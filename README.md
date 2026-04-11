@@ -11,6 +11,9 @@
   <a href="https://github.com/lorconksu/aerodocs/actions/workflows/ci.yml">
     <img src="https://img.shields.io/github/actions/workflow/status/lorconksu/aerodocs/ci.yml?branch=main&label=CI" alt="CI status" />
   </a>
+  <a href="https://sonarcloud.io/summary/new_code?id=lorconksu_aerodocs">
+    <img src="https://sonarcloud.io/api/project_badges/measure?project=lorconksu_aerodocs&metric=alert_status" alt="Quality Gate Status" />
+  </a>
   <a href="https://github.com/lorconksu/aerodocs/releases">
     <img src="https://img.shields.io/github/v/release/lorconksu/aerodocs?sort=semver&label=release" alt="Latest release" />
   </a>
@@ -126,6 +129,7 @@ The agent installs as a systemd service, connects to the Hub over gRPC with mTLS
 - [API Reference](docs/engineering/api-reference.md) — Complete REST API endpoint documentation
 - [Deployment Guide](docs/engineering/deployment.md) — Production deployment and reverse proxy setup
 - [Security Model](docs/engineering/security-model.md) — Threat model and security controls
+- [SonarCloud](https://sonarcloud.io/summary/new_code?id=lorconksu_aerodocs) — Public code quality, coverage, and maintainability dashboard
 
 ## License
 
