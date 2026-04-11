@@ -6,6 +6,9 @@ export default defineConfig({
   timeout: 60000,
   retries: 1,
   fullyParallel: false,
+  // The suite shares a single TOTP-backed test account. Serializing CI workers
+  // avoids cross-worker code reuse and intermittent auth failures.
+  workers: process.env.CI ? 1 : undefined,
   use: {
     baseURL: process.env.E2E_BASE_URL || 'http://localhost:18081',
     screenshot: 'only-on-failure',

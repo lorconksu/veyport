@@ -53,6 +53,9 @@ export async function loginViaAPI(page: Page, baseURL: string) {
   const loginResp = await page.request.post(`${baseURL}/api/auth/login`, {
     data: { username: 'admin', password: 'E2eTestPass!2026' },
   })
+  if (!loginResp.ok()) {
+    throw new Error(`password login failed: ${loginResp.status()} ${await loginResp.text()}`)
+  }
   const loginData = await loginResp.json() as { totp_token: string }
 
   // Step 2: TOTP verification - wait for a fresh code to avoid replay rejection
@@ -60,6 +63,9 @@ export async function loginViaAPI(page: Page, baseURL: string) {
   const totpResp = await page.request.post(`${baseURL}/api/auth/login/totp`, {
     data: { totp_token: loginData.totp_token, code },
   })
+  if (!totpResp.ok()) {
+    throw new Error(`totp login failed: ${totpResp.status()} ${await totpResp.text()}`)
+  }
   lastUsedTOTPCode = code
   const authData = await totpResp.json() as { access_token: string; refresh_token: string }
 

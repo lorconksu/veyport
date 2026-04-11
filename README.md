@@ -3,8 +3,8 @@
 </p>
 
 <p align="center">
-  <strong>Self-hosted infrastructure observability platform</strong><br>
-  Monitor server fleets, tail logs in real-time, browse remote file systems, and securely transfer files — all from a single web interface.
+  <strong>Secure remote file access and server operations from one web UI</strong><br>
+  Browse files, stream logs, and move data across your servers from a self-hosted control plane built for small fleets.
 </p>
 
 <p align="center">
@@ -27,11 +27,11 @@
 
 ## What is AeroDocs?
 
-AeroDocs is a web-based control panel for managing small server fleets. It gives you structured, auditable access to your machines without handing out SSH keys or jumping between terminal sessions. Browse files, tail logs, transfer files, and monitor server health — all from one place.
+AeroDocs gives you secure, day-to-day access to your servers through one self-hosted web interface. Browse remote file systems, stream logs in real time, and transfer files without handing out SSH keys or bouncing between terminal sessions.
 
-It runs as a single binary with no external dependencies. The Hub server embeds the entire React frontend and uses SQLite for storage, so there's nothing to install, no runtime to manage, and no database to provision. Deploy it once and point your agents at it.
+It runs as a single binary with no external dependencies. The Hub embeds the full React frontend and uses SQLite for storage, so setup stays lightweight: no separate database, no extra services, and no runtime sprawl. Deploy it once and connect your agents.
 
-AeroDocs is built for home lab operators and small teams who want real visibility into their infrastructure without the overhead of enterprise monitoring stacks. Every action is logged, every user requires 2FA, and access is scoped per-server and per-path.
+AeroDocs is built for home lab operators and small teams who need dependable access, clear audit trails, and tight operational control. Every action is logged, every user requires 2FA, and permissions are scoped per-server and per-path.
 
 AeroDocs is open source software licensed under the Apache License 2.0. The
 software license does not grant rights to the `AeroDocs` name or logos; see
