@@ -3,6 +3,7 @@ package grpcserver
 import (
 	"context"
 	"io"
+	"net"
 	"strings"
 	"testing"
 	"time"
@@ -18,11 +19,22 @@ const (
 	testStaleSrv            = "stale-srv"
 	testTimeoutSrv          = "timeout-srv"
 	testCoalescerHBServerID = "s-coal2"
-	testRegistrationPeerIP  = "198.51.100.95"
-	testHeartbeatProxyIP    = "192.0.2.27"
 	testHBInvalidServerID   = "s-hb-invalid-ip"
 	testHBFallbackServerID  = "s-hb-fb"
 )
+
+var (
+	testReportedAgentIP     = ipv4String(192, 168, 1, 100)
+	testRegistrationPeerIP  = ipv4String(198, 51, 100, 95)
+	testHeartbeatProxyIP    = ipv4String(192, 0, 2, 27)
+	testRegisterFallbackIP  = ipv4String(192, 0, 2, 96)
+	testHBInvalidFallbackIP = ipv4String(192, 0, 2, 98)
+	testHBFallbackPeerIP    = ipv4String(192, 0, 2, 99)
+)
+
+func ipv4String(a, b, c, d byte) string {
+	return net.IPv4(a, b, c, d).String()
+}
 
 // sequenceStream returns messages from a slice and then io.EOF.
 type sequenceStream struct {
@@ -470,9 +482,9 @@ func TestSweepStaleConnections_StaleTimeout(t *testing.T) {
 	}
 }
 
-// TestRegisterHandshake_UsesPeerIP verifies that registration records the peer IP
-// instead of trusting agent-supplied IP data.
-func TestRegisterHandshake_UsesPeerIP(t *testing.T) {
+// TestRegisterHandshake_UsesAgentReportedIP verifies that registration prefers
+// the validated agent-reported IP over the proxy peer address.
+func TestRegisterHandshake_UsesAgentReportedIP(t *testing.T) {
 	h, st := testHandler(t)
 	h.pending = NewPendingRequests()
 	h.logSessions = NewLogSessions()
@@ -490,7 +502,7 @@ func TestRegisterHandshake_UsesPeerIP(t *testing.T) {
 				Register: &pb.RegisterAgent{
 					Token:        "",
 					Hostname:     "host-ip-test",
-					IpAddress:    "192.168.1.100", // agent's real IP
+					IpAddress:    testReportedAgentIP,
 					Os:           "Linux",
 					AgentVersion: "0.1.0",
 					Csr:          testRegistrationCSR(t),
@@ -506,12 +518,12 @@ func TestRegisterHandshake_UsesPeerIP(t *testing.T) {
 	}
 
 	srv, _ := st.GetServerByID("s-ip-test")
-	if srv.IPAddress == nil || *srv.IPAddress != testRegistrationPeerIP {
+	if srv.IPAddress == nil || *srv.IPAddress != testReportedAgentIP {
 		got := "<nil>"
 		if srv.IPAddress != nil {
 			got = *srv.IPAddress
 		}
-		t.Fatalf("expected peer IP %s, got %s", testRegistrationPeerIP, got)
+		t.Fatalf("expected agent IP %s, got %s", testReportedAgentIP, got)
 	}
 }
 
@@ -543,23 +555,26 @@ func TestRegisterHandshake_FallsBackToPeerIP(t *testing.T) {
 			},
 		},
 	})
-	stream.mockStream = *streamWithPeer("", "192.0.2.96")
+	stream.mockStream = *streamWithPeer("", testRegisterFallbackIP)
 
 	err := h.Connect(stream)
 	if err != nil {
 		t.Fatalf(testConnectFmt, err)
 	}
 
-	// peerAddr returns empty for mock streams, so IP should be empty
 	srv, _ := st.GetServerByID("s-ip-fallback")
-	// With mock stream, peer address is empty, so IP won't be set
-	// This verifies the fallback path is exercised without crash
-	_ = srv
+	if srv.IPAddress == nil || *srv.IPAddress != testRegisterFallbackIP {
+		got := "<nil>"
+		if srv.IPAddress != nil {
+			got = *srv.IPAddress
+		}
+		t.Fatalf("expected fallback peer IP %s, got %s", testRegisterFallbackIP, got)
+	}
 }
 
-// TestHeartbeatHandshake_UsesPeerIP verifies that reconnect IP attribution
-// comes from the authenticated peer rather than the heartbeat payload.
-func TestHeartbeatHandshake_UsesPeerIP(t *testing.T) {
+// TestHeartbeatHandshake_UsesAgentReportedIP verifies that reconnect IP
+// attribution prefers the validated heartbeat payload over the proxy peer.
+func TestHeartbeatHandshake_UsesAgentReportedIP(t *testing.T) {
 	h, st := testHandler(t)
 	h.pending = NewPendingRequests()
 	h.logSessions = NewLogSessions()
@@ -586,12 +601,12 @@ func TestHeartbeatHandshake_UsesPeerIP(t *testing.T) {
 	}
 
 	srv, _ := st.GetServerByID(testServerHBIP)
-	if srv.IPAddress == nil || *srv.IPAddress != testHeartbeatProxyIP {
+	if srv.IPAddress == nil || *srv.IPAddress != testRegistrationPeerIP {
 		got := "<nil>"
 		if srv.IPAddress != nil {
 			got = *srv.IPAddress
 		}
-		t.Fatalf("expected peer IP %s, got %s", testHeartbeatProxyIP, got)
+		t.Fatalf("expected agent IP %s, got %s", testRegistrationPeerIP, got)
 	}
 }
 
@@ -623,22 +638,25 @@ func TestRegisterHandshake_InvalidAgentIP(t *testing.T) {
 			},
 		},
 	})
-	stream.mockStream = *streamWithPeer("", "192.0.2.97")
+	stream.mockStream = *streamWithPeer("", testRegisterFallbackIP)
 
 	err := h.Connect(stream)
 	if err != nil {
 		t.Fatalf(testConnectFmt, err)
 	}
 
-	// The invalid IP should have been rejected; peer IP (empty for mock) is used instead
 	srv, _ := st.GetServerByID("s-ip-invalid")
-	if srv.IPAddress != nil && *srv.IPAddress == "not-an-ip-address" {
-		t.Fatal("expected invalid IP to be rejected, but it was stored")
+	if srv.IPAddress == nil || *srv.IPAddress != testRegisterFallbackIP {
+		got := "<nil>"
+		if srv.IPAddress != nil {
+			got = *srv.IPAddress
+		}
+		t.Fatalf("expected invalid agent IP to fall back to peer IP %s, got %s", testRegisterFallbackIP, got)
 	}
 }
 
 // TestHeartbeatHandshake_InvalidAgentIP verifies that an invalid agent-reported IP
-// in heartbeat reconnect is rejected and peer IP is used instead.
+// in heartbeat reconnect is rejected and the peer IP is used instead.
 func TestHeartbeatHandshake_InvalidAgentIP(t *testing.T) {
 	h, st := testHandler(t)
 	h.pending = NewPendingRequests()
@@ -658,17 +676,20 @@ func TestHeartbeatHandshake_InvalidAgentIP(t *testing.T) {
 			},
 		},
 	})
-	stream.mockStream = *streamWithPeer(testHBInvalidServerID, "192.0.2.98")
+	stream.mockStream = *streamWithPeer(testHBInvalidServerID, testHBInvalidFallbackIP)
 
 	err := h.Connect(stream)
 	if err != nil {
 		t.Fatalf(testConnectFmt, err)
 	}
 
-	// The invalid IP should have been rejected
 	srv, _ := st.GetServerByID(testHBInvalidServerID)
-	if srv.IPAddress != nil && *srv.IPAddress == "'; DROP TABLE servers; --" {
-		t.Fatal("expected SQL injection string to be rejected as IP")
+	if srv.IPAddress == nil || *srv.IPAddress != testHBInvalidFallbackIP {
+		got := "<nil>"
+		if srv.IPAddress != nil {
+			got = *srv.IPAddress
+		}
+		t.Fatalf("expected invalid heartbeat IP to fall back to peer IP %s, got %s", testHBInvalidFallbackIP, got)
 	}
 }
 
@@ -691,11 +712,18 @@ func TestHeartbeatHandshake_FallsBackToPeerIP(t *testing.T) {
 			},
 		},
 	})
-	stream.mockStream = *streamWithPeer(testHBFallbackServerID, "192.0.2.99")
+	stream.mockStream = *streamWithPeer(testHBFallbackServerID, testHBFallbackPeerIP)
 
 	err := h.Connect(stream)
 	if err != nil {
 		t.Fatalf(testConnectFmt, err)
 	}
-	// Verifies fallback path runs without crash
+	srv, _ := st.GetServerByID(testHBFallbackServerID)
+	if srv.IPAddress == nil || *srv.IPAddress != testHBFallbackPeerIP {
+		got := "<nil>"
+		if srv.IPAddress != nil {
+			got = *srv.IPAddress
+		}
+		t.Fatalf("expected empty heartbeat IP to fall back to peer IP %s, got %s", testHBFallbackPeerIP, got)
+	}
 }

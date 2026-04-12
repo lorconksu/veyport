@@ -202,7 +202,8 @@ func (h *Handler) performHandshake(stream pb.AgentService_ConnectServer) (*hands
 }
 
 func (h *Handler) performRegisterHandshake(stream pb.AgentService_ConnectServer, reg *pb.RegisterAgent, peerIP string) (*handshakeResult, error) {
-	serverID, clientCert, caCert, err := h.handleRegister(reg.Token, reg.Hostname, peerIP, reg.Os, reg.AgentVersion, reg.Csr)
+	agentIP := preferredAgentIP(reg.GetIpAddress(), peerIP)
+	serverID, clientCert, caCert, err := h.handleRegister(reg.Token, reg.Hostname, agentIP, reg.Os, reg.AgentVersion, reg.Csr)
 	if err != nil {
 		h.logRegistrationAuditFailure(reg, peerIP, err)
 		_ = stream.Send(&pb.HubMessage{
@@ -290,6 +291,13 @@ func optionalStringPointer(value string) *string {
 	return &value
 }
 
+func preferredAgentIP(reportedIP, peerIP string) string {
+	if net.ParseIP(reportedIP) != nil {
+		return reportedIP
+	}
+	return peerIP
+}
+
 func (h *Handler) performHeartbeatHandshake(stream pb.AgentService_ConnectServer, hb *pb.Heartbeat, peerIP string) (*handshakeResult, error) {
 	serverID := hb.ServerId
 	if err := h.verifyCertCN(stream, serverID, true); err != nil {
@@ -306,8 +314,8 @@ func (h *Handler) performHeartbeatHandshake(stream pb.AgentService_ConnectServer
 		return nil, status.Errorf(codes.Internal, "failed to send heartbeat ack: %v", err)
 	}
 
-	if peerIP != "" {
-		_ = h.store.UpdateServerIP(serverID, peerIP)
+	if ip := preferredAgentIP(hb.GetIpAddress(), peerIP); ip != "" {
+		_ = h.store.UpdateServerIP(serverID, ip)
 	}
 
 	return &handshakeResult{serverID: serverID}, nil
