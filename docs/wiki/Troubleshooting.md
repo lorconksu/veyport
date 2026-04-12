@@ -19,7 +19,12 @@ AeroDocs does not have a "forgot password" email flow. Ask an admin to delete yo
 
 ### I'm locked out after too many attempts
 
-AeroDocs enforces a rate limit of 5 login attempts per IP address per minute. Wait one minute and try again. This limit applies to the combination of your IP address and is not per-account.
+AeroDocs enforces separate auth rate limits per IP address:
+
+- Login and registration: 10 attempts per minute
+- TOTP verification: 3 attempts per minute
+
+Wait one minute and try again. These limits are IP-based, not per-account.
 
 ### I'm the only admin and lost my authenticator
 
@@ -50,7 +55,7 @@ The agent was previously connected but has lost its connection. Check:
 
 - Is the agent service running? `systemctl status aerodocs-agent`
 - Can the server reach the Hub? Check network connectivity.
-- Is the Hub's gRPC port (9443, or the port configured via `--grpc-external-addr`) reachable from the agent?
+- Is the Hub's gRPC endpoint reachable from the agent? This is usually port `9090` directly, or the external address configured via `--grpc-external-addr` when using a proxy or load balancer.
 - Restart the agent: `sudo systemctl restart aerodocs-agent`
 
 ### Server status isn't updating
@@ -149,21 +154,21 @@ The Dropzone tab is only visible to admin users. Viewers cannot upload files. If
 
 ### Agent won't connect after install
 
-- Check that the firewall allows outbound connections to the Hub's gRPC port (9443 by default, or the port configured via `--grpc-external-addr`).
+- Check that the firewall allows outbound connections to the Hub's gRPC endpoint. This is usually `9090` directly, or the external address configured via `--grpc-external-addr` (often `9443` behind a proxy).
 - Verify the Hub gRPC address in the agent configuration file (`/etc/aerodocs/agent.conf`).
 - Check agent logs: `journalctl -u aerodocs-agent -f`
 - If mTLS is enabled, ensure the agent's certificate is valid and not expired.
 
 ### Agent shows proxy IP instead of real IP
 
-Fixed in v1.2.15. The Hub now reads the client IP from the `X-Forwarded-For` header when running behind a reverse proxy (e.g. Traefik). To take advantage of this fix, both the Hub and the agent must be updated to v1.2.15 or later. After updating, the agent's real IP will be recorded in the Fleet Dashboard and audit log entries.
+The IP shown for an agent comes from the gRPC registration and heartbeat data, not from HTTP proxy headers like `X-Forwarded-For`. If the displayed IP looks wrong, restart the agent so it re-registers and sends a fresh heartbeat, then verify the host itself reports the expected primary IP. For proxy/TLS-passthrough setups, see the notes in `Proxy-Configuration.md`.
 
 ### Agent keeps reconnecting
 
 - The Hub may be restarting or under heavy load. Check Hub service logs: `journalctl -u aerodocs -f`
 - Network instability between the agent and Hub can cause repeated disconnects.
 - Check if the Hub is running out of memory or file descriptors.
-- The agent automatically refreshes its IP on reconnect (as of v1.2.11), so IP changes should be handled transparently.
+- The agent refreshes its reported IP on reconnect, so IP changes should be handled once the connection stabilizes.
 
 ### mTLS certificate errors
 

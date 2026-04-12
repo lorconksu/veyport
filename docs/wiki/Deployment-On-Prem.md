@@ -60,12 +60,12 @@ volumes:
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `AERODOCS_VERSION` | `latest` | Docker image tag (e.g., `v1.2.12`) |
+| `AERODOCS_VERSION` | `latest` | Docker image tag (e.g., `vX.Y.Z`) |
 
 Pin to a specific version for reproducible deployments:
 
 ```bash
-export AERODOCS_VERSION=v1.2.12
+export AERODOCS_VERSION=vX.Y.Z
 docker compose up -d
 ```
 

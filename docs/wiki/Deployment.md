@@ -56,7 +56,7 @@ volumes:
 
 | Setting | Value | Notes |
 |---------|-------|-------|
-| Image | `yiucloud/aerodocs:latest` | Pin to a specific tag (e.g. `yiucloud/aerodocs:v1.2.17`) for reproducible deployments |
+| Image | `yiucloud/aerodocs:latest` | Pin to a specific tag (e.g. `yiucloud/aerodocs:vX.Y.Z`) for reproducible deployments |
 | HTTP port | `8081` | Web UI and REST API |
 | gRPC port | `9090` | Agent connections - must be reachable by agents |
 | Data volume | `aerodocs-data` mounted at `/data` | Contains the SQLite database (`/data/aerodocs.db`) and all persistent state |
@@ -67,7 +67,7 @@ volumes:
 Replace `latest` with a specific version tag to avoid unexpected upgrades:
 
 ```yaml
-image: yiucloud/aerodocs:v1.2.17
+image: yiucloud/aerodocs:vX.Y.Z
 ```
 
 ---
