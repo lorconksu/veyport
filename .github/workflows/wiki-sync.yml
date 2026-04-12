@@ -6,6 +6,7 @@ on:
     branches: [main]
     paths:
       - 'docs/wiki/**'
+      - 'docs/wiki/screenshots/**'
       - 'docs/screenshots/**'
 
 jobs:
@@ -31,6 +32,7 @@ jobs:
 
           # Copy screenshots referenced by wiki pages
           mkdir -p wiki/screenshots
+          cp docs/wiki/screenshots/*.png wiki/screenshots/ 2>/dev/null || true
           cp docs/screenshots/*.png wiki/screenshots/ 2>/dev/null || true
 
           # Fix image paths in wiki pages (../screenshots/ -> screenshots/)

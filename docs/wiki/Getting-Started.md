@@ -12,28 +12,21 @@ This guide walks you through the initial setup of AeroDocs for the first time. T
 
 ## Deploying the Hub
 
-AeroDocs Hub is distributed as a Docker image. Pull the latest release:
-
-```bash
-docker pull ghcr.io/your-org/aerodocs-hub:v1.2.11
-```
-
-A minimal `docker-compose.yml` example:
+AeroDocs Hub is distributed as a Docker image. The default deployment path uses the published Docker Hub image:
 
 ```yaml
-version: "3.8"
 services:
-  aerodocs-hub:
-    image: ghcr.io/your-org/aerodocs-hub:v1.2.11
+  aerodocs:
+    image: yiucloud/aerodocs:latest
     ports:
-      - "3000:3000"   # Web UI
-      - "9443:9443"   # gRPC (agent connections)
+      - "8081:8081"
+      - "127.0.0.1:9090:9090"
     volumes:
-      - ./data:/data
-    environment:
-      - AERODOCS_DB_PATH=/data/aerodocs.db
-      - AERODOCS_GRPC_EXTERNAL_ADDR=grpc.aerodocs.example.com:9443
+      - aerodocs-data:/data
     restart: unless-stopped
+
+volumes:
+  aerodocs-data:
 ```
 
 Start the Hub:
@@ -42,7 +35,7 @@ Start the Hub:
 docker compose up -d
 ```
 
-> **Note:** The gRPC port (9443) must be reachable by your agents. If running behind a reverse proxy like Traefik, configure TLS passthrough or TCP routing for the gRPC port.
+The Hub listens on port `8081` for the web UI and REST API, and on port `9090` for agent gRPC connections. If you are exposing agents over TLS or through a reverse proxy, follow [[Deployment]] and [[Proxy Configuration]] for the correct `9443` external gRPC setup.
 
 ---
 
@@ -62,7 +55,7 @@ Fill in the setup form:
 
 - **Username** - Choose a username. It must be 3-32 characters, letters and numbers only (no spaces).
 - **Email** - Enter your email address.
-- **Password** - Your password must be at least 8 characters long and contain at least one number and one special character.
+- **Password** - Your password must be at least 12 characters long and include at least one uppercase letter, one lowercase letter, one number, and one special character.
 
 Click **Create Admin Account** to continue.
 

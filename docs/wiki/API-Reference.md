@@ -5,8 +5,8 @@
 > - **Who:** Frontend developers, integration builders, and anyone automating AeroDocs
 > - **Why:** Complete reference for every HTTP endpoint with request/response schemas
 > - **Where:** All endpoints served by the Hub on the HTTP port (default :8081)
-> - **When:** After authentication - most endpoints require a valid JWT access token
-> - **How:** JSON request/response bodies; Bearer token auth; SSE for streaming
+> - **When:** After authentication - most endpoints require a valid access token
+> - **How:** JSON request/response bodies; secure cookie auth for browsers with Bearer fallback for scripts; SSE for streaming
 
 ---
 
@@ -34,18 +34,21 @@
 |---|---|
 | Base URL | `http://<hub-host>:8081` (dev) or `https://<hub-domain>` (prod) |
 | Content Type | `application/json` (request and response) |
-| Auth Header | `Authorization: Bearer <token>` |
+| Browser Auth | `aerodocs_access` and `aerodocs_refresh` secure cookies, plus `aerodocs_csrf` for mutating requests |
+| API Client Auth | `Authorization: Bearer <token>` |
 | Pagination | `?limit=N&offset=N` (default limit varies, max 100) |
-| CORS | Enabled globally |
+| CORS | Enabled in dev mode for `http://localhost:5173` |
 | Caching | `Cache-Control: no-store` on all API responses |
 
 All request and response bodies are JSON unless otherwise noted (file uploads use `multipart/form-data`, SSE streams use `text/event-stream`, binary downloads use `application/octet-stream`).
+
+For browser sessions, successful login and refresh flows set auth cookies and may omit token strings from the JSON response body. The cURL examples below use Bearer headers because they are intended for scripts and API clients.
 
 ---
 
 ## Authentication Flow
 
-AeroDocs uses four JWT token types:
+AeroDocs uses four JWT token types. In browser-driven flows, the resulting access and refresh tokens are set as secure cookies.
 
 | Token Type | Purpose | Lifetime |
 |---|---|---|
@@ -67,11 +70,11 @@ sequenceDiagram
         Client->>Hub: POST /api/auth/totp/setup (Bearer setup_token)
         Hub-->>Client: 200 {secret, qr_url}
         Client->>Hub: POST /api/auth/totp/enable {code} (Bearer setup_token)
-        Hub-->>Client: 200 {access_token, refresh_token, user}
+        Hub-->>Client: 200 Set-Cookie(access, refresh, csrf) + {user}
     else TOTP enabled
         Hub-->>Client: 202 {totp_token}
         Client->>Hub: POST /api/auth/login/totp {totp_token, code}
-        Hub-->>Client: 200 {access_token, refresh_token, user}
+        Hub-->>Client: 200 Set-Cookie(access, refresh, csrf) + {user}
     end
 ```
 
@@ -130,7 +133,7 @@ Check whether the Hub has been initialized (at least one user exists).
 ```json
 {
   "initialized": true,
-  "version": "1.2.17"
+  "version": "vX.Y.Z"
 }
 ```
 
@@ -151,7 +154,7 @@ Register the first admin user. Only works when no users exist (`initialized: fal
 | Property | Value |
 |---|---|
 | Auth | None |
-| Rate Limited | Yes (5 requests / 60s) |
+| Rate Limited | Yes (10 requests / 60s) |
 
 **Request Body:**
 
@@ -207,7 +210,7 @@ Authenticate with username and password.
 | Property | Value |
 |---|---|
 | Auth | None |
-| Rate Limited | Yes (5 requests / 60s) |
+| Rate Limited | Yes (10 requests / 60s) |
 
 **Request Body:**
 
@@ -255,7 +258,7 @@ Complete login by providing a TOTP code (second factor).
 | Property | Value |
 |---|---|
 | Auth | None (TOTP token in body) |
-| Rate Limited | Yes (5 requests / 60s) |
+| Rate Limited | Yes (3 requests / 60s) |
 
 **Request Body:**
 
@@ -270,8 +273,6 @@ Complete login by providing a TOTP code (second factor).
 
 ```json
 {
-  "access_token": "eyJhbGci...",
-  "refresh_token": "eyJhbGci...",
   "user": {
     "id": "uuid",
     "username": "admin",
@@ -284,6 +285,8 @@ Complete login by providing a TOTP code (second factor).
   }
 }
 ```
+
+On success, the Hub also sets `aerodocs_access`, `aerodocs_refresh`, and `aerodocs_csrf` cookies for browser clients.
 
 **Error Cases:**
 - `401` - Invalid or expired TOTP token, invalid TOTP code, user not found
@@ -304,8 +307,8 @@ Exchange a refresh token for a new access/refresh token pair.
 
 | Property | Value |
 |---|---|
-| Auth | None (refresh token in body) |
-| Rate Limited | No |
+| Auth | None. Browser clients usually send the `aerodocs_refresh` cookie; non-browser clients may send `refresh_token` in the JSON body |
+| Rate Limited | Yes (30 requests / 60s) |
 
 **Request Body:**
 
@@ -318,11 +321,10 @@ Exchange a refresh token for a new access/refresh token pair.
 **Response (200):**
 
 ```json
-{
-  "access_token": "eyJhbGci...",
-  "refresh_token": "eyJhbGci..."
-}
+{}
 ```
+
+On success, the Hub rotates the refresh token and sets new `aerodocs_access`, `aerodocs_refresh`, and `aerodocs_csrf` cookies.
 
 **Error Cases:**
 - `401` - Invalid or expired refresh token
@@ -372,7 +374,7 @@ curl - X POST https://hub.example.com/api/auth/totp/setup \
 
 ### 7. POST /api/auth/totp/enable
 
-Verify and enable TOTP by providing a valid code. Returns full auth tokens on success.
+Verify and enable TOTP by providing a valid code. For users created with a temporary password, this is also where the permanent password is set.
 
 | Property | Value |
 |---|---|
@@ -383,7 +385,8 @@ Verify and enable TOTP by providing a valid code. Returns full auth tokens on su
 
 ```json
 {
-  "code": "123456"
+  "code": "123456",
+  "new_password": "OptionalUnlessTemporaryPassword"
 }
 ```
 
@@ -391,8 +394,6 @@ Verify and enable TOTP by providing a valid code. Returns full auth tokens on su
 
 ```json
 {
-  "access_token": "eyJhbGci...",
-  "refresh_token": "eyJhbGci...",
   "user": {
     "id": "uuid",
     "username": "admin",
@@ -405,6 +406,8 @@ Verify and enable TOTP by providing a valid code. Returns full auth tokens on su
   }
 }
 ```
+
+On success, the Hub also sets `aerodocs_access`, `aerodocs_refresh`, and `aerodocs_csrf` cookies for browser clients.
 
 **Error Cases:**
 - `401` - Invalid TOTP code
@@ -645,7 +648,7 @@ Create a new user. A temporary password is auto-generated.
 ```
 
 **Validation:**
-- `role` must be `"admin"` or `"viewer"`
+- `role` must be `"admin"`, `"auditor"`, or `"viewer"`
 - Username: 3-32 characters, alphanumeric and underscores only
 
 **Response (201):**
@@ -696,7 +699,7 @@ Update a user's role.
 
 ```json
 {
-  "role": "admin"
+  "role": "auditor"
 }
 ```
 
@@ -766,13 +769,33 @@ curl - X DELETE https://hub.example.com/api/users/USER_UUID \
 
 ## Audit Log Endpoints
 
+Audit viewing and workflow endpoints are available to **admins and auditors**. Admins can additionally update audit settings and run retention. The current audit API surface includes:
+
+- `GET /api/audit-logs`
+- `GET /api/audit-logs/catalog`
+- `GET /api/audit-logs/health`
+- `GET /api/audit-logs/settings`
+- `PUT /api/audit-logs/settings` (admin only)
+- `GET /api/audit-logs/export`
+- `GET /api/audit-logs/exports`
+- `POST /api/audit-logs/retention/run` (admin only)
+- `GET /api/audit-logs/reviews`
+- `POST /api/audit-logs/reviews`
+- `GET /api/audit-logs/filters`
+- `POST /api/audit-logs/filters`
+- `DELETE /api/audit-logs/filters/{id}`
+- `GET /api/audit-logs/flags`
+- `POST /api/audit-logs/flags`
+- `GET /api/audit-logs/detections`
+- `GET /api/audit-users`
+
 ### 16. GET /api/audit-logs
 
 List audit log entries with optional filters.
 
 | Property | Value |
 |---|---|
-| Auth | Access token (Bearer), admin only |
+| Auth | Access token (cookie or Bearer), admin or auditor |
 
 **Query Parameters:**
 

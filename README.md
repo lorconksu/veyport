@@ -50,7 +50,7 @@ for issue and pull-request expectations.
 - **Email Notifications** — 8 configurable alert types (agent connect/disconnect, file uploads, login events, and more)
 - **Audit Logging** — Immutable record of every action with 23 event types — who did what, when, and from where
 - **2FA (TOTP)** — Mandatory TOTP-based two-factor authentication for all users, no exceptions
-- **Role-Based Access** — Admin and Viewer roles with per-server, per-path permissions enforced at both Hub and Agent layers
+- **Role-Based Access** — Admin, Auditor, and Viewer roles with per-server, per-path permissions enforced at both Hub and Agent layers
 - **mTLS Agent Communication** — Hub-issued 12-hour ECDSA P-256 client certificates with automatic in-stream renewal
 
 ## Architecture
@@ -83,7 +83,7 @@ From the Hub web UI, click **Add Server** and run the generated install command 
 
 ```bash
 curl -fsSL https://<hub-address>/api/install.sh | sudo bash -s -- \
-  --hub grpc://<hub-address>:9443 \
+  --hub <hub-address>:9443 \
   --token <registration-token>
 ```
 
@@ -124,11 +124,12 @@ The agent installs as a systemd service, connects to the Hub over gRPC with mTLS
 
 ## Documentation
 
-- [Engineering Docs](docs/engineering/) — Architecture, deployment, security model, API reference, gRPC protocol
 - [User Wiki](docs/wiki/) — End-user documentation and walkthroughs
-- [API Reference](docs/engineering/api-reference.md) — Complete REST API endpoint documentation
-- [Deployment Guide](docs/engineering/deployment.md) — Production deployment and reverse proxy setup
-- [Security Model](docs/engineering/security-model.md) — Threat model and security controls
+- [Architecture](docs/wiki/Architecture.md) — Hub, agent, and transport model
+- [API Reference](docs/wiki/API-Reference.md) — REST API endpoints and auth flow
+- [Deployment Guide](docs/wiki/Deployment.md) — Docker-first deployment and runtime flags
+- [Proxy Configuration](docs/wiki/Proxy-Configuration.md) — Reverse proxy and gRPC passthrough setup
+- [Development Guide](docs/wiki/Development.md) — Local development workflow and test commands
 - [SonarCloud](https://sonarcloud.io/summary/new_code?id=lorconksu_aerodocs) — Public code quality, coverage, and maintainability dashboard
 
 ## License

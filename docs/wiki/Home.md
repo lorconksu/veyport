@@ -16,7 +16,7 @@ Everything you do in AeroDocs is tracked. There is a permanent record of who log
 - Supports drag-and-drop file transfers via the Dropzone uploader
 - Records every action in an immutable audit log
 - Requires two-factor authentication for every account - no exceptions
-- Supports multiple user accounts with Admin and Viewer roles
+- Supports multiple user accounts with Admin, Auditor, and Viewer roles
 - Sends email notifications for key events (server status changes, file uploads, user actions) via configurable SMTP
 - Secures agent-to-hub communication with mutual TLS (mTLS) for certificate-based authentication
 - Enforces sensitive path blocklists to prevent agents from exposing restricted filesystem paths
@@ -30,13 +30,20 @@ These guides cover features that require an admin role:
 - [[Getting Started]] - Initial setup and first admin account
 - [[Fleet Dashboard]] - Adding/removing servers, bulk operations
 - [[Settings]] - User management, role changes, 2FA reset, email notifications, alert preferences
-- [[Audit Logs]] - Activity monitoring and compliance
+
+---
+
+## For Admins and Auditors
+
+These guides cover audit and review workflows:
+
+- [[Audit Logs]] - Activity monitoring, exports, reviews, detections, and compliance
 
 ---
 
 ## For All Users
 
-These guides cover features available to every user (admin and viewer):
+These guides cover features available to every user (admin, auditor, and viewer):
 
 - [[Logging In]] - Password + 2FA login
 - [[Fleet Dashboard]] - Viewing server status at a glance

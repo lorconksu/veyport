@@ -101,7 +101,7 @@ The SQLite database is stored at `/data/aerodocs.db` inside the container, persi
 ### 1. Build from source
 
 ```bash
-git clone https://github.com/wyiu/aerodocs.git
+git clone https://github.com/lorconksu/aerodocs.git
 cd aerodocs
 make build
 ```

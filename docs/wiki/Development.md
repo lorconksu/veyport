@@ -20,7 +20,7 @@
 ## Clone and Setup
 
 ```bash
-git clone https://github.com/wyiu/aerodocs.git
+git clone https://github.com/lorconksu/aerodocs.git
 cd aerodocs
 
 # Install frontend dependencies
@@ -109,15 +109,13 @@ Output: `bin/aerodocs` - a single self-contained binary.
 make test
 ```
 
-This runs `go test ./...` from the `hub/` directory. The test suite covers:
+This runs the Go test suites for both the Hub and the Agent:
 
 - `auth/` - JWT generation, validation, token type enforcement, bcrypt, TOTP
 - `store/` - All store methods against a real in-memory SQLite database (including notification preferences and log)
 - `server/` - HTTP handler tests using `httptest` (including SMTP, notification, and hub config handlers)
 - `notify/` - SMTP client tests, template rendering, CRLF injection prevention, debounce logic
 - `grpcserver/` - HeartbeatCoalescer tests, handler tests
-
-There are no frontend tests at this time.
 
 ### Agent tests
 
@@ -126,6 +124,14 @@ make test-agent
 ```
 
 Runs `go test ./...` from the `agent/` directory.
+
+### Frontend tests
+
+```bash
+cd web && npx vitest run
+```
+
+The CI pipeline also runs integration, smoke, and e2e suites on pull requests.
 
 ---
 
@@ -239,7 +245,7 @@ aerodocs/
 │       ├── client/             # gRPC stream client with reconnect backoff
 │       ├── dropzone/           # Chunked file upload receiver
 │       ├── filebrowser/        # Directory listing and file reading
-│       ├── heartbeat/          # Periodic heartbeat sender (15s interval)
+│       ├── heartbeat/          # Periodic heartbeat sender (10s interval)
 │       ├── logtailer/          # Poll-based file tailing with grep support
 │       └── sysinfo/            # CPU, memory, disk, uptime collection
 └── web/

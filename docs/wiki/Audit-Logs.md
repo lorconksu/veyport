@@ -4,9 +4,9 @@
 
 Every action taken in AeroDocs is recorded in the audit log. Think of it as an activity history - a permanent record of who did what and when.
 
-Audit log entries cannot be edited or deleted, even by admins. Each entry is protected by a transactional hash chain - every row includes a cryptographic hash that incorporates the previous entry's hash. This means any tampering (insertion, deletion, or modification of a row) breaks the chain and is detectable. This makes the log trustworthy: if something changed, there will be a record of it.
+Audit log entries cannot be edited or deleted, even by admins. Each entry is protected by a transactional hash chain - every row includes a cryptographic hash that incorporates the previous entry's hash. This means any tampering (insertion, deletion, or modification of a row) breaks the chain and is detectable.
 
-The audit log is only visible to admins.
+The audit log is visible to **admins and auditors**. Admins can also manage retention and threshold settings; auditors can review, export, filter, and flag events without changing those controls.
 
 ---
 
@@ -25,6 +25,14 @@ Each entry shows:
 - **Details** - any additional context
 - **IP Address** - the IP address the request came from
 
+At the top of the page you will also see summary cards for:
+
+- **System health** - whether the audit pipeline is healthy or degraded
+- **Retention** - the current retention window
+- **Last review** - the most recent recorded audit review
+
+If the system detects unusual patterns, an **Active Detections** panel appears above the log table.
+
 ---
 
 ## Filtering the Log
@@ -37,6 +45,8 @@ Use the filters at the top of the page to narrow down the log:
 
 You can combine filters. Click **Clear** to reset them.
 
+You can also save the current filter set for reuse later. Saved filters appear in the workflow panel and can be re-applied with one click.
+
 ---
 
 ## Pagination
@@ -47,6 +57,19 @@ The audit log displays entries in pages. Use the navigation controls at the bott
 - **Page indicator** - Shows which page you are on and the total number of pages
 
 The log is sorted with the most recent entries first. Filters are preserved as you navigate between pages.
+
+---
+
+## Export, Review, and Flag Workflow
+
+The Audit Logs page also supports a lightweight review workflow:
+
+- **Export** - download the currently filtered audit set as JSON with an export manifest
+- **Record Review Completion** - store a review note and timestamp for the current filtered view
+- **Saved Filters** - keep commonly used filter combinations for later reviews
+- **Flagged Events** - attach notes to suspicious entries or filtered result sets
+
+Admins and auditors can use these workflow features. Only admins can change retention and detection thresholds or run retention from the UI.
 
 ---
 

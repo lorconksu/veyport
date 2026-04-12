@@ -491,7 +491,7 @@ For contributors or those who prefer running a bare-metal binary.
 ### Build
 
 ```bash
-git clone https://github.com/wyiu/aerodocs.git
+git clone https://github.com/lorconksu/aerodocs.git
 cd aerodocs
 make build
 ```
