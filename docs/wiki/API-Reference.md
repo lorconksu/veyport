@@ -5,8 +5,8 @@
 > - **Who:** Frontend developers, integration builders, and anyone automating AeroDocs
 > - **Why:** Complete reference for every HTTP endpoint with request/response schemas
 > - **Where:** All endpoints served by the Hub on the HTTP port (default :8081)
-> - **When:** After authentication - most endpoints require a valid access token
-> - **How:** JSON request/response bodies; secure cookie auth for browsers with Bearer fallback for scripts; SSE for streaming
+> - **When:** After authentication - most endpoints require a valid JWT access token or CLI-created API token
+> - **How:** JSON request/response bodies; secure cookie auth for browsers with Bearer fallback for scripts/API tokens; SSE for streaming
 
 ---
 
@@ -35,7 +35,7 @@
 | Base URL | `http://<hub-host>:8081` (dev) or `https://<hub-domain>` (prod) |
 | Content Type | `application/json` (request and response) |
 | Browser Auth | `aerodocs_access` and `aerodocs_refresh` secure cookies, plus `aerodocs_csrf` for mutating requests |
-| API Client Auth | `Authorization: Bearer <token>` |
+| API Client Auth | `Authorization: Bearer <JWT access token or CLI-created API token>` |
 | Pagination | `?limit=N&offset=N` (default limit varies, max 100) |
 | CORS | Enabled in dev mode for `http://localhost:5173` |
 | Caching | `Cache-Control: no-store` on all API responses |
@@ -56,6 +56,36 @@ AeroDocs uses four JWT token types. In browser-driven flows, the resulting acces
 | **TOTP** | Issued after password verification when TOTP is enabled. Authorizes `/api/auth/login/totp`. | Short-lived |
 | **Access** | General-purpose API token. Required by most endpoints. | Short-lived |
 | **Refresh** | Long-lived token used to obtain a new access/refresh pair via `/api/auth/refresh`. | Long-lived |
+
+For non-browser automation, AeroDocs also supports opaque API tokens created with the Hub CLI. These are not JWTs, are stored as SHA-256 hashes at rest, and are recommended over automating a human password + TOTP secret.
+
+### Machine Authentication
+
+Create a dedicated low-privilege user for automation, then mint an API token on the Hub host:
+
+```bash
+# Docker deployment
+docker exec aerodocs /app/aerodocs admin create-api-token \
+  --username scanner \
+  --name nightly-scan \
+  --expires-in 720h \
+  --db /data/aerodocs.db
+
+# Bare-metal deployment
+./bin/aerodocs admin create-api-token \
+  --username scanner \
+  --name nightly-scan \
+  --expires-in 720h \
+  --db /var/lib/aerodocs/aerodocs.db
+```
+
+Use the returned token with the standard Bearer header:
+
+```bash
+curl -H "Authorization: Bearer adt_..." https://hub.example.com/api/auth/me
+```
+
+API tokens can call normal access-token-protected API endpoints, but they are intentionally rejected on interactive account-management endpoints such as password changes, avatar updates, and TOTP disable.
 
 ### Typical Login Flow
 

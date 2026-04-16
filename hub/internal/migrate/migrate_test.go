@@ -54,7 +54,7 @@ func TestRunMigrations_Idempotent(t *testing.T) {
 
 	var count int
 	db.QueryRow("SELECT COUNT(*) FROM _migrations").Scan(&count)
-	if count != 16 {
-		t.Fatalf("expected 16 migrations, got %d", count)
+	if count != 17 {
+		t.Fatalf("expected 17 migrations, got %d", count)
 	}
 }

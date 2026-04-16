@@ -41,6 +41,11 @@ software license does not grant rights to the `AeroDocs` name or logos; see
 [TRADEMARKS.md](TRADEMARKS.md) for branding rules and [CONTRIBUTING.md](CONTRIBUTING.md)
 for issue and pull-request expectations.
 
+AeroDocs is open source software licensed under the Apache License 2.0. The
+software license does not grant rights to the `AeroDocs` name or logos; see
+[TRADEMARKS.md](TRADEMARKS.md) for branding rules and [CONTRIBUTING.md](CONTRIBUTING.md)
+for issue and pull-request expectations.
+
 ## Features
 
 - **Fleet Dashboard** — At-a-glance health overview of all connected servers with live status, search, and filtering

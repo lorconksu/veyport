@@ -241,6 +241,42 @@ func TestSendRegister_RequiresReconnectForMTLS(t *testing.T) {
 	}
 }
 
+func TestSendRegister_InvokesOnRegisteredCallback(t *testing.T) {
+	var gotServerID string
+	c := New(Config{
+		HubAddr:  testHubAddr,
+		Token:    "reg-token",
+		Hostname: "host1",
+		CertDir:  t.TempDir(),
+		OnRegistered: func(serverID string) {
+			gotServerID = serverID
+		},
+	})
+	stream := &mockConnectClientStream{
+		recv: []*pb.HubMessage{
+			{
+				Payload: &pb.HubMessage_RegisterAck{
+					RegisterAck: &pb.RegisterAck{
+						Success:  true,
+						ServerId: "srv-callback",
+					},
+				},
+			},
+		},
+	}
+
+	bootstrapRegistered, err := c.sendRegister(stream)
+	if err != nil {
+		t.Fatalf("sendRegister: %v", err)
+	}
+	if !bootstrapRegistered {
+		t.Fatal("expected successful registration to require an mTLS reconnect")
+	}
+	if gotServerID != "srv-callback" {
+		t.Fatalf("expected OnRegistered callback to receive %q, got %q", "srv-callback", gotServerID)
+	}
+}
+
 func TestHandleFileDeleteRequest_OutsideDropzone(t *testing.T) {
 	c := &Client{tailSessions: make(map[string]chan struct{}), dropzone: dropzone.New(t.TempDir())}
 	sendCh := make(chan *pb.AgentMessage, 1)

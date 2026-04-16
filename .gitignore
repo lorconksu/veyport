@@ -23,6 +23,7 @@ hub/web/dist/
 .claude/
 .worktrees/
 .playwright-mcp/
+claude.md
 
 # Database
 *.db
@@ -36,3 +37,7 @@ docs-internal/
 node_modules/
 *.png
 .env
+scripts/nightly-security-scan.sh
+
+# Temporary development scripts
+hub/.tmp-*.go

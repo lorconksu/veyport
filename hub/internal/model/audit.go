@@ -75,6 +75,11 @@ const (
 )
 
 const (
+	AuditAPITokenCreated = "api_token.created"
+	AuditAPITokenRevoked = "api_token.revoked"
+)
+
+const (
 	AuditAuditExported          = "audit.exported"
 	AuditAuditReviewCompleted   = "audit.review_completed"
 	AuditAuditFilterSaved       = "audit.filter_saved"

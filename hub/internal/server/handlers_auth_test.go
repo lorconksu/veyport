@@ -306,8 +306,11 @@ func TestLoginTOTP_Success(t *testing.T) {
 
 	var authResp model.AuthResponse
 	json.NewDecoder(totpRec.Body).Decode(&authResp)
-	if authResp.AccessToken != "" {
-		t.Fatal("expected access_token to be omitted from login/totp response body")
+	if authResp.AccessToken == "" {
+		t.Fatal("expected access_token in login/totp response body")
+	}
+	if authResp.RefreshToken == "" {
+		t.Fatal("expected refresh_token in login/totp response body")
 	}
 }
 
@@ -416,8 +419,11 @@ func TestRefresh_ValidToken(t *testing.T) {
 
 	var tokenPair model.TokenPair
 	json.NewDecoder(refreshRec.Body).Decode(&tokenPair)
-	if tokenPair.AccessToken != "" {
-		t.Fatal("expected access_token to be omitted from refresh response body")
+	if tokenPair.AccessToken == "" {
+		t.Fatal("expected access_token in refresh response body")
+	}
+	if tokenPair.RefreshToken == "" {
+		t.Fatal("expected refresh_token in refresh response body")
 	}
 }
 
@@ -537,8 +543,11 @@ func TestTOTPEnable_Success(t *testing.T) {
 
 	var authResp model.AuthResponse
 	json.NewDecoder(enableRec.Body).Decode(&authResp)
-	if authResp.AccessToken != "" {
-		t.Fatal("expected access_token to be omitted from TOTP enable response body")
+	if authResp.AccessToken == "" {
+		t.Fatal("expected access_token in TOTP enable response body")
+	}
+	if authResp.RefreshToken == "" {
+		t.Fatal("expected refresh_token in TOTP enable response body")
 	}
 	if !authResp.User.TOTPEnabled {
 		t.Fatal("expected totp_enabled=true")

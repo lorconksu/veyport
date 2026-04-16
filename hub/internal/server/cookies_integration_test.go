@@ -172,11 +172,11 @@ func TestCookieAuth_LoginResponseStillContainsTokens(t *testing.T) {
 	var authResp model.AuthResponse
 	json.NewDecoder(rec2.Body).Decode(&authResp)
 
-	if authResp.AccessToken != "" {
-		t.Error("expected access_token to be omitted from response body")
+	if authResp.AccessToken == "" {
+		t.Error("expected access_token in response body")
 	}
-	if authResp.RefreshToken != "" {
-		t.Error("expected refresh_token to be omitted from response body")
+	if authResp.RefreshToken == "" {
+		t.Error("expected refresh_token in response body")
 	}
 }
 
@@ -294,11 +294,11 @@ func TestCookieAuth_RefreshViaCookie(t *testing.T) {
 	// Verify response body still contains tokens
 	var tokenPair model.TokenPair
 	json.NewDecoder(rec.Body).Decode(&tokenPair)
-	if tokenPair.AccessToken != "" {
-		t.Error("expected access_token to be omitted from refresh response body")
+	if tokenPair.AccessToken == "" {
+		t.Error("expected access_token in refresh response body")
 	}
-	if tokenPair.RefreshToken != "" {
-		t.Error("expected refresh_token to be omitted from refresh response body")
+	if tokenPair.RefreshToken == "" {
+		t.Error("expected refresh_token in refresh response body")
 	}
 }
 

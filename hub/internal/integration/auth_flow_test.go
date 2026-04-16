@@ -100,8 +100,8 @@ func enableTOTP(t *testing.T, h *TestHarness, secret, setupToken string) (access
 
 	var result model.AuthResponse
 	decodeJSON(t, resp, &result, "totp enable")
-	if result.AccessToken != "" || result.RefreshToken != "" {
-		t.Fatal("expected token fields to be omitted from totp enable response body")
+	if result.AccessToken == "" || result.RefreshToken == "" {
+		t.Fatal("expected token fields in totp enable response body")
 	}
 
 	access := findCookie(resp, cookieAccess)
@@ -148,8 +148,8 @@ func completeTOTPLogin(t *testing.T, h *TestHarness, totpToken, secret string) (
 
 	var result model.AuthResponse
 	decodeJSON(t, resp, &result, "login/totp")
-	if result.AccessToken != "" || result.RefreshToken != "" {
-		t.Fatal("expected token fields to be omitted from login/totp response body")
+	if result.AccessToken == "" || result.RefreshToken == "" {
+		t.Fatal("expected token fields in login/totp response body")
 	}
 
 	access := findCookie(resp, cookieAccess)
@@ -242,8 +242,8 @@ func TestFullAuthFlow(t *testing.T) {
 
 		var result model.TokenPair
 		decodeJSON(t, resp, &result, "refresh")
-		if result.AccessToken != "" || result.RefreshToken != "" {
-			t.Fatal("expected token fields to be omitted from refresh response body")
+		if result.AccessToken == "" || result.RefreshToken == "" {
+			t.Fatal("expected token fields in refresh response body")
 		}
 
 		access := findCookie(resp, cookieAccess)

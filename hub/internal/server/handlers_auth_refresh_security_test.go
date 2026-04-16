@@ -102,8 +102,8 @@ func TestRefresh_DemotedUser_GetsCurrentRole(t *testing.T) {
 
 	var tokenPair model.TokenPair
 	json.NewDecoder(refreshRec.Body).Decode(&tokenPair)
-	if tokenPair.AccessToken != "" || tokenPair.RefreshToken != "" {
-		t.Fatal("expected refresh response body to omit rotated tokens")
+	if tokenPair.AccessToken == "" || tokenPair.RefreshToken == "" {
+		t.Fatal("expected refresh response body to include rotated tokens")
 	}
 
 	accessCookie := findCookie(refreshRec.Result().Cookies(), cookieAccess)
@@ -119,5 +119,13 @@ func TestRefresh_DemotedUser_GetsCurrentRole(t *testing.T) {
 
 	if claims.Role != string(model.RoleViewer) {
 		t.Fatalf("expected role 'viewer' in new token, got '%s'", claims.Role)
+	}
+
+	bodyClaims, err := auth.ValidateToken(s.jwtSecret, tokenPair.AccessToken)
+	if err != nil {
+		t.Fatalf("validate response access token: %v", err)
+	}
+	if bodyClaims.Role != string(model.RoleViewer) {
+		t.Fatalf("expected role 'viewer' in response token, got '%s'", bodyClaims.Role)
 	}
 }
