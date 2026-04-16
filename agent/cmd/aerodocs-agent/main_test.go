@@ -108,6 +108,48 @@ func TestSaveNewConfig_PersistsUnregisterToken(t *testing.T) {
 	}
 }
 
+func TestResolveConfig_PrefersSavedConfigOverBootstrapToken(t *testing.T) {
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, testAgentConf)
+
+	saved := agentConfig{
+		ServerID:        "srv-existing",
+		HubURL:          "saved.example.com:443",
+		HubCAPin:        "cafebabe",
+		UnregisterToken: "saved-unreg-token",
+	}
+	data, err := json.MarshalIndent(saved, "", "  ")
+	if err != nil {
+		t.Fatalf("marshal config: %v", err)
+	}
+	if err := os.WriteFile(configPath, data, 0600); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	cfg, hubAddr, serverID, regToken, hubCAPin := resolveConfig(
+		configPath,
+		"new.example.com:443",
+		"new-bootstrap-token",
+		"deadbeef",
+	)
+
+	if cfg == nil {
+		t.Fatal("expected saved config to be loaded")
+	}
+	if hubAddr != saved.HubURL {
+		t.Fatalf("expected hubAddr %q, got %q", saved.HubURL, hubAddr)
+	}
+	if serverID != saved.ServerID {
+		t.Fatalf("expected serverID %q, got %q", saved.ServerID, serverID)
+	}
+	if regToken != "" {
+		t.Fatalf("expected bootstrap token to be ignored, got %q", regToken)
+	}
+	if hubCAPin != saved.HubCAPin {
+		t.Fatalf("expected hubCAPin %q, got %q", saved.HubCAPin, hubCAPin)
+	}
+}
+
 func TestParseAllowedPaths(t *testing.T) {
 	tests := []struct {
 		input string

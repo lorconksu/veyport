@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/wyiu/aerodocs/hub/internal/auth"
 	"github.com/wyiu/aerodocs/hub/internal/model"
 )
@@ -83,6 +84,89 @@ func TestAuthMiddleware_MissingToken(t *testing.T) {
 
 	if rec.Code != http.StatusUnauthorized {
 		t.Fatalf(testExpected401, rec.Code)
+	}
+}
+
+func TestAuthMiddleware_ValidAPIToken(t *testing.T) {
+	s := testServer(t)
+	_ = registerAndGetAdminToken(t, s)
+
+	user, err := s.store.GetUserByUsername("admin")
+	if err != nil {
+		t.Fatalf("get user: %v", err)
+	}
+
+	raw, hash, prefix, err := auth.GenerateAPIToken()
+	if err != nil {
+		t.Fatalf("generate api token: %v", err)
+	}
+	if err := s.store.CreateAPIToken(&model.APIToken{
+		ID:          uuid.NewString(),
+		UserID:      user.ID,
+		Name:        "nightly",
+		TokenHash:   hash,
+		TokenPrefix: prefix,
+	}); err != nil {
+		t.Fatalf("create api token: %v", err)
+	}
+
+	handler := s.authMiddleware(auth.TokenTypeAccess, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if got := UserIDFromContext(r.Context()); got != user.ID {
+			t.Fatalf("expected user id %q, got %q", user.ID, got)
+		}
+		if got := UserRoleFromContext(r.Context()); got != string(user.Role) {
+			t.Fatalf("expected role %q, got %q", user.Role, got)
+		}
+		if got := TokenTypeFromContext(r.Context()); got != auth.TokenTypeAPIToken {
+			t.Fatalf("expected token type %q, got %q", auth.TokenTypeAPIToken, got)
+		}
+		w.WriteHeader(http.StatusOK)
+	}))
+
+	req := httptest.NewRequest("GET", "/test", nil)
+	req.Header.Set("Authorization", testBearerPrefix+raw)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf(testExpected200Body, rec.Code, rec.Body.String())
+	}
+}
+
+func TestInteractiveOnly_RejectsAPIToken(t *testing.T) {
+	s := testServer(t)
+	_ = registerAndGetAdminToken(t, s)
+
+	user, err := s.store.GetUserByUsername("admin")
+	if err != nil {
+		t.Fatalf("get user: %v", err)
+	}
+
+	raw, hash, prefix, err := auth.GenerateAPIToken()
+	if err != nil {
+		t.Fatalf("generate api token: %v", err)
+	}
+	if err := s.store.CreateAPIToken(&model.APIToken{
+		ID:          uuid.NewString(),
+		UserID:      user.ID,
+		Name:        "nightly",
+		TokenHash:   hash,
+		TokenPrefix: prefix,
+	}); err != nil {
+		t.Fatalf("create api token: %v", err)
+	}
+
+	handler := s.authMiddleware(auth.TokenTypeAccess, s.interactiveOnly(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		t.Fatal(testHandlerNotCall)
+	})))
+
+	req := httptest.NewRequest("PUT", "/test", nil)
+	req.Header.Set("Authorization", testBearerPrefix+raw)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("expected 403, got %d: %s", rec.Code, rec.Body.String())
 	}
 }
 

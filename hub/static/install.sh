@@ -200,7 +200,7 @@ Wants=network-online.target
 [Service]
 Type=simple
 EnvironmentFile=/etc/aerodocs/agent.env
-ExecStart=/usr/local/bin/aerodocs-agent --hub ${AERODOCS_HUB} --token ${AERODOCS_TOKEN} --ca-pin ${AERODOCS_HUB_CA_PIN}
+ExecStart=/bin/sh -eu -c 'if [ -f /etc/aerodocs/agent.conf ]; then exec /usr/local/bin/aerodocs-agent; else exec /usr/local/bin/aerodocs-agent --hub "$AERODOCS_HUB" --token "$AERODOCS_TOKEN" --ca-pin "$AERODOCS_HUB_CA_PIN"; fi'
 Restart=always
 RestartSec=5
 

@@ -241,9 +241,8 @@ After=network.target
 
 [Service]
 Type=simple
-ExecStart=/usr/local/bin/aerodocs-agent \
-  --hub aerodocs.example.com:443 \
-  --token <REGISTRATION_TOKEN>
+EnvironmentFile=/etc/aerodocs/agent.env
+ExecStart=/bin/sh -eu -c 'if [ -f /etc/aerodocs/agent.conf ]; then exec /usr/local/bin/aerodocs-agent; else exec /usr/local/bin/aerodocs-agent --hub "$AERODOCS_HUB" --token "$AERODOCS_TOKEN" --ca-pin "$AERODOCS_HUB_CA_PIN"; fi'
 Restart=on-failure
 RestartSec=5s
 
@@ -336,6 +335,64 @@ As of v1.1, the web UI uses **httpOnly cookies** for JWT token storage instead o
 - The refresh token cookie is scoped to `/api/auth/refresh` to limit exposure
 
 No action is required from operators. The cookie auth is active by default when upgrading to v1.1.
+
+---
+
+## Machine Auth for Scripts
+
+If you are automating AeroDocs from cron, CI, or a scanner, do not script a human username/password/TOTP flow. Use a dedicated service account plus a CLI-created API token instead.
+
+### Create a dedicated token
+
+```bash
+# Docker deployment
+docker exec aerodocs /app/aerodocs admin create-api-token \
+  --username scanner \
+  --name nightly-scan \
+  --expires-in 720h \
+  --db /data/aerodocs.db
+
+# Bare-metal deployment
+./bin/aerodocs admin create-api-token \
+  --username scanner \
+  --name nightly-scan \
+  --expires-in 720h \
+  --db /var/lib/aerodocs/aerodocs.db
+```
+
+Store the printed token in a root-only env file on the machine that runs the automation:
+
+```bash
+sudo install -m 600 /dev/null /opt/aerodocs/nightly-security-scan.env
+sudo editor /opt/aerodocs/nightly-security-scan.env
+```
+
+Example contents:
+
+```bash
+AERODOCS_SCAN_BASE_URL=https://aerodocs.example.com
+AERODOCS_API_TOKEN=adt_replace_me
+SONAR_TOKEN=replace_me
+CLAUDE_BIN=/home/wyiu/.local/bin/claude
+```
+
+The sample file is included in the repo at `scripts/nightly-security-scan.env.example`.
+
+### Claude CLI auth for cron
+
+The nightly scan also depends on Claude CLI itself being authenticated. For unattended jobs, prefer a long-lived Claude token on the scan host:
+
+```bash
+/home/wyiu/.local/bin/claude setup-token
+```
+
+If you prefer the normal browser-backed login flow, refresh it with:
+
+```bash
+/home/wyiu/.local/bin/claude auth login
+```
+
+The nightly scan script now performs a short preflight request before the full run and exits early with a clear error if Claude auth is stale.
 
 ---
 

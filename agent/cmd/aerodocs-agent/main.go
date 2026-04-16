@@ -71,6 +71,13 @@ func main() {
 		AgentVersion: version,
 		Insecure:     *insecureFlag,
 		AllowedPaths: allowedPaths,
+		OnRegistered: func(serverID string) {
+			if cfg != nil || serverID == "" {
+				return
+			}
+			unregToken := os.Getenv("AERODOCS_UNREGISTER_TOKEN")
+			saveNewConfig(*configPath, hubAddr, serverID, hubCAPin, unregToken)
+		},
 	})
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
@@ -138,38 +145,13 @@ func runSelfUnregister(configPath string) {
 }
 
 // resolveConfig determines the effective hub address, server ID, and registration token
-// from the saved config file and CLI flags. If a token flag is provided, any existing
-// config is discarded to force a fresh registration.
+// from the saved config file and CLI flags. Saved config takes precedence over bootstrap
+// flags so service restarts reconnect with the persisted server ID.
 func resolveConfig(configPath, hubFlag, tokenFlag, caPinFlag string) (cfg *agentConfig, hubAddr, serverID, regToken, hubCAPin string) {
 	cfg, err := loadConfig(configPath)
 	if err != nil {
 		cfg = nil
 	}
-
-	// If --token is provided, always do a fresh registration (ignore saved config)
-	// This handles re-installs after unregister
-	if tokenFlag != "" {
-		if hubFlag == "" {
-			fmt.Fprintf(os.Stderr, "--hub is required when using --token\n")
-			flag.Usage()
-			os.Exit(1)
-		}
-		if cfg != nil {
-			log.Printf("--token provided, ignoring saved config (previous server_id=%s)", cfg.ServerID)
-			os.Remove(configPath)
-		}
-		cfg = nil
-	}
-
-	if cfg == nil && tokenFlag == "" {
-		fmt.Fprintf(os.Stderr, "first run: --hub and --token are required\n")
-		flag.Usage()
-		os.Exit(1)
-	}
-
-	hubAddr = hubFlag
-	regToken = tokenFlag
-	hubCAPin = caPinFlag
 
 	if cfg != nil {
 		hubAddr = cfg.HubURL
@@ -177,12 +159,31 @@ func resolveConfig(configPath, hubFlag, tokenFlag, caPinFlag string) (cfg *agent
 		regToken = ""
 		hubCAPin = cfg.HubCAPin
 		log.Printf("loaded config: server_id=%s hub=%s", serverID, hubAddr)
+		if tokenFlag != "" {
+			log.Printf("saved config present; ignoring bootstrap token and reusing server_id=%s", serverID)
+		}
+		return cfg, hubAddr, serverID, regToken, hubCAPin
 	}
-	if hubCAPin == "" && tokenFlag != "" {
+
+	if tokenFlag == "" {
+		fmt.Fprintf(os.Stderr, "first run: --hub and --token are required\n")
+		flag.Usage()
+		os.Exit(1)
+	}
+	if hubFlag == "" {
+		fmt.Fprintf(os.Stderr, "--hub is required when using --token\n")
+		flag.Usage()
+		os.Exit(1)
+	}
+	if caPinFlag == "" {
 		fmt.Fprintf(os.Stderr, "--ca-pin is required when using --token\n")
 		flag.Usage()
 		os.Exit(1)
 	}
+
+	hubAddr = hubFlag
+	regToken = tokenFlag
+	hubCAPin = caPinFlag
 
 	return cfg, hubAddr, serverID, regToken, hubCAPin
 }

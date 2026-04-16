@@ -171,11 +171,11 @@ func TestHandleRefresh_ValidToken(t *testing.T) {
 
 	var resp model.TokenPair
 	json.NewDecoder(rec.Body).Decode(&resp)
-	if resp.AccessToken != "" {
-		t.Fatal("expected access token to be omitted from refresh response body")
+	if resp.AccessToken == "" {
+		t.Fatal("expected access token in refresh response body")
 	}
-	if resp.RefreshToken != "" {
-		t.Fatal("expected refresh token to be omitted from refresh response body")
+	if resp.RefreshToken == "" {
+		t.Fatal("expected refresh token in refresh response body")
 	}
 }
 

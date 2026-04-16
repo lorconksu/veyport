@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"fmt"
 	"log"
 	"net"
 	"net/http"
@@ -52,35 +53,71 @@ func (s *Server) authMiddleware(requiredType string, next http.Handler) http.Han
 			return
 		}
 
-		claims, err := auth.ValidateToken(s.jwtSecret, tokenStr)
+		userID, role, tokenType, err := s.authenticateRequestToken(tokenStr)
 		if err != nil {
 			respondError(w, http.StatusUnauthorized, "invalid token")
 			return
 		}
 
-		// Check token blacklist (revoked tokens)
-		if claims.ID != "" && s.tokenBlacklist != nil && s.tokenBlacklist.IsBlacklisted(claims.ID) {
-			respondError(w, http.StatusUnauthorized, "token has been revoked")
-			return
-		}
-
-		if claims.TokenType != requiredType {
+		if !isAllowedTokenType(requiredType, tokenType) {
 			respondError(w, http.StatusForbidden, "invalid token type for this endpoint")
 			return
 		}
 
+		ctx := context.WithValue(r.Context(), ctxUserID, userID)
+		ctx = context.WithValue(ctx, ctxUserRole, role)
+		ctx = context.WithValue(ctx, ctxTokenType, tokenType)
+		next.ServeHTTP(w, r.WithContext(ctx))
+	})
+}
+
+func (s *Server) authenticateRequestToken(tokenStr string) (userID, role, tokenType string, err error) {
+	claims, err := auth.ValidateToken(s.jwtSecret, tokenStr)
+	if err == nil {
+		if claims.ID != "" && s.tokenBlacklist != nil && s.tokenBlacklist.IsBlacklisted(claims.ID) {
+			return "", "", "", fmt.Errorf("token has been revoked")
+		}
 		if claims.TokenType == auth.TokenTypeAccess {
 			user, err := s.store.GetUserByID(claims.Subject)
 			if err != nil || claims.TokenGeneration != user.TokenGeneration {
-				respondError(w, http.StatusUnauthorized, "token has been revoked")
-				return
+				return "", "", "", fmt.Errorf("token has been revoked")
 			}
 		}
+		return claims.Subject, claims.Role, claims.TokenType, nil
+	}
 
-		ctx := context.WithValue(r.Context(), ctxUserID, claims.Subject)
-		ctx = context.WithValue(ctx, ctxUserRole, claims.Role)
-		ctx = context.WithValue(ctx, ctxTokenType, claims.TokenType)
-		next.ServeHTTP(w, r.WithContext(ctx))
+	if !auth.LooksLikeAPIToken(tokenStr) {
+		return "", "", "", err
+	}
+
+	apiToken, err := s.store.GetActiveAPITokenByHash(auth.HashAPIToken(tokenStr))
+	if err != nil {
+		return "", "", "", err
+	}
+
+	user, err := s.store.GetUserByID(apiToken.UserID)
+	if err != nil {
+		return "", "", "", err
+	}
+
+	_ = s.store.UpdateAPITokenLastUsed(apiToken.ID, time.Now().UTC())
+	return user.ID, string(user.Role), auth.TokenTypeAPIToken, nil
+}
+
+func isAllowedTokenType(requiredType, tokenType string) bool {
+	if requiredType == auth.TokenTypeAccess && tokenType == auth.TokenTypeAPIToken {
+		return true
+	}
+	return requiredType == tokenType
+}
+
+func (s *Server) interactiveOnly(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if TokenTypeFromContext(r.Context()) != auth.TokenTypeAccess {
+			respondError(w, http.StatusForbidden, "interactive login required")
+			return
+		}
+		next.ServeHTTP(w, r)
 	})
 }
 

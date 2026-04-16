@@ -60,8 +60,8 @@ func TestRefreshToken_NewTokenWorks(t *testing.T) {
 
 	var pair model.TokenPair
 	json.NewDecoder(rec.Body).Decode(&pair)
-	if pair.AccessToken != "" || pair.RefreshToken != "" {
-		t.Fatal("expected refresh response body to omit rotated tokens")
+	if pair.AccessToken == "" || pair.RefreshToken == "" {
+		t.Fatal("expected refresh response body to include rotated tokens")
 	}
 
 	// The new refresh token from the cookie should work

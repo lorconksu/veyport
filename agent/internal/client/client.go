@@ -47,6 +47,7 @@ type Config struct {
 	AllowedPaths    []string
 	HubCAPin        string
 	DropzoneDir     string
+	OnRegistered    func(serverID string)
 }
 
 const (
@@ -74,6 +75,7 @@ type Client struct {
 	insecure        bool
 	allowedPaths    []string
 	hubCAPin        string
+	onRegistered    func(serverID string)
 }
 
 func New(cfg Config) *Client {
@@ -102,6 +104,7 @@ func New(cfg Config) *Client {
 		insecure:        cfg.Insecure,
 		allowedPaths:    cfg.AllowedPaths,
 		hubCAPin:        cfg.HubCAPin,
+		onRegistered:    cfg.OnRegistered,
 	}
 }
 
@@ -622,6 +625,9 @@ func (c *Client) sendRegister(stream pb.AgentService_ConnectClient) (bool, error
 	c.serverID = ack.ServerId
 	log.Printf("registered successfully: server_id=%s", c.serverID)
 	c.storeMTLSCerts(ack)
+	if c.onRegistered != nil {
+		c.onRegistered(c.serverID)
+	}
 	return true, nil
 }
 
