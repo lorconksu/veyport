@@ -1,0 +1,99 @@
+name: Base Refresh
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '17 3 * * *'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: base-refresh
+  cancel-in-progress: false
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: hub/go.mod
+          cache-dependency-path: |
+            hub/go.sum
+            agent/go.sum
+      - name: Create frontend embed stub
+        run: mkdir -p hub/web/dist && touch hub/web/dist/index.html
+      - name: Hub tests
+        run: cd hub && go test ./internal/...
+      - name: Agent tests
+        run: cd agent && go test ./...
+
+  build-and-push:
+    needs: test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Compute image metadata
+        id: meta
+        env:
+          REPOSITORY: yiucloud/aerodocs
+        run: |
+          DATE_TAG="$(date -u +%Y%m%d)"
+          SHORT_SHA="${GITHUB_SHA::7}"
+          BUILD_VERSION="nightly-${DATE_TAG}-${SHORT_SHA}"
+          CREATED="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+
+          {
+            echo "build_version=${BUILD_VERSION}"
+            echo "labels<<EOF"
+            echo "org.opencontainers.image.created=${CREATED}"
+            echo "org.opencontainers.image.revision=${GITHUB_SHA}"
+            echo "org.opencontainers.image.source=${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}"
+            echo "org.opencontainers.image.version=${BUILD_VERSION}"
+            echo "EOF"
+            echo "tags<<EOF"
+            echo "${REPOSITORY}:latest"
+            echo "${REPOSITORY}:nightly"
+            echo "${REPOSITORY}:nightly-${DATE_TAG}"
+            echo "${REPOSITORY}:main-${SHORT_SHA}"
+            echo "EOF"
+          } >> "${GITHUB_OUTPUT}"
+
+      - name: Log in to Docker Hub
+        uses: docker/login-action@v4
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v4
+        with:
+          driver: cloud
+          endpoint: "yiucloud/aerodocs-builder"
+
+      - name: Build and push
+        uses: docker/build-push-action@v7
+        env:
+          DOCKER_BUILD_SUMMARY: false
+          DOCKER_BUILD_RECORD_UPLOAD: false
+        with:
+          context: .
+          pull: true
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          build-args: |
+            VERSION=${{ steps.meta.outputs.build_version }}
+          sbom: true
+          provenance: mode=max
+
+      - name: Docker Scout CVE scan
+        uses: docker/scout-action@v1.20.3
+        with:
+          command: cves
+          image: yiucloud/aerodocs:latest
+          summary: true
+          write-comment: false
