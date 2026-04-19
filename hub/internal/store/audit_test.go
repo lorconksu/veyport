@@ -223,3 +223,31 @@ func TestLogAuditConcurrent(t *testing.T) {
 		}
 	}
 }
+
+func TestLogAudit_GeneratesUniqueIDWhenMissing(t *testing.T) {
+	s := testStore(t)
+
+	if err := s.LogAudit(model.AuditEntry{Action: model.AuditServerConnected}); err != nil {
+		t.Fatalf("first log audit without id: %v", err)
+	}
+	if err := s.LogAudit(model.AuditEntry{Action: model.AuditServerDisconnected}); err != nil {
+		t.Fatalf("second log audit without id: %v", err)
+	}
+
+	entries, total, err := s.ListAuditLogs(model.AuditFilter{Limit: 10})
+	if err != nil {
+		t.Fatalf("list audit logs: %v", err)
+	}
+	if total != 2 {
+		t.Fatalf("expected total 2, got %d", total)
+	}
+	if len(entries) != 2 {
+		t.Fatalf("expected 2 returned entries, got %d", len(entries))
+	}
+	if entries[0].ID == "" || entries[1].ID == "" {
+		t.Fatal("expected generated audit ids to be non-empty")
+	}
+	if entries[0].ID == entries[1].ID {
+		t.Fatalf("expected generated audit ids to be unique, got %q", entries[0].ID)
+	}
+}

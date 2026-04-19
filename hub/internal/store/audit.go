@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/wyiu/aerodocs/hub/internal/model"
 )
 
@@ -159,6 +160,9 @@ func scanAuditRows(rows interface {
 }
 
 func normalizeAuditEntry(entry model.AuditEntry) model.AuditEntry {
+	if entry.ID == "" {
+		entry.ID = uuid.NewString()
+	}
 	if entry.Outcome == "" {
 		if strings.HasSuffix(entry.Action, "_failed") {
 			entry.Outcome = model.AuditOutcomeFailure
