@@ -34,8 +34,14 @@ jobs:
       - name: Frontend tests with coverage
         run: cd web && npx vitest run --coverage
 
+      - name: Create frontend embed stub
+        run: mkdir -p hub/web/dist && touch hub/web/dist/index.html
+
       - name: Hub tests with coverage
         run: cd hub && go test ./internal/... -coverprofile=../coverage-hub.out -covermode=atomic
+
+      - name: Hub command tests with coverage
+        run: cd hub && go test ./cmd/aerodocs -coverprofile=../coverage-hub-cmd.out -covermode=atomic
 
       - name: Agent tests with coverage
         run: cd agent && go test ./... -coverprofile=../coverage-agent.out -covermode=atomic
@@ -46,6 +52,7 @@ jobs:
           name: coverage
           path: |
             coverage-hub.out
+            coverage-hub-cmd.out
             coverage-agent.out
             web/coverage/lcov.info
 

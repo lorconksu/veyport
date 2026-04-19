@@ -1,8 +1,12 @@
 package main
 
 import (
+	"io"
+	"os"
 	"path/filepath"
+	"strings"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/wyiu/aerodocs/hub/internal/auth"
@@ -10,96 +14,377 @@ import (
 	"github.com/wyiu/aerodocs/hub/internal/store"
 )
 
-const testFlagUsername = "--username"
-
-// TestRunAdmin_NoArgs verifies that runAdmin with no arguments returns a usage error.
 func TestRunAdmin_NoArgs(t *testing.T) {
-	err := runAdmin([]string{})
-	if err == nil {
-		t.Fatal("expected error for no args")
+	err := runAdmin(nil)
+	if err == nil || !strings.Contains(err.Error(), "usage: aerodocs admin") {
+		t.Fatalf("expected usage error, got %v", err)
 	}
 }
 
-// TestRunAdmin_UnknownCommand verifies that runAdmin with an unknown command returns an error.
 func TestRunAdmin_UnknownCommand(t *testing.T) {
-	err := runAdmin([]string{"unknown-cmd"})
-	if err == nil {
-		t.Fatal("expected error for unknown command")
+	err := runAdmin([]string{"unknown"})
+	if err == nil || !strings.Contains(err.Error(), "unknown admin command") {
+		t.Fatalf("expected unknown command error, got %v", err)
 	}
 }
 
-// TestRunAdmin_ResetTOTP_NoUsername verifies that reset-totp without --username returns an error.
-func TestRunResetTOTP_NoUsername(t *testing.T) {
-	err := runResetTOTP([]string{})
-	if err == nil {
-		t.Fatal("expected error when --username is missing")
+func TestRunAdmin_DispatchesResetTOTP(t *testing.T) {
+	err := runAdmin([]string{"reset-totp"})
+	if err == nil || err.Error() != "--username is required" {
+		t.Fatalf("expected reset-totp dispatch error, got %v", err)
 	}
 }
 
-// TestRunResetTOTP_BadDB verifies that reset-totp with an invalid db path returns an error.
+func TestRunAdmin_DispatchesCreateAPIToken(t *testing.T) {
+	err := runAdmin([]string{"create-api-token"})
+	if err == nil || err.Error() != "--username is required" {
+		t.Fatalf("expected create-api-token dispatch error, got %v", err)
+	}
+}
+
+func TestRunAdmin_DispatchesListAPITokens(t *testing.T) {
+	err := runAdmin([]string{"list-api-tokens"})
+	if err == nil || err.Error() != "--username is required" {
+		t.Fatalf("expected list-api-tokens dispatch error, got %v", err)
+	}
+}
+
+func TestRunAdmin_DispatchesRevokeAPIToken(t *testing.T) {
+	err := runAdmin([]string{"revoke-api-token"})
+	if err == nil || err.Error() != "--id is required" {
+		t.Fatalf("expected revoke-api-token dispatch error, got %v", err)
+	}
+}
+
+func TestRunResetTOTP_RequiresUsername(t *testing.T) {
+	err := runResetTOTP(nil)
+	if err == nil || err.Error() != "--username is required" {
+		t.Fatalf("expected missing username error, got %v", err)
+	}
+}
+
 func TestRunResetTOTP_BadDB(t *testing.T) {
-	err := runResetTOTP([]string{testFlagUsername, "testuser", "--db", "/dev/null/nonexistent/path.db"})
-	if err == nil {
-		t.Fatal("expected error for bad db path")
+	err := runResetTOTP([]string{"--username", "resetme", "--db", "/dev/null/admin.db"})
+	if err == nil || !strings.Contains(err.Error(), "open database:") {
+		t.Fatalf("expected db open error, got %v", err)
 	}
 }
 
-// TestRunResetTOTP_UserNotFound verifies that reset-totp with a nonexistent user errors.
 func TestRunResetTOTP_UserNotFound(t *testing.T) {
-	dir := t.TempDir()
-	dbPath := filepath.Join(dir, "test.db")
+	dbPath, st := newAdminTestStore(t)
+	st.Close()
 
-	// Create and immediately close a valid DB (so it has migrations applied).
-	st, err := store.New(dbPath)
+	err := runResetTOTP([]string{"--username", "missing", "--db", dbPath})
+	if err == nil || !strings.Contains(err.Error(), `user "missing" not found`) {
+		t.Fatalf("expected not found error, got %v", err)
+	}
+}
+
+func TestRunResetTOTP_Success(t *testing.T) {
+	dbPath, st := newAdminTestStore(t)
+	secret := "totp-secret"
+	user := createAdminUser(t, st, "resetme", model.RoleAdmin, &secret, true)
+	originalHash := user.PasswordHash
+	st.Close()
+
+	output := captureStdout(t, func() {
+		if err := runResetTOTP([]string{"--username", "resetme", "--db", dbPath}); err != nil {
+			t.Fatalf("run reset-totp: %v", err)
+		}
+	})
+
+	verifyStore, err := store.New(dbPath)
 	if err != nil {
-		t.Fatalf("create store: %v", err)
+		t.Fatalf("re-open store: %v", err)
+	}
+	defer verifyStore.Close()
+
+	got, err := verifyStore.GetUserByUsername("resetme")
+	if err != nil {
+		t.Fatalf("fetch user: %v", err)
+	}
+	if got.TOTPSecret != nil {
+		t.Fatal("expected TOTP secret to be cleared")
+	}
+	if got.TOTPEnabled {
+		t.Fatal("expected TOTP to be disabled")
+	}
+	if got.PasswordHash == originalHash {
+		t.Fatal("expected temporary password hash to be updated")
+	}
+	if !strings.Contains(output, "Temporary password:") {
+		t.Fatalf("expected temporary password in output, got %q", output)
+	}
+}
+
+func TestRunCreateAPIToken_RequiresUsername(t *testing.T) {
+	err := runCreateAPIToken([]string{"--name", "nightly"})
+	if err == nil || err.Error() != "--username is required" {
+		t.Fatalf("expected missing username error, got %v", err)
+	}
+}
+
+func TestRunCreateAPIToken_RequiresName(t *testing.T) {
+	err := runCreateAPIToken([]string{"--username", "scanner"})
+	if err == nil || err.Error() != "--name is required" {
+		t.Fatalf("expected missing name error, got %v", err)
+	}
+}
+
+func TestRunCreateAPIToken_InvalidDuration(t *testing.T) {
+	dbPath, st := newAdminTestStore(t)
+	createAdminUser(t, st, "scanner", model.RoleViewer, nil, false)
+	st.Close()
+
+	err := runCreateAPIToken([]string{
+		"--username", "scanner",
+		"--name", "nightly",
+		"--expires-in", "not-a-duration",
+		"--db", dbPath,
+	})
+	if err == nil || !strings.Contains(err.Error(), "invalid value") {
+		t.Fatalf("expected duration parse error, got %v", err)
+	}
+}
+
+func TestRunCreateAPIToken_Success(t *testing.T) {
+	dbPath, st := newAdminTestStore(t)
+	user := createAdminUser(t, st, "scanner", model.RoleViewer, nil, false)
+	st.Close()
+
+	output := captureStdout(t, func() {
+		err := runCreateAPIToken([]string{
+			"--username", "scanner",
+			"--name", "nightly scan",
+			"--expires-in", "0",
+			"--db", dbPath,
+		})
+		if err != nil {
+			t.Fatalf("run create-api-token: %v", err)
+		}
+	})
+
+	verifyStore, err := store.New(dbPath)
+	if err != nil {
+		t.Fatalf("re-open store: %v", err)
+	}
+	defer verifyStore.Close()
+
+	tokens, err := verifyStore.ListAPITokensByUserID(user.ID)
+	if err != nil {
+		t.Fatalf("list api tokens: %v", err)
+	}
+	if len(tokens) != 1 {
+		t.Fatalf("expected 1 token, got %d", len(tokens))
+	}
+	if tokens[0].ExpiresAt != nil {
+		t.Fatal("expected token with no expiry")
+	}
+	if tokens[0].Name != "nightly scan" {
+		t.Fatalf("expected token name to be trimmed and stored, got %q", tokens[0].Name)
+	}
+	if !strings.Contains(output, "Expires At: never") || !strings.Contains(output, "Token: adt_") {
+		t.Fatalf("expected token details in output, got %q", output)
+	}
+}
+
+func TestRunListAPITokens_RequiresUsername(t *testing.T) {
+	err := runListAPITokens(nil)
+	if err == nil || err.Error() != "--username is required" {
+		t.Fatalf("expected missing username error, got %v", err)
+	}
+}
+
+func TestRunListAPITokens_NoTokens(t *testing.T) {
+	dbPath, st := newAdminTestStore(t)
+	createAdminUser(t, st, "scanner", model.RoleViewer, nil, false)
+	st.Close()
+
+	output := captureStdout(t, func() {
+		if err := runListAPITokens([]string{"--username", "scanner", "--db", dbPath}); err != nil {
+			t.Fatalf("run list-api-tokens: %v", err)
+		}
+	})
+
+	if !strings.Contains(output, `No API tokens found for "scanner"`) {
+		t.Fatalf("expected empty token message, got %q", output)
+	}
+}
+
+func TestRunListAPITokens_ShowsStatuses(t *testing.T) {
+	dbPath, st := newAdminTestStore(t)
+	user := createAdminUser(t, st, "scanner", model.RoleViewer, nil, false)
+	now := time.Now().UTC()
+	lastUsedAt := now.Add(-time.Minute)
+	expiredAt := now.Add(-time.Hour)
+	revokedAt := now.Add(-30 * time.Minute)
+
+	tokens := []*model.APIToken{
+		{
+			ID:          "active-token",
+			UserID:      user.ID,
+			Name:        "active",
+			TokenHash:   "hash-active",
+			TokenPrefix: "adt_active",
+			LastUsedAt:  &lastUsedAt,
+		},
+		{
+			ID:          "expired-token",
+			UserID:      user.ID,
+			Name:        "expired",
+			TokenHash:   "hash-expired",
+			TokenPrefix: "adt_expired",
+			ExpiresAt:   &expiredAt,
+		},
+		{
+			ID:          "revoked-token",
+			UserID:      user.ID,
+			Name:        "revoked",
+			TokenHash:   "hash-revoked",
+			TokenPrefix: "adt_revoked",
+			RevokedAt:   &revokedAt,
+		},
+	}
+	for _, token := range tokens {
+		if err := st.CreateAPIToken(token); err != nil {
+			t.Fatalf("create api token %s: %v", token.ID, err)
+		}
 	}
 	st.Close()
 
-	err = runResetTOTP([]string{testFlagUsername, "nonexistentuser", "--db", dbPath})
-	if err == nil {
-		t.Fatal("expected error for nonexistent user")
+	output := captureStdout(t, func() {
+		if err := runListAPITokens([]string{"--username", "scanner", "--db", dbPath}); err != nil {
+			t.Fatalf("run list-api-tokens: %v", err)
+		}
+	})
+
+	for _, fragment := range []string{
+		"ID\tNAME\tPREFIX\tEXPIRES_AT\tLAST_USED_AT\tSTATUS",
+		"active-token\tactive\tadt_active\tnever\t",
+		"\tactive\n",
+		"expired-token\texpired\tadt_expired\t",
+		"\texpired\n",
+		"revoked-token\trevoked\tadt_revoked\tnever\tnever\trevoked",
+	} {
+		if !strings.Contains(output, fragment) {
+			t.Fatalf("expected output to contain %q, got %q", fragment, output)
+		}
 	}
 }
 
-// TestRunResetTOTP_Success verifies reset-totp completes successfully with a real user.
-func TestRunResetTOTP_Success(t *testing.T) {
-	dir := t.TempDir()
-	dbPath := filepath.Join(dir, "test.db")
+func TestRunRevokeAPIToken_RequiresID(t *testing.T) {
+	err := runRevokeAPIToken(nil)
+	if err == nil || err.Error() != "--id is required" {
+		t.Fatalf("expected missing id error, got %v", err)
+	}
+}
 
-	// Create store and seed a user.
+func TestRunRevokeAPIToken_Success(t *testing.T) {
+	dbPath, st := newAdminTestStore(t)
+	user := createAdminUser(t, st, "scanner", model.RoleViewer, nil, false)
+	token := &model.APIToken{
+		ID:          "tok-1",
+		UserID:      user.ID,
+		Name:        "nightly",
+		TokenHash:   "hash-1",
+		TokenPrefix: "adt_123456789abc",
+	}
+	if err := st.CreateAPIToken(token); err != nil {
+		t.Fatalf("create api token: %v", err)
+	}
+	st.Close()
+
+	output := captureStdout(t, func() {
+		if err := runRevokeAPIToken([]string{"--id", token.ID, "--db", dbPath}); err != nil {
+			t.Fatalf("run revoke-api-token: %v", err)
+		}
+	})
+
+	verifyStore, err := store.New(dbPath)
+	if err != nil {
+		t.Fatalf("re-open store: %v", err)
+	}
+	defer verifyStore.Close()
+
+	tokens, err := verifyStore.ListAPITokensByUserID(user.ID)
+	if err != nil {
+		t.Fatalf("list api tokens: %v", err)
+	}
+	if len(tokens) != 1 || tokens[0].RevokedAt == nil {
+		t.Fatalf("expected revoked token, got %+v", tokens)
+	}
+	if !strings.Contains(output, "API token tok-1 revoked") {
+		t.Fatalf("expected revoke output, got %q", output)
+	}
+}
+
+func TestRunRevokeAPIToken_NotFound(t *testing.T) {
+	dbPath, st := newAdminTestStore(t)
+	st.Close()
+
+	err := runRevokeAPIToken([]string{"--id", "missing", "--db", dbPath})
+	if err == nil || err.Error() != "api token not found" {
+		t.Fatalf("expected not found error, got %v", err)
+	}
+}
+
+func newAdminTestStore(t *testing.T) (string, *store.Store) {
+	t.Helper()
+
+	dbPath := filepath.Join(t.TempDir(), "admin-test.db")
 	st, err := store.New(dbPath)
 	if err != nil {
 		t.Fatalf("create store: %v", err)
 	}
+	return dbPath, st
+}
+
+func createAdminUser(t *testing.T, st *store.Store, username string, role model.Role, secret *string, totpEnabled bool) *model.User {
+	t.Helper()
+
 	hash, err := auth.HashPassword("MyP@ssw0rd!234")
 	if err != nil {
 		t.Fatalf("hash password: %v", err)
 	}
 	user := &model.User{
 		ID:           uuid.NewString(),
-		Username:     "testadmin",
-		Email:        "testadmin@test.com",
+		Username:     username,
+		Email:        username + "@test.com",
 		PasswordHash: hash,
-		Role:         model.RoleAdmin,
+		Role:         role,
+		TOTPSecret:   secret,
+		TOTPEnabled:  totpEnabled,
 	}
 	if err := st.CreateUser(user); err != nil {
 		t.Fatalf("create user: %v", err)
 	}
-	st.Close()
-
-	// Now call reset-totp — should succeed.
-	err = runResetTOTP([]string{testFlagUsername, "testadmin", "--db", dbPath})
-	if err != nil {
-		t.Fatalf("expected success, got: %v", err)
-	}
+	return user
 }
 
-// TestRunAdmin_ResetTOTP_Dispatches verifies that runAdmin("reset-totp") dispatches correctly.
-func TestRunAdmin_ResetTOTP_Dispatches(t *testing.T) {
-	// Passing "reset-totp" with no username should give --username required error
-	err := runAdmin([]string{"reset-totp"})
-	if err == nil {
-		t.Fatal("expected error when dispatching reset-totp with no args")
+func captureStdout(t *testing.T, fn func()) string {
+	t.Helper()
+
+	originalStdout := os.Stdout
+	reader, writer, err := os.Pipe()
+	if err != nil {
+		t.Fatalf("create stdout pipe: %v", err)
 	}
+	defer reader.Close()
+	defer func() {
+		_ = writer.Close()
+		os.Stdout = originalStdout
+	}()
+
+	os.Stdout = writer
+	fn()
+	if err := writer.Close(); err != nil {
+		t.Fatalf("close stdout writer: %v", err)
+	}
+	os.Stdout = originalStdout
+
+	output, err := io.ReadAll(reader)
+	if err != nil {
+		t.Fatalf("read stdout: %v", err)
+	}
+	return string(output)
 }
