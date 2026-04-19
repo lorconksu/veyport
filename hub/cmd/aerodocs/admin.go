@@ -68,6 +68,9 @@ func runResetTOTP(args []string) error {
 	if err := st.UpdateUserPassword(user.ID, hash); err != nil {
 		return fmt.Errorf("update password: %w", err)
 	}
+	if err := st.MarkInitialSetupComplete(); err != nil {
+		return fmt.Errorf("mark setup complete: %w", err)
+	}
 
 	fmt.Printf("TOTP reset for user %q\n", resolvedUsername)
 	fmt.Printf("Temporary password: %s\n", tempPassword)

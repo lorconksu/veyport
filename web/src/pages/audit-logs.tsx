@@ -1,6 +1,6 @@
 import { useState, useMemo, useCallback, useEffect } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { Download, Save, ShieldAlert } from 'lucide-react'
+import { Download, Info, Save, ShieldAlert } from 'lucide-react'
 import { apiFetch } from '@/lib/api'
 import { useAuth } from '@/hooks/use-auth'
 import type {
@@ -279,14 +279,64 @@ export function AuditLogsPage() {
         </div>
       </div>
 
+      <div className="bg-surface border border-border rounded p-4">
+        <div className="flex items-start gap-3">
+          <div className="shrink-0 rounded-full bg-accent/10 p-2 text-accent">
+            <Info className="w-4 h-4" />
+          </div>
+          <div className="space-y-3">
+            <div>
+              <div className="text-sm font-semibold text-text-primary">What this page tells you</div>
+              <p className="text-xs text-text-muted mt-1">
+                Use this page to answer four questions: is audit logging healthy, what happened, has someone reviewed it,
+                and did any rule-based detections trigger.
+              </p>
+            </div>
+            <div className="grid gap-3 md:grid-cols-2">
+              <div className="rounded border border-border bg-elevated/40 p-3">
+                <div className="text-xs font-semibold uppercase tracking-wider text-text-primary">Audit Health</div>
+                <p className="text-xs text-text-muted mt-1">
+                  This is the health of the audit pipeline itself. The failure counter tracks failed attempts to write
+                  audit rows, not failed user logins or confirmed attacks.
+                </p>
+              </div>
+              <div className="rounded border border-border bg-elevated/40 p-3">
+                <div className="text-xs font-semibold uppercase tracking-wider text-text-primary">Active Detections</div>
+                <p className="text-xs text-text-muted mt-1">
+                  These are simple threshold-based warnings such as repeated failed logins, failed registrations,
+                  privileged-action bursts, or overdue reviews. They are prompts to investigate, not verdicts.
+                </p>
+              </div>
+              <div className="rounded border border-border bg-elevated/40 p-3">
+                <div className="text-xs font-semibold uppercase tracking-wider text-text-primary">Review Workflow</div>
+                <p className="text-xs text-text-muted mt-1">
+                  This is manual review bookkeeping. You can save a filter, export a filtered set, record that you reviewed
+                  it, and flag entries with notes for follow-up.
+                </p>
+              </div>
+              <div className="rounded border border-border bg-elevated/40 p-3">
+                <div className="text-xs font-semibold uppercase tracking-wider text-text-primary">Audit Records</div>
+                <p className="text-xs text-text-muted mt-1">
+                  The table is a quick summary. Exporting the current view gives you the full JSON records with IDs,
+                  details, resource metadata, correlation IDs, and the integrity hash chain.
+                </p>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
       <div className="grid gap-4 md:grid-cols-4">
         <div className="bg-surface border border-border rounded p-4">
           <div className="text-xs uppercase tracking-wider text-text-muted mb-1">Audit Health</div>
           <div className={`text-sm font-semibold ${health?.degraded ? 'text-status-error' : 'text-status-online'}`}>
             {health?.degraded ? 'Degraded' : 'Healthy'}
           </div>
-          <div className="text-xs text-text-muted mt-2">Failures: {health?.failure_count ?? 0}</div>
+          <div className="text-xs text-text-muted mt-2">Write failures: {health?.failure_count ?? 0}</div>
           <div className="text-xs text-text-muted mt-1">Last failure: {health?.last_failure_at ? formatDate(health.last_failure_at) : '—'}</div>
+          <div className="text-xs text-text-muted mt-1">
+            {health?.last_failure_reason ? `Reason: ${health.last_failure_reason}` : 'Counts are cumulative until reset.'}
+          </div>
         </div>
         <div className="bg-surface border border-border rounded p-4">
           <div className="text-xs uppercase tracking-wider text-text-muted mb-1">Retention</div>
@@ -312,6 +362,9 @@ export function AuditLogsPage() {
             <ShieldAlert className="w-4 h-4" />
             <span className="text-sm font-semibold">Active Detections</span>
           </div>
+          <p className="text-xs text-text-muted mb-3">
+            These notices are threshold-based prompts for review. They do not mean AeroDocs has confirmed malicious activity.
+          </p>
           <div className="space-y-2">
             {detections.detections.map(detection => (
               <div key={detection.id} className="text-sm text-text-primary">
@@ -326,6 +379,10 @@ export function AuditLogsPage() {
       <div className="grid gap-4 lg:grid-cols-3">
         <div className="bg-surface border border-border rounded p-4 space-y-3">
           <div className="text-sm font-semibold text-text-primary">Compliance Controls</div>
+          <p className="text-xs text-text-muted">
+            These settings control retention, review reminders, password policy, and the thresholds used by active detections.
+            Only admins can change them.
+          </p>
           <div className="grid grid-cols-2 gap-3">
             <label className="text-xs text-text-muted">
               <span>Retention Days</span>
@@ -414,10 +471,18 @@ export function AuditLogsPage() {
               {retentionMutation.isPending ? 'Running…' : 'Run Retention'}
             </button>
           </div>
+          <div className="space-y-1 border-t border-border pt-3 text-xs text-text-muted">
+            <div><span className="text-text-primary font-medium">Save Controls</span> stores the values above for future reminders, password policy checks, and detections.</div>
+            <div><span className="text-text-primary font-medium">Run Retention</span> immediately deletes audit rows older than the retention window.</div>
+          </div>
         </div>
 
         <div className="bg-surface border border-border rounded p-4 space-y-3">
           <div className="text-sm font-semibold text-text-primary">Review Workflow</div>
+          <p className="text-xs text-text-muted">
+            Recording a review does not approve, dismiss, or edit entries. It only stores who reviewed the current filtered
+            set, when they reviewed it, and any notes they left.
+          </p>
           <textarea
             value={reviewNotes}
             onChange={e => setReviewNotes(e.target.value)}
@@ -443,6 +508,9 @@ export function AuditLogsPage() {
 
         <div className="bg-surface border border-border rounded p-4 space-y-3">
           <div className="text-sm font-semibold text-text-primary">Saved Filters</div>
+          <p className="text-xs text-text-muted">
+            Save the current date, user, action, and outcome filters so common reviews can be reopened in one click.
+          </p>
           <input
             type="text"
             value={savedFilterName}
@@ -504,6 +572,9 @@ export function AuditLogsPage() {
       <div className="grid gap-4 lg:grid-cols-2">
         <div className="bg-surface border border-border rounded p-4 space-y-3">
           <div className="text-sm font-semibold text-text-primary">Export History</div>
+          <p className="text-xs text-text-muted">
+            This shows recent audit exports. Each export records who exported data, when they did it, and which filters were applied.
+          </p>
           <div className="space-y-2">
             {(exportHistory?.entries ?? []).slice(0, 5).map(entry => (
               <div key={entry.id} className="text-xs text-text-muted border-b border-border last:border-b-0 pb-2">
@@ -516,6 +587,9 @@ export function AuditLogsPage() {
         </div>
         <div className="bg-surface border border-border rounded p-4 space-y-3">
           <div className="text-sm font-semibold text-text-primary">Flagged Events</div>
+          <p className="text-xs text-text-muted">
+            Flagging is a manual note for follow-up. It does not change the underlying audit record.
+          </p>
           <div className="space-y-2">
             {(flags?.flags ?? []).map(flag => (
               <div key={flag.id} className="text-xs text-text-muted border-b border-border last:border-b-0 pb-2">
@@ -530,6 +604,10 @@ export function AuditLogsPage() {
 
       <div>
         <h3 className="text-sm font-semibold text-text-primary mb-3">Audit Log Records</h3>
+        <p className="text-xs text-text-muted mb-3">
+          The table shows the most useful summary fields for quick triage. When an entry includes extra context, it appears
+          under the action. Export the current view if you need the full record payload.
+        </p>
 
         <div className="flex items-center gap-3 mb-4 flex-wrap">
           <input
@@ -608,7 +686,12 @@ export function AuditLogsPage() {
                   <td className="px-4 py-2 text-text-secondary">{formatDate(entry.created_at)}</td>
                   <td className="px-4 py-2 text-text-primary">{getActorLabel(entry)}</td>
                   <td className="px-4 py-2">
-                    <span className="font-mono text-xs bg-elevated px-2 py-0.5 rounded text-text-secondary">{entry.action}</span>
+                    <div className="space-y-1">
+                      <span className="font-mono text-xs bg-elevated px-2 py-0.5 rounded text-text-secondary">{entry.action}</span>
+                      {entry.detail && (
+                        <div className="text-xs text-text-muted max-w-xs break-words">{entry.detail}</div>
+                      )}
+                    </div>
                   </td>
                   <td className="px-4 py-2 text-text-muted capitalize">{entry.outcome ?? 'success'}</td>
                   <td className="px-4 py-2 text-text-muted font-mono text-xs">{entry.target ?? '—'}</td>

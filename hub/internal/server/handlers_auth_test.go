@@ -99,6 +99,48 @@ func TestRegisterBlocked_AfterFirstUser(t *testing.T) {
 	}
 }
 
+func TestAuthStatus_RemainsInitializedAfterTOTPReset(t *testing.T) {
+	s := testServer(t)
+	_ = registerAndGetAdminToken(t, s)
+
+	user, err := s.store.GetUserByUsername("admin")
+	if err != nil {
+		t.Fatalf("get admin user: %v", err)
+	}
+	if err := s.store.UpdateUserTOTP(user.ID, nil, false); err != nil {
+		t.Fatalf("reset totp in store: %v", err)
+	}
+
+	statusReq := httptest.NewRequest("GET", "/api/auth/status", nil)
+	statusRec := httptest.NewRecorder()
+	s.routes().ServeHTTP(statusRec, statusReq)
+
+	if statusRec.Code != http.StatusOK {
+		t.Fatalf(testExpected200Body, statusRec.Code, statusRec.Body.String())
+	}
+
+	var statusResp model.AuthStatusResponse
+	if err := json.NewDecoder(statusRec.Body).Decode(&statusResp); err != nil {
+		t.Fatalf("decode auth status: %v", err)
+	}
+	if !statusResp.Initialized {
+		t.Fatal("expected initialized=true after TOTP reset on a completed system")
+	}
+
+	body, _ := json.Marshal(model.RegisterRequest{
+		Username: "newadmin",
+		Email:    "newadmin@test.com",
+		Password: testPassword,
+	})
+	req := httptest.NewRequest("POST", testRegisterPath, bytes.NewReader(body))
+	rec := httptest.NewRecorder()
+	s.routes().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("expected 403 after TOTP reset, got %d: %s", rec.Code, rec.Body.String())
+	}
+}
+
 func TestChangePassword_Success(t *testing.T) {
 	s := testServer(t)
 	token := registerAndGetAdminToken(t, s)

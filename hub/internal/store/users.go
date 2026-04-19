@@ -8,6 +8,8 @@ import (
 	"github.com/wyiu/aerodocs/hub/internal/model"
 )
 
+const configInitialSetupComplete = "initial_setup_completed"
+
 func (s *Store) CreateUser(u *model.User) error {
 	_, err := s.db.Exec(
 		`INSERT INTO users (
@@ -52,6 +54,27 @@ func (s *Store) InitializedUserCount() (int, error) {
 	var count int
 	err := s.db.QueryRow("SELECT COUNT(*) FROM users WHERE totp_enabled = 1").Scan(&count)
 	return count, err
+}
+
+// InitialSetupComplete returns true once the system has completed its first
+// successful TOTP enable flow. Older installations that predate the config
+// flag fall back to the historical "enabled TOTP user exists" check.
+func (s *Store) InitialSetupComplete() (bool, error) {
+	if value, ok, err := s.LookupConfig(configInitialSetupComplete); err != nil {
+		return false, err
+	} else if ok {
+		return value == "true", nil
+	}
+
+	count, err := s.InitializedUserCount()
+	if err != nil {
+		return false, err
+	}
+	return count > 0, nil
+}
+
+func (s *Store) MarkInitialSetupComplete() error {
+	return s.SetConfig(configInitialSetupComplete, "true")
 }
 
 // DeleteIncompleteUsers removes users that registered but never finished

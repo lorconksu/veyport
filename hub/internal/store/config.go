@@ -5,14 +5,25 @@ import (
 	"fmt"
 )
 
-func (s *Store) GetConfig(key string) (string, error) {
+func (s *Store) LookupConfig(key string) (string, bool, error) {
 	var value string
 	err := s.db.QueryRow("SELECT value FROM _config WHERE key = ?", key).Scan(&value)
 	if err == sql.ErrNoRows {
-		return "", fmt.Errorf("config key %q not found", key)
+		return "", false, nil
 	}
 	if err != nil {
-		return "", fmt.Errorf("get config %q: %w", key, err)
+		return "", false, fmt.Errorf("get config %q: %w", key, err)
+	}
+	return value, true, nil
+}
+
+func (s *Store) GetConfig(key string) (string, error) {
+	value, ok, err := s.LookupConfig(key)
+	if err != nil {
+		return "", err
+	}
+	if !ok {
+		return "", fmt.Errorf("config key %q not found", key)
 	}
 	return value, nil
 }

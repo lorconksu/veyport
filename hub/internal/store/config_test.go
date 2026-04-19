@@ -1,6 +1,9 @@
 package store_test
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 func TestConfigGetSet(t *testing.T) {
 	s := testStore(t)
@@ -26,5 +29,35 @@ func TestConfigGetMissing(t *testing.T) {
 	_, err := s.GetConfig("nonexistent")
 	if err == nil {
 		t.Fatal("expected error for missing key")
+	}
+}
+
+func TestLookupConfigMissing(t *testing.T) {
+	s := testStore(t)
+
+	value, ok, err := s.LookupConfig("nonexistent")
+	if err != nil {
+		t.Fatalf("lookup missing config: %v", err)
+	}
+	if ok {
+		t.Fatal("expected missing config lookup to return ok=false")
+	}
+	if value != "" {
+		t.Fatalf("expected empty missing config value, got %q", value)
+	}
+}
+
+func TestGetConfig_PropagatesLookupErrors(t *testing.T) {
+	s := testStore(t)
+	if err := s.Close(); err != nil {
+		t.Fatalf("close store: %v", err)
+	}
+
+	_, err := s.GetConfig("jwt_key")
+	if err == nil {
+		t.Fatal("expected query error after store close")
+	}
+	if !strings.Contains(err.Error(), `get config "jwt_key":`) {
+		t.Fatalf("expected wrapped lookup error, got %v", err)
 	}
 }

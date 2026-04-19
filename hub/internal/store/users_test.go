@@ -358,6 +358,39 @@ func TestInitializedUserCount(t *testing.T) {
 	}
 }
 
+func TestInitialSetupComplete_UsesPersistentFlag(t *testing.T) {
+	s := testStore(t)
+
+	if initialized, err := s.InitialSetupComplete(); err != nil {
+		t.Fatalf("initial setup complete: %v", err)
+	} else if initialized {
+		t.Fatal("expected initial setup incomplete for empty store")
+	}
+
+	if err := s.CreateUser(&model.User{
+		ID: "u1", Username: "alice", Email: testAliceEmail,
+		PasswordHash: "h", Role: model.RoleAdmin, TOTPEnabled: false,
+	}); err != nil {
+		t.Fatalf("create user: %v", err)
+	}
+
+	if initialized, err := s.InitialSetupComplete(); err != nil {
+		t.Fatalf("initial setup complete: %v", err)
+	} else if initialized {
+		t.Fatal("expected setup incomplete before flag is written")
+	}
+
+	if err := s.MarkInitialSetupComplete(); err != nil {
+		t.Fatalf("mark setup complete: %v", err)
+	}
+
+	if initialized, err := s.InitialSetupComplete(); err != nil {
+		t.Fatalf("initial setup complete after mark: %v", err)
+	} else if !initialized {
+		t.Fatal("expected setup complete after persistent flag is written")
+	}
+}
+
 func TestDeleteIncompleteUsers(t *testing.T) {
 	s := testStore(t)
 

@@ -16,12 +16,12 @@ import (
 const errFailedToHashPassword = "failed to hash password"
 
 func (s *Server) handleAuthStatus(w http.ResponseWriter, r *http.Request) {
-	count, err := s.store.InitializedUserCount()
+	initialized, err := s.store.InitialSetupComplete()
 	if err != nil {
-		respondError(w, http.StatusInternalServerError, "failed to check user count")
+		respondError(w, http.StatusInternalServerError, "failed to check setup state")
 		return
 	}
-	resp := model.AuthStatusResponse{Initialized: count > 0}
+	resp := model.AuthStatusResponse{Initialized: initialized}
 
 	// Only include version for authenticated users
 	if tokenStr := readAccessToken(r); tokenStr != "" {
@@ -34,13 +34,13 @@ func (s *Server) handleAuthStatus(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
-	// Only allowed when no fully-initialized users exist
-	count, err := s.store.InitializedUserCount()
+	// Only allowed when the system has not completed initial setup yet.
+	initialized, err := s.store.InitialSetupComplete()
 	if err != nil {
-		respondError(w, http.StatusInternalServerError, "failed to check user count")
+		respondError(w, http.StatusInternalServerError, "failed to check setup state")
 		return
 	}
-	if count > 0 {
+	if initialized {
 		respondError(w, http.StatusForbidden, "registration disabled — use admin to create users")
 		return
 	}
@@ -90,8 +90,8 @@ func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
 	_ = s.store.TrimPasswordHistory(user.ID, settings.PasswordHistoryCount)
 
 	// Recheck: if another registration won the race with a different username, roll back
-	count, _ = s.store.UserCount()
-	if count > 1 {
+	userCount, _ := s.store.UserCount()
+	if userCount > 1 {
 		s.store.DeleteUser(user.ID)
 		respondError(w, http.StatusConflict, "setup already completed")
 		return
@@ -483,6 +483,10 @@ func (s *Server) handleTOTPEnable(w http.ResponseWriter, r *http.Request) {
 
 	if err := s.store.UpdateUserTOTP(userID, &encryptedSecret, true); err != nil {
 		respondError(w, http.StatusInternalServerError, "failed to enable TOTP")
+		return
+	}
+	if err := s.store.MarkInitialSetupComplete(); err != nil {
+		respondError(w, http.StatusInternalServerError, "failed to mark setup complete")
 		return
 	}
 

@@ -112,8 +112,40 @@ func TestRunResetTOTP_Success(t *testing.T) {
 	if got.PasswordHash == originalHash {
 		t.Fatal("expected temporary password hash to be updated")
 	}
+	initialized, err := verifyStore.InitialSetupComplete()
+	if err != nil {
+		t.Fatalf("initial setup complete: %v", err)
+	}
+	if !initialized {
+		t.Fatal("expected reset-totp to preserve completed setup state")
+	}
 	if !strings.Contains(output, "Temporary password:") {
 		t.Fatalf("expected temporary password in output, got %q", output)
+	}
+}
+
+func TestRunResetTOTP_MarkSetupCompleteFailure(t *testing.T) {
+	dbPath, st := newAdminTestStore(t)
+	secret := "totp-secret"
+	createAdminUser(t, st, "resetme", model.RoleAdmin, &secret, true)
+	if _, err := st.DB().Exec(`
+		CREATE TRIGGER block_setup_config_insert
+		BEFORE INSERT ON _config
+		WHEN NEW.key = 'initial_setup_completed'
+		BEGIN
+			SELECT RAISE(FAIL, 'config writes blocked');
+		END;
+	`); err != nil {
+		t.Fatalf("create config trigger: %v", err)
+	}
+	st.Close()
+
+	err := runResetTOTP([]string{"--username", "resetme", "--db", dbPath})
+	if err == nil {
+		t.Fatal("expected setup state write to fail")
+	}
+	if !strings.Contains(err.Error(), `mark setup complete: set config "initial_setup_completed":`) {
+		t.Fatalf("expected wrapped setup completion error, got %v", err)
 	}
 }
 
