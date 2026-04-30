@@ -88,7 +88,7 @@ jobs:
           build-args: |
             VERSION=${{ steps.meta.outputs.build_version }}
           sbom: true
-          provenance: mode=max
+          provenance: mode=max,version=v0.2
 
       - name: Docker Scout CVE scan
         uses: docker/scout-action@v1.20.3

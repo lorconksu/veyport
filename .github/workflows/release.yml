@@ -64,13 +64,14 @@ jobs:
           DOCKER_BUILD_RECORD_UPLOAD: false
         with:
           context: .
+          pull: true
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
           build-args: |
             VERSION=${{ steps.meta.outputs.version }}
           sbom: true
-          provenance: mode=max
+          provenance: mode=max,version=v0.2
 
   scan-container:
     needs: build-and-push
