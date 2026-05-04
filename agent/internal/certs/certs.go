@@ -34,12 +34,76 @@ type Store struct {
 // NewStore creates a disk-backed certificate store. If dir is non-empty,
 // StoreCert will persist PEM files to that directory.
 func NewStore(dir string) *Store {
-	return &Store{dir: dir}
+	s := &Store{dir: dir}
+	if dir != "" {
+		_ = s.loadFromDisk()
+	}
+	return s
 }
 
 // NewMemoryStore creates an in-memory certificate store for testing.
 func NewMemoryStore() *Store {
 	return &Store{}
+}
+
+func (s *Store) loadFromDisk() error {
+	certPEM, err := os.ReadFile(filepath.Join(s.dir, "client.crt"))
+	if err != nil {
+		return err
+	}
+	keyPEM, err := os.ReadFile(filepath.Join(s.dir, "client.key"))
+	if err != nil {
+		return err
+	}
+	caPEM, err := os.ReadFile(filepath.Join(s.dir, "ca.crt"))
+	if err != nil {
+		return err
+	}
+
+	certBlock, _ := pem.Decode(certPEM)
+	if certBlock == nil {
+		return fmt.Errorf("decode client certificate")
+	}
+	cert, err := x509.ParseCertificate(certBlock.Bytes)
+	if err != nil {
+		return fmt.Errorf("parse client cert: %w", err)
+	}
+
+	keyBlock, _ := pem.Decode(keyPEM)
+	if keyBlock == nil {
+		return fmt.Errorf("decode client key")
+	}
+	key, err := x509.ParseECPrivateKey(keyBlock.Bytes)
+	if err != nil {
+		return fmt.Errorf("parse client key: %w", err)
+	}
+
+	caBlock, _ := pem.Decode(caPEM)
+	if caBlock == nil {
+		return fmt.Errorf("decode CA certificate")
+	}
+	caCert, err := x509.ParseCertificate(caBlock.Bytes)
+	if err != nil {
+		return fmt.Errorf("parse CA cert: %w", err)
+	}
+
+	if err := cert.CheckSignatureFrom(caCert); err != nil {
+		return fmt.Errorf("verify client cert signature: %w", err)
+	}
+	if err := verifyCertMatchesKey(cert, key); err != nil {
+		return err
+	}
+
+	s.mu.Lock()
+	s.cert = cert
+	s.key = key
+	s.caCert = caCert
+	s.certPEM = certPEM
+	s.keyPEM = keyPEM
+	s.caPEM = caPEM
+	s.mu.Unlock()
+
+	return nil
 }
 
 // GenerateCSR generates an ECDSA P-256 keypair, stores the private key in

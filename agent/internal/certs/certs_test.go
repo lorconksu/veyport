@@ -6,9 +6,11 @@ import (
 	"crypto/rand"
 	"crypto/x509"
 	"crypto/x509/pkix"
+	"encoding/pem"
 	"math/big"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -229,5 +231,161 @@ func TestDiskPersistence(t *testing.T) {
 		if perm != 0600 {
 			t.Errorf("file %s has permissions %o, want 0600", name, perm)
 		}
+	}
+}
+
+func TestDiskPersistenceReloadsCerts(t *testing.T) {
+	dir := t.TempDir()
+	caCert, caKey := newTestCA(t)
+
+	s := NewStore(dir)
+	csrDER, err := s.GenerateCSR("disk-reload-test")
+	if err != nil {
+		t.Fatalf(testGenerateCSRFmt, err)
+	}
+
+	certDER := signCSR(t, csrDER, caCert, caKey, time.Now().Add(24*time.Hour))
+	if err := s.StoreCert(certDER, caCert.Raw); err != nil {
+		t.Fatalf(testStoreCertFmt, err)
+	}
+
+	reloaded := NewStore(dir)
+	if !reloaded.HasCert() {
+		t.Fatal("expected NewStore to load persisted client certificate and key")
+	}
+	if reloaded.TLSConfig() == nil {
+		t.Fatal("expected reloaded store to build a TLS config")
+	}
+}
+
+func TestLoadFromDiskRejectsInvalidPersistedMaterial(t *testing.T) {
+	tests := []struct {
+		name    string
+		corrupt func(t *testing.T, dir string)
+		wantErr string
+	}{
+		{
+			name: "missing client key",
+			corrupt: func(t *testing.T, dir string) {
+				t.Helper()
+				if err := os.Remove(filepath.Join(dir, "client.key")); err != nil {
+					t.Fatalf("remove client key: %v", err)
+				}
+			},
+			wantErr: "client.key",
+		},
+		{
+			name: "missing CA certificate",
+			corrupt: func(t *testing.T, dir string) {
+				t.Helper()
+				if err := os.Remove(filepath.Join(dir, "ca.crt")); err != nil {
+					t.Fatalf("remove CA cert: %v", err)
+				}
+			},
+			wantErr: "ca.crt",
+		},
+		{
+			name: "malformed client certificate PEM",
+			corrupt: func(t *testing.T, dir string) {
+				t.Helper()
+				writeTestFile(t, filepath.Join(dir, "client.crt"), []byte("not a certificate"))
+			},
+			wantErr: "decode client certificate",
+		},
+		{
+			name: "malformed client key PEM",
+			corrupt: func(t *testing.T, dir string) {
+				t.Helper()
+				writeTestFile(t, filepath.Join(dir, "client.key"), []byte("not a key"))
+			},
+			wantErr: "decode client key",
+		},
+		{
+			name: "malformed CA certificate PEM",
+			corrupt: func(t *testing.T, dir string) {
+				t.Helper()
+				writeTestFile(t, filepath.Join(dir, "ca.crt"), []byte("not a CA certificate"))
+			},
+			wantErr: "decode CA certificate",
+		},
+		{
+			name: "wrong CA certificate",
+			corrupt: func(t *testing.T, dir string) {
+				t.Helper()
+				otherCA, _ := newTestCA(t)
+				writeTestCertPEM(t, filepath.Join(dir, "ca.crt"), otherCA)
+			},
+			wantErr: "verify client cert signature",
+		},
+		{
+			name: "mismatched client key",
+			corrupt: func(t *testing.T, dir string) {
+				t.Helper()
+				key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+				if err != nil {
+					t.Fatalf("generate replacement key: %v", err)
+				}
+				keyDER, err := x509.MarshalECPrivateKey(key)
+				if err != nil {
+					t.Fatalf("marshal replacement key: %v", err)
+				}
+				writeTestFile(t, filepath.Join(dir, "client.key"), pem.EncodeToMemory(&pem.Block{
+					Type:  "EC PRIVATE KEY",
+					Bytes: keyDER,
+				}))
+			},
+			wantErr: "client certificate does not match",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			dir := t.TempDir()
+			writeValidDiskCerts(t, dir)
+			tt.corrupt(t, dir)
+
+			s := &Store{dir: dir}
+			err := s.loadFromDisk()
+			if err == nil {
+				t.Fatal("expected loadFromDisk to reject invalid persisted cert material")
+			}
+			if !strings.Contains(err.Error(), tt.wantErr) {
+				t.Fatalf("loadFromDisk error = %q, want to contain %q", err, tt.wantErr)
+			}
+			if s.HasCert() {
+				t.Fatal("expected invalid persisted cert material to leave store empty")
+			}
+		})
+	}
+}
+
+func writeValidDiskCerts(t *testing.T, dir string) {
+	t.Helper()
+	caCert, caKey := newTestCA(t)
+
+	s := NewStore(dir)
+	csrDER, err := s.GenerateCSR("disk-error-test")
+	if err != nil {
+		t.Fatalf(testGenerateCSRFmt, err)
+	}
+
+	certDER := signCSR(t, csrDER, caCert, caKey, time.Now().Add(24*time.Hour))
+	if err := s.StoreCert(certDER, caCert.Raw); err != nil {
+		t.Fatalf(testStoreCertFmt, err)
+	}
+}
+
+func writeTestCertPEM(t *testing.T, path string, cert *x509.Certificate) {
+	t.Helper()
+	writeTestFile(t, path, pem.EncodeToMemory(&pem.Block{
+		Type:  "CERTIFICATE",
+		Bytes: cert.Raw,
+	}))
+}
+
+func writeTestFile(t *testing.T, path string, data []byte) {
+	t.Helper()
+	if err := os.WriteFile(path, data, 0600); err != nil {
+		t.Fatalf("write %s: %v", filepath.Base(path), err)
 	}
 }

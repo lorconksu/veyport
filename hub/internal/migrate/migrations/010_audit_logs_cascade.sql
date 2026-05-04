@@ -12,7 +12,19 @@ CREATE TABLE audit_logs_new (
 );
 
 INSERT INTO audit_logs_new (id, user_id, action, target, detail, ip_address, created_at)
-    SELECT id, user_id, action, target, detail, ip_address, created_at FROM audit_logs;
+    SELECT
+        audit_logs.id,
+        CASE
+            WHEN audit_logs.user_id IS NULL OR users.id IS NOT NULL THEN audit_logs.user_id
+            ELSE NULL
+        END,
+        audit_logs.action,
+        audit_logs.target,
+        audit_logs.detail,
+        audit_logs.ip_address,
+        audit_logs.created_at
+    FROM audit_logs
+    LEFT JOIN users ON users.id = audit_logs.user_id;
 DROP TABLE audit_logs;
 ALTER TABLE audit_logs_new RENAME TO audit_logs;
 
