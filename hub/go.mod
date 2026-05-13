@@ -1,12 +1,12 @@
 module github.com/wyiu/aerodocs/hub
 
-go 1.26.2
+go 1.26.3
 
 require (
 	github.com/golang-jwt/jwt/v5 v5.3.1
 	github.com/google/uuid v1.6.0
 	github.com/pquerna/otp v1.5.0
-	golang.org/x/crypto v0.49.0
+	golang.org/x/crypto v0.50.0
 	modernc.org/sqlite v1.47.0
 )
 
@@ -19,9 +19,9 @@ require (
 	github.com/ncruces/go-strftime v1.0.0 // indirect
 	github.com/remyoudompheng/bigfft v0.0.0-20230129092748-24d4a6f8daec // indirect
 	github.com/wyiu/aerodocs/proto v0.0.0
-	golang.org/x/net v0.51.0 // indirect
-	golang.org/x/sys v0.42.0 // indirect
-	golang.org/x/text v0.35.0 // indirect
+	golang.org/x/net v0.53.0 // indirect
+	golang.org/x/sys v0.43.0 // indirect
+	golang.org/x/text v0.36.0 // indirect
 	google.golang.org/genproto/googleapis/rpc v0.0.0-20251202230838-ff82c1b0f217 // indirect
 	google.golang.org/grpc v1.79.3
 	google.golang.org/protobuf v1.36.11

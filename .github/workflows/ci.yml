@@ -96,7 +96,7 @@ jobs:
       - name: Run smoke tests
         run: bash tests/smoke/smoke_test.sh
         env:
-          BUILD_ARGS: "--build-arg NODE_IMAGE=node:25-slim --build-arg GO_IMAGE=golang:1.26.2-bookworm"
+          BUILD_ARGS: "--build-arg NODE_IMAGE=node:25-slim --build-arg GO_IMAGE=golang:1.26.3-bookworm"
 
   e2e:
     needs: test
@@ -112,7 +112,7 @@ jobs:
         run: cd tests/e2e && npm ci && npx playwright install --with-deps chromium
 
       - name: Build Docker image
-        run: docker build --build-arg NODE_IMAGE=node:25-slim --build-arg GO_IMAGE=golang:1.26.2-bookworm -t aerodocs-e2e:test .
+        run: docker build --build-arg NODE_IMAGE=node:25-slim --build-arg GO_IMAGE=golang:1.26.3-bookworm -t aerodocs-e2e:test .
 
       - name: Run E2E tests
         run: cd tests/e2e && E2E_IMAGE=aerodocs-e2e:test npx playwright test
