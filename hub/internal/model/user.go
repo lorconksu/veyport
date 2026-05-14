@@ -10,6 +10,13 @@ const (
 	RoleViewer  Role = "viewer"
 )
 
+type AuthProvider string
+
+const (
+	AuthProviderLocal AuthProvider = "local"
+	AuthProviderLDAP  AuthProvider = "ldap"
+)
+
 func IsValidRole(role Role) bool {
 	switch role {
 	case RoleAdmin, RoleAuditor, RoleViewer:
@@ -20,19 +27,25 @@ func IsValidRole(role Role) bool {
 }
 
 type User struct {
-	ID                    string     `json:"id"`
-	Username              string     `json:"username"`
-	Email                 string     `json:"email"`
-	PasswordHash          string     `json:"-"`
-	Role                  Role       `json:"role"`
-	TOTPSecret            *string    `json:"-"`
-	TOTPEnabled           bool       `json:"totp_enabled"`
-	TokenGeneration       int        `json:"-"`
-	Avatar                *string    `json:"avatar"`
-	MustChangePassword    bool       `json:"must_change_password,omitempty"`
-	TempPasswordExpiresAt *time.Time `json:"temp_password_expires_at,omitempty"`
-	CreatedAt             time.Time  `json:"created_at"`
-	UpdatedAt             time.Time  `json:"updated_at"`
+	ID                    string       `json:"id"`
+	Username              string       `json:"username"`
+	Email                 string       `json:"email"`
+	PasswordHash          string       `json:"-"`
+	Role                  Role         `json:"role"`
+	AuthProvider          AuthProvider `json:"auth_provider"`
+	ExternalID            string       `json:"external_id,omitempty"`
+	LDAPDN                string       `json:"ldap_dn,omitempty"`
+	LDAPUsername          string       `json:"ldap_username,omitempty"`
+	LDAPLastSyncAt        *time.Time   `json:"ldap_last_sync_at,omitempty"`
+	TerminalAccess        bool         `json:"terminal_access"`
+	TOTPSecret            *string      `json:"-"`
+	TOTPEnabled           bool         `json:"totp_enabled"`
+	TokenGeneration       int          `json:"-"`
+	Avatar                *string      `json:"avatar"`
+	MustChangePassword    bool         `json:"must_change_password,omitempty"`
+	TempPasswordExpiresAt *time.Time   `json:"temp_password_expires_at,omitempty"`
+	CreatedAt             time.Time    `json:"created_at"`
+	UpdatedAt             time.Time    `json:"updated_at"`
 }
 
 type UpdateAvatarRequest struct {

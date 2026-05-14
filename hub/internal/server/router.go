@@ -14,6 +14,7 @@ func (s *Server) routes() http.Handler {
 	totpLimiter := newRateLimiter(3, 60*time.Second)
 	refreshLimiter := newRateLimiter(30, 60*time.Second)
 	fileOpsLimiter := newRateLimiter(60, 60*time.Second)
+	terminalLimiter := newRateLimiter(3600, 60*time.Second)
 
 	// Public auth endpoints (rate-limited)
 	mux.Handle("GET /api/health", loggingMiddleware(http.HandlerFunc(s.handleHealth)))
@@ -95,6 +96,13 @@ func (s *Server) routes() http.Handler {
 
 	// Log tailing SSE endpoint (any authenticated user, permission-checked in handler)
 	mux.Handle("GET /api/servers/{id}/logs/tail", loggingMiddleware(fileOpsLimiter.middleware(s.authMiddleware(auth.TokenTypeAccess, http.HandlerFunc(s.handleTailLog)))))
+
+	// Terminal endpoints (admins, or LDAP terminal users on assigned servers)
+	mux.Handle("POST /api/servers/{id}/terminal/sessions", loggingMiddleware(terminalLimiter.middleware(s.authMiddleware(auth.TokenTypeAccess, s.interactiveOnly(s.terminalAccessOnly(http.HandlerFunc(s.handleCreateTerminalSession)))))))
+	mux.Handle("GET /api/servers/{id}/terminal/sessions/{sessionId}/stream", loggingMiddleware(terminalLimiter.middleware(s.authMiddleware(auth.TokenTypeAccess, s.interactiveOnly(s.terminalAccessOnly(http.HandlerFunc(s.handleTerminalStream)))))))
+	mux.Handle("POST /api/servers/{id}/terminal/sessions/{sessionId}/input", loggingMiddleware(terminalLimiter.middleware(s.authMiddleware(auth.TokenTypeAccess, s.interactiveOnly(s.terminalAccessOnly(http.HandlerFunc(s.handleTerminalInput)))))))
+	mux.Handle("POST /api/servers/{id}/terminal/sessions/{sessionId}/resize", loggingMiddleware(terminalLimiter.middleware(s.authMiddleware(auth.TokenTypeAccess, s.interactiveOnly(s.terminalAccessOnly(http.HandlerFunc(s.handleTerminalResize)))))))
+	mux.Handle("DELETE /api/servers/{id}/terminal/sessions/{sessionId}", loggingMiddleware(terminalLimiter.middleware(s.authMiddleware(auth.TokenTypeAccess, s.interactiveOnly(s.terminalAccessOnly(http.HandlerFunc(s.handleCloseTerminalSession)))))))
 
 	// Dropzone endpoints (admin only)
 	mux.Handle("POST /api/servers/{id}/upload", loggingMiddleware(fileOpsLimiter.middleware(s.authMiddleware(auth.TokenTypeAccess, s.adminOnly(http.HandlerFunc(s.handleUploadFile))))))

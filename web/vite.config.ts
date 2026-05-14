@@ -29,7 +29,12 @@ export default defineConfig({
     proxy: {
       '/api': {
         target: apiProxyTarget,
-        changeOrigin: true,
+      },
+      '/install.sh': {
+        target: apiProxyTarget,
+      },
+      '/install': {
+        target: apiProxyTarget,
       },
     },
   },

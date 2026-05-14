@@ -148,7 +148,7 @@ fi
 DOWNLOAD_URL="${URL}/install/${OS}/${ARCH}"
 
 echo "==> Downloading AeroDocs Agent (${OS}-${ARCH})..."
-curl -sSL "$DOWNLOAD_URL" -o /usr/local/bin/aerodocs-agent
+curl -fsSL "$DOWNLOAD_URL" -o /usr/local/bin/aerodocs-agent
 chmod +x /usr/local/bin/aerodocs-agent
 
 # Verify binary was downloaded
@@ -159,8 +159,8 @@ fi
 
 # SHA256 checksum verification
 echo "==> Verifying checksum..."
-EXPECTED_SHA=$(curl -sSL "${DOWNLOAD_URL}/sha256" 2>/dev/null | awk '{print $1}')
-if [[ -n "$EXPECTED_SHA" ]]; then
+EXPECTED_SHA=$(curl -fsSL "${DOWNLOAD_URL}/sha256" 2>/dev/null | awk '{print $1}' || true)
+if [[ "$EXPECTED_SHA" =~ ^[a-fA-F0-9]{64}$ ]]; then
   ACTUAL_SHA=$(sha256sum /usr/local/bin/aerodocs-agent | awk '{print $1}')
   if [[ "$EXPECTED_SHA" != "$ACTUAL_SHA" ]]; then
     echo "ERROR: Checksum verification failed!" >&2
@@ -171,7 +171,7 @@ if [[ -n "$EXPECTED_SHA" ]]; then
   fi
   echo "    Checksum OK."
 else
-  echo "    WARNING: Could not fetch checksum — skipping verification."
+  echo "    WARNING: Could not fetch a valid checksum — skipping verification."
 fi
 
 # --- Create config directory ---

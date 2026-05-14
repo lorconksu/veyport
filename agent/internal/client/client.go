@@ -30,6 +30,7 @@ import (
 	"github.com/wyiu/aerodocs/agent/internal/filebrowser"
 	"github.com/wyiu/aerodocs/agent/internal/heartbeat"
 	"github.com/wyiu/aerodocs/agent/internal/logtailer"
+	"github.com/wyiu/aerodocs/agent/internal/terminal"
 	pb "github.com/wyiu/aerodocs/proto/aerodocs/v1"
 )
 
@@ -419,7 +420,62 @@ func (c *Client) handleUnregisterRequest(p *pb.HubMessage_UnregisterRequest, sen
 	}()
 }
 
-func (c *Client) handleMessage(msg *pb.HubMessage, sendCh chan<- *pb.AgentMessage) {
+func (c *Client) handleTerminalOpenRequest(p *pb.HubMessage_TerminalOpenRequest, sendCh chan<- *pb.AgentMessage, terminalMgr *terminal.Manager) {
+	req := p.TerminalOpenRequest
+	ack := &pb.TerminalOpenAck{SessionId: req.SessionId}
+	if terminalMgr == nil {
+		ack.Error = "terminal manager unavailable"
+	} else if err := terminalMgr.Open(req.SessionId, req.Cols, req.Rows, req.Cwd, req.RunAsUser); err != nil {
+		ack.Error = err.Error()
+	} else {
+		ack.Success = true
+		log.Printf("started terminal session: %s cwd=%q run_as=%q", req.SessionId, req.Cwd, req.RunAsUser)
+	}
+	ackMsg := &pb.AgentMessage{
+		Payload: &pb.AgentMessage_TerminalOpenAck{
+			TerminalOpenAck: ack,
+		},
+	}
+	if terminalMgr != nil {
+		_ = terminalMgr.Send(ackMsg)
+		return
+	}
+	sendCh <- ackMsg
+}
+
+func (c *Client) handleTerminalInput(p *pb.HubMessage_TerminalInput, terminalMgr *terminal.Manager) {
+	if terminalMgr == nil {
+		return
+	}
+	if err := terminalMgr.Input(p.TerminalInput.SessionId, p.TerminalInput.Data); err != nil && !errors.Is(err, terminal.ErrSessionNotFound) {
+		log.Printf("terminal input failed for %s: %v", p.TerminalInput.SessionId, err)
+	}
+}
+
+func (c *Client) handleTerminalResize(p *pb.HubMessage_TerminalResize, terminalMgr *terminal.Manager) {
+	if terminalMgr == nil {
+		return
+	}
+	if err := terminalMgr.Resize(p.TerminalResize.SessionId, p.TerminalResize.Cols, p.TerminalResize.Rows); err != nil && !errors.Is(err, terminal.ErrSessionNotFound) {
+		log.Printf("terminal resize failed for %s: %v", p.TerminalResize.SessionId, err)
+	}
+}
+
+func (c *Client) handleTerminalClose(p *pb.HubMessage_TerminalClose, terminalMgr *terminal.Manager) {
+	if terminalMgr == nil {
+		return
+	}
+	if err := terminalMgr.Close(p.TerminalClose.SessionId); err != nil && !errors.Is(err, terminal.ErrSessionNotFound) {
+		log.Printf("terminal close failed for %s: %v", p.TerminalClose.SessionId, err)
+	}
+}
+
+func (c *Client) handleMessage(msg *pb.HubMessage, sendCh chan<- *pb.AgentMessage, managers ...*terminal.Manager) {
+	var terminalMgr *terminal.Manager
+	if len(managers) > 0 {
+		terminalMgr = managers[0]
+	}
+
 	switch p := msg.Payload.(type) {
 	case *pb.HubMessage_FileListRequest:
 		c.handleFileListRequest(p, sendCh)
@@ -437,6 +493,16 @@ func (c *Client) handleMessage(msg *pb.HubMessage, sendCh chan<- *pb.AgentMessag
 		c.handleUnregisterRequest(p, sendCh)
 	case *pb.HubMessage_CertRenewResponse:
 		c.handleCertRenewResponse(p)
+	case *pb.HubMessage_HeartbeatAck:
+		return
+	case *pb.HubMessage_TerminalOpenRequest:
+		c.handleTerminalOpenRequest(p, sendCh, terminalMgr)
+	case *pb.HubMessage_TerminalInput:
+		c.handleTerminalInput(p, terminalMgr)
+	case *pb.HubMessage_TerminalResize:
+		c.handleTerminalResize(p, terminalMgr)
+	case *pb.HubMessage_TerminalClose:
+		c.handleTerminalClose(p, terminalMgr)
 	default:
 		log.Printf("unhandled hub message: %T", p)
 	}
@@ -676,7 +742,12 @@ func (c *Client) sendHeartbeatHandshake(stream pb.AgentService_ConnectClient) er
 // startRecvLoop starts a goroutine that receives messages from the stream and
 // dispatches them. It returns a channel that receives the first error (or nil
 // on clean EOF).
-func (c *Client) startRecvLoop(stream pb.AgentService_ConnectClient, sendCh chan<- *pb.AgentMessage) <-chan error {
+func (c *Client) startRecvLoop(stream pb.AgentService_ConnectClient, sendCh chan<- *pb.AgentMessage, managers ...*terminal.Manager) <-chan error {
+	var terminalMgr *terminal.Manager
+	if len(managers) > 0 {
+		terminalMgr = managers[0]
+	}
+
 	recvErr := make(chan error, 1)
 	go func() {
 		for {
@@ -692,9 +763,9 @@ func (c *Client) startRecvLoop(stream pb.AgentService_ConnectClient, sendCh chan
 			// File upload chunks must be sequential to avoid race conditions.
 			// Other messages can be handled concurrently.
 			if _, ok := msg.Payload.(*pb.HubMessage_FileUploadRequest); ok {
-				c.handleMessage(msg, sendCh)
+				c.handleMessage(msg, sendCh, terminalMgr)
 			} else {
-				go c.handleMessage(msg, sendCh)
+				go c.handleMessage(msg, sendCh, terminalMgr)
 			}
 		}
 	}()
@@ -726,6 +797,7 @@ func (c *Client) connectAndStream(ctx context.Context) error {
 	log.Printf("connected to hub at %s", c.hubAddr)
 
 	sendCh := make(chan *pb.AgentMessage, 16)
+	terminalMgr := terminal.NewManager(sendCh)
 	defer func() {
 		c.tailSessionsMu.Lock()
 		for id, stop := range c.tailSessions {
@@ -733,6 +805,7 @@ func (c *Client) connectAndStream(ctx context.Context) error {
 			delete(c.tailSessions, id)
 		}
 		c.tailSessionsMu.Unlock()
+		terminalMgr.CloseAll()
 		c.dropzone.Cleanup()
 	}()
 	hbStop := make(chan struct{})
@@ -740,7 +813,7 @@ func (c *Client) connectAndStream(ctx context.Context) error {
 	go heartbeat.StartTicker(c.serverID, 10*time.Second, sendCh, hbStop)
 	go c.startCertRenewalTicker(10*time.Second, sendCh, hbStop)
 
-	recvErr := c.startRecvLoop(stream, sendCh)
+	recvErr := c.startRecvLoop(stream, sendCh, terminalMgr)
 
 	for {
 		select {

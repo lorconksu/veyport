@@ -68,6 +68,8 @@ const (
 
 const (
 	AuditLogTailStarted = "log.tail_started"
+	AuditTerminalOpened = "terminal.opened"
+	AuditTerminalClosed = "terminal.closed"
 )
 
 const (

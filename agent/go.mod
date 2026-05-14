@@ -5,6 +5,7 @@ go 1.26.3
 replace github.com/wyiu/aerodocs/proto => ../proto
 
 require (
+	github.com/creack/pty v1.1.24
 	github.com/wyiu/aerodocs/proto v0.0.0-00010101000000-000000000000
 	golang.org/x/sys v0.43.0
 	google.golang.org/grpc v1.79.3

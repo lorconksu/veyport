@@ -36,6 +36,8 @@ var AuditCatalog = []AuditCatalogEntry{
 	{Action: AuditPathGranted, Label: "Path granted", Category: auditCategoryFileAccess, Outcome: AuditOutcomeSuccess, ActorType: AuditActorTypeUser, ResourceType: "path"},
 	{Action: AuditPathRevoked, Label: "Path revoked", Category: auditCategoryFileAccess, Outcome: AuditOutcomeSuccess, ActorType: AuditActorTypeUser, ResourceType: "path"},
 	{Action: AuditLogTailStarted, Label: "Log tail started", Category: "Log Access", Outcome: AuditOutcomeSuccess, ActorType: AuditActorTypeUser, ResourceType: "log"},
+	{Action: AuditTerminalOpened, Label: "Terminal session opened", Category: "Terminal Access", Outcome: AuditOutcomeSuccess, ActorType: AuditActorTypeUser, ResourceType: "terminal"},
+	{Action: AuditTerminalClosed, Label: "Terminal session closed", Category: "Terminal Access", Outcome: AuditOutcomeSuccess, ActorType: AuditActorTypeUser, ResourceType: "terminal"},
 	{Action: AuditAuditExported, Label: "Audit exported", Category: auditCategoryAuditGovernance, Outcome: AuditOutcomeSuccess, ActorType: AuditActorTypeUser, ResourceType: "audit"},
 	{Action: AuditAuditReviewCompleted, Label: "Audit review completed", Category: auditCategoryAuditGovernance, Outcome: AuditOutcomeSuccess, ActorType: AuditActorTypeUser, ResourceType: "audit"},
 	{Action: AuditAuditFilterSaved, Label: "Audit filter saved", Category: auditCategoryAuditGovernance, Outcome: AuditOutcomeSuccess, ActorType: AuditActorTypeUser, ResourceType: "audit"},

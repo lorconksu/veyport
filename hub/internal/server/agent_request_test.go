@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"google.golang.org/grpc/metadata"
+	"google.golang.org/protobuf/proto"
 
 	"github.com/wyiu/aerodocs/hub/internal/connmgr"
 	"github.com/wyiu/aerodocs/hub/internal/grpcserver"
@@ -17,48 +18,73 @@ import (
 
 // mockGRPCStream implements pb.AgentService_ConnectServer for testing.
 type mockGRPCStream struct {
-	ctx      context.Context
-	sent     []*pb.HubMessage
-	pending  *grpcserver.PendingRequests
-	serverID string
+	ctx                  context.Context
+	sent                 []*pb.HubMessage
+	pending              *grpcserver.PendingRequests
+	serverID             string
+	terms                *grpcserver.TerminalSessions
+	terminalOpenResponse proto.Message
+	sendErr              error
 }
 
 func (m *mockGRPCStream) Send(msg *pb.HubMessage) error {
-	m.sent = append(m.sent, msg)
-	// If we have a pending registry, auto-deliver responses
-	if m.pending != nil {
-		switch p := msg.Payload.(type) {
-		case *pb.HubMessage_FileListRequest:
-			go func() {
-				resp := &pb.FileListResponse{RequestId: p.FileListRequest.RequestId}
-				m.pending.Deliver(m.serverID, p.FileListRequest.RequestId, resp)
-			}()
-		case *pb.HubMessage_FileReadRequest:
-			go func() {
-				resp := &pb.FileReadResponse{RequestId: p.FileReadRequest.RequestId}
-				m.pending.Deliver(m.serverID, p.FileReadRequest.RequestId, resp)
-			}()
-		case *pb.HubMessage_FileDeleteRequest:
-			go func() {
-				resp := &pb.FileDeleteResponse{RequestId: p.FileDeleteRequest.RequestId, Success: true}
-				m.pending.Deliver(m.serverID, p.FileDeleteRequest.RequestId, resp)
-			}()
-		case *pb.HubMessage_UnregisterRequest:
-			go func() {
-				resp := &pb.UnregisterAck{RequestId: p.UnregisterRequest.RequestId}
-				m.pending.Deliver(m.serverID, p.UnregisterRequest.RequestId, resp)
-			}()
-		case *pb.HubMessage_FileUploadRequest:
-			// Only deliver ack on the final "done" chunk
-			if p.FileUploadRequest.Done {
-				go func() {
-					resp := &pb.FileUploadAck{RequestId: p.FileUploadRequest.RequestId, Success: true}
-					m.pending.Deliver(m.serverID, p.FileUploadRequest.RequestId, resp)
-				}()
-			}
-		}
+	if m.sendErr != nil {
+		return m.sendErr
 	}
+	m.sent = append(m.sent, msg)
+	if m.pending == nil {
+		return nil
+	}
+	m.deliverMockResponse(msg)
 	return nil
+}
+
+func (m *mockGRPCStream) deliverMockResponse(msg *pb.HubMessage) {
+	switch p := msg.Payload.(type) {
+	case *pb.HubMessage_FileListRequest:
+		m.deliverLater(p.FileListRequest.RequestId, &pb.FileListResponse{RequestId: p.FileListRequest.RequestId})
+	case *pb.HubMessage_FileReadRequest:
+		m.deliverLater(p.FileReadRequest.RequestId, &pb.FileReadResponse{RequestId: p.FileReadRequest.RequestId})
+	case *pb.HubMessage_FileDeleteRequest:
+		m.deliverLater(p.FileDeleteRequest.RequestId, &pb.FileDeleteResponse{RequestId: p.FileDeleteRequest.RequestId, Success: true})
+	case *pb.HubMessage_UnregisterRequest:
+		m.deliverLater(p.UnregisterRequest.RequestId, &pb.UnregisterAck{RequestId: p.UnregisterRequest.RequestId})
+	case *pb.HubMessage_FileUploadRequest:
+		m.deliverFileUploadAck(p.FileUploadRequest)
+	case *pb.HubMessage_TerminalOpenRequest:
+		m.deliverTerminalOpen(p.TerminalOpenRequest)
+	}
+}
+
+func (m *mockGRPCStream) deliverLater(requestID string, resp proto.Message) {
+	go func() {
+		m.pending.Deliver(m.serverID, requestID, resp)
+	}()
+}
+
+func (m *mockGRPCStream) deliverFileUploadAck(req *pb.FileUploadRequest) {
+	if !req.Done {
+		return
+	}
+	m.deliverLater(req.RequestId, &pb.FileUploadAck{RequestId: req.RequestId, Success: true})
+}
+
+func (m *mockGRPCStream) deliverTerminalOpen(req *pb.TerminalOpenRequest) {
+	go func() {
+		resp := m.terminalOpenResponse
+		if resp == nil {
+			resp = &pb.TerminalOpenAck{SessionId: req.SessionId, Success: true}
+		}
+		m.pending.Deliver(m.serverID, req.SessionId, resp)
+		if terminalOpenSucceeded(resp) && m.terms != nil {
+			m.terms.DeliverData(m.serverID, req.SessionId, []byte("mock$ "))
+		}
+	}()
+}
+
+func terminalOpenSucceeded(resp proto.Message) bool {
+	ack, ok := resp.(*pb.TerminalOpenAck)
+	return ok && ack.Success
 }
 
 func (m *mockGRPCStream) Recv() (*pb.AgentMessage, error) { return nil, nil }
@@ -68,10 +94,10 @@ func (m *mockGRPCStream) Context() context.Context {
 	}
 	return context.Background()
 }
-func (m *mockGRPCStream) SendMsg(msg interface{}) error  { return nil }
-func (m *mockGRPCStream) RecvMsg(msg interface{}) error  { return nil }
-func (m *mockGRPCStream) SetHeader(metadata.MD) error    { return nil }
-func (m *mockGRPCStream) SendHeader(metadata.MD) error   { return nil }
+func (m *mockGRPCStream) SendMsg(msg interface{}) error { return nil }
+func (m *mockGRPCStream) RecvMsg(msg interface{}) error { return nil }
+func (m *mockGRPCStream) SetHeader(metadata.MD) error   { return nil }
+func (m *mockGRPCStream) SendHeader(metadata.MD) error  { return nil }
 func (m *mockGRPCStream) SetTrailer(metadata.MD) {
 	// no-op: mock stub for testing
 }
@@ -95,19 +121,21 @@ func testServerWithAgent(t *testing.T) (s *Server, adminToken, serverID string) 
 	cm := connmgr.New()
 	pending := grpcserver.NewPendingRequests()
 	logSessions := grpcserver.NewLogSessions()
+	terminalSessions := grpcserver.NewTerminalSessions()
 
 	notifier := notify.New(st)
 	t.Cleanup(func() { notifier.Close() })
 
 	s = New(Config{
-		Addr:        ":0",
-		Store:       st,
-		JWTSecret:   jwtSecret,
-		IsDev:       true,
-		ConnMgr:     cm,
-		Pending:     pending,
-		LogSessions: logSessions,
-		Notifier:    notifier,
+		Addr:             ":0",
+		Store:            st,
+		JWTSecret:        jwtSecret,
+		IsDev:            true,
+		ConnMgr:          cm,
+		Pending:          pending,
+		LogSessions:      logSessions,
+		TerminalSessions: terminalSessions,
+		Notifier:         notifier,
 	})
 
 	// Create a server in the store
@@ -115,7 +143,7 @@ func testServerWithAgent(t *testing.T) (s *Server, adminToken, serverID string) 
 	serverID = createTestServer(t, s, adminToken, "agent-test-srv")
 
 	// Register a mock stream that auto-delivers responses
-	stream := &mockGRPCStream{pending: pending, serverID: serverID}
+	stream := &mockGRPCStream{pending: pending, serverID: serverID, terms: terminalSessions}
 	cm.Register(serverID, stream)
 	t.Cleanup(func() { cm.Unregister(serverID) })
 

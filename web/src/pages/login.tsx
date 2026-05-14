@@ -1,10 +1,12 @@
 import { useState, useEffect } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { apiFetch } from '@/lib/api'
-import type { LoginRequest, LoginResponse, AuthStatusResponse } from '@/types/api'
+import { useAuth } from '@/hooks/use-auth'
+import type { LoginRequest, LoginResponse, AuthResponse, AuthStatusResponse } from '@/types/api'
 
 export function LoginPage() {
   const navigate = useNavigate()
+  const { login } = useAuth()
   const [username, setUsername] = useState('')
   const [password, setPassword] = useState('')
   const [error, setError] = useState('')
@@ -38,11 +40,17 @@ export function LoginPage() {
         throw new Error((body as { error?: string }).error || 'Login failed')
       }
 
-      const resp = await res.json() as LoginResponse
+      const resp = await res.json() as LoginResponse | AuthResponse
 
-      if (resp.requires_totp_setup && resp.setup_token) {
+      if ('user' in resp && resp.user) {
+        login(resp.user)
+        navigate('/')
+        return
+      }
+
+      if ('requires_totp_setup' in resp && resp.requires_totp_setup && resp.setup_token) {
         navigate('/setup/totp', { state: { setupToken: resp.setup_token, mustChangePassword: resp.must_change_password === true } })
-      } else if (resp.totp_token) {
+      } else if ('totp_token' in resp && resp.totp_token) {
         navigate('/login/totp', { state: { totpToken: resp.totp_token } })
       }
     } catch (err) {

@@ -24,58 +24,64 @@ import (
 var Version = "dev"
 
 type Server struct {
-	httpServer       *http.Server
-	store            *store.Store
-	jwtSecret        string
-	isDev            bool
-	frontendFS       *embed.FS
-	agentBinDir      string
-	grpcAddr         string
-	grpcExternalAddr string
-	grpcCACertSHA256 string
-	connMgr          *connmgr.ConnManager
-	pending          *grpcserver.PendingRequests
-	logSessions      *grpcserver.LogSessions
-	logTailMu        sync.Mutex
-	logTailSessions  map[string]int
-	totpCache        *auth.TOTPUsedCodes
-	tokenBlacklist   *auth.TokenBlacklist
-	notifier         *notify.Notifier
+	httpServer        *http.Server
+	store             *store.Store
+	jwtSecret         string
+	isDev             bool
+	frontendFS        *embed.FS
+	agentBinDir       string
+	grpcAddr          string
+	grpcExternalAddr  string
+	grpcCACertSHA256  string
+	connMgr           *connmgr.ConnManager
+	pending           *grpcserver.PendingRequests
+	logSessions       *grpcserver.LogSessions
+	terminalSessions  *grpcserver.TerminalSessions
+	logTailMu         sync.Mutex
+	logTailSessions   map[string]int
+	totpCache         *auth.TOTPUsedCodes
+	tokenBlacklist    *auth.TokenBlacklist
+	notifier          *notify.Notifier
+	ldapAuthenticator LDAPAuthenticator
 }
 
 type Config struct {
-	Addr             string
-	Store            *store.Store
-	JWTSecret        string
-	IsDev            bool
-	FrontendFS       *embed.FS
-	AgentBinDir      string
-	GRPCAddr         string
-	GRPCExternalAddr string
-	GRPCCACertSHA256 string
-	ConnMgr          *connmgr.ConnManager
-	Pending          *grpcserver.PendingRequests
-	LogSessions      *grpcserver.LogSessions
-	Notifier         *notify.Notifier
+	Addr              string
+	Store             *store.Store
+	JWTSecret         string
+	IsDev             bool
+	FrontendFS        *embed.FS
+	AgentBinDir       string
+	GRPCAddr          string
+	GRPCExternalAddr  string
+	GRPCCACertSHA256  string
+	ConnMgr           *connmgr.ConnManager
+	Pending           *grpcserver.PendingRequests
+	LogSessions       *grpcserver.LogSessions
+	TerminalSessions  *grpcserver.TerminalSessions
+	Notifier          *notify.Notifier
+	LDAPAuthenticator LDAPAuthenticator
 }
 
 func New(cfg Config) *Server {
 	s := &Server{
-		store:            cfg.Store,
-		jwtSecret:        cfg.JWTSecret,
-		isDev:            cfg.IsDev,
-		frontendFS:       cfg.FrontendFS,
-		agentBinDir:      cfg.AgentBinDir,
-		grpcAddr:         cfg.GRPCAddr,
-		grpcExternalAddr: cfg.GRPCExternalAddr,
-		grpcCACertSHA256: cfg.GRPCCACertSHA256,
-		connMgr:          cfg.ConnMgr,
-		pending:          cfg.Pending,
-		logSessions:      cfg.LogSessions,
-		logTailSessions:  make(map[string]int),
-		totpCache:        auth.NewTOTPUsedCodes(),
-		tokenBlacklist:   auth.NewTokenBlacklist(cfg.Store.DB()),
-		notifier:         cfg.Notifier,
+		store:             cfg.Store,
+		jwtSecret:         cfg.JWTSecret,
+		isDev:             cfg.IsDev,
+		frontendFS:        cfg.FrontendFS,
+		agentBinDir:       cfg.AgentBinDir,
+		grpcAddr:          cfg.GRPCAddr,
+		grpcExternalAddr:  cfg.GRPCExternalAddr,
+		grpcCACertSHA256:  cfg.GRPCCACertSHA256,
+		connMgr:           cfg.ConnMgr,
+		pending:           cfg.Pending,
+		logSessions:       cfg.LogSessions,
+		terminalSessions:  cfg.TerminalSessions,
+		logTailSessions:   make(map[string]int),
+		totpCache:         auth.NewTOTPUsedCodes(),
+		tokenBlacklist:    auth.NewTokenBlacklist(cfg.Store.DB()),
+		notifier:          cfg.Notifier,
+		ldapAuthenticator: cfg.LDAPAuthenticator,
 	}
 
 	s.installAuditObservers()

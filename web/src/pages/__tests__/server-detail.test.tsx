@@ -33,6 +33,23 @@ vi.mock('@/components/markdown-viewer', () => ({
   default: ({ content }: { content: string }) => <div data-testid="markdown">{content}</div>,
 }))
 
+vi.mock('@/components/server-terminal', () => ({
+  ServerTerminal: ({ serverId, server }: { serverId: string; server: { name: string } }) => (
+    <div data-testid="server-terminal">
+      <div>Live Terminal</div>
+      <div>{server.name}</div>
+      <div>{serverId}</div>
+    </div>
+  ),
+  OfflineTerminalState: ({ server }: { server: { name: string } }) => (
+    <div data-testid="offline-terminal">
+      <div>Terminal</div>
+      <div>Awaiting agent</div>
+      <div>{server.name}</div>
+    </div>
+  ),
+}))
+
 // Mock individual highlight.js language modules
 vi.mock('highlight.js/lib/languages/bash', () => ({ default: {} }))
 vi.mock('highlight.js/lib/languages/css', () => ({ default: {} }))
@@ -208,6 +225,65 @@ describe('ServerDetailPage', () => {
     renderPage()
     await waitFor(() => {
       expect(screen.getByText('File Explorer')).toBeInTheDocument()
+    })
+  })
+
+  it('shows workspace mode toggle for online server', async () => {
+    mockApiFetch.mockResolvedValueOnce(mockServer)
+    mockApiFetch.mockResolvedValue({ paths: ['/etc'] })
+    renderPage()
+
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: 'Files' })).toBeInTheDocument()
+      expect(screen.getByRole('button', { name: 'Terminal' })).toBeInTheDocument()
+    })
+  })
+
+  it('keeps workspace mode toggle visible for pending servers', async () => {
+    mockApiFetch.mockResolvedValueOnce(mockPendingServer)
+    renderPage()
+
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: 'Files' })).toBeInTheDocument()
+      expect(screen.getByRole('button', { name: 'Terminal' })).toBeInTheDocument()
+      expect(screen.getByText(/file browsing is waiting on the agent/i)).toBeInTheDocument()
+    })
+  })
+
+  it('switches from file explorer to terminal and back', async () => {
+    mockApiFetch.mockResolvedValueOnce(mockServer)
+    mockApiFetch.mockResolvedValue({ paths: ['/etc'] })
+    renderPage()
+
+    await waitFor(() => expect(screen.getByText('File Explorer')).toBeInTheDocument())
+
+    fireEvent.click(screen.getByRole('button', { name: 'Terminal' }))
+
+    await waitFor(() => {
+      expect(screen.getByText('Live Terminal')).toBeInTheDocument()
+      expect(screen.queryByText('File Explorer')).not.toBeInTheDocument()
+      expect(screen.getByTestId('server-terminal')).toBeInTheDocument()
+    })
+
+    fireEvent.click(screen.getByRole('button', { name: 'Files' }))
+
+    await waitFor(() => {
+      expect(screen.getByText('File Explorer')).toBeInTheDocument()
+      expect(screen.queryByText('Live Terminal')).not.toBeInTheDocument()
+    })
+  })
+
+  it('shows offline terminal state for pending servers', async () => {
+    mockApiFetch.mockResolvedValueOnce(mockPendingServer)
+    renderPage()
+
+    await waitFor(() => expect(screen.getByText(/file browsing is waiting on the agent/i)).toBeInTheDocument())
+
+    fireEvent.click(screen.getByRole('button', { name: 'Terminal' }))
+
+    await waitFor(() => {
+      expect(screen.getByText('Awaiting agent')).toBeInTheDocument()
+      expect(screen.getByTestId('offline-terminal')).toBeInTheDocument()
     })
   })
 
@@ -719,10 +795,7 @@ describe('FileViewerContent rendering', () => {
     // Wait for debounce — navigation prev/next buttons should appear
     await waitFor(() => expect(screen.getByTitle('Search in file (Ctrl+F)')).toBeInTheDocument())
 
-    // Click navigate next (ChevronDown button after the search input)
-    const navButtons = screen.getAllByRole('button')
-    // Find the ChevronDown (navigate next) and ChevronUp (navigate prev) buttons
-    // They are near the search bar - use Enter key to trigger onNavigateNext
+    // Navigate search matches from the input.
     fireEvent.keyDown(screen.getByPlaceholderText('Search in file...'), { key: 'Enter' })
     fireEvent.keyDown(screen.getByPlaceholderText('Search in file...'), { key: 'Enter', shiftKey: true })
     // Just verify no crash

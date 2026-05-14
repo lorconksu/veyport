@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -89,7 +90,23 @@ func (s *Server) resolveGRPCTarget(host string) string {
 	return target
 }
 
-func (s *Server) resolvePublicBaseURL() (string, error) {
+func (s *Server) resolvePublicBaseURL(r *http.Request) (string, error) {
+	if raw := strings.TrimSpace(os.Getenv("AERODOCS_PUBLIC_BASE_URL")); raw != "" {
+		parsed, err := url.Parse(raw)
+		if err != nil || parsed.Host == "" || (parsed.Scheme != "http" && parsed.Scheme != "https") {
+			return "", fmt.Errorf("invalid public base url")
+		}
+		return strings.TrimRight(raw, "/"), nil
+	}
+
+	if r != nil && r.Host != "" {
+		host := r.Host
+		if !hostPattern.MatchString(host) {
+			return "", fmt.Errorf("invalid public hub address")
+		}
+		return fmt.Sprintf("%s://%s", s.requestScheme(r), host), nil
+	}
+
 	if s.isDev {
 		return "http://localhost:8080", nil
 	}
@@ -162,7 +179,7 @@ func (s *Server) handleCreateServer(w http.ResponseWriter, r *http.Request) {
 		IPAddress: &ip,
 	})
 
-	baseURL, err := s.resolvePublicBaseURL()
+	baseURL, err := s.resolvePublicBaseURL(r)
 	if err != nil {
 		respondError(w, http.StatusInternalServerError, "public hub address is not configured")
 		return
@@ -178,9 +195,13 @@ func (s *Server) handleCreateServer(w http.ResponseWriter, r *http.Request) {
 	// Compute the HMAC-based self-unregister token for this server
 	unregisterToken := s.selfUnregisterToken(srv.ID)
 
+	installArgs := fmt.Sprintf(
+		"-s -- --token '%s' --hub '%s' --url '%s' --unregister-token '%s' --ca-pin '%s'",
+		rawToken, grpcTarget, baseURL, unregisterToken, s.grpcCACertSHA256,
+	)
 	installCmd := fmt.Sprintf(
-		"curl -sSL '%s/install.sh' | sudo bash -s -- --token '%s' --hub '%s' --url '%s' --unregister-token '%s' --ca-pin '%s'",
-		baseURL, rawToken, grpcTarget, baseURL, unregisterToken, s.grpcCACertSHA256,
+		"curl -sSL '%s/install.sh' | { if [ \"$(id -u)\" -eq 0 ]; then bash %s; elif command -v sudo >/dev/null 2>&1; then sudo bash %s; elif command -v doas >/dev/null 2>&1; then doas bash %s; else echo 'This installer needs root. Re-run as root or install sudo/doas.' >&2; exit 1; fi; }",
+		baseURL, installArgs, installArgs, installArgs,
 	)
 
 	respondJSON(w, http.StatusCreated, model.CreateServerResponse{

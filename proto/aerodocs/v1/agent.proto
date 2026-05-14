@@ -20,6 +20,9 @@ message AgentMessage {
     FileDeleteResponse file_delete_response = 15;
     UnregisterAck unregister_ack = 16;
     CertRenewRequest cert_renew_request = 17;
+    TerminalOpenAck terminal_open_ack = 18;
+    TerminalData terminal_data = 19;
+    TerminalExit terminal_exit = 20;
   }
 }
 
@@ -37,6 +40,10 @@ message HubMessage {
     FileDeleteRequest file_delete_request = 15;
     UnregisterRequest unregister_request = 16;
     CertRenewResponse cert_renew_response = 17;
+    TerminalOpenRequest terminal_open_request = 18;
+    TerminalInput terminal_input = 19;
+    TerminalResize terminal_resize = 20;
+    TerminalClose terminal_close = 21;
   }
 }
 
@@ -174,4 +181,45 @@ message CertRenewResponse {
   bytes client_cert = 1;
   bytes ca_cert = 2;
   string error = 3;
+}
+
+// Interactive terminal
+message TerminalOpenRequest {
+  string session_id = 1;
+  uint32 cols = 2;
+  uint32 rows = 3;
+  string cwd = 4;
+  string run_as_user = 5;
+}
+
+message TerminalOpenAck {
+  string session_id = 1;
+  bool success = 2;
+  string error = 3;
+}
+
+message TerminalInput {
+  string session_id = 1;
+  bytes data = 2;
+}
+
+message TerminalResize {
+  string session_id = 1;
+  uint32 cols = 2;
+  uint32 rows = 3;
+}
+
+message TerminalData {
+  string session_id = 1;
+  bytes data = 2;
+}
+
+message TerminalExit {
+  string session_id = 1;
+  int32 exit_code = 2;
+  string error = 3;
+}
+
+message TerminalClose {
+  string session_id = 1;
 }

@@ -40,6 +40,11 @@ type FileReadResult struct {
 	MimeType  string `json:"mime_type"`
 }
 
+// TerminalSessionResponse is returned after creating a terminal session.
+type TerminalSessionResponse struct {
+	SessionID string `json:"session_id"`
+}
+
 // PermissionListResponse wraps a list of path permissions for a server.
 type PermissionListResponse struct {
 	Paths []Permission `json:"paths"`

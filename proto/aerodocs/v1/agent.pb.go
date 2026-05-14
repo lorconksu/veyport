@@ -35,6 +35,9 @@ type AgentMessage struct {
 	//	*AgentMessage_FileDeleteResponse
 	//	*AgentMessage_UnregisterAck
 	//	*AgentMessage_CertRenewRequest
+	//	*AgentMessage_TerminalOpenAck
+	//	*AgentMessage_TerminalData
+	//	*AgentMessage_TerminalExit
 	Payload       isAgentMessage_Payload `protobuf_oneof:"payload"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -158,6 +161,33 @@ func (x *AgentMessage) GetCertRenewRequest() *CertRenewRequest {
 	return nil
 }
 
+func (x *AgentMessage) GetTerminalOpenAck() *TerminalOpenAck {
+	if x != nil {
+		if x, ok := x.Payload.(*AgentMessage_TerminalOpenAck); ok {
+			return x.TerminalOpenAck
+		}
+	}
+	return nil
+}
+
+func (x *AgentMessage) GetTerminalData() *TerminalData {
+	if x != nil {
+		if x, ok := x.Payload.(*AgentMessage_TerminalData); ok {
+			return x.TerminalData
+		}
+	}
+	return nil
+}
+
+func (x *AgentMessage) GetTerminalExit() *TerminalExit {
+	if x != nil {
+		if x, ok := x.Payload.(*AgentMessage_TerminalExit); ok {
+			return x.TerminalExit
+		}
+	}
+	return nil
+}
+
 type isAgentMessage_Payload interface {
 	isAgentMessage_Payload()
 }
@@ -199,6 +229,18 @@ type AgentMessage_CertRenewRequest struct {
 	CertRenewRequest *CertRenewRequest `protobuf:"bytes,17,opt,name=cert_renew_request,json=certRenewRequest,proto3,oneof"`
 }
 
+type AgentMessage_TerminalOpenAck struct {
+	TerminalOpenAck *TerminalOpenAck `protobuf:"bytes,18,opt,name=terminal_open_ack,json=terminalOpenAck,proto3,oneof"`
+}
+
+type AgentMessage_TerminalData struct {
+	TerminalData *TerminalData `protobuf:"bytes,19,opt,name=terminal_data,json=terminalData,proto3,oneof"`
+}
+
+type AgentMessage_TerminalExit struct {
+	TerminalExit *TerminalExit `protobuf:"bytes,20,opt,name=terminal_exit,json=terminalExit,proto3,oneof"`
+}
+
 func (*AgentMessage_Heartbeat) isAgentMessage_Payload() {}
 
 func (*AgentMessage_Register) isAgentMessage_Payload() {}
@@ -217,6 +259,12 @@ func (*AgentMessage_UnregisterAck) isAgentMessage_Payload() {}
 
 func (*AgentMessage_CertRenewRequest) isAgentMessage_Payload() {}
 
+func (*AgentMessage_TerminalOpenAck) isAgentMessage_Payload() {}
+
+func (*AgentMessage_TerminalData) isAgentMessage_Payload() {}
+
+func (*AgentMessage_TerminalExit) isAgentMessage_Payload() {}
+
 // Messages from Hub → Agent
 type HubMessage struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
@@ -232,6 +280,10 @@ type HubMessage struct {
 	//	*HubMessage_FileDeleteRequest
 	//	*HubMessage_UnregisterRequest
 	//	*HubMessage_CertRenewResponse
+	//	*HubMessage_TerminalOpenRequest
+	//	*HubMessage_TerminalInput
+	//	*HubMessage_TerminalResize
+	//	*HubMessage_TerminalClose
 	Payload       isHubMessage_Payload `protobuf_oneof:"payload"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -364,6 +416,42 @@ func (x *HubMessage) GetCertRenewResponse() *CertRenewResponse {
 	return nil
 }
 
+func (x *HubMessage) GetTerminalOpenRequest() *TerminalOpenRequest {
+	if x != nil {
+		if x, ok := x.Payload.(*HubMessage_TerminalOpenRequest); ok {
+			return x.TerminalOpenRequest
+		}
+	}
+	return nil
+}
+
+func (x *HubMessage) GetTerminalInput() *TerminalInput {
+	if x != nil {
+		if x, ok := x.Payload.(*HubMessage_TerminalInput); ok {
+			return x.TerminalInput
+		}
+	}
+	return nil
+}
+
+func (x *HubMessage) GetTerminalResize() *TerminalResize {
+	if x != nil {
+		if x, ok := x.Payload.(*HubMessage_TerminalResize); ok {
+			return x.TerminalResize
+		}
+	}
+	return nil
+}
+
+func (x *HubMessage) GetTerminalClose() *TerminalClose {
+	if x != nil {
+		if x, ok := x.Payload.(*HubMessage_TerminalClose); ok {
+			return x.TerminalClose
+		}
+	}
+	return nil
+}
+
 type isHubMessage_Payload interface {
 	isHubMessage_Payload()
 }
@@ -409,6 +497,22 @@ type HubMessage_CertRenewResponse struct {
 	CertRenewResponse *CertRenewResponse `protobuf:"bytes,17,opt,name=cert_renew_response,json=certRenewResponse,proto3,oneof"`
 }
 
+type HubMessage_TerminalOpenRequest struct {
+	TerminalOpenRequest *TerminalOpenRequest `protobuf:"bytes,18,opt,name=terminal_open_request,json=terminalOpenRequest,proto3,oneof"`
+}
+
+type HubMessage_TerminalInput struct {
+	TerminalInput *TerminalInput `protobuf:"bytes,19,opt,name=terminal_input,json=terminalInput,proto3,oneof"`
+}
+
+type HubMessage_TerminalResize struct {
+	TerminalResize *TerminalResize `protobuf:"bytes,20,opt,name=terminal_resize,json=terminalResize,proto3,oneof"`
+}
+
+type HubMessage_TerminalClose struct {
+	TerminalClose *TerminalClose `protobuf:"bytes,21,opt,name=terminal_close,json=terminalClose,proto3,oneof"`
+}
+
 func (*HubMessage_HeartbeatAck) isHubMessage_Payload() {}
 
 func (*HubMessage_RegisterAck) isHubMessage_Payload() {}
@@ -428,6 +532,14 @@ func (*HubMessage_FileDeleteRequest) isHubMessage_Payload() {}
 func (*HubMessage_UnregisterRequest) isHubMessage_Payload() {}
 
 func (*HubMessage_CertRenewResponse) isHubMessage_Payload() {}
+
+func (*HubMessage_TerminalOpenRequest) isHubMessage_Payload() {}
+
+func (*HubMessage_TerminalInput) isHubMessage_Payload() {}
+
+func (*HubMessage_TerminalResize) isHubMessage_Payload() {}
+
+func (*HubMessage_TerminalClose) isHubMessage_Payload() {}
 
 type Heartbeat struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
@@ -1727,11 +1839,416 @@ func (x *CertRenewResponse) GetError() string {
 	return ""
 }
 
+// Interactive terminal
+type TerminalOpenRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	SessionId     string                 `protobuf:"bytes,1,opt,name=session_id,json=sessionId,proto3" json:"session_id,omitempty"`
+	Cols          uint32                 `protobuf:"varint,2,opt,name=cols,proto3" json:"cols,omitempty"`
+	Rows          uint32                 `protobuf:"varint,3,opt,name=rows,proto3" json:"rows,omitempty"`
+	Cwd           string                 `protobuf:"bytes,4,opt,name=cwd,proto3" json:"cwd,omitempty"`
+	RunAsUser     string                 `protobuf:"bytes,5,opt,name=run_as_user,json=runAsUser,proto3" json:"run_as_user,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *TerminalOpenRequest) Reset() {
+	*x = TerminalOpenRequest{}
+	mi := &file_proto_aerodocs_v1_agent_proto_msgTypes[23]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *TerminalOpenRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*TerminalOpenRequest) ProtoMessage() {}
+
+func (x *TerminalOpenRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_proto_aerodocs_v1_agent_proto_msgTypes[23]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use TerminalOpenRequest.ProtoReflect.Descriptor instead.
+func (*TerminalOpenRequest) Descriptor() ([]byte, []int) {
+	return file_proto_aerodocs_v1_agent_proto_rawDescGZIP(), []int{23}
+}
+
+func (x *TerminalOpenRequest) GetSessionId() string {
+	if x != nil {
+		return x.SessionId
+	}
+	return ""
+}
+
+func (x *TerminalOpenRequest) GetCols() uint32 {
+	if x != nil {
+		return x.Cols
+	}
+	return 0
+}
+
+func (x *TerminalOpenRequest) GetRows() uint32 {
+	if x != nil {
+		return x.Rows
+	}
+	return 0
+}
+
+func (x *TerminalOpenRequest) GetCwd() string {
+	if x != nil {
+		return x.Cwd
+	}
+	return ""
+}
+
+func (x *TerminalOpenRequest) GetRunAsUser() string {
+	if x != nil {
+		return x.RunAsUser
+	}
+	return ""
+}
+
+type TerminalOpenAck struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	SessionId     string                 `protobuf:"bytes,1,opt,name=session_id,json=sessionId,proto3" json:"session_id,omitempty"`
+	Success       bool                   `protobuf:"varint,2,opt,name=success,proto3" json:"success,omitempty"`
+	Error         string                 `protobuf:"bytes,3,opt,name=error,proto3" json:"error,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *TerminalOpenAck) Reset() {
+	*x = TerminalOpenAck{}
+	mi := &file_proto_aerodocs_v1_agent_proto_msgTypes[24]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *TerminalOpenAck) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*TerminalOpenAck) ProtoMessage() {}
+
+func (x *TerminalOpenAck) ProtoReflect() protoreflect.Message {
+	mi := &file_proto_aerodocs_v1_agent_proto_msgTypes[24]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use TerminalOpenAck.ProtoReflect.Descriptor instead.
+func (*TerminalOpenAck) Descriptor() ([]byte, []int) {
+	return file_proto_aerodocs_v1_agent_proto_rawDescGZIP(), []int{24}
+}
+
+func (x *TerminalOpenAck) GetSessionId() string {
+	if x != nil {
+		return x.SessionId
+	}
+	return ""
+}
+
+func (x *TerminalOpenAck) GetSuccess() bool {
+	if x != nil {
+		return x.Success
+	}
+	return false
+}
+
+func (x *TerminalOpenAck) GetError() string {
+	if x != nil {
+		return x.Error
+	}
+	return ""
+}
+
+type TerminalInput struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	SessionId     string                 `protobuf:"bytes,1,opt,name=session_id,json=sessionId,proto3" json:"session_id,omitempty"`
+	Data          []byte                 `protobuf:"bytes,2,opt,name=data,proto3" json:"data,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *TerminalInput) Reset() {
+	*x = TerminalInput{}
+	mi := &file_proto_aerodocs_v1_agent_proto_msgTypes[25]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *TerminalInput) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*TerminalInput) ProtoMessage() {}
+
+func (x *TerminalInput) ProtoReflect() protoreflect.Message {
+	mi := &file_proto_aerodocs_v1_agent_proto_msgTypes[25]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use TerminalInput.ProtoReflect.Descriptor instead.
+func (*TerminalInput) Descriptor() ([]byte, []int) {
+	return file_proto_aerodocs_v1_agent_proto_rawDescGZIP(), []int{25}
+}
+
+func (x *TerminalInput) GetSessionId() string {
+	if x != nil {
+		return x.SessionId
+	}
+	return ""
+}
+
+func (x *TerminalInput) GetData() []byte {
+	if x != nil {
+		return x.Data
+	}
+	return nil
+}
+
+type TerminalResize struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	SessionId     string                 `protobuf:"bytes,1,opt,name=session_id,json=sessionId,proto3" json:"session_id,omitempty"`
+	Cols          uint32                 `protobuf:"varint,2,opt,name=cols,proto3" json:"cols,omitempty"`
+	Rows          uint32                 `protobuf:"varint,3,opt,name=rows,proto3" json:"rows,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *TerminalResize) Reset() {
+	*x = TerminalResize{}
+	mi := &file_proto_aerodocs_v1_agent_proto_msgTypes[26]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *TerminalResize) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*TerminalResize) ProtoMessage() {}
+
+func (x *TerminalResize) ProtoReflect() protoreflect.Message {
+	mi := &file_proto_aerodocs_v1_agent_proto_msgTypes[26]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use TerminalResize.ProtoReflect.Descriptor instead.
+func (*TerminalResize) Descriptor() ([]byte, []int) {
+	return file_proto_aerodocs_v1_agent_proto_rawDescGZIP(), []int{26}
+}
+
+func (x *TerminalResize) GetSessionId() string {
+	if x != nil {
+		return x.SessionId
+	}
+	return ""
+}
+
+func (x *TerminalResize) GetCols() uint32 {
+	if x != nil {
+		return x.Cols
+	}
+	return 0
+}
+
+func (x *TerminalResize) GetRows() uint32 {
+	if x != nil {
+		return x.Rows
+	}
+	return 0
+}
+
+type TerminalData struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	SessionId     string                 `protobuf:"bytes,1,opt,name=session_id,json=sessionId,proto3" json:"session_id,omitempty"`
+	Data          []byte                 `protobuf:"bytes,2,opt,name=data,proto3" json:"data,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *TerminalData) Reset() {
+	*x = TerminalData{}
+	mi := &file_proto_aerodocs_v1_agent_proto_msgTypes[27]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *TerminalData) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*TerminalData) ProtoMessage() {}
+
+func (x *TerminalData) ProtoReflect() protoreflect.Message {
+	mi := &file_proto_aerodocs_v1_agent_proto_msgTypes[27]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use TerminalData.ProtoReflect.Descriptor instead.
+func (*TerminalData) Descriptor() ([]byte, []int) {
+	return file_proto_aerodocs_v1_agent_proto_rawDescGZIP(), []int{27}
+}
+
+func (x *TerminalData) GetSessionId() string {
+	if x != nil {
+		return x.SessionId
+	}
+	return ""
+}
+
+func (x *TerminalData) GetData() []byte {
+	if x != nil {
+		return x.Data
+	}
+	return nil
+}
+
+type TerminalExit struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	SessionId     string                 `protobuf:"bytes,1,opt,name=session_id,json=sessionId,proto3" json:"session_id,omitempty"`
+	ExitCode      int32                  `protobuf:"varint,2,opt,name=exit_code,json=exitCode,proto3" json:"exit_code,omitempty"`
+	Error         string                 `protobuf:"bytes,3,opt,name=error,proto3" json:"error,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *TerminalExit) Reset() {
+	*x = TerminalExit{}
+	mi := &file_proto_aerodocs_v1_agent_proto_msgTypes[28]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *TerminalExit) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*TerminalExit) ProtoMessage() {}
+
+func (x *TerminalExit) ProtoReflect() protoreflect.Message {
+	mi := &file_proto_aerodocs_v1_agent_proto_msgTypes[28]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use TerminalExit.ProtoReflect.Descriptor instead.
+func (*TerminalExit) Descriptor() ([]byte, []int) {
+	return file_proto_aerodocs_v1_agent_proto_rawDescGZIP(), []int{28}
+}
+
+func (x *TerminalExit) GetSessionId() string {
+	if x != nil {
+		return x.SessionId
+	}
+	return ""
+}
+
+func (x *TerminalExit) GetExitCode() int32 {
+	if x != nil {
+		return x.ExitCode
+	}
+	return 0
+}
+
+func (x *TerminalExit) GetError() string {
+	if x != nil {
+		return x.Error
+	}
+	return ""
+}
+
+type TerminalClose struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	SessionId     string                 `protobuf:"bytes,1,opt,name=session_id,json=sessionId,proto3" json:"session_id,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *TerminalClose) Reset() {
+	*x = TerminalClose{}
+	mi := &file_proto_aerodocs_v1_agent_proto_msgTypes[29]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *TerminalClose) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*TerminalClose) ProtoMessage() {}
+
+func (x *TerminalClose) ProtoReflect() protoreflect.Message {
+	mi := &file_proto_aerodocs_v1_agent_proto_msgTypes[29]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use TerminalClose.ProtoReflect.Descriptor instead.
+func (*TerminalClose) Descriptor() ([]byte, []int) {
+	return file_proto_aerodocs_v1_agent_proto_rawDescGZIP(), []int{29}
+}
+
+func (x *TerminalClose) GetSessionId() string {
+	if x != nil {
+		return x.SessionId
+	}
+	return ""
+}
+
 var File_proto_aerodocs_v1_agent_proto protoreflect.FileDescriptor
 
 const file_proto_aerodocs_v1_agent_proto_rawDesc = "" +
 	"\n" +
-	"\x1dproto/aerodocs/v1/agent.proto\x12\vaerodocs.v1\"\xa1\x05\n" +
+	"\x1dproto/aerodocs/v1/agent.proto\x12\vaerodocs.v1\"\xf1\x06\n" +
 	"\fAgentMessage\x126\n" +
 	"\theartbeat\x18\x01 \x01(\v2\x16.aerodocs.v1.HeartbeatH\x00R\theartbeat\x128\n" +
 	"\bregister\x18\x02 \x01(\v2\x1a.aerodocs.v1.RegisterAgentH\x00R\bregister\x12M\n" +
@@ -1742,8 +2259,11 @@ const file_proto_aerodocs_v1_agent_proto_rawDesc = "" +
 	"\x12file_read_response\x18\r \x01(\v2\x1d.aerodocs.v1.FileReadResponseH\x00R\x10fileReadResponse\x12S\n" +
 	"\x14file_delete_response\x18\x0f \x01(\v2\x1f.aerodocs.v1.FileDeleteResponseH\x00R\x12fileDeleteResponse\x12C\n" +
 	"\x0eunregister_ack\x18\x10 \x01(\v2\x1a.aerodocs.v1.UnregisterAckH\x00R\runregisterAck\x12M\n" +
-	"\x12cert_renew_request\x18\x11 \x01(\v2\x1d.aerodocs.v1.CertRenewRequestH\x00R\x10certRenewRequestB\t\n" +
-	"\apayload\"\x8c\x06\n" +
+	"\x12cert_renew_request\x18\x11 \x01(\v2\x1d.aerodocs.v1.CertRenewRequestH\x00R\x10certRenewRequest\x12J\n" +
+	"\x11terminal_open_ack\x18\x12 \x01(\v2\x1c.aerodocs.v1.TerminalOpenAckH\x00R\x0fterminalOpenAck\x12@\n" +
+	"\rterminal_data\x18\x13 \x01(\v2\x19.aerodocs.v1.TerminalDataH\x00R\fterminalData\x12@\n" +
+	"\rterminal_exit\x18\x14 \x01(\v2\x19.aerodocs.v1.TerminalExitH\x00R\fterminalExitB\t\n" +
+	"\apayload\"\xb6\b\n" +
 	"\n" +
 	"HubMessage\x12@\n" +
 	"\rheartbeat_ack\x18\x01 \x01(\v2\x19.aerodocs.v1.HeartbeatAckH\x00R\fheartbeatAck\x12=\n" +
@@ -1756,7 +2276,11 @@ const file_proto_aerodocs_v1_agent_proto_rawDesc = "" +
 	"\x0flog_stream_stop\x18\x0e \x01(\v2\x1a.aerodocs.v1.LogStreamStopH\x00R\rlogStreamStop\x12P\n" +
 	"\x13file_delete_request\x18\x0f \x01(\v2\x1e.aerodocs.v1.FileDeleteRequestH\x00R\x11fileDeleteRequest\x12O\n" +
 	"\x12unregister_request\x18\x10 \x01(\v2\x1e.aerodocs.v1.UnregisterRequestH\x00R\x11unregisterRequest\x12P\n" +
-	"\x13cert_renew_response\x18\x11 \x01(\v2\x1e.aerodocs.v1.CertRenewResponseH\x00R\x11certRenewResponseB\t\n" +
+	"\x13cert_renew_response\x18\x11 \x01(\v2\x1e.aerodocs.v1.CertRenewResponseH\x00R\x11certRenewResponse\x12V\n" +
+	"\x15terminal_open_request\x18\x12 \x01(\v2 .aerodocs.v1.TerminalOpenRequestH\x00R\x13terminalOpenRequest\x12C\n" +
+	"\x0eterminal_input\x18\x13 \x01(\v2\x1a.aerodocs.v1.TerminalInputH\x00R\rterminalInput\x12F\n" +
+	"\x0fterminal_resize\x18\x14 \x01(\v2\x1b.aerodocs.v1.TerminalResizeH\x00R\x0eterminalResize\x12C\n" +
+	"\x0eterminal_close\x18\x15 \x01(\v2\x1a.aerodocs.v1.TerminalCloseH\x00R\rterminalCloseB\t\n" +
 	"\apayload\"\x9f\x01\n" +
 	"\tHeartbeat\x12\x1b\n" +
 	"\tserver_id\x18\x01 \x01(\tR\bserverId\x12\x1c\n" +
@@ -1866,7 +2390,40 @@ const file_proto_aerodocs_v1_agent_proto_rawDesc = "" +
 	"\vclient_cert\x18\x01 \x01(\fR\n" +
 	"clientCert\x12\x17\n" +
 	"\aca_cert\x18\x02 \x01(\fR\x06caCert\x12\x14\n" +
-	"\x05error\x18\x03 \x01(\tR\x05error2Q\n" +
+	"\x05error\x18\x03 \x01(\tR\x05error\"\x8e\x01\n" +
+	"\x13TerminalOpenRequest\x12\x1d\n" +
+	"\n" +
+	"session_id\x18\x01 \x01(\tR\tsessionId\x12\x12\n" +
+	"\x04cols\x18\x02 \x01(\rR\x04cols\x12\x12\n" +
+	"\x04rows\x18\x03 \x01(\rR\x04rows\x12\x10\n" +
+	"\x03cwd\x18\x04 \x01(\tR\x03cwd\x12\x1e\n" +
+	"\vrun_as_user\x18\x05 \x01(\tR\trunAsUser\"`\n" +
+	"\x0fTerminalOpenAck\x12\x1d\n" +
+	"\n" +
+	"session_id\x18\x01 \x01(\tR\tsessionId\x12\x18\n" +
+	"\asuccess\x18\x02 \x01(\bR\asuccess\x12\x14\n" +
+	"\x05error\x18\x03 \x01(\tR\x05error\"B\n" +
+	"\rTerminalInput\x12\x1d\n" +
+	"\n" +
+	"session_id\x18\x01 \x01(\tR\tsessionId\x12\x12\n" +
+	"\x04data\x18\x02 \x01(\fR\x04data\"W\n" +
+	"\x0eTerminalResize\x12\x1d\n" +
+	"\n" +
+	"session_id\x18\x01 \x01(\tR\tsessionId\x12\x12\n" +
+	"\x04cols\x18\x02 \x01(\rR\x04cols\x12\x12\n" +
+	"\x04rows\x18\x03 \x01(\rR\x04rows\"A\n" +
+	"\fTerminalData\x12\x1d\n" +
+	"\n" +
+	"session_id\x18\x01 \x01(\tR\tsessionId\x12\x12\n" +
+	"\x04data\x18\x02 \x01(\fR\x04data\"`\n" +
+	"\fTerminalExit\x12\x1d\n" +
+	"\n" +
+	"session_id\x18\x01 \x01(\tR\tsessionId\x12\x1b\n" +
+	"\texit_code\x18\x02 \x01(\x05R\bexitCode\x12\x14\n" +
+	"\x05error\x18\x03 \x01(\tR\x05error\".\n" +
+	"\rTerminalClose\x12\x1d\n" +
+	"\n" +
+	"session_id\x18\x01 \x01(\tR\tsessionId2Q\n" +
 	"\fAgentService\x12A\n" +
 	"\aConnect\x12\x19.aerodocs.v1.AgentMessage\x1a\x17.aerodocs.v1.HubMessage(\x010\x01B,Z*github.com/wyiu/aerodocs/proto/aerodocs/v1b\x06proto3"
 
@@ -1882,31 +2439,38 @@ func file_proto_aerodocs_v1_agent_proto_rawDescGZIP() []byte {
 	return file_proto_aerodocs_v1_agent_proto_rawDescData
 }
 
-var file_proto_aerodocs_v1_agent_proto_msgTypes = make([]protoimpl.MessageInfo, 23)
+var file_proto_aerodocs_v1_agent_proto_msgTypes = make([]protoimpl.MessageInfo, 30)
 var file_proto_aerodocs_v1_agent_proto_goTypes = []any{
-	(*AgentMessage)(nil),       // 0: aerodocs.v1.AgentMessage
-	(*HubMessage)(nil),         // 1: aerodocs.v1.HubMessage
-	(*Heartbeat)(nil),          // 2: aerodocs.v1.Heartbeat
-	(*HeartbeatAck)(nil),       // 3: aerodocs.v1.HeartbeatAck
-	(*RegisterAgent)(nil),      // 4: aerodocs.v1.RegisterAgent
-	(*RegisterAck)(nil),        // 5: aerodocs.v1.RegisterAck
-	(*SystemInfo)(nil),         // 6: aerodocs.v1.SystemInfo
-	(*FileListRequest)(nil),    // 7: aerodocs.v1.FileListRequest
-	(*FileListResponse)(nil),   // 8: aerodocs.v1.FileListResponse
-	(*FileNode)(nil),           // 9: aerodocs.v1.FileNode
-	(*FileReadRequest)(nil),    // 10: aerodocs.v1.FileReadRequest
-	(*FileReadResponse)(nil),   // 11: aerodocs.v1.FileReadResponse
-	(*LogStreamRequest)(nil),   // 12: aerodocs.v1.LogStreamRequest
-	(*LogStreamChunk)(nil),     // 13: aerodocs.v1.LogStreamChunk
-	(*LogStreamStop)(nil),      // 14: aerodocs.v1.LogStreamStop
-	(*FileUploadRequest)(nil),  // 15: aerodocs.v1.FileUploadRequest
-	(*FileUploadAck)(nil),      // 16: aerodocs.v1.FileUploadAck
-	(*FileDeleteRequest)(nil),  // 17: aerodocs.v1.FileDeleteRequest
-	(*FileDeleteResponse)(nil), // 18: aerodocs.v1.FileDeleteResponse
-	(*UnregisterRequest)(nil),  // 19: aerodocs.v1.UnregisterRequest
-	(*UnregisterAck)(nil),      // 20: aerodocs.v1.UnregisterAck
-	(*CertRenewRequest)(nil),   // 21: aerodocs.v1.CertRenewRequest
-	(*CertRenewResponse)(nil),  // 22: aerodocs.v1.CertRenewResponse
+	(*AgentMessage)(nil),        // 0: aerodocs.v1.AgentMessage
+	(*HubMessage)(nil),          // 1: aerodocs.v1.HubMessage
+	(*Heartbeat)(nil),           // 2: aerodocs.v1.Heartbeat
+	(*HeartbeatAck)(nil),        // 3: aerodocs.v1.HeartbeatAck
+	(*RegisterAgent)(nil),       // 4: aerodocs.v1.RegisterAgent
+	(*RegisterAck)(nil),         // 5: aerodocs.v1.RegisterAck
+	(*SystemInfo)(nil),          // 6: aerodocs.v1.SystemInfo
+	(*FileListRequest)(nil),     // 7: aerodocs.v1.FileListRequest
+	(*FileListResponse)(nil),    // 8: aerodocs.v1.FileListResponse
+	(*FileNode)(nil),            // 9: aerodocs.v1.FileNode
+	(*FileReadRequest)(nil),     // 10: aerodocs.v1.FileReadRequest
+	(*FileReadResponse)(nil),    // 11: aerodocs.v1.FileReadResponse
+	(*LogStreamRequest)(nil),    // 12: aerodocs.v1.LogStreamRequest
+	(*LogStreamChunk)(nil),      // 13: aerodocs.v1.LogStreamChunk
+	(*LogStreamStop)(nil),       // 14: aerodocs.v1.LogStreamStop
+	(*FileUploadRequest)(nil),   // 15: aerodocs.v1.FileUploadRequest
+	(*FileUploadAck)(nil),       // 16: aerodocs.v1.FileUploadAck
+	(*FileDeleteRequest)(nil),   // 17: aerodocs.v1.FileDeleteRequest
+	(*FileDeleteResponse)(nil),  // 18: aerodocs.v1.FileDeleteResponse
+	(*UnregisterRequest)(nil),   // 19: aerodocs.v1.UnregisterRequest
+	(*UnregisterAck)(nil),       // 20: aerodocs.v1.UnregisterAck
+	(*CertRenewRequest)(nil),    // 21: aerodocs.v1.CertRenewRequest
+	(*CertRenewResponse)(nil),   // 22: aerodocs.v1.CertRenewResponse
+	(*TerminalOpenRequest)(nil), // 23: aerodocs.v1.TerminalOpenRequest
+	(*TerminalOpenAck)(nil),     // 24: aerodocs.v1.TerminalOpenAck
+	(*TerminalInput)(nil),       // 25: aerodocs.v1.TerminalInput
+	(*TerminalResize)(nil),      // 26: aerodocs.v1.TerminalResize
+	(*TerminalData)(nil),        // 27: aerodocs.v1.TerminalData
+	(*TerminalExit)(nil),        // 28: aerodocs.v1.TerminalExit
+	(*TerminalClose)(nil),       // 29: aerodocs.v1.TerminalClose
 }
 var file_proto_aerodocs_v1_agent_proto_depIdxs = []int32{
 	2,  // 0: aerodocs.v1.AgentMessage.heartbeat:type_name -> aerodocs.v1.Heartbeat
@@ -1918,25 +2482,32 @@ var file_proto_aerodocs_v1_agent_proto_depIdxs = []int32{
 	18, // 6: aerodocs.v1.AgentMessage.file_delete_response:type_name -> aerodocs.v1.FileDeleteResponse
 	20, // 7: aerodocs.v1.AgentMessage.unregister_ack:type_name -> aerodocs.v1.UnregisterAck
 	21, // 8: aerodocs.v1.AgentMessage.cert_renew_request:type_name -> aerodocs.v1.CertRenewRequest
-	3,  // 9: aerodocs.v1.HubMessage.heartbeat_ack:type_name -> aerodocs.v1.HeartbeatAck
-	5,  // 10: aerodocs.v1.HubMessage.register_ack:type_name -> aerodocs.v1.RegisterAck
-	7,  // 11: aerodocs.v1.HubMessage.file_list_request:type_name -> aerodocs.v1.FileListRequest
-	12, // 12: aerodocs.v1.HubMessage.log_stream_request:type_name -> aerodocs.v1.LogStreamRequest
-	15, // 13: aerodocs.v1.HubMessage.file_upload_request:type_name -> aerodocs.v1.FileUploadRequest
-	10, // 14: aerodocs.v1.HubMessage.file_read_request:type_name -> aerodocs.v1.FileReadRequest
-	14, // 15: aerodocs.v1.HubMessage.log_stream_stop:type_name -> aerodocs.v1.LogStreamStop
-	17, // 16: aerodocs.v1.HubMessage.file_delete_request:type_name -> aerodocs.v1.FileDeleteRequest
-	19, // 17: aerodocs.v1.HubMessage.unregister_request:type_name -> aerodocs.v1.UnregisterRequest
-	22, // 18: aerodocs.v1.HubMessage.cert_renew_response:type_name -> aerodocs.v1.CertRenewResponse
-	6,  // 19: aerodocs.v1.Heartbeat.system_info:type_name -> aerodocs.v1.SystemInfo
-	9,  // 20: aerodocs.v1.FileListResponse.files:type_name -> aerodocs.v1.FileNode
-	0,  // 21: aerodocs.v1.AgentService.Connect:input_type -> aerodocs.v1.AgentMessage
-	1,  // 22: aerodocs.v1.AgentService.Connect:output_type -> aerodocs.v1.HubMessage
-	22, // [22:23] is the sub-list for method output_type
-	21, // [21:22] is the sub-list for method input_type
-	21, // [21:21] is the sub-list for extension type_name
-	21, // [21:21] is the sub-list for extension extendee
-	0,  // [0:21] is the sub-list for field type_name
+	24, // 9: aerodocs.v1.AgentMessage.terminal_open_ack:type_name -> aerodocs.v1.TerminalOpenAck
+	27, // 10: aerodocs.v1.AgentMessage.terminal_data:type_name -> aerodocs.v1.TerminalData
+	28, // 11: aerodocs.v1.AgentMessage.terminal_exit:type_name -> aerodocs.v1.TerminalExit
+	3,  // 12: aerodocs.v1.HubMessage.heartbeat_ack:type_name -> aerodocs.v1.HeartbeatAck
+	5,  // 13: aerodocs.v1.HubMessage.register_ack:type_name -> aerodocs.v1.RegisterAck
+	7,  // 14: aerodocs.v1.HubMessage.file_list_request:type_name -> aerodocs.v1.FileListRequest
+	12, // 15: aerodocs.v1.HubMessage.log_stream_request:type_name -> aerodocs.v1.LogStreamRequest
+	15, // 16: aerodocs.v1.HubMessage.file_upload_request:type_name -> aerodocs.v1.FileUploadRequest
+	10, // 17: aerodocs.v1.HubMessage.file_read_request:type_name -> aerodocs.v1.FileReadRequest
+	14, // 18: aerodocs.v1.HubMessage.log_stream_stop:type_name -> aerodocs.v1.LogStreamStop
+	17, // 19: aerodocs.v1.HubMessage.file_delete_request:type_name -> aerodocs.v1.FileDeleteRequest
+	19, // 20: aerodocs.v1.HubMessage.unregister_request:type_name -> aerodocs.v1.UnregisterRequest
+	22, // 21: aerodocs.v1.HubMessage.cert_renew_response:type_name -> aerodocs.v1.CertRenewResponse
+	23, // 22: aerodocs.v1.HubMessage.terminal_open_request:type_name -> aerodocs.v1.TerminalOpenRequest
+	25, // 23: aerodocs.v1.HubMessage.terminal_input:type_name -> aerodocs.v1.TerminalInput
+	26, // 24: aerodocs.v1.HubMessage.terminal_resize:type_name -> aerodocs.v1.TerminalResize
+	29, // 25: aerodocs.v1.HubMessage.terminal_close:type_name -> aerodocs.v1.TerminalClose
+	6,  // 26: aerodocs.v1.Heartbeat.system_info:type_name -> aerodocs.v1.SystemInfo
+	9,  // 27: aerodocs.v1.FileListResponse.files:type_name -> aerodocs.v1.FileNode
+	0,  // 28: aerodocs.v1.AgentService.Connect:input_type -> aerodocs.v1.AgentMessage
+	1,  // 29: aerodocs.v1.AgentService.Connect:output_type -> aerodocs.v1.HubMessage
+	29, // [29:30] is the sub-list for method output_type
+	28, // [28:29] is the sub-list for method input_type
+	28, // [28:28] is the sub-list for extension type_name
+	28, // [28:28] is the sub-list for extension extendee
+	0,  // [0:28] is the sub-list for field type_name
 }
 
 func init() { file_proto_aerodocs_v1_agent_proto_init() }
@@ -1954,6 +2525,9 @@ func file_proto_aerodocs_v1_agent_proto_init() {
 		(*AgentMessage_FileDeleteResponse)(nil),
 		(*AgentMessage_UnregisterAck)(nil),
 		(*AgentMessage_CertRenewRequest)(nil),
+		(*AgentMessage_TerminalOpenAck)(nil),
+		(*AgentMessage_TerminalData)(nil),
+		(*AgentMessage_TerminalExit)(nil),
 	}
 	file_proto_aerodocs_v1_agent_proto_msgTypes[1].OneofWrappers = []any{
 		(*HubMessage_HeartbeatAck)(nil),
@@ -1966,6 +2540,10 @@ func file_proto_aerodocs_v1_agent_proto_init() {
 		(*HubMessage_FileDeleteRequest)(nil),
 		(*HubMessage_UnregisterRequest)(nil),
 		(*HubMessage_CertRenewResponse)(nil),
+		(*HubMessage_TerminalOpenRequest)(nil),
+		(*HubMessage_TerminalInput)(nil),
+		(*HubMessage_TerminalResize)(nil),
+		(*HubMessage_TerminalClose)(nil),
 	}
 	type x struct{}
 	out := protoimpl.TypeBuilder{
@@ -1973,7 +2551,7 @@ func file_proto_aerodocs_v1_agent_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_proto_aerodocs_v1_agent_proto_rawDesc), len(file_proto_aerodocs_v1_agent_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   23,
+			NumMessages:   30,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

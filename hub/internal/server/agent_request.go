@@ -28,6 +28,10 @@ func (s *Server) requireAgent(w http.ResponseWriter, r *http.Request) (string, b
 // Returns the raw response interface{}, or writes an error and returns nil.
 func (s *Server) sendAgentRequest(w http.ResponseWriter, serverID string, buildMsg func(requestID string) *pb.HubMessage, timeout time.Duration) interface{} {
 	requestID := uuid.NewString()
+	return s.sendAgentRequestWithID(w, serverID, requestID, buildMsg, timeout)
+}
+
+func (s *Server) sendAgentRequestWithID(w http.ResponseWriter, serverID, requestID string, buildMsg func(requestID string) *pb.HubMessage, timeout time.Duration) interface{} {
 	ch := s.pending.Register(serverID, requestID)
 	defer s.pending.Remove(serverID, requestID)
 

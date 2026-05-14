@@ -15,6 +15,13 @@ vi.mock('@/lib/api', () => ({
   apiFetch: vi.fn(),
 }))
 
+const mockLogin = vi.fn()
+vi.mock('@/hooks/use-auth', () => ({
+  useAuth: vi.fn(() => ({
+    login: mockLogin,
+  })),
+}))
+
 import { apiFetch } from '@/lib/api'
 const mockApiFetch = apiFetch as ReturnType<typeof vi.fn>
 
@@ -40,6 +47,7 @@ describe('LoginPage', () => {
   beforeEach(() => {
     mockApiFetch.mockReset()
     mockNavigate.mockReset()
+    mockLogin.mockReset()
     vi.restoreAllMocks()
     // Default: system is initialized (apiFetch used for /auth/status)
     mockApiFetch.mockResolvedValueOnce({ initialized: true })
@@ -171,5 +179,30 @@ describe('LoginPage', () => {
       expect(globalThis.fetch).toHaveBeenCalledWith('/api/auth/login', expect.any(Object))
     })
     expect(mockNavigate).not.toHaveBeenCalled()
+  })
+
+  it('logs in directly when login returns a user payload', async () => {
+    const user = {
+      id: 'preview-user',
+      username: 'preview',
+      email: 'preview@test.local',
+      role: 'admin',
+      totp_enabled: false,
+      avatar: null,
+      created_at: '',
+      updated_at: '',
+    }
+
+    vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce(mockFetchResponse({ user }))
+    renderPage()
+
+    fireEvent.change(screen.getByPlaceholderText('username'), { target: { value: 'preview' } })
+    fireEvent.change(screen.getByPlaceholderText('password'), { target: { value: 'secret' } })
+    fireEvent.submit(screen.getByRole('button', { name: /sign in/i }).closest('form')!)
+
+    await waitFor(() => {
+      expect(mockLogin).toHaveBeenCalledWith(user)
+      expect(mockNavigate).toHaveBeenCalledWith('/')
+    })
   })
 })

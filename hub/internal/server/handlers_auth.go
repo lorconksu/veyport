@@ -13,7 +13,10 @@ import (
 	"github.com/wyiu/aerodocs/hub/internal/model"
 )
 
-const errFailedToHashPassword = "failed to hash password"
+const (
+	errFailedToHashPassword = "failed to hash password"
+	errInvalidCredentials   = "invalid credentials"
+)
 
 func (s *Server) handleAuthStatus(w http.ResponseWriter, r *http.Request) {
 	initialized, err := s.store.InitialSetupComplete()
@@ -126,58 +129,78 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 
 	user, err := s.store.GetUserByUsername(req.Username)
 	if err != nil {
-		// Dummy bcrypt compare to prevent username enumeration via timing
-		auth.ComparePassword("$2a$12$000000000000000000000000000000000000000000000000000000", "dummy")
-		ip := clientIP(r)
-		s.auditLogRequest(r, model.AuditEntry{
-			ID:        uuid.NewString(),
-			Action:    model.AuditUserLoginFailed,
-			IPAddress: &ip,
-			ActorType: model.AuditActorTypeAnonymous,
-		})
-		if s.notifier != nil {
-			s.notifier.Notify(model.NotifyLoginFailed, map[string]string{
-				"username": req.Username, "ip": ip,
-				"timestamp": time.Now().UTC().Format(model.NotifyTimestampFormat),
-			})
-		}
-		respondError(w, http.StatusUnauthorized, "invalid credentials")
+		s.handleUnknownUserLogin(w, r, req)
+		return
+	}
+
+	if user.AuthProvider == model.AuthProviderLDAP {
+		s.handleLDAPUserLogin(w, r, req, user)
 		return
 	}
 
 	if !auth.ComparePassword(user.PasswordHash, req.Password) {
-		ip := clientIP(r)
-		s.auditLogRequest(r, model.AuditEntry{
-			ID:        uuid.NewString(),
-			UserID:    &user.ID,
-			Action:    model.AuditUserLoginFailed,
-			IPAddress: &ip,
-		})
-		if s.notifier != nil {
-			s.notifier.Notify(model.NotifyLoginFailed, map[string]string{
-				"username": req.Username, "ip": ip,
-				"timestamp": time.Now().UTC().Format(model.NotifyTimestampFormat),
-			})
-		}
-		respondError(w, http.StatusUnauthorized, "invalid credentials")
+		s.recordLoginFailure(r, &user.ID, req.Username, nil, true)
+		respondError(w, http.StatusUnauthorized, errInvalidCredentials)
 		return
 	}
 
 	if user.MustChangePassword && user.TempPasswordExpiresAt != nil && time.Now().UTC().After(*user.TempPasswordExpiresAt) {
-		ip := clientIP(r)
 		detail := "temporary password expired"
-		s.auditLogRequest(r, model.AuditEntry{
-			ID:        uuid.NewString(),
-			UserID:    &user.ID,
-			Action:    model.AuditUserLoginFailed,
-			Detail:    &detail,
-			IPAddress: &ip,
-			Outcome:   model.AuditOutcomeFailure,
-		})
+		s.recordLoginFailure(r, &user.ID, req.Username, &detail, false)
 		respondError(w, http.StatusUnauthorized, "temporary password expired — contact an administrator")
 		return
 	}
 
+	s.respondAfterPrimaryLogin(w, user)
+}
+
+func (s *Server) handleUnknownUserLogin(w http.ResponseWriter, r *http.Request, req model.LoginRequest) {
+	if ldapUser, ldapErr := s.authenticateLDAPLogin(r.Context(), req.Username, req.Password); ldapErr == nil {
+		s.respondAfterPrimaryLogin(w, ldapUser)
+		return
+	}
+	// Dummy bcrypt compare to prevent username enumeration via timing.
+	auth.ComparePassword("$2a$12$000000000000000000000000000000000000000000000000000000", "dummy")
+	s.recordLoginFailure(r, nil, req.Username, nil, true)
+	respondError(w, http.StatusUnauthorized, errInvalidCredentials)
+}
+
+func (s *Server) handleLDAPUserLogin(w http.ResponseWriter, r *http.Request, req model.LoginRequest, user *model.User) {
+	ldapUser, ldapErr := s.authenticateLDAPLogin(r.Context(), req.Username, req.Password)
+	if ldapErr != nil {
+		s.recordLoginFailure(r, &user.ID, req.Username, nil, true)
+		respondError(w, http.StatusUnauthorized, errInvalidCredentials)
+		return
+	}
+	s.respondAfterPrimaryLogin(w, ldapUser)
+}
+
+func (s *Server) recordLoginFailure(r *http.Request, userID *string, username string, detail *string, notify bool) {
+	ip := clientIP(r)
+	entry := model.AuditEntry{
+		ID:        uuid.NewString(),
+		UserID:    userID,
+		Action:    model.AuditUserLoginFailed,
+		Detail:    detail,
+		IPAddress: &ip,
+	}
+	if userID == nil {
+		entry.ActorType = model.AuditActorTypeAnonymous
+	}
+	if detail != nil {
+		entry.Outcome = model.AuditOutcomeFailure
+	}
+	s.auditLogRequest(r, entry)
+	if notify && s.notifier != nil {
+		s.notifier.Notify(model.NotifyLoginFailed, map[string]string{
+			"username":  username,
+			"ip":        ip,
+			"timestamp": time.Now().UTC().Format(model.NotifyTimestampFormat),
+		})
+	}
+}
+
+func (s *Server) respondAfterPrimaryLogin(w http.ResponseWriter, user *model.User) {
 	// If TOTP not set up yet, return setup token
 	if !user.TOTPEnabled {
 		setupToken, err := auth.GenerateSetupToken(s.jwtSecret, user.ID, string(user.Role))

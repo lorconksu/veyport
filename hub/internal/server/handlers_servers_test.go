@@ -95,6 +95,65 @@ func TestCreateServer(t *testing.T) {
 	if !strings.Contains(resp.InstallCommand, "--ca-pin '") {
 		t.Fatalf("expected install_command to include --ca-pin, got %q", resp.InstallCommand)
 	}
+	if !strings.Contains(resp.InstallCommand, "id -u") {
+		t.Fatalf("expected install_command to handle root shells without sudo, got %q", resp.InstallCommand)
+	}
+}
+
+func TestCreateServer_InstallCommandUsesRequestHostPort(t *testing.T) {
+	s := testServer(t)
+	token := registerAndGetAdminToken(t, s)
+
+	body, _ := json.Marshal(model.CreateServerRequest{Name: "preview-port-test"})
+
+	req := httptest.NewRequest("POST", "https://10.10.1.95:4443/api/servers", bytes.NewReader(body))
+	req.Host = "10.10.1.95:4443"
+	req.Header.Set("Authorization", testBearerPrefix+token)
+	rec := httptest.NewRecorder()
+	s.routes().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("expected 201, got %d: %s", rec.Code, rec.Body.String())
+	}
+
+	var resp model.CreateServerResponse
+	json.NewDecoder(rec.Body).Decode(&resp)
+
+	if !strings.Contains(resp.InstallCommand, "https://10.10.1.95:4443/install.sh") {
+		t.Fatalf("expected install_command to preserve request host and port, got %q", resp.InstallCommand)
+	}
+	if !strings.Contains(resp.InstallCommand, "--url 'https://10.10.1.95:4443'") {
+		t.Fatalf("expected install_command to preserve request URL host and port, got %q", resp.InstallCommand)
+	}
+}
+
+func TestCreateServer_InstallCommandUsesConfiguredPublicBaseURL(t *testing.T) {
+	t.Setenv("AERODOCS_PUBLIC_BASE_URL", "http://10.10.1.95:8082")
+
+	s := testServer(t)
+	token := registerAndGetAdminToken(t, s)
+
+	body, _ := json.Marshal(model.CreateServerRequest{Name: "preview-install-base"})
+
+	req := httptest.NewRequest("POST", "https://preview.example/api/servers", bytes.NewReader(body))
+	req.Host = "preview.example"
+	req.Header.Set("Authorization", testBearerPrefix+token)
+	rec := httptest.NewRecorder()
+	s.routes().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("expected 201, got %d: %s", rec.Code, rec.Body.String())
+	}
+
+	var resp model.CreateServerResponse
+	json.NewDecoder(rec.Body).Decode(&resp)
+
+	if !strings.Contains(resp.InstallCommand, "http://10.10.1.95:8082/install.sh") {
+		t.Fatalf("expected install_command to use configured public base url, got %q", resp.InstallCommand)
+	}
+	if !strings.Contains(resp.InstallCommand, "--url 'http://10.10.1.95:8082'") {
+		t.Fatalf("expected install_command to use configured public base url for downloads, got %q", resp.InstallCommand)
+	}
 }
 
 func TestCreateServer_EmptyName(t *testing.T) {

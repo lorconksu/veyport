@@ -68,6 +68,7 @@ func runServer() error {
 	cm := connmgr.New()
 	pending := grpcserver.NewPendingRequests()
 	logSessions := grpcserver.NewLogSessions()
+	terminalSessions := grpcserver.NewTerminalSessions()
 
 	srv := server.New(server.Config{
 		Addr:             *addr,
@@ -82,6 +83,7 @@ func runServer() error {
 		ConnMgr:          cm,
 		Pending:          pending,
 		LogSessions:      logSessions,
+		TerminalSessions: terminalSessions,
 		Notifier:         notifier,
 	})
 
@@ -102,6 +104,7 @@ func runServer() error {
 		ConnMgr:          cm,
 		Pending:          pending,
 		LogSessions:      logSessions,
+		TerminalSessions: terminalSessions,
 		CACert:           caCert,
 		CAKey:            caKey,
 		Notifier:         notifier,

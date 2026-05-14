@@ -3,22 +3,37 @@ package store
 import (
 	"database/sql"
 	"fmt"
+	"strings"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/wyiu/aerodocs/hub/internal/model"
 )
 
 const configInitialSetupComplete = "initial_setup_completed"
 
+const userSelectColumns = `id, username, email, password_hash, role, auth_provider, external_id,
+        ldap_dn, ldap_username, ldap_last_sync_at, terminal_access, totp_secret, totp_enabled,
+        token_generation, avatar, must_change_password, temp_password_expires_at, created_at, updated_at`
+
 func (s *Store) CreateUser(u *model.User) error {
+	if u.AuthProvider == "" {
+		u.AuthProvider = model.AuthProviderLocal
+	}
+	if u.LDAPUsername == "" && u.AuthProvider == model.AuthProviderLDAP {
+		u.LDAPUsername = u.Username
+	}
 	_, err := s.db.Exec(
 		`INSERT INTO users (
-			id, username, email, password_hash, role, totp_secret, totp_enabled,
+			id, username, email, password_hash, role, auth_provider, external_id,
+			ldap_dn, ldap_username, ldap_last_sync_at, terminal_access, totp_secret, totp_enabled,
 			avatar, token_generation, must_change_password, temp_password_expires_at
 		)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		u.ID, u.Username, u.Email, u.PasswordHash, u.Role, u.TOTPSecret, u.TOTPEnabled,
-		u.Avatar, u.TokenGeneration, u.MustChangePassword, sqliteTimePtr(u.TempPasswordExpiresAt),
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		u.ID, u.Username, u.Email, u.PasswordHash, u.Role, u.AuthProvider, u.ExternalID,
+		u.LDAPDN, u.LDAPUsername, sqliteTimePtr(u.LDAPLastSyncAt), u.TerminalAccess,
+		u.TOTPSecret, u.TOTPEnabled, u.Avatar, u.TokenGeneration, u.MustChangePassword,
+		sqliteTimePtr(u.TempPasswordExpiresAt),
 	)
 	if err != nil {
 		return fmt.Errorf("create user: %w", err)
@@ -28,18 +43,114 @@ func (s *Store) CreateUser(u *model.User) error {
 
 func (s *Store) GetUserByID(id string) (*model.User, error) {
 	return s.scanUser(s.db.QueryRow(
-		`SELECT id, username, email, password_hash, role, totp_secret, totp_enabled, token_generation, avatar,
-		        must_change_password, temp_password_expires_at, created_at, updated_at
-		 FROM users WHERE id = ?`, id,
+		`SELECT `+userSelectColumns+` FROM users WHERE id = ?`, id,
 	))
 }
 
 func (s *Store) GetUserByUsername(username string) (*model.User, error) {
 	return s.scanUser(s.db.QueryRow(
-		`SELECT id, username, email, password_hash, role, totp_secret, totp_enabled, token_generation, avatar,
-		        must_change_password, temp_password_expires_at, created_at, updated_at
-		 FROM users WHERE username = ?`, username,
+		`SELECT `+userSelectColumns+` FROM users WHERE username = ?`, username,
 	))
+}
+
+func (s *Store) GetUserByExternalIdentity(provider model.AuthProvider, externalID string) (*model.User, error) {
+	if externalID == "" {
+		return nil, fmt.Errorf(errUserNotFound)
+	}
+	return s.scanUser(s.db.QueryRow(
+		`SELECT `+userSelectColumns+` FROM users WHERE auth_provider = ? AND external_id = ?`, provider, externalID,
+	))
+}
+
+func (s *Store) UpsertLDAPUser(u *model.User) (*model.User, error) {
+	if err := normalizeLDAPUser(u); err != nil {
+		return nil, err
+	}
+	existing, err := s.findExistingLDAPUser(u)
+	if err != nil {
+		return nil, err
+	}
+	if existing == nil {
+		if err := s.CreateUser(u); err != nil {
+			return nil, err
+		}
+		return s.GetUserByID(u.ID)
+	}
+	if err := prepareLDAPUserUpdate(existing, u); err != nil {
+		return nil, err
+	}
+	if err := s.updateLDAPUser(existing.ID, u); err != nil {
+		return nil, err
+	}
+	return s.GetUserByID(existing.ID)
+}
+
+func normalizeLDAPUser(u *model.User) error {
+	if u.ID == "" {
+		u.ID = uuid.NewString()
+	}
+	if u.Username == "" {
+		return fmt.Errorf("username is required")
+	}
+	if u.Email == "" {
+		u.Email = u.Username + "@ldap.local"
+	}
+	u.AuthProvider = model.AuthProviderLDAP
+	u.PasswordHash = ""
+	if u.LDAPUsername == "" {
+		u.LDAPUsername = u.Username
+	}
+	now := time.Now().UTC()
+	u.LDAPLastSyncAt = &now
+	return nil
+}
+
+func (s *Store) findExistingLDAPUser(u *model.User) (*model.User, error) {
+	if u.ExternalID != "" {
+		user, err := s.GetUserByExternalIdentity(model.AuthProviderLDAP, u.ExternalID)
+		if err == nil || !isUserNotFound(err) {
+			return user, err
+		}
+	}
+	user, err := s.GetUserByUsername(u.Username)
+	if err != nil && !isUserNotFound(err) {
+		return nil, err
+	}
+	return user, nil
+}
+
+func prepareLDAPUserUpdate(existing, u *model.User) error {
+	if existing.AuthProvider != model.AuthProviderLDAP {
+		return fmt.Errorf("username is reserved by a local user")
+	}
+	if existing.ExternalID != "" && u.ExternalID != "" && existing.ExternalID != u.ExternalID {
+		return fmt.Errorf("LDAP external identity mismatch")
+	}
+	if u.ExternalID == "" {
+		u.ExternalID = existing.ExternalID
+	}
+	return nil
+}
+
+func (s *Store) updateLDAPUser(userID string, u *model.User) error {
+	_, err := s.db.Exec(
+		`UPDATE users
+				 SET username = ?, email = ?, role = ?, auth_provider = ?, external_id = ?,
+				     ldap_dn = ?, ldap_username = ?, ldap_last_sync_at = ?, terminal_access = ?,
+			     updated_at = datetime('now')
+			 WHERE id = ?`,
+		u.Username, u.Email, u.Role, model.AuthProviderLDAP, u.ExternalID,
+		u.LDAPDN, u.LDAPUsername, sqliteTimePtr(u.LDAPLastSyncAt), u.TerminalAccess,
+		userID,
+	)
+	if err != nil {
+		return fmt.Errorf("update ldap user: %w", err)
+	}
+	return nil
+}
+
+func isUserNotFound(err error) bool {
+	return err != nil && strings.Contains(err.Error(), errUserNotFound)
 }
 
 func (s *Store) UserCount() (int, error) {
@@ -209,9 +320,7 @@ func (s *Store) SetTemporaryPasswordState(userID string, mustChange bool, expire
 
 func (s *Store) ListUsers() ([]model.User, error) {
 	rows, err := s.db.Query(
-		`SELECT id, username, email, password_hash, role, totp_secret, totp_enabled, token_generation, avatar,
-		        must_change_password, temp_password_expires_at, created_at, updated_at
-		 FROM users ORDER BY created_at ASC`,
+		`SELECT ` + userSelectColumns + ` FROM users ORDER BY created_at ASC`,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("list users: %w", err)
@@ -232,9 +341,10 @@ func (s *Store) ListUsers() ([]model.User, error) {
 func (s *Store) scanUser(row *sql.Row) (*model.User, error) {
 	var u model.User
 	var createdAt, updatedAt string
-	var tempPasswordExpiresAt sql.NullString
+	var ldapLastSyncAt, tempPasswordExpiresAt sql.NullString
 	err := row.Scan(&u.ID, &u.Username, &u.Email, &u.PasswordHash, &u.Role,
-		&u.TOTPSecret, &u.TOTPEnabled, &u.TokenGeneration, &u.Avatar,
+		&u.AuthProvider, &u.ExternalID, &u.LDAPDN, &u.LDAPUsername, &ldapLastSyncAt,
+		&u.TerminalAccess, &u.TOTPSecret, &u.TOTPEnabled, &u.TokenGeneration, &u.Avatar,
 		&u.MustChangePassword, &tempPasswordExpiresAt, &createdAt, &updatedAt)
 	if err == sql.ErrNoRows {
 		return nil, fmt.Errorf(errUserNotFound)
@@ -244,6 +354,11 @@ func (s *Store) scanUser(row *sql.Row) (*model.User, error) {
 	}
 	u.CreatedAt, _ = time.Parse(sqliteTimeFormat, createdAt)
 	u.UpdatedAt, _ = time.Parse(sqliteTimeFormat, updatedAt)
+	if ldapLastSyncAt.Valid {
+		if parsed, err := time.Parse(sqliteTimeFormat, ldapLastSyncAt.String); err == nil {
+			u.LDAPLastSyncAt = &parsed
+		}
+	}
 	if tempPasswordExpiresAt.Valid {
 		if parsed, err := time.Parse(sqliteTimeFormat, tempPasswordExpiresAt.String); err == nil {
 			u.TempPasswordExpiresAt = &parsed
@@ -255,15 +370,21 @@ func (s *Store) scanUser(row *sql.Row) (*model.User, error) {
 func (s *Store) scanUserRow(rows *sql.Rows) (*model.User, error) {
 	var u model.User
 	var createdAt, updatedAt string
-	var tempPasswordExpiresAt sql.NullString
+	var ldapLastSyncAt, tempPasswordExpiresAt sql.NullString
 	err := rows.Scan(&u.ID, &u.Username, &u.Email, &u.PasswordHash, &u.Role,
-		&u.TOTPSecret, &u.TOTPEnabled, &u.TokenGeneration, &u.Avatar,
+		&u.AuthProvider, &u.ExternalID, &u.LDAPDN, &u.LDAPUsername, &ldapLastSyncAt,
+		&u.TerminalAccess, &u.TOTPSecret, &u.TOTPEnabled, &u.TokenGeneration, &u.Avatar,
 		&u.MustChangePassword, &tempPasswordExpiresAt, &createdAt, &updatedAt)
 	if err != nil {
 		return nil, fmt.Errorf("scan user row: %w", err)
 	}
 	u.CreatedAt, _ = time.Parse(sqliteTimeFormat, createdAt)
 	u.UpdatedAt, _ = time.Parse(sqliteTimeFormat, updatedAt)
+	if ldapLastSyncAt.Valid {
+		if parsed, err := time.Parse(sqliteTimeFormat, ldapLastSyncAt.String); err == nil {
+			u.LDAPLastSyncAt = &parsed
+		}
+	}
 	if tempPasswordExpiresAt.Valid {
 		if parsed, err := time.Parse(sqliteTimeFormat, tempPasswordExpiresAt.String); err == nil {
 			u.TempPasswordExpiresAt = &parsed

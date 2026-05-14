@@ -1,6 +1,7 @@
 package client
 
 import (
+	"bytes"
 	"context"
 	"crypto/ecdsa"
 	"crypto/elliptic"
@@ -9,9 +10,11 @@ import (
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"io"
+	"log"
 	"math/big"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -427,18 +430,24 @@ func TestHandleUnregisterRequest_NoCert(t *testing.T) {
 	}
 }
 
-func TestHandleMessage_UnknownType(t *testing.T) {
+func TestHandleMessage_HeartbeatAckIgnored(t *testing.T) {
 	c := &Client{tailSessions: make(map[string]chan struct{})}
 	sendCh := make(chan *pb.AgentMessage, 1)
+	var logOutput bytes.Buffer
+	previousLogOutput := log.Writer()
+	log.SetOutput(&logOutput)
+	defer log.SetOutput(previousLogOutput)
 
-	// HeartbeatAck is a HubMessage type not handled in handleMessage
 	msg := &pb.HubMessage{
 		Payload: &pb.HubMessage_HeartbeatAck{
 			HeartbeatAck: &pb.HeartbeatAck{},
 		},
 	}
-	// Should not panic
 	c.handleMessage(msg, sendCh)
+
+	if strings.Contains(logOutput.String(), "unhandled hub message") {
+		t.Fatalf("HeartbeatAck should not be logged as unhandled, got %q", logOutput.String())
+	}
 }
 
 func TestHandleFileListRequest(t *testing.T) {

@@ -132,6 +132,21 @@ func (s *Server) adminOnly(next http.Handler) http.Handler {
 	})
 }
 
+func (s *Server) terminalAccessOnly(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		user, err := s.store.GetUserByID(UserIDFromContext(r.Context()))
+		if err != nil {
+			respondError(w, http.StatusForbidden, "terminal access required")
+			return
+		}
+		if user.Role == model.RoleAdmin || (user.AuthProvider == model.AuthProviderLDAP && user.TerminalAccess) {
+			next.ServeHTTP(w, r)
+			return
+		}
+		respondError(w, http.StatusForbidden, "terminal access required")
+	})
+}
+
 func (s *Server) auditAccessOnly(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		role := UserRoleFromContext(r.Context())

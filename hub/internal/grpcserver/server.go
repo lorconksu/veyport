@@ -26,6 +26,7 @@ type Server struct {
 	connMgr     *connmgr.ConnManager
 	pending     *PendingRequests
 	logSessions *LogSessions
+	terminals   *TerminalSessions
 	hbCoalescer *HeartbeatCoalescer
 	addr        string
 }
@@ -38,6 +39,7 @@ type Config struct {
 	ConnMgr                *connmgr.ConnManager
 	Pending                *PendingRequests
 	LogSessions            *LogSessions
+	TerminalSessions       *TerminalSessions
 	CACert                 *x509.Certificate
 	CAKey                  *ecdsa.PrivateKey
 	Notifier               *notify.Notifier
@@ -50,6 +52,9 @@ func New(cfg Config) *Server {
 	if cfg.LogSessions == nil {
 		cfg.LogSessions = NewLogSessions()
 	}
+	if cfg.TerminalSessions == nil {
+		cfg.TerminalSessions = NewTerminalSessions()
+	}
 	flushInterval := cfg.HeartbeatFlushInterval
 	if flushInterval <= 0 {
 		flushInterval = 30 * time.Second
@@ -60,6 +65,7 @@ func New(cfg Config) *Server {
 		connMgr:     cfg.ConnMgr,
 		pending:     cfg.Pending,
 		logSessions: cfg.LogSessions,
+		terminals:   cfg.TerminalSessions,
 		hbCoalescer: hbCoalescer,
 		addr:        cfg.Addr,
 	}
@@ -113,6 +119,7 @@ func New(cfg Config) *Server {
 		connMgr:     cfg.ConnMgr,
 		pending:     s.pending,
 		logSessions: s.logSessions,
+		terminals:   s.terminals,
 		hbCoalescer: hbCoalescer,
 		caCert:      cfg.CACert,
 		caKey:       cfg.CAKey,

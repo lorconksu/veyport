@@ -1,6 +1,7 @@
 package store_test
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/wyiu/aerodocs/hub/internal/model"
@@ -426,5 +427,68 @@ func TestListUsers_Empty(t *testing.T) {
 	}
 	if users != nil && len(users) != 0 {
 		t.Fatalf("expected 0 users, got %d", len(users))
+	}
+}
+
+func TestUpsertLDAPUserRejectsExternalIdentityMismatch(t *testing.T) {
+	s := testStore(t)
+
+	if err := s.CreateUser(&model.User{
+		ID:           "ldap-1",
+		Username:     "alice",
+		Email:        "alice@example.com",
+		Role:         model.RoleViewer,
+		AuthProvider: model.AuthProviderLDAP,
+		ExternalID:   "entry-old",
+	}); err != nil {
+		t.Fatalf("create ldap user: %v", err)
+	}
+
+	_, err := s.UpsertLDAPUser(&model.User{
+		Username:   "alice",
+		Email:      "alice-new@example.com",
+		Role:       model.RoleViewer,
+		ExternalID: "entry-new",
+	})
+	if err == nil || !strings.Contains(err.Error(), "external identity mismatch") {
+		t.Fatalf("expected external identity mismatch, got %v", err)
+	}
+
+	got, err := s.GetUserByUsername("alice")
+	if err != nil {
+		t.Fatalf(testGetUserFmt, err)
+	}
+	if got.ExternalID != "entry-old" || got.Email != "alice@example.com" {
+		t.Fatalf("expected existing LDAP identity to remain unchanged, got external_id=%q email=%q", got.ExternalID, got.Email)
+	}
+}
+
+func TestUpsertLDAPUserPreservesExternalIdentityWhenMissing(t *testing.T) {
+	s := testStore(t)
+
+	if err := s.CreateUser(&model.User{
+		ID:           "ldap-1",
+		Username:     "alice",
+		Email:        "alice@example.com",
+		Role:         model.RoleViewer,
+		AuthProvider: model.AuthProviderLDAP,
+		ExternalID:   "entry-old",
+	}); err != nil {
+		t.Fatalf("create ldap user: %v", err)
+	}
+
+	got, err := s.UpsertLDAPUser(&model.User{
+		Username: "alice",
+		Email:    "alice-new@example.com",
+		Role:     model.RoleAuditor,
+	})
+	if err != nil {
+		t.Fatalf("upsert ldap user: %v", err)
+	}
+	if got.ExternalID != "entry-old" {
+		t.Fatalf("expected existing external identity to be preserved, got %q", got.ExternalID)
+	}
+	if got.Email != "alice-new@example.com" || got.Role != model.RoleAuditor {
+		t.Fatalf("expected mutable LDAP attributes to update, got email=%q role=%q", got.Email, got.Role)
 	}
 }

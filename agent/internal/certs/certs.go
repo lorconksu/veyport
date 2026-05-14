@@ -73,9 +73,9 @@ func (s *Store) loadFromDisk() error {
 	if keyBlock == nil {
 		return fmt.Errorf("decode client key")
 	}
-	key, err := x509.ParseECPrivateKey(keyBlock.Bytes)
+	key, err := parsePrivateKey(keyBlock.Bytes)
 	if err != nil {
-		return fmt.Errorf("parse client key: %w", err)
+		return err
 	}
 
 	caBlock, _ := pem.Decode(caPEM)
@@ -104,6 +104,22 @@ func (s *Store) loadFromDisk() error {
 	s.mu.Unlock()
 
 	return nil
+}
+
+func parsePrivateKey(keyDER []byte) (*ecdsa.PrivateKey, error) {
+	key, err := x509.ParseECPrivateKey(keyDER)
+	if err == nil {
+		return key, nil
+	}
+	parsed, pkcs8Err := x509.ParsePKCS8PrivateKey(keyDER)
+	if pkcs8Err != nil {
+		return nil, fmt.Errorf("parse client key: %w", err)
+	}
+	ecKey, ok := parsed.(*ecdsa.PrivateKey)
+	if !ok {
+		return nil, fmt.Errorf("client key is not ECDSA")
+	}
+	return ecKey, nil
 }
 
 // GenerateCSR generates an ECDSA P-256 keypair, stores the private key in
@@ -240,6 +256,7 @@ func (s *Store) TLSConfig() *tls.Config {
 	return &tls.Config{
 		Certificates: []tls.Certificate{clientCert},
 		RootCAs:      caPool,
+		MinVersion:   tls.VersionTLS13,
 	}
 }
 

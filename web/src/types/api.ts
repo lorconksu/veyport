@@ -5,6 +5,8 @@ export interface User {
   username: string
   email: string
   role: Role
+  auth_provider?: 'local' | 'ldap'
+  terminal_access?: boolean
   totp_enabled: boolean
   avatar: string | null
   must_change_password?: boolean
@@ -286,6 +288,10 @@ export interface FileReadResponse {
   data: string  // base64-encoded
   total_size: number
   mime_type: string
+}
+
+export interface TerminalSessionResponse {
+  session_id: string
 }
 
 export interface PathPermission {

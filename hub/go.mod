@@ -10,7 +10,16 @@ require (
 	modernc.org/sqlite v1.47.0
 )
 
-require github.com/wyiu/aerodocs/agent v0.0.0-00010101000000-000000000000
+require (
+	github.com/go-ldap/ldap/v3 v3.4.13
+	github.com/wyiu/aerodocs/agent v0.0.0-00010101000000-000000000000
+)
+
+require (
+	github.com/Azure/go-ntlmssp v0.1.1 // indirect
+	github.com/creack/pty v1.1.24 // indirect
+	github.com/go-asn1-ber/asn1-ber v1.5.8-0.20250403174932-29230038a667 // indirect
+)
 
 require (
 	github.com/boombuler/barcode v1.0.1-0.20190219062509-6c824513bacc // indirect

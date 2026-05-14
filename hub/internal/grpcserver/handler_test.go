@@ -153,6 +153,48 @@ func TestHandleRegister_InvalidToken(t *testing.T) {
 	}
 }
 
+func TestRouteAgentMessage_DeliversTerminalEvents(t *testing.T) {
+	h, _ := testHandler(t)
+	h.terminals = NewTerminalSessions()
+	ch, ok := h.terminals.Register("srv-1", "term-1", "user-1", "")
+	if !ok || ch == nil {
+		t.Fatal("register terminal session")
+	}
+
+	err := h.routeAgentMessage("srv-1", &mockStream{}, &pb.AgentMessage{
+		Payload: &pb.AgentMessage_TerminalData{
+			TerminalData: &pb.TerminalData{
+				SessionId: "term-1",
+				Data:      []byte("hello"),
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("route terminal data: %v", err)
+	}
+	event := <-ch
+	if event.Type != TerminalEventData || string(event.Data) != "hello" {
+		t.Fatalf("unexpected terminal data event: %+v", event)
+	}
+
+	err = h.routeAgentMessage("srv-1", &mockStream{}, &pb.AgentMessage{
+		Payload: &pb.AgentMessage_TerminalExit{
+			TerminalExit: &pb.TerminalExit{
+				SessionId: "term-1",
+				ExitCode:  7,
+				Error:     "boom",
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("route terminal exit: %v", err)
+	}
+	exit := <-ch
+	if exit.Type != TerminalEventExit || exit.ExitCode != 7 || exit.Error != "boom" {
+		t.Fatalf("unexpected terminal exit event: %+v", exit)
+	}
+}
+
 func TestHandleHeartbeat_ValidServer(t *testing.T) {
 	h, st := testHandler(t)
 	st.CreateServer(&model.Server{ID: "s1", Name: "test", Status: "offline", Labels: "{}"})

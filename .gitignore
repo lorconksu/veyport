@@ -23,6 +23,7 @@ hub/web/dist/
 .claude/
 .worktrees/
 .playwright-mcp/
+.playwright-cli/
 claude.md
 
 # Database
