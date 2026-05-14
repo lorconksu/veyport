@@ -72,9 +72,31 @@ func runResetTOTP(args []string) error {
 		return fmt.Errorf("mark setup complete: %w", err)
 	}
 
+	// Invalidate all existing sessions and API tokens for the reset user — this is
+	// a break-glass account-recovery flow, so any pre-existing credentials must
+	// no longer be valid after reset.
+	if _, err := st.IncrementTokenGeneration(user.ID); err != nil {
+		return fmt.Errorf("invalidate sessions: %w", err)
+	}
+	if err := st.RevokeAllAPITokensByUserID(user.ID); err != nil {
+		return fmt.Errorf("revoke api tokens: %w", err)
+	}
+
+	userResourceType := "user"
+	_ = st.LogAudit(model.AuditEntry{
+		ID:           uuid.NewString(),
+		UserID:       &user.ID,
+		Action:       model.AuditUserTOTPReset,
+		Target:       &user.ID,
+		Outcome:      model.AuditOutcomeSuccess,
+		ActorType:    model.AuditActorTypeSystem,
+		ResourceType: &userResourceType,
+	})
+
 	fmt.Printf("TOTP reset for user %q\n", resolvedUsername)
 	fmt.Printf("Temporary password: %s\n", tempPassword)
 	fmt.Println("User must set up TOTP again on next login.")
+	fmt.Println("All existing sessions and API tokens for this user have been invalidated.")
 	return nil
 }
 

@@ -3,6 +3,7 @@ package server
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -350,6 +351,98 @@ func TestUpdateUserRole_InvalidJSON(t *testing.T) {
 
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf(testExpected400, rec.Code)
+	}
+}
+
+// TestUpdateUserRole_InvalidatesSessions verifies that demoting a user's role
+// also forces re-authentication by incrementing the user's token_generation,
+// so the existing access token cannot continue exercising the old role for the
+// remainder of its 15-minute TTL.
+func TestUpdateUserRole_InvalidatesSessions(t *testing.T) {
+	s := testServer(t)
+	token := registerAndGetAdminToken(t, s)
+
+	createBody, _ := json.Marshal(model.CreateUserRequest{
+		Username: "demoteme", Email: testViewerEmail, Role: model.RoleAdmin,
+	})
+	createReq := httptest.NewRequest("POST", testUsersPath, bytes.NewReader(createBody))
+	createReq.Header.Set("Authorization", testBearerPrefix+token)
+	createRec := httptest.NewRecorder()
+	s.routes().ServeHTTP(createRec, createReq)
+
+	var createResp model.CreateUserResponse
+	if err := json.NewDecoder(createRec.Body).Decode(&createResp); err != nil {
+		t.Fatalf("decode create user: %v", err)
+	}
+
+	before, err := s.store.GetUserByID(createResp.User.ID)
+	if err != nil {
+		t.Fatalf("get user before: %v", err)
+	}
+
+	body, _ := json.Marshal(model.UpdateRoleRequest{Role: model.RoleViewer})
+	req := httptest.NewRequest("PUT", testUsersPrefix+createResp.User.ID+"/role", bytes.NewReader(body))
+	req.Header.Set("Authorization", testBearerPrefix+token)
+	rec := httptest.NewRecorder()
+	s.routes().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf(testExpected200Body, rec.Code, rec.Body.String())
+	}
+
+	after, err := s.store.GetUserByID(createResp.User.ID)
+	if err != nil {
+		t.Fatalf("get user after: %v", err)
+	}
+	if after.TokenGeneration <= before.TokenGeneration {
+		t.Fatalf("expected token_generation to increase after role update, was %d, now %d",
+			before.TokenGeneration, after.TokenGeneration)
+	}
+}
+
+// TestUpdateUserRole_InvalidateSessionsFailure exercises the 500 error branch
+// when token_generation cannot be incremented after a successful role update.
+func TestUpdateUserRole_InvalidateSessionsFailure(t *testing.T) {
+	s := testServer(t)
+	token := registerAndGetAdminToken(t, s)
+
+	createBody, _ := json.Marshal(model.CreateUserRequest{
+		Username: "demoteme2", Email: testViewerEmail, Role: model.RoleAdmin,
+	})
+	createReq := httptest.NewRequest("POST", testUsersPath, bytes.NewReader(createBody))
+	createReq.Header.Set("Authorization", testBearerPrefix+token)
+	createRec := httptest.NewRecorder()
+	s.routes().ServeHTTP(createRec, createReq)
+
+	var createResp model.CreateUserResponse
+	if err := json.NewDecoder(createRec.Body).Decode(&createResp); err != nil {
+		t.Fatalf("decode create user: %v", err)
+	}
+
+	// Block the IncrementTokenGeneration UPDATE for the *target* user only.
+	// Limiting to a specific id keeps the admin's own session usable so the
+	// request can reach the handler in the first place.
+	// SQLite triggers do not accept bound parameters in the body, so the id
+	// (a server-generated UUID) is interpolated literally.
+	if _, err := s.store.DB().Exec(fmt.Sprintf(`
+		CREATE TRIGGER block_role_session_invalidation
+		BEFORE UPDATE OF token_generation ON users
+		WHEN NEW.id = '%s'
+		BEGIN
+			SELECT RAISE(FAIL, 'token_generation updates blocked');
+		END;
+	`, createResp.User.ID)); err != nil {
+		t.Fatalf("create users trigger: %v", err)
+	}
+
+	body, _ := json.Marshal(model.UpdateRoleRequest{Role: model.RoleViewer})
+	req := httptest.NewRequest("PUT", testUsersPrefix+createResp.User.ID+"/role", bytes.NewReader(body))
+	req.Header.Set("Authorization", testBearerPrefix+token)
+	rec := httptest.NewRecorder()
+	s.routes().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusInternalServerError {
+		t.Fatalf("expected 500, got %d: %s", rec.Code, rec.Body.String())
 	}
 }
 

@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"testing"
 
+	"github.com/google/uuid"
 	"github.com/wyiu/aerodocs/hub/internal/auth"
 	"github.com/wyiu/aerodocs/hub/internal/model"
 	"github.com/wyiu/aerodocs/hub/internal/notify"
@@ -827,6 +828,87 @@ func TestTOTPDisable_AdminSelfDisable(t *testing.T) {
 
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("expected 400 Bad Request, got %d: %s", rec.Code, rec.Body.String())
+	}
+}
+
+// TestTOTPDisable_InvalidatesTargetCredentials verifies that admin-initiated
+// TOTP disable also invalidates the target user's existing refresh tokens
+// (via token_generation bump) and API tokens. This is the same security-event
+// semantics applied to handleChangePassword.
+func TestTOTPDisable_InvalidatesTargetCredentials(t *testing.T) {
+	s := testServer(t)
+	adminToken := registerAndGetAdminToken(t, s)
+	viewerToken := createViewerAndGetToken(t, s, adminToken)
+
+	meReq := httptest.NewRequest("GET", testMePath, nil)
+	meReq.Header.Set("Authorization", testBearerPrefix+viewerToken)
+	meRec := httptest.NewRecorder()
+	s.routes().ServeHTTP(meRec, meReq)
+
+	var viewerUser model.User
+	if err := json.NewDecoder(meRec.Body).Decode(&viewerUser); err != nil {
+		t.Fatalf("decode viewer: %v", err)
+	}
+
+	// Give the target user an API token so we can confirm it is revoked.
+	_, tokenHash, tokenPrefix, err := auth.GenerateAPIToken()
+	if err != nil {
+		t.Fatalf("generate api token: %v", err)
+	}
+	apiTokenID := uuid.NewString()
+	if err := s.store.CreateAPIToken(&model.APIToken{
+		ID:          apiTokenID,
+		UserID:      viewerUser.ID,
+		Name:        "regression",
+		TokenHash:   tokenHash,
+		TokenPrefix: tokenPrefix,
+	}); err != nil {
+		t.Fatalf("create api token: %v", err)
+	}
+
+	before, err := s.store.GetUserByID(viewerUser.ID)
+	if err != nil {
+		t.Fatalf("get user before: %v", err)
+	}
+
+	adminUser, _ := s.store.GetUserByUsername("admin")
+	s.totpCache.Clear()
+	rawAdminTOTP, _ := s.DecryptTOTPSecret(*adminUser.TOTPSecret)
+	adminCode, _ := auth.GenerateValidCode(rawAdminTOTP)
+
+	disableBody, _ := json.Marshal(model.TOTPDisableRequest{
+		UserID:        viewerUser.ID,
+		AdminTOTPCode: adminCode,
+	})
+	disableReq := httptest.NewRequest("POST", testTOTPDisablePath, bytes.NewReader(disableBody))
+	disableReq.Header.Set("Authorization", testBearerPrefix+adminToken)
+	disableRec := httptest.NewRecorder()
+	s.routes().ServeHTTP(disableRec, disableReq)
+
+	if disableRec.Code != http.StatusOK {
+		t.Fatalf(testExpected200Body, disableRec.Code, disableRec.Body.String())
+	}
+
+	after, err := s.store.GetUserByID(viewerUser.ID)
+	if err != nil {
+		t.Fatalf("get user after: %v", err)
+	}
+	if after.TokenGeneration <= before.TokenGeneration {
+		t.Fatalf("expected token_generation to increase after TOTP disable, was %d, now %d",
+			before.TokenGeneration, after.TokenGeneration)
+	}
+
+	apiTokens, err := s.store.ListAPITokensByUserID(viewerUser.ID)
+	if err != nil {
+		t.Fatalf("list api tokens: %v", err)
+	}
+	if len(apiTokens) == 0 {
+		t.Fatalf("expected target user's api tokens to still be listed (as revoked)")
+	}
+	for _, tok := range apiTokens {
+		if tok.RevokedAt == nil {
+			t.Fatalf("expected api token %q to be revoked after TOTP disable", tok.ID)
+		}
 	}
 }
 

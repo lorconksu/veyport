@@ -720,6 +720,17 @@ func (s *Server) handleTOTPDisable(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Admin-initiated TOTP removal is a security-sensitive auth-factor change;
+	// invalidate the target user's existing sessions and API tokens so any
+	// pre-existing credentials can't ride through the 2FA removal.
+	if _, err := s.store.IncrementTokenGeneration(req.UserID); err != nil {
+		respondError(w, http.StatusInternalServerError, "failed to invalidate sessions")
+		return
+	}
+	if err := s.store.RevokeAllAPITokensByUserID(req.UserID); err != nil {
+		log.Printf("warning: failed to revoke api tokens on admin TOTP disable for user %s: %v", req.UserID, err)
+	}
+
 	ip := clientIP(r)
 	s.auditLogRequest(r, model.AuditEntry{
 		ID:        uuid.NewString(),

@@ -47,6 +47,15 @@ func (s *Server) handleUpdateUserRole(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Force re-authentication so the new role takes effect immediately instead
+	// of waiting up to 15 minutes for the existing access token to expire.
+	// Access tokens read the role from JWT claims, not the DB, so without this
+	// a demoted admin keeps admin authority until token expiry.
+	if _, err := s.store.IncrementTokenGeneration(targetID); err != nil {
+		respondError(w, http.StatusInternalServerError, "failed to invalidate sessions")
+		return
+	}
+
 	user, err := s.store.GetUserByID(targetID)
 	if err != nil {
 		respondError(w, http.StatusInternalServerError, "failed to fetch updated user")

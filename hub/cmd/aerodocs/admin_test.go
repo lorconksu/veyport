@@ -124,6 +124,145 @@ func TestRunResetTOTP_Success(t *testing.T) {
 	}
 }
 
+// TestRunResetTOTP_InvalidatesCredentials verifies that the admin CLI break-glass
+// reset also invalidates the target user's existing refresh tokens (via
+// token_generation bump) and API tokens, so stolen sessions cannot survive the
+// reset.
+func TestRunResetTOTP_InvalidatesCredentials(t *testing.T) {
+	dbPath, st := newAdminTestStore(t)
+	secret := "totp-secret"
+	user := createAdminUser(t, st, "resetme", model.RoleAdmin, &secret, true)
+
+	beforeGen := user.TokenGeneration
+
+	_, tokenHash, tokenPrefix, err := auth.GenerateAPIToken()
+	if err != nil {
+		t.Fatalf("generate api token: %v", err)
+	}
+	apiTokenID := uuid.NewString()
+	if err := st.CreateAPIToken(&model.APIToken{
+		ID:          apiTokenID,
+		UserID:      user.ID,
+		Name:        "stale",
+		TokenHash:   tokenHash,
+		TokenPrefix: tokenPrefix,
+	}); err != nil {
+		t.Fatalf("create api token: %v", err)
+	}
+	st.Close()
+
+	captureStdout(t, func() {
+		if err := runResetTOTP([]string{"--username", "resetme", "--db", dbPath}); err != nil {
+			t.Fatalf("run reset-totp: %v", err)
+		}
+	})
+
+	verifyStore, err := store.New(dbPath)
+	if err != nil {
+		t.Fatalf("re-open store: %v", err)
+	}
+	defer verifyStore.Close()
+
+	got, err := verifyStore.GetUserByUsername("resetme")
+	if err != nil {
+		t.Fatalf("fetch user: %v", err)
+	}
+	if got.TokenGeneration <= beforeGen {
+		t.Fatalf("expected token_generation to increase after reset-totp, was %d, now %d",
+			beforeGen, got.TokenGeneration)
+	}
+
+	tokens, err := verifyStore.ListAPITokensByUserID(user.ID)
+	if err != nil {
+		t.Fatalf("list api tokens: %v", err)
+	}
+	if len(tokens) != 1 || tokens[0].RevokedAt == nil {
+		t.Fatalf("expected pre-existing API token to be revoked after reset-totp, got %+v", tokens)
+	}
+
+	// reset-totp should also write an audit log entry so admin recovery is auditable.
+	entries, _, err := verifyStore.ListAuditLogs(model.AuditFilter{Limit: 10})
+	if err != nil {
+		t.Fatalf("list audit entries: %v", err)
+	}
+	found := false
+	for _, e := range entries {
+		if e.Action == model.AuditUserTOTPReset {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("expected an audit entry for %q, got %d entries: %+v",
+			model.AuditUserTOTPReset, len(entries), entries)
+	}
+}
+
+// TestRunResetTOTP_IncrementTokenGenerationFailure exercises the error branch
+// where invalidating the user's existing sessions fails after the password reset.
+func TestRunResetTOTP_IncrementTokenGenerationFailure(t *testing.T) {
+	dbPath, st := newAdminTestStore(t)
+	secret := "totp-secret"
+	createAdminUser(t, st, "resetme", model.RoleAdmin, &secret, true)
+	if _, err := st.DB().Exec(`
+		CREATE TRIGGER block_token_generation_update
+		BEFORE UPDATE OF token_generation ON users
+		BEGIN
+			SELECT RAISE(FAIL, 'token_generation updates blocked');
+		END;
+	`); err != nil {
+		t.Fatalf("create users trigger: %v", err)
+	}
+	st.Close()
+
+	err := runResetTOTP([]string{"--username", "resetme", "--db", dbPath})
+	if err == nil {
+		t.Fatal("expected session invalidation to fail")
+	}
+	if !strings.Contains(err.Error(), "invalidate sessions:") {
+		t.Fatalf("expected wrapped invalidate-sessions error, got %v", err)
+	}
+}
+
+// TestRunResetTOTP_RevokeAPITokensFailure exercises the error branch where the
+// API-token revocation step fails after sessions were successfully invalidated.
+func TestRunResetTOTP_RevokeAPITokensFailure(t *testing.T) {
+	dbPath, st := newAdminTestStore(t)
+	secret := "totp-secret"
+	user := createAdminUser(t, st, "resetme", model.RoleAdmin, &secret, true)
+
+	_, hash, prefix, err := auth.GenerateAPIToken()
+	if err != nil {
+		t.Fatalf("generate api token: %v", err)
+	}
+	if err := st.CreateAPIToken(&model.APIToken{
+		ID:          uuid.NewString(),
+		UserID:      user.ID,
+		Name:        "stale",
+		TokenHash:   hash,
+		TokenPrefix: prefix,
+	}); err != nil {
+		t.Fatalf("create api token: %v", err)
+	}
+
+	if _, err := st.DB().Exec(`
+		CREATE TRIGGER block_api_token_revoke
+		BEFORE UPDATE OF revoked_at ON api_tokens
+		BEGIN
+			SELECT RAISE(FAIL, 'api_token revocations blocked');
+		END;
+	`); err != nil {
+		t.Fatalf("create api_tokens trigger: %v", err)
+	}
+	st.Close()
+
+	if err := runResetTOTP([]string{"--username", "resetme", "--db", dbPath}); err == nil {
+		t.Fatal("expected API token revocation to fail")
+	} else if !strings.Contains(err.Error(), "revoke api tokens:") {
+		t.Fatalf("expected wrapped revoke-api-tokens error, got %v", err)
+	}
+}
+
 func TestRunResetTOTP_MarkSetupCompleteFailure(t *testing.T) {
 	dbPath, st := newAdminTestStore(t)
 	secret := "totp-secret"
