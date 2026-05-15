@@ -492,3 +492,125 @@ func TestUpsertLDAPUserPreservesExternalIdentityWhenMissing(t *testing.T) {
 		t.Fatalf("expected mutable LDAP attributes to update, got email=%q role=%q", got.Email, got.Role)
 	}
 }
+
+func TestUpsertLDAPUserBumpsTokenGenerationOnRoleChange(t *testing.T) {
+	s := testStore(t)
+
+	if err := s.CreateUser(&model.User{
+		ID:           "ldap-1",
+		Username:     "alice",
+		Email:        "alice@example.com",
+		Role:         model.RoleAdmin,
+		AuthProvider: model.AuthProviderLDAP,
+		ExternalID:   "entry-1",
+	}); err != nil {
+		t.Fatalf("create ldap user: %v", err)
+	}
+
+	before, err := s.GetUserByID("ldap-1")
+	if err != nil {
+		t.Fatalf(testGetUserFmt, err)
+	}
+
+	if _, err := s.UpsertLDAPUser(&model.User{
+		Username:   "alice",
+		Email:      "alice@example.com",
+		Role:       model.RoleViewer,
+		ExternalID: "entry-1",
+	}); err != nil {
+		t.Fatalf("upsert ldap user: %v", err)
+	}
+
+	after, err := s.GetUserByID("ldap-1")
+	if err != nil {
+		t.Fatalf(testGetUserFmt, err)
+	}
+	if after.TokenGeneration <= before.TokenGeneration {
+		t.Fatalf("expected token_generation to bump after LDAP role change, before=%d after=%d",
+			before.TokenGeneration, after.TokenGeneration)
+	}
+	if after.Role != model.RoleViewer {
+		t.Fatalf("expected role to update to viewer, got %q", after.Role)
+	}
+}
+
+func TestUpsertLDAPUserBumpsTokenGenerationOnTerminalAccessChange(t *testing.T) {
+	s := testStore(t)
+
+	if err := s.CreateUser(&model.User{
+		ID:             "ldap-1",
+		Username:       "alice",
+		Email:          "alice@example.com",
+		Role:           model.RoleViewer,
+		AuthProvider:   model.AuthProviderLDAP,
+		ExternalID:     "entry-1",
+		TerminalAccess: true,
+	}); err != nil {
+		t.Fatalf("create ldap user: %v", err)
+	}
+
+	before, err := s.GetUserByID("ldap-1")
+	if err != nil {
+		t.Fatalf(testGetUserFmt, err)
+	}
+
+	if _, err := s.UpsertLDAPUser(&model.User{
+		Username:       "alice",
+		Email:          "alice@example.com",
+		Role:           model.RoleViewer,
+		ExternalID:     "entry-1",
+		TerminalAccess: false,
+	}); err != nil {
+		t.Fatalf("upsert ldap user: %v", err)
+	}
+
+	after, err := s.GetUserByID("ldap-1")
+	if err != nil {
+		t.Fatalf(testGetUserFmt, err)
+	}
+	if after.TokenGeneration <= before.TokenGeneration {
+		t.Fatalf("expected token_generation to bump after terminal_access change, before=%d after=%d",
+			before.TokenGeneration, after.TokenGeneration)
+	}
+	if after.TerminalAccess {
+		t.Fatalf("expected terminal_access to be cleared")
+	}
+}
+
+func TestUpsertLDAPUserDoesNotBumpTokenGenerationOnIdleUpsert(t *testing.T) {
+	s := testStore(t)
+
+	if err := s.CreateUser(&model.User{
+		ID:           "ldap-1",
+		Username:     "alice",
+		Email:        "alice@example.com",
+		Role:         model.RoleViewer,
+		AuthProvider: model.AuthProviderLDAP,
+		ExternalID:   "entry-1",
+	}); err != nil {
+		t.Fatalf("create ldap user: %v", err)
+	}
+
+	before, err := s.GetUserByID("ldap-1")
+	if err != nil {
+		t.Fatalf(testGetUserFmt, err)
+	}
+
+	if _, err := s.UpsertLDAPUser(&model.User{
+		Username:   "alice",
+		Email:      "alice@example.com",
+		Role:       model.RoleViewer,
+		ExternalID: "entry-1",
+	}); err != nil {
+		t.Fatalf("upsert ldap user: %v", err)
+	}
+
+	after, err := s.GetUserByID("ldap-1")
+	if err != nil {
+		t.Fatalf(testGetUserFmt, err)
+	}
+	if after.TokenGeneration != before.TokenGeneration {
+		t.Fatalf("expected token_generation to remain stable when no auth-relevant attribute changes, before=%d after=%d",
+			before.TokenGeneration, after.TokenGeneration)
+	}
+}

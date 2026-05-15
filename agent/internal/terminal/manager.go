@@ -46,6 +46,7 @@ type session struct {
 	id        string
 	cmd       *exec.Cmd
 	tty       *os.File
+	exited    chan struct{}
 	closeOnce sync.Once
 }
 
@@ -105,9 +106,10 @@ func (m *Manager) Open(sessionID string, cols, rows uint32, cwd, runAsUser strin
 	}
 
 	s := &session{
-		id:  sessionID,
-		cmd: cmd,
-		tty: ptmx,
+		id:     sessionID,
+		cmd:    cmd,
+		tty:    ptmx,
+		exited: make(chan struct{}),
 	}
 
 	if err := m.register(sessionID, s); err != nil {
@@ -285,6 +287,7 @@ func (m *Manager) readLoop(s *session) {
 
 func (m *Manager) waitLoop(s *session) {
 	err := s.cmd.Wait()
+	close(s.exited)
 
 	exitCode := int32(0)
 	exitErr := ""
@@ -328,10 +331,16 @@ func (m *Manager) closeSession(s *session, signalProcess bool) {
 		m.mu.Unlock()
 
 		if signalProcess && s.cmd.Process != nil {
-			signalProcessGroup(s.cmd.Process.Pid, syscall.SIGHUP)
-			time.AfterFunc(500*time.Millisecond, func() {
-				signalProcessGroup(s.cmd.Process.Pid, syscall.SIGKILL)
-			})
+			pid := s.cmd.Process.Pid
+			signalProcessGroup(pid, syscall.SIGHUP)
+			go func() {
+				select {
+				case <-s.exited:
+					return
+				case <-time.After(500 * time.Millisecond):
+					signalProcessGroup(pid, syscall.SIGKILL)
+				}
+			}()
 		}
 
 		_ = s.tty.Close()

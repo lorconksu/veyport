@@ -63,6 +63,43 @@ func TestTerminalSessions_DeliverAndEnd(t *testing.T) {
 	}
 }
 
+func TestTerminalSessions_EndEvictsBufferedDataToDeliverExit(t *testing.T) {
+	ts := NewTerminalSessions()
+	ch, ok := ts.Register("srv-1", "sess-1", "user-1", "")
+	if !ok {
+		t.Fatal("expected registration to succeed")
+	}
+
+	// Fill the per-session channel with data events without draining it,
+	// simulating an SSE consumer that has not yet attached (or is slow).
+	for i := 0; i < cap(ch); i++ {
+		if !ts.DeliverData("srv-1", "sess-1", []byte("x")) {
+			t.Fatalf("expected DeliverData #%d to succeed before End", i)
+		}
+	}
+
+	// End must still enqueue the exit event by evicting the oldest data,
+	// so the SSE client surfaces the real exit code, not a generic close.
+	if !ts.End("srv-1", "sess-1", 7, "boom") {
+		t.Fatal("expected terminal end to succeed")
+	}
+
+	var exit TerminalEvent
+	foundExit := false
+	for event := range ch {
+		if event.Type == TerminalEventExit {
+			exit = event
+			foundExit = true
+		}
+	}
+	if !foundExit {
+		t.Fatal("expected exit event to be delivered even when channel was full")
+	}
+	if exit.ExitCode != 7 || exit.Error != "boom" {
+		t.Fatalf("unexpected exit payload: %+v", exit)
+	}
+}
+
 func TestTerminalSessions_AttachStreamOnlyOnce(t *testing.T) {
 	ts := NewTerminalSessions()
 	if _, ok := ts.Register("srv-1", "sess-1", "user-1", "alice"); !ok {

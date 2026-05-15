@@ -120,10 +120,7 @@ func (ts *TerminalSessions) End(serverID, sessionID string, exitCode int32, err 
 	if !ok || s.closed {
 		return false
 	}
-	select {
-	case s.ch <- TerminalEvent{Type: TerminalEventExit, ExitCode: exitCode, Error: err}:
-	default:
-	}
+	deliverExit(s.ch, TerminalEvent{Type: TerminalEventExit, ExitCode: exitCode, Error: err})
 	close(s.ch)
 	s.closed = true
 	return true
@@ -137,13 +134,25 @@ func (ts *TerminalSessions) EndAll(serverID string, exitCode int32, err string) 
 		if len(key) < len(prefix) || key[:len(prefix)] != prefix || s.closed {
 			continue
 		}
-		select {
-		case s.ch <- TerminalEvent{Type: TerminalEventExit, ExitCode: exitCode, Error: err}:
-		default:
-		}
+		deliverExit(s.ch, TerminalEvent{Type: TerminalEventExit, ExitCode: exitCode, Error: err})
 		close(s.ch)
 		s.closed = true
 	}
+}
+
+// deliverExit guarantees that a terminal exit event is enqueued by evicting the
+// oldest buffered data event when the channel is full. Without this, a slow or
+// unattached SSE consumer would surface the channel close as a generic
+// "connection lost" instead of the agent-reported exit code/error.
+func deliverExit(ch chan TerminalEvent, evt TerminalEvent) {
+	for len(ch) == cap(ch) {
+		select {
+		case <-ch:
+		default:
+			return
+		}
+	}
+	ch <- evt
 }
 
 func (ts *TerminalSessions) RemoveUnattached(serverID, sessionID string) bool {

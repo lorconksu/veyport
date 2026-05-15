@@ -102,9 +102,9 @@ func (s *Server) handleCreateTerminalSession(w http.ResponseWriter, r *http.Requ
 		respondError(w, status, ack.Error)
 		return
 	}
-	s.expireUnattachedTerminalSession(serverID, sessionID)
-
 	ip := clientIP(r)
+	s.expireUnattachedTerminalSession(serverID, sessionID, userID, ip)
+
 	detail := "session_id=" + sessionID
 	if req.Cwd != "" {
 		detail += fmt.Sprintf(" cwd=%q", req.Cwd)
@@ -182,7 +182,7 @@ func (s *Server) handleTerminalStream(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-func (s *Server) expireUnattachedTerminalSession(serverID, sessionID string) {
+func (s *Server) expireUnattachedTerminalSession(serverID, sessionID, userID, ip string) {
 	time.AfterFunc(terminalStreamAttachDelay, func() {
 		if s.terminalSessions == nil || !s.terminalSessions.RemoveUnattached(serverID, sessionID) {
 			return
@@ -196,6 +196,21 @@ func (s *Server) expireUnattachedTerminalSession(serverID, sessionID string) {
 				},
 			})
 		}
+		uid, srvID, addr := userID, serverID, ip
+		detail := "session_id=" + sessionID + " expired_unattached"
+		entry := model.AuditEntry{
+			ID:     uuid.NewString(),
+			Action: model.AuditTerminalClosed,
+			Target: &srvID,
+			Detail: &detail,
+		}
+		if uid != "" {
+			entry.UserID = &uid
+		}
+		if addr != "" {
+			entry.IPAddress = &addr
+		}
+		_ = s.store.LogAudit(entry)
 	})
 }
 

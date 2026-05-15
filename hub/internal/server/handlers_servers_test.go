@@ -156,6 +156,55 @@ func TestCreateServer_InstallCommandUsesConfiguredPublicBaseURL(t *testing.T) {
 	}
 }
 
+func TestCreateServer_InstallCommandPrefersDBStoredPublicBaseURL(t *testing.T) {
+	// Ensure the DB-stored public_base_url is preferred over r.Host so an
+	// attacker who can spoof the Host header behind a misconfigured proxy
+	// cannot poison the generated install command.
+	s := testServer(t)
+	if err := s.store.SetConfig("public_base_url", "https://hub.internal.example:443"); err != nil {
+		t.Fatalf("set public_base_url: %v", err)
+	}
+	token := registerAndGetAdminToken(t, s)
+
+	body, _ := json.Marshal(model.CreateServerRequest{Name: "preview-db-base"})
+	req := httptest.NewRequest("POST", "https://attacker.example/api/servers", bytes.NewReader(body))
+	req.Host = "attacker.example"
+	req.Header.Set("Authorization", testBearerPrefix+token)
+	rec := httptest.NewRecorder()
+	s.routes().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("expected 201, got %d: %s", rec.Code, rec.Body.String())
+	}
+	var resp model.CreateServerResponse
+	json.NewDecoder(rec.Body).Decode(&resp)
+	if !strings.Contains(resp.InstallCommand, "https://hub.internal.example:443/install.sh") {
+		t.Fatalf("expected DB-stored public_base_url to win over request Host, got %q", resp.InstallCommand)
+	}
+	if strings.Contains(resp.InstallCommand, "attacker.example") {
+		t.Fatalf("install command leaked attacker-controlled host header: %q", resp.InstallCommand)
+	}
+}
+
+func TestCreateServer_InvalidDBStoredPublicBaseURLRejected(t *testing.T) {
+	s := testServer(t)
+	if err := s.store.SetConfig("public_base_url", "not a url"); err != nil {
+		t.Fatalf("set public_base_url: %v", err)
+	}
+	token := registerAndGetAdminToken(t, s)
+
+	body, _ := json.Marshal(model.CreateServerRequest{Name: "preview-bad-base"})
+	req := httptest.NewRequest("POST", "https://10.10.1.95:4443/api/servers", bytes.NewReader(body))
+	req.Host = "10.10.1.95:4443"
+	req.Header.Set("Authorization", testBearerPrefix+token)
+	rec := httptest.NewRecorder()
+	s.routes().ServeHTTP(rec, req)
+
+	if rec.Code == http.StatusCreated {
+		t.Fatalf("expected a non-2xx when stored public_base_url is malformed, got 201 body=%s", rec.Body.String())
+	}
+}
+
 func TestCreateServer_EmptyName(t *testing.T) {
 	s := testServer(t)
 	token := registerAndGetAdminToken(t, s)

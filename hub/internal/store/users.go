@@ -79,8 +79,14 @@ func (s *Store) UpsertLDAPUser(u *model.User) (*model.User, error) {
 	if err := prepareLDAPUserUpdate(existing, u); err != nil {
 		return nil, err
 	}
+	rotateSessions := existing.Role != u.Role || existing.TerminalAccess != u.TerminalAccess
 	if err := s.updateLDAPUser(existing.ID, u); err != nil {
 		return nil, err
+	}
+	if rotateSessions {
+		if _, err := s.IncrementTokenGeneration(existing.ID); err != nil {
+			return nil, fmt.Errorf("invalidate sessions after ldap attribute change: %w", err)
+		}
 	}
 	return s.GetUserByID(existing.ID)
 }

@@ -99,6 +99,16 @@ func (s *Server) resolvePublicBaseURL(r *http.Request) (string, error) {
 		return strings.TrimRight(raw, "/"), nil
 	}
 
+	if stored, err := s.store.GetConfig("public_base_url"); err == nil {
+		if trimmed := strings.TrimSpace(stored); trimmed != "" {
+			parsed, err := url.Parse(trimmed)
+			if err != nil || parsed.Host == "" || (parsed.Scheme != "http" && parsed.Scheme != "https") {
+				return "", fmt.Errorf("invalid public base url")
+			}
+			return strings.TrimRight(trimmed, "/"), nil
+		}
+	}
+
 	if r != nil && r.Host != "" {
 		host := r.Host
 		if !hostPattern.MatchString(host) {
