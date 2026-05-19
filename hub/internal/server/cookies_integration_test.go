@@ -7,8 +7,8 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	"github.com/wyiu/aerodocs/hub/internal/auth"
-	"github.com/wyiu/aerodocs/hub/internal/model"
+	"github.com/wyiu/veyport/hub/internal/auth"
+	"github.com/wyiu/veyport/hub/internal/model"
 )
 
 // registerAndLoginWithCookies performs the full register -> TOTP setup -> TOTP enable
@@ -111,27 +111,27 @@ func TestCookieAuth_LoginSetsCookies(t *testing.T) {
 	csrf := findCookie(cookies, cookieCSRF)
 
 	if access == nil {
-		t.Fatal("missing aerodocs_access cookie")
+		t.Fatal("missing veyport_access cookie")
 	}
 	if !access.HttpOnly {
-		t.Error("aerodocs_access should be httpOnly")
+		t.Error("veyport_access should be httpOnly")
 	}
 
 	if refresh == nil {
-		t.Fatal("missing aerodocs_refresh cookie")
+		t.Fatal("missing veyport_refresh cookie")
 	}
 	if !refresh.HttpOnly {
-		t.Error("aerodocs_refresh should be httpOnly")
+		t.Error("veyport_refresh should be httpOnly")
 	}
 	if refresh.Path != testRefreshPath {
-		t.Errorf("aerodocs_refresh path = %q, want /api/auth/refresh", refresh.Path)
+		t.Errorf("veyport_refresh path = %q, want /api/auth/refresh", refresh.Path)
 	}
 
 	if csrf == nil {
-		t.Fatal("missing aerodocs_csrf cookie")
+		t.Fatal("missing veyport_csrf cookie")
 	}
 	if csrf.HttpOnly {
-		t.Error("aerodocs_csrf should NOT be httpOnly (JS needs to read it)")
+		t.Error("veyport_csrf should NOT be httpOnly (JS needs to read it)")
 	}
 }
 
@@ -264,7 +264,7 @@ func TestCookieAuth_RefreshViaCookie(t *testing.T) {
 	// The refresh endpoint is public (no auth middleware) and CSRF middleware
 	// exempts requests without access/CSRF cookies. But we send the refresh
 	// cookie which is scoped to /api/auth/refresh path, so only that cookie
-	// is present. Since there's no aerodocs_access or aerodocs_csrf cookie
+	// is present. Since there's no veyport_access or veyport_csrf cookie
 	// in the request, CSRF middleware will pass through.
 	req := httptest.NewRequest("POST", testRefreshPath, nil)
 	req.AddCookie(refreshCookie)

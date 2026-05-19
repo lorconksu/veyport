@@ -9,8 +9,8 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	"github.com/wyiu/aerodocs/hub/internal/auth"
-	"github.com/wyiu/aerodocs/hub/internal/model"
+	"github.com/wyiu/veyport/hub/internal/auth"
+	"github.com/wyiu/veyport/hub/internal/model"
 )
 
 const (
@@ -423,7 +423,7 @@ func (s *Server) handleTOTPSetup(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	key, err := auth.GenerateTOTPSecret(user.Username, "AeroDocs")
+	key, err := auth.GenerateTOTPSecret(user.Username, "Veyport")
 	if err != nil {
 		respondError(w, http.StatusInternalServerError, "failed to generate TOTP secret")
 		return

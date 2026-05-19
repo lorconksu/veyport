@@ -1,13 +1,13 @@
 # Proxy Configuration Guide
 
 > **TL;DR**
-> AeroDocs Hub exposes two services: HTTP (port 8081) for the web UI and REST API, and gRPC (port 9090) for agent connections. The HTTP service works with standard TLS-terminating reverse proxies. The gRPC service requires **TLS passthrough** because the Hub performs its own mTLS handshake with agents -- the proxy must not terminate TLS on the gRPC port.
+> Veyport Hub exposes two services: HTTP (port 8081) for the web UI and REST API, and gRPC (port 9090) for agent connections. The HTTP service works with standard TLS-terminating reverse proxies. The gRPC service requires **TLS passthrough** because the Hub performs its own mTLS handshake with agents -- the proxy must not terminate TLS on the gRPC port.
 
 ---
 
 ## Overview
 
-AeroDocs Hub is a dual-service application. The web UI, REST API, and asset serving all run on a single HTTP port, while a separate gRPC port handles persistent bidirectional streams from agents. These two services have fundamentally different proxying requirements:
+Veyport Hub is a dual-service application. The web UI, REST API, and asset serving all run on a single HTTP port, while a separate gRPC port handles persistent bidirectional streams from agents. These two services have fundamentally different proxying requirements:
 
 - **HTTP/HTTPS (Web + API)** -- Standard reverse proxy with TLS termination. The proxy obtains a certificate (e.g., via Let's Encrypt), terminates TLS, and forwards plaintext HTTP to the Hub on port 8081. This is the same as proxying any web application.
 
@@ -17,7 +17,7 @@ AeroDocs Hub is a dual-service application. The web UI, REST API, and asset serv
 flowchart LR
     subgraph Internet
         Browser["Browser / API Client"]
-        Agent["AeroDocs Agent"]
+        Agent["Veyport Agent"]
     end
 
     subgraph Proxy["Reverse Proxy"]
@@ -25,7 +25,7 @@ flowchart LR
         GRPC["gRPC :9443<br/>TLS Passthrough"]
     end
 
-    subgraph Hub["AeroDocs Hub"]
+    subgraph Hub["Veyport Hub"]
         HTTP_SVC[":8081<br/>Web UI + REST API"]
         GRPC_SVC[":9090<br/>gRPC (mTLS)"]
     end
@@ -59,7 +59,7 @@ The Hub generates an internal ECDSA P-256 CA on first boot. When an agent regist
 
 ## Traefik Configuration
 
-Traefik is the recommended proxy for AeroDocs. It natively supports both HTTP routing with TLS termination and TCP routing with TLS passthrough.
+Traefik is the recommended proxy for Veyport. It natively supports both HTTP routing with TLS termination and TCP routing with TLS passthrough.
 
 ### Static configuration (`traefik.yml`)
 
@@ -115,7 +115,7 @@ entryPoints:
     address: ":9443"
 ```
 
-### Dynamic configuration -- File provider (`/etc/traefik/conf.d/aerodocs.yml`)
+### Dynamic configuration -- File provider (`/etc/traefik/conf.d/veyport.yml`)
 
 ```yaml
 # ============================================================
@@ -123,16 +123,16 @@ entryPoints:
 # ============================================================
 http:
   routers:
-    aerodocs:
-      rule: "Host(`aerodocs.example.com`)"
+    veyport:
+      rule: "Host(`veyport.example.com`)"
       entryPoints:
         - websecure
       tls:
         certResolver: letsencrypt
-      service: aerodocs-svc
+      service: veyport-svc
 
   services:
-    aerodocs-svc:
+    veyport-svc:
       loadBalancer:
         servers:
           - url: "http://192.0.2.10:8081"
@@ -146,16 +146,16 @@ http:
 # ============================================================
 tcp:
   routers:
-    aerodocs-grpc:
-      rule: "HostSNI(`aerodocs.example.com`)"
+    veyport-grpc:
+      rule: "HostSNI(`veyport.example.com`)"
       entryPoints:
         - grpc
-      service: aerodocs-grpc-svc
+      service: veyport-grpc-svc
       tls:
         passthrough: true
 
   services:
-    aerodocs-grpc-svc:
+    veyport-grpc-svc:
       loadBalancer:
         servers:
           - address: "192.0.2.10:9090"
@@ -169,7 +169,7 @@ tcp:
 
 ### Docker Compose with Traefik labels
 
-If both Traefik and AeroDocs run in Docker on the same host, use labels instead of the file provider:
+If both Traefik and Veyport run in Docker on the same host, use labels instead of the file provider:
 
 ```yaml
 services:
@@ -196,36 +196,36 @@ services:
     networks:
       - proxy
 
-  aerodocs:
-    image: yiucloud/aerodocs:latest
-    container_name: aerodocs
+  veyport:
+    image: yiucloud/veyport:latest
+    container_name: veyport
     volumes:
-      - aerodocs-data:/data
+      - veyport-data:/data
     restart: unless-stopped
     labels:
       # Enable Traefik for this container
       - "traefik.enable=true"
 
       # --- HTTP: Web UI + REST API ---
-      - "traefik.http.routers.aerodocs.rule=Host(`aerodocs.example.com`)"
-      - "traefik.http.routers.aerodocs.entrypoints=websecure"
-      - "traefik.http.routers.aerodocs.tls.certresolver=letsencrypt"
-      - "traefik.http.routers.aerodocs.service=aerodocs-http"
-      - "traefik.http.services.aerodocs-http.loadbalancer.server.port=8081"
-      - "traefik.http.services.aerodocs-http.loadbalancer.healthcheck.path=/api/health"
-      - "traefik.http.services.aerodocs-http.loadbalancer.healthcheck.interval=30s"
+      - "traefik.http.routers.veyport.rule=Host(`veyport.example.com`)"
+      - "traefik.http.routers.veyport.entrypoints=websecure"
+      - "traefik.http.routers.veyport.tls.certresolver=letsencrypt"
+      - "traefik.http.routers.veyport.service=veyport-http"
+      - "traefik.http.services.veyport-http.loadbalancer.server.port=8081"
+      - "traefik.http.services.veyport-http.loadbalancer.healthcheck.path=/api/health"
+      - "traefik.http.services.veyport-http.loadbalancer.healthcheck.interval=30s"
 
       # --- TCP: gRPC agent connections (TLS passthrough) ---
-      - "traefik.tcp.routers.aerodocs-grpc.rule=HostSNI(`aerodocs.example.com`)"
-      - "traefik.tcp.routers.aerodocs-grpc.entrypoints=grpc"
-      - "traefik.tcp.routers.aerodocs-grpc.tls.passthrough=true"
-      - "traefik.tcp.routers.aerodocs-grpc.service=aerodocs-grpc"
-      - "traefik.tcp.services.aerodocs-grpc.loadbalancer.server.port=9090"
+      - "traefik.tcp.routers.veyport-grpc.rule=HostSNI(`veyport.example.com`)"
+      - "traefik.tcp.routers.veyport-grpc.entrypoints=grpc"
+      - "traefik.tcp.routers.veyport-grpc.tls.passthrough=true"
+      - "traefik.tcp.routers.veyport-grpc.service=veyport-grpc"
+      - "traefik.tcp.services.veyport-grpc.loadbalancer.server.port=9090"
     networks:
       - proxy
 
 volumes:
-  aerodocs-data:
+  veyport-data:
   traefik-certs:
 
 networks:
@@ -233,7 +233,7 @@ networks:
 ```
 
 **Notes:**
-- No `ports` mapping is needed on the AeroDocs container -- Traefik routes traffic through the Docker network.
+- No `ports` mapping is needed on the Veyport container -- Traefik routes traffic through the Docker network.
 - The TCP router for gRPC uses `HostSNI` matching, which requires TLS (the agent's TLS ClientHello includes the SNI hostname).
 - Health checks only apply to the HTTP service; TCP passthrough services cannot be health-checked at the application layer.
 
@@ -243,16 +243,16 @@ networks:
 
 nginx can proxy both services, but the gRPC passthrough requires the `stream` module, which is compiled in by default on most distributions but must be configured at the top level (outside the `http` block).
 
-### HTTPS -- Web UI + REST API (`/etc/nginx/sites-enabled/aerodocs.conf`)
+### HTTPS -- Web UI + REST API (`/etc/nginx/sites-enabled/veyport.conf`)
 
 ```nginx
 server {
     listen 443 ssl http2;
-    server_name aerodocs.example.com;
+    server_name veyport.example.com;
 
     # --- TLS (Let's Encrypt via certbot) ---
-    ssl_certificate     /etc/letsencrypt/live/aerodocs.example.com/fullchain.pem;
-    ssl_certificate_key /etc/letsencrypt/live/aerodocs.example.com/privkey.pem;
+    ssl_certificate     /etc/letsencrypt/live/veyport.example.com/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/veyport.example.com/privkey.pem;
     ssl_protocols       TLSv1.2 TLSv1.3;
     ssl_ciphers         HIGH:!aNULL:!MD5;
     ssl_prefer_server_ciphers on;
@@ -290,7 +290,7 @@ server {
 # HTTP to HTTPS redirect
 server {
     listen 80;
-    server_name aerodocs.example.com;
+    server_name veyport.example.com;
     return 301 https://$host$request_uri;
 }
 
@@ -301,7 +301,7 @@ map $http_upgrade $connection_upgrade {
 }
 ```
 
-### TCP passthrough -- gRPC (`/etc/nginx/nginx.conf` or `/etc/nginx/stream.d/aerodocs-grpc.conf`)
+### TCP passthrough -- gRPC (`/etc/nginx/nginx.conf` or `/etc/nginx/stream.d/veyport-grpc.conf`)
 
 The `stream` block must be at the top level of `nginx.conf`, not inside the `http` block. Many distributions support an include directory for stream configs:
 
@@ -316,7 +316,7 @@ stream {
 Then create the gRPC passthrough config:
 
 ```nginx
-# /etc/nginx/stream.d/aerodocs-grpc.conf
+# /etc/nginx/stream.d/veyport-grpc.conf
 
 # TLS passthrough for gRPC agent connections
 # The Hub handles its own mTLS -- nginx must NOT terminate TLS here.
@@ -347,7 +347,7 @@ server {
 sudo apt install certbot python3-certbot-nginx
 
 # Obtain a certificate (automatically configures nginx)
-sudo certbot --nginx -d aerodocs.example.com
+sudo certbot --nginx -d veyport.example.com
 
 # Auto-renewal is configured by default; verify with:
 sudo certbot renew --dry-run
@@ -396,7 +396,7 @@ defaults
 # ==============================================================
 frontend https_front
     mode http
-    bind *:443 ssl crt /etc/haproxy/certs/aerodocs.example.com.pem
+    bind *:443 ssl crt /etc/haproxy/certs/veyport.example.com.pem
 
     # Security headers
     http-response set-header Strict-Transport-Security "max-age=63072000; includeSubDomains; preload"
@@ -404,11 +404,11 @@ frontend https_front
     http-response set-header X-Content-Type-Options "nosniff"
     http-response set-header Referrer-Policy "strict-origin-when-cross-origin"
 
-    # Route to AeroDocs backend
-    acl is_aerodocs hdr(host) -i aerodocs.example.com
-    use_backend aerodocs_web if is_aerodocs
+    # Route to Veyport backend
+    acl is_veyport hdr(host) -i veyport.example.com
+    use_backend veyport_web if is_veyport
 
-    default_backend aerodocs_web
+    default_backend veyport_web
 
 # HTTP to HTTPS redirect
 frontend http_front
@@ -426,13 +426,13 @@ frontend grpc_front
     # NO ssl termination here -- passthrough to the Hub
     # The Hub performs its own mTLS with agents
 
-    default_backend aerodocs_grpc
+    default_backend veyport_grpc
 
 # ==============================================================
 # Backends
 # ==============================================================
 
-backend aerodocs_web
+backend veyport_web
     mode http
     option httpchk GET /api/health
     http-check expect status 200
@@ -447,7 +447,7 @@ backend aerodocs_web
 
     server hub 127.0.0.1:8081 check inter 30s fall 3 rise 2
 
-backend aerodocs_grpc
+backend veyport_grpc
     mode tcp
 
     # TCP health check (connection only -- cannot inspect gRPC at this layer)
@@ -467,10 +467,10 @@ HAProxy expects the certificate and private key in a single PEM file. If using L
 
 ```bash
 # Combine fullchain and private key into one file
-cat /etc/letsencrypt/live/aerodocs.example.com/fullchain.pem \
-    /etc/letsencrypt/live/aerodocs.example.com/privkey.pem \
-    > /etc/haproxy/certs/aerodocs.example.com.pem
-chmod 600 /etc/haproxy/certs/aerodocs.example.com.pem
+cat /etc/letsencrypt/live/veyport.example.com/fullchain.pem \
+    /etc/letsencrypt/live/veyport.example.com/privkey.pem \
+    > /etc/haproxy/certs/veyport.example.com.pem
+chmod 600 /etc/haproxy/certs/veyport.example.com.pem
 ```
 
 Set up a certbot deploy hook to rebuild this file on renewal:
@@ -478,7 +478,7 @@ Set up a certbot deploy hook to rebuild this file on renewal:
 ```bash
 # /etc/letsencrypt/renewal-hooks/deploy/haproxy.sh
 #!/bin/bash
-DOMAIN="aerodocs.example.com"
+DOMAIN="veyport.example.com"
 cat "/etc/letsencrypt/live/${DOMAIN}/fullchain.pem" \
     "/etc/letsencrypt/live/${DOMAIN}/privkey.pem" \
     > "/etc/haproxy/certs/${DOMAIN}.pem"
@@ -493,15 +493,15 @@ systemctl reload haproxy
 
 | Check | What to look for |
 |-------|-----------------|
-| **Port open?** | Verify port 9443 is open in your firewall: `nc -zv aerodocs.example.com 9443` |
+| **Port open?** | Verify port 9443 is open in your firewall: `nc -zv veyport.example.com 9443` |
 | **TLS passthrough?** | The gRPC frontend/server block must **not** terminate TLS. If using Traefik, confirm `tls.passthrough: true` on the TCP router. |
 | **SNI matches?** | For Traefik TCP routers, `HostSNI()` must match the hostname the agent connects to. |
 | **Hub listening?** | Verify the Hub's gRPC port is up: `ss -tlnp \| grep 9090` on the Hub host. |
-| **Agent config** | Check `/etc/aerodocs/agent.conf` -- the `hub_url` must point to `<hostname>:9443` (the external gRPC port), not 9090. |
+| **Agent config** | Check `/etc/veyport/agent.conf` -- the `hub_url` must point to `<hostname>:9443` (the external gRPC port), not 9090. |
 
 ### Agent shows the proxy's IP instead of its real IP
 
-This is expected behavior. TCP passthrough proxies do not inject `X-Forwarded-For` headers because they cannot inspect the encrypted traffic. The AeroDocs agent works around this by self-reporting its IP address via the gRPC heartbeat protocol. The IP shown in the Hub UI is the agent's self-reported address, not the connection source.
+This is expected behavior. TCP passthrough proxies do not inject `X-Forwarded-For` headers because they cannot inspect the encrypted traffic. The Veyport agent works around this by self-reporting its IP address via the gRPC heartbeat protocol. The IP shown in the Hub UI is the agent's self-reported address, not the connection source.
 
 ### SSE log tailing disconnects prematurely
 

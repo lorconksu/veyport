@@ -1,5 +1,5 @@
 {
-  "name": "aerodocs-e2e",
+  "name": "veyport-e2e",
   "private": true,
   "scripts": {
     "test": "playwright test",

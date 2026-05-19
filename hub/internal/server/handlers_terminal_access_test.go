@@ -6,8 +6,8 @@ import (
 	"testing"
 
 	"github.com/google/uuid"
-	"github.com/wyiu/aerodocs/hub/internal/auth"
-	"github.com/wyiu/aerodocs/hub/internal/model"
+	"github.com/wyiu/veyport/hub/internal/auth"
+	"github.com/wyiu/veyport/hub/internal/model"
 )
 
 func createLDAPViewerToken(t *testing.T, s *Server, username string, terminalAccess bool) (string, string) {

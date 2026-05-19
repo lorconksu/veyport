@@ -15,26 +15,26 @@ import (
 	"testing"
 	"time"
 
-	"github.com/wyiu/aerodocs/hub/internal/model"
+	"github.com/wyiu/veyport/hub/internal/model"
 )
 
 const (
-	testSMTPEHLOReply    = "250-localhost\r\n250 OK\r\n"
-	testSMTPGreeting     = "220 localhost ESMTP\r\n"
-	testSMTPMailFrom     = "MAIL FROM"
-	testSMTPOK           = "250 OK\r\n"
-	testSMTPRcptTo       = "RCPT TO"
-	testSMTPSendData     = "354 Send data\r\n"
-	testSMTPDataEnd      = "\r\n.\r\n"
-	testSMTPBye          = "221 Bye\r\n"
-	testRecipient        = "to@example.com"
-	testListenAddr       = "127.0.0.1:0"
-	testMockServerFmt    = "failed to start mock server: %v"
-	testLocalhost        = "127.0.0.1"
-	testSenderEmail      = "sender@example.com"
-	testRecipientEmail   = "recipient@example.com"
-	testFromEmail        = "test@test.com"
-	testServerNameWeb01  = "web-01"
+	testSMTPEHLOReply     = "250-localhost\r\n250 OK\r\n"
+	testSMTPGreeting      = "220 localhost ESMTP\r\n"
+	testSMTPMailFrom      = "MAIL FROM"
+	testSMTPOK            = "250 OK\r\n"
+	testSMTPRcptTo        = "RCPT TO"
+	testSMTPSendData      = "354 Send data\r\n"
+	testSMTPDataEnd       = "\r\n.\r\n"
+	testSMTPBye           = "221 Bye\r\n"
+	testRecipient         = "to@example.com"
+	testListenAddr        = "127.0.0.1:0"
+	testMockServerFmt     = "failed to start mock server: %v"
+	testLocalhost         = "127.0.0.1"
+	testSenderEmail       = "sender@example.com"
+	testRecipientEmail    = "recipient@example.com"
+	testFromEmail         = "test@test.com"
+	testServerNameWeb01   = "web-01"
 	testTimestamp20260330 = "2026-03-30 12:00:00 UTC"
 )
 
@@ -106,7 +106,7 @@ func TestSendEmail_PlainSMTP(t *testing.T) {
 		TLS:     false,
 	}
 
-	err = SendEmail(cfg, testRecipientEmail, "[AeroDocs] Test Subject", "Hello from AeroDocs.")
+	err = SendEmail(cfg, testRecipientEmail, "[Veyport] Test Subject", "Hello from Veyport.")
 	if err != nil {
 		t.Fatalf("SendEmail returned error: %v", err)
 	}
@@ -138,7 +138,7 @@ func TestSendEmail_MessageContents(t *testing.T) {
 	cfg := model.SMTPConfig{
 		Host:    testLocalhost,
 		Port:    addr.Port,
-		From:    "noreply@aerodocs.local",
+		From:    "noreply@veyport.local",
 		Enabled: true,
 		TLS:     false,
 	}
@@ -157,8 +157,8 @@ func TestSendEmail_MessageContents(t *testing.T) {
 		if !strings.Contains(data, "test-server") {
 			t.Errorf("expected message to contain 'test-server', got: %q", data)
 		}
-		if !strings.Contains(data, "[AeroDocs]") {
-			t.Errorf("expected message to contain '[AeroDocs]', got: %q", data)
+		if !strings.Contains(data, "[Veyport]") {
+			t.Errorf("expected message to contain '[Veyport]', got: %q", data)
 		}
 	case <-time.After(3 * time.Second):
 		t.Error("timeout waiting for mock SMTP server to receive data")

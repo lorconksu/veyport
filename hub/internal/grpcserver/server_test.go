@@ -3,9 +3,9 @@ package grpcserver
 import (
 	"testing"
 
-	"github.com/wyiu/aerodocs/hub/internal/connmgr"
-	"github.com/wyiu/aerodocs/hub/internal/model"
-	"github.com/wyiu/aerodocs/hub/internal/store"
+	"github.com/wyiu/veyport/hub/internal/connmgr"
+	"github.com/wyiu/veyport/hub/internal/model"
+	"github.com/wyiu/veyport/hub/internal/store"
 )
 
 const testStale1 = "stale-1"

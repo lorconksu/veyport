@@ -12,8 +12,8 @@ import (
 	"time"
 
 	ldap "github.com/go-ldap/ldap/v3"
-	"github.com/wyiu/aerodocs/hub/internal/auth"
-	"github.com/wyiu/aerodocs/hub/internal/model"
+	"github.com/wyiu/veyport/hub/internal/auth"
+	"github.com/wyiu/veyport/hub/internal/model"
 )
 
 type LDAPIdentity struct {
@@ -61,12 +61,12 @@ type ldapBindAuthenticator struct {
 }
 
 var defaultLDAPRoleGroups = map[model.Role][]string{
-	model.RoleAdmin:   {"aerodocs-admins"},
-	model.RoleAuditor: {"aerodocs-auditors"},
-	model.RoleViewer:  {"aerodocs-viewers"},
+	model.RoleAdmin:   {"veyport-admins"},
+	model.RoleAuditor: {"veyport-auditors"},
+	model.RoleViewer:  {"veyport-viewers"},
 }
 
-var defaultLDAPTerminalGroups = []string{"aerodocs-terminal-users"}
+var defaultLDAPTerminalGroups = []string{"veyport-terminal-users"}
 
 const errInvalidLDAPCredentials = "invalid LDAP credentials"
 
@@ -88,7 +88,7 @@ func (s *Server) authenticateLDAPLogin(ctx context.Context, username, password s
 	}
 	role, ok := mapLDAPRole(identity.Groups)
 	if !ok {
-		return nil, fmt.Errorf("LDAP user is not authorized for AeroDocs")
+		return nil, fmt.Errorf("LDAP user is not authorized for Veyport")
 	}
 	return s.store.UpsertLDAPUser(&model.User{
 		Username:       firstNonEmpty(identity.Username, username),

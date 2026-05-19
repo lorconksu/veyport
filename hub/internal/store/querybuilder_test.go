@@ -5,8 +5,8 @@ import (
 )
 
 const (
-	testBaseQuery      = "SELECT * FROM servers"
-	testStatusClause   = "status = ?"
+	testBaseQuery       = "SELECT * FROM servers"
+	testStatusClause    = "status = ?"
 	testUnexpectedQuery = "unexpected query: %q"
 	testUnexpectedArgs  = "unexpected args: %v"
 )

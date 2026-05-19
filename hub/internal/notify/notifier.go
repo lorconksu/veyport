@@ -13,8 +13,8 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	"github.com/wyiu/aerodocs/hub/internal/model"
-	"github.com/wyiu/aerodocs/hub/internal/store"
+	"github.com/wyiu/veyport/hub/internal/model"
+	"github.com/wyiu/veyport/hub/internal/store"
 )
 
 const queueSize = 100

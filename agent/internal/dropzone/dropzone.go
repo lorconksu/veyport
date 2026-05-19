@@ -6,10 +6,10 @@ import (
 	"path/filepath"
 	"sync"
 
-	pb "github.com/wyiu/aerodocs/proto/aerodocs/v1"
+	pb "github.com/wyiu/veyport/proto/veyport/v1"
 )
 
-const DefaultDir = "/tmp/aerodocs-dropzone"
+const DefaultDir = "/tmp/veyport-dropzone"
 
 const errFileOperation = "file operation failed"
 

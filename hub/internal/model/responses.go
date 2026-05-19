@@ -1,6 +1,6 @@
 package model
 
-import pb "github.com/wyiu/aerodocs/proto/aerodocs/v1"
+import pb "github.com/wyiu/veyport/proto/veyport/v1"
 
 // SetupResponse is returned after initial user registration.
 type SetupResponse struct {

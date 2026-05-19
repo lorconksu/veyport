@@ -69,14 +69,42 @@ export async function loginViaAPI(page: Page, baseURL: string) {
   lastUsedTOTPCode = code
   const authData = await totpResp.json() as { access_token: string; refresh_token: string }
 
-  // Step 3: Inject tokens into localStorage so the SPA picks them up
-  // Navigate to a blank page first to set localStorage without redirect interference
-  await page.goto(baseURL + '/api/auth/status')
-  await page.evaluate((tokens) => {
-    localStorage.setItem('aerodocs_access_token', tokens.access_token)
-    localStorage.setItem('aerodocs_refresh_token', tokens.refresh_token)
-  }, authData)
+  // Step 3: Seed auth cookies so the SPA's cookie-based auth picks them up.
+  const parsedBaseURL = new URL(baseURL)
+  const expires = Math.floor(Date.now() / 1000)
+  await page.context().addCookies([
+    {
+      name: 'veyport_access',
+      value: authData.access_token,
+      domain: parsedBaseURL.hostname,
+      path: '/',
+      expires: expires + 900,
+      httpOnly: true,
+      secure: parsedBaseURL.protocol === 'https:',
+      sameSite: 'Strict',
+    },
+    {
+      name: 'veyport_refresh',
+      value: authData.refresh_token,
+      domain: parsedBaseURL.hostname,
+      path: '/api/auth/refresh',
+      expires: expires + 604800,
+      httpOnly: true,
+      secure: parsedBaseURL.protocol === 'https:',
+      sameSite: 'Strict',
+    },
+    {
+      name: 'veyport_csrf',
+      value: 'e2e-csrf',
+      domain: parsedBaseURL.hostname,
+      path: '/',
+      expires: expires + 604800,
+      httpOnly: false,
+      secure: parsedBaseURL.protocol === 'https:',
+      sameSite: 'Strict',
+    },
+  ])
 
-  // Now navigate to the app — tokens are in localStorage, so auth will succeed
+  // Now navigate to the app — auth cookies are set, so auth will succeed
   await page.goto(baseURL + '/')
 }

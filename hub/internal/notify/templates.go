@@ -3,7 +3,7 @@ package notify
 import (
 	"strings"
 
-	"github.com/wyiu/aerodocs/hub/internal/model"
+	"github.com/wyiu/veyport/hub/internal/model"
 )
 
 type emailTemplate struct {
@@ -56,14 +56,14 @@ var templates = map[string]emailTemplate{
 	},
 	model.NotifyAuditDegraded: {
 		subject: "Audit Pipeline Degraded",
-		body: "AeroDocs detected an audit logging failure.\n\n" +
+		body: "Veyport detected an audit logging failure.\n\n" +
 			"Failure Count: {{failure_count}}\n" +
 			"Last Failure: {{last_failure_at}}\n" +
 			"Reason: {{last_failure_reason}}\n",
 	},
 	model.NotifyAuditRecovered: {
 		subject: "Audit Pipeline Recovered",
-		body: "AeroDocs audit logging has recovered.\n\n" +
+		body: "Veyport audit logging has recovered.\n\n" +
 			"Last Recovery: {{last_recovered_at}}\n" +
 			"Failure Count: {{failure_count}}\n",
 	},
@@ -76,12 +76,12 @@ var templates = map[string]emailTemplate{
 	},
 }
 
-const fallbackSubject = "AeroDocs Notification: {{event_type}}"
-const fallbackBody = "An event of type {{event_type}} occurred.\n\nPlease check the AeroDocs dashboard for details."
+const fallbackSubject = "Veyport Notification: {{event_type}}"
+const fallbackBody = "An event of type {{event_type}} occurred.\n\nPlease check the Veyport dashboard for details."
 
 // RenderEmail returns the subject and body for a given event type, with
 // {{key}} placeholders substituted from the provided context map.
-// The subject is always prefixed with "[AeroDocs] ".
+// The subject is always prefixed with "[Veyport] ".
 func RenderEmail(eventType string, context map[string]string) (subject, body string) {
 	tmpl, ok := templates[eventType]
 	if !ok {
@@ -95,7 +95,7 @@ func RenderEmail(eventType string, context map[string]string) (subject, body str
 		context["event_type"] = eventType
 	}
 
-	subject = "[AeroDocs] " + substitute(tmpl.subject, context)
+	subject = "[Veyport] " + substitute(tmpl.subject, context)
 	body = substitute(tmpl.body, context)
 	return subject, body
 }

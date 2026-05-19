@@ -4,7 +4,7 @@ import (
 	"net/http"
 
 	"github.com/google/uuid"
-	"github.com/wyiu/aerodocs/hub/internal/model"
+	"github.com/wyiu/veyport/hub/internal/model"
 )
 
 func (s *Server) handleListPaths(w http.ResponseWriter, r *http.Request) {

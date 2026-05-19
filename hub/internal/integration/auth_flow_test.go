@@ -6,8 +6,8 @@ import (
 	"net/http"
 	"testing"
 
-	"github.com/wyiu/aerodocs/hub/internal/auth"
-	"github.com/wyiu/aerodocs/hub/internal/model"
+	"github.com/wyiu/veyport/hub/internal/auth"
+	"github.com/wyiu/veyport/hub/internal/model"
 )
 
 // requireStatusOK reads a response and fatals if status is not 200.

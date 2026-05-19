@@ -12,13 +12,13 @@ import (
 	"syscall"
 	"time"
 
-	hub "github.com/wyiu/aerodocs/hub"
-	"github.com/wyiu/aerodocs/hub/internal/ca"
-	"github.com/wyiu/aerodocs/hub/internal/connmgr"
-	"github.com/wyiu/aerodocs/hub/internal/grpcserver"
-	"github.com/wyiu/aerodocs/hub/internal/notify"
-	"github.com/wyiu/aerodocs/hub/internal/server"
-	"github.com/wyiu/aerodocs/hub/internal/store"
+	hub "github.com/wyiu/veyport/hub"
+	"github.com/wyiu/veyport/hub/internal/ca"
+	"github.com/wyiu/veyport/hub/internal/connmgr"
+	"github.com/wyiu/veyport/hub/internal/grpcserver"
+	"github.com/wyiu/veyport/hub/internal/notify"
+	"github.com/wyiu/veyport/hub/internal/server"
+	"github.com/wyiu/veyport/hub/internal/store"
 )
 
 func main() {
@@ -38,7 +38,7 @@ func main() {
 
 func runServer() error {
 	addr := flag.String("addr", ":8080", "listen address")
-	dbPath := flag.String("db", "aerodocs.db", "SQLite database path")
+	dbPath := flag.String("db", "veyport.db", "SQLite database path")
 	dev := flag.Bool("dev", false, "enable development mode (CORS)")
 	grpcAddr := flag.String("grpc-addr", ":9090", "gRPC listen address")
 	grpcExternalAddr := flag.String("grpc-external-addr", "", "external gRPC address for agent install commands (e.g. hub.example.com:9443)")

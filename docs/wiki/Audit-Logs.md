@@ -2,7 +2,7 @@
 
 ## What Are Audit Logs?
 
-Every action taken in AeroDocs is recorded in the audit log. Think of it as an activity history - a permanent record of who did what and when.
+Every action taken in Veyport is recorded in the audit log. Think of it as an activity history - a permanent record of who did what and when.
 
 Audit log entries cannot be edited or deleted, even by admins. Each entry is protected by a transactional hash chain - every row includes a cryptographic hash that incorporates the previous entry's hash. This means any tampering (insertion, deletion, or modification of a row) breaks the chain and is detectable.
 
@@ -41,7 +41,7 @@ Use the filters at the top of the page to narrow down the log:
 
 - **Date range** - Show entries between a start and end date/time
 - **User** - Filter to actions by a specific user
-- **Action type** - Filter to a specific category of action (e.g. `user.*`, `server.*`, `file.*`)
+- **Action type** - Filter to a specific category of action (e.g. `user.*`, `server.*`, `file.*`, `terminal.*`)
 
 You can combine filters. Click **Clear** to reset them.
 
@@ -103,6 +103,7 @@ Actions follow a `resource.action` naming pattern.
 | `user.totp_reset` | TOTP was reset via the CLI break-glass command |
 | `user.created` | An admin created a new user account |
 | `user.password_changed` | A user changed their password |
+| `user.password_reuse_rejected` | A password change was rejected because it reused a previous password |
 | `user.role_updated` | An admin changed a user's role |
 | `user.deleted` | An admin deleted a user account |
 
@@ -112,7 +113,10 @@ Actions follow a `resource.action` naming pattern.
 |--------|--------------|
 | `server.created` | An admin added a new server record |
 | `server.updated` | An admin edited a server's name or labels |
+| `server.deleted` | An admin deleted a server record |
+| `server.batch_deleted` | An admin deleted multiple server records in one operation |
 | `server.registered` | An agent ran the install command and registered with the Hub |
+| `server.registration_failed` | An agent attempted registration with an invalid or expired token |
 | `server.connected` | An agent established a live gRPC connection to the Hub |
 | `server.disconnected` | An agent's gRPC connection to the Hub dropped |
 | `server.unregistered` | An admin unregistered a server - cleanup sent to the agent (if online), then record deleted from the Hub database |
@@ -137,9 +141,30 @@ Actions follow a `resource.action` naming pattern.
 |--------|--------------|
 | `log.tail_started` | A user started a live log tail session on a server |
 
-### Notification actions
+### Terminal actions
 
 | Action | What it means |
 |--------|--------------|
-| `notification.sent` | An email notification was sent to one or more recipients |
-| `notification.failed` | An email notification failed to send |
+| `terminal.opened` | A user opened a browser terminal session on a server |
+| `terminal.closed` | A browser terminal session ended or was cleaned up |
+
+### API token actions
+
+| Action | What it means |
+|--------|--------------|
+| `api_token.created` | A CLI-created API token was created |
+| `api_token.revoked` | A CLI-created API token was revoked |
+
+### Audit governance actions
+
+| Action | What it means |
+|--------|--------------|
+| `audit.exported` | An admin or auditor exported audit entries |
+| `audit.review_completed` | An admin or auditor recorded audit review completion |
+| `audit.filter_saved` | An admin or auditor saved an audit filter |
+| `audit.filter_deleted` | An admin or auditor deleted a saved audit filter |
+| `audit.retention_updated` | An admin changed audit retention or detection settings |
+| `audit.retention_executed` | An admin ran audit retention cleanup |
+| `audit.flag_created` | An admin or auditor flagged an audit event or filtered result set |
+
+Notification delivery attempts are shown in **Settings > Notifications**. They are stored in the notification delivery log rather than the immutable audit log action catalog.

@@ -112,7 +112,7 @@ export function AuditLogsPage() {
       const url = URL.createObjectURL(blob)
       const a = document.createElement('a')
       a.href = url
-      a.download = `aerodocs-audit-export-${new Date().toISOString().slice(0, 10)}.json`
+      a.download = `veyport-audit-export-${new Date().toISOString().slice(0, 10)}.json`
       a.click()
       URL.revokeObjectURL(url)
       queryClient.invalidateQueries({ queryKey: ['audit-logs'] })
@@ -363,7 +363,7 @@ export function AuditLogsPage() {
             <span className="text-sm font-semibold">Active Detections</span>
           </div>
           <p className="text-xs text-text-muted mb-3">
-            These notices are threshold-based prompts for review. They do not mean AeroDocs has confirmed malicious activity.
+            These notices are threshold-based prompts for review. They do not mean Veyport has confirmed malicious activity.
           </p>
           <div className="space-y-2">
             {detections.detections.map(detection => (

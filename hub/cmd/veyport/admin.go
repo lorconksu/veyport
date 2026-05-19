@@ -8,14 +8,14 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	"github.com/wyiu/aerodocs/hub/internal/auth"
-	"github.com/wyiu/aerodocs/hub/internal/model"
-	"github.com/wyiu/aerodocs/hub/internal/store"
+	"github.com/wyiu/veyport/hub/internal/auth"
+	"github.com/wyiu/veyport/hub/internal/model"
+	"github.com/wyiu/veyport/hub/internal/store"
 )
 
 const (
-	adminUsage         = "usage: aerodocs admin <command>\ncommands: reset-totp, create-api-token, list-api-tokens, revoke-api-token"
-	defaultAdminDBPath = "aerodocs.db"
+	adminUsage         = "usage: veyport admin <command>\ncommands: reset-totp, create-api-token, list-api-tokens, revoke-api-token"
+	defaultAdminDBPath = "veyport.db"
 )
 
 func runAdmin(args []string) error {

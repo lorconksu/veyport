@@ -16,7 +16,7 @@ const mockSMTPConfig = {
   port: 587,
   username: 'user@example.com',
   password: 'secret',
-  from: 'AeroDocs <noreply@example.com>',
+  from: 'Veyport <noreply@example.com>',
   tls: true,
   enabled: true,
 }
@@ -79,7 +79,7 @@ describe('NotificationsTab', () => {
     expect(screen.getByPlaceholderText('587')).toBeInTheDocument()
     expect(screen.getByPlaceholderText('user@example.com')).toBeInTheDocument()
     expect(screen.getByPlaceholderText('••••••••')).toBeInTheDocument()
-    expect(screen.getByPlaceholderText('AeroDocs <noreply@example.com>')).toBeInTheDocument()
+    expect(screen.getByPlaceholderText('Veyport <noreply@example.com>')).toBeInTheDocument()
     expect(screen.getByText('Use TLS')).toBeInTheDocument()
     expect(screen.getByText('Enable SMTP')).toBeInTheDocument()
   })
@@ -341,10 +341,10 @@ describe('NotificationsTab', () => {
   it('updates from address input when user types', async () => {
     renderTab()
     await waitFor(() => {
-      expect(screen.getByPlaceholderText('AeroDocs <noreply@example.com>')).toBeInTheDocument()
+      expect(screen.getByPlaceholderText('Veyport <noreply@example.com>')).toBeInTheDocument()
     })
 
-    const fromInput = screen.getByPlaceholderText('AeroDocs <noreply@example.com>') as HTMLInputElement
+    const fromInput = screen.getByPlaceholderText('Veyport <noreply@example.com>') as HTMLInputElement
     fireEvent.change(fromInput, { target: { value: 'MyApp <no-reply@myapp.com>' } })
     expect(fromInput.value).toBe('MyApp <no-reply@myapp.com>')
   })

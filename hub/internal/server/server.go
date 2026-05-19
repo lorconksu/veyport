@@ -12,12 +12,12 @@ import (
 	"sync"
 	"time"
 
-	"github.com/wyiu/aerodocs/hub/internal/auth"
-	"github.com/wyiu/aerodocs/hub/internal/connmgr"
-	"github.com/wyiu/aerodocs/hub/internal/grpcserver"
-	"github.com/wyiu/aerodocs/hub/internal/model"
-	"github.com/wyiu/aerodocs/hub/internal/notify"
-	"github.com/wyiu/aerodocs/hub/internal/store"
+	"github.com/wyiu/veyport/hub/internal/auth"
+	"github.com/wyiu/veyport/hub/internal/connmgr"
+	"github.com/wyiu/veyport/hub/internal/grpcserver"
+	"github.com/wyiu/veyport/hub/internal/model"
+	"github.com/wyiu/veyport/hub/internal/notify"
+	"github.com/wyiu/veyport/hub/internal/store"
 )
 
 // Version is set at build time via -ldflags.
@@ -134,7 +134,7 @@ func (s *Server) installAuditObservers() {
 }
 
 func (s *Server) Start() error {
-	fmt.Printf("AeroDocs Hub listening on %s\n", s.httpServer.Addr)
+	fmt.Printf("Veyport Hub listening on %s\n", s.httpServer.Addr)
 	return s.httpServer.ListenAndServe()
 }
 

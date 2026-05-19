@@ -7,15 +7,15 @@ function run(cmd: string, args: string[], options?: { cwd?: string }) {
 }
 
 export default async function globalSetup() {
-  const containerName = 'aerodocs-e2e'
+  const containerName = 'veyport-e2e'
   const httpPort = process.env.E2E_HTTP_PORT || '18081'
-  const imageName = process.env.E2E_IMAGE || 'aerodocs-e2e:test'
+  const imageName = process.env.E2E_IMAGE || 'veyport-e2e:test'
   const repoRoot = path.resolve(__dirname, '../..')
 
   // Build if no pre-built image provided
   if (!process.env.E2E_IMAGE) {
     console.log('Building Docker image...')
-    run('docker', ['build', '-t', 'aerodocs-e2e:test', '.'], { cwd: repoRoot })
+    run('docker', ['build', '-t', 'veyport-e2e:test', '.'], { cwd: repoRoot })
   }
 
   // Remove old container
@@ -30,7 +30,7 @@ export default async function globalSetup() {
     imageName,
     '--addr', ':8081',
     '--grpc-addr', ':9090',
-    '--db', '/data/aerodocs.db',
+    '--db', '/data/veyport.db',
     '--agent-bin-dir', '/app',
     '--grpc-external-addr', 'localhost:9443',
   ])

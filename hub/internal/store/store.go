@@ -6,8 +6,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/wyiu/aerodocs/hub/internal/migrate"
-	"github.com/wyiu/aerodocs/hub/internal/model"
+	"github.com/wyiu/veyport/hub/internal/migrate"
+	"github.com/wyiu/veyport/hub/internal/model"
 	_ "modernc.org/sqlite" // registers the SQLite driver
 )
 
@@ -22,7 +22,7 @@ type Store struct {
 
 func New(dbPath string) (*Store, error) {
 	if dbPath == ":memory:" {
-		dbPath = fmt.Sprintf("file:aerodocs-%d?mode=memory&cache=shared", time.Now().UnixNano())
+		dbPath = fmt.Sprintf("file:veyport-%d?mode=memory&cache=shared", time.Now().UnixNano())
 	}
 
 	db, err := sql.Open("sqlite", dbPath)

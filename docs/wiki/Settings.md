@@ -36,9 +36,11 @@ You will remain logged in on the current device after changing your password. Al
 
 ## Users Tab (Admin Only)
 
-The Users tab lists all accounts registered in AeroDocs. This tab is only visible to admins.
+The Users tab lists all accounts registered in Veyport. This tab is only visible to admins.
 
 ![Settings Users](screenshots/settings-users.png)
+
+LDAP-backed users are created or updated when they successfully log in through LDAP. Their role and terminal eligibility come from LDAP group mapping rather than manual local-user creation.
 
 ### Creating a New User
 
@@ -46,7 +48,7 @@ The Users tab lists all accounts registered in AeroDocs. This tab is only visibl
 2. Fill in the **Username**, **Email**, and **Role** (Admin, Auditor, or Viewer)
 3. Click **Create**
 
-AeroDocs generates a temporary password and shows it to you once. Copy it and share it securely with the new user. They will be required to change their password and set up TOTP on their first login.
+Veyport generates a temporary password and shows it to you once. Copy it and share it securely with the new user. They will be required to change their password and set up TOTP on their first login.
 
 New users cannot choose their own password during account creation - they must use the temporary password you provide.
 
@@ -91,7 +93,7 @@ Deleting a user is permanent and cannot be undone. Their audit log entries are p
 
 ![Settings Notifications](screenshots/settings-notifications.png)
 
-The Notifications tab lets admins configure email notifications for the entire AeroDocs instance.
+The Notifications tab lets admins configure email notifications for the entire Veyport instance.
 
 ### SMTP Configuration
 
@@ -101,7 +103,7 @@ Configure your outbound email settings:
 - **SMTP Port** - The port to connect on (e.g. `587` for STARTTLS, `465` for SSL)
 - **Username** - The SMTP authentication username
 - **Password** - The SMTP authentication password
-- **From Address** - The sender address that will appear on notification emails (e.g. `aerodocs@example.com`)
+- **From Address** - The sender address that will appear on notification emails (e.g. `veyport@example.com`)
 
 Click **Save** to store the SMTP configuration. Credentials are encrypted at rest.
 
@@ -130,7 +132,7 @@ Available event types include:
 - **Server Online** - A server's agent connected to the Hub
 - **Server Offline** - A server's agent disconnected from the Hub
 - **File Uploaded** - A file was uploaded to a server via the Dropzone
-- **User Login** - A user logged in to AeroDocs
+- **User Login** - A user logged in to Veyport
 - **User Created** - A new user account was created
 
 Toggle each event on or off. Changes are saved automatically.

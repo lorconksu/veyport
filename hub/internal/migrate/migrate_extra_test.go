@@ -3,7 +3,7 @@ package migrate_test
 import (
 	"testing"
 
-	"github.com/wyiu/aerodocs/hub/internal/migrate"
+	"github.com/wyiu/veyport/hub/internal/migrate"
 )
 
 const testRunFmt = "run: %v"

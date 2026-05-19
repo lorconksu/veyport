@@ -9,14 +9,14 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	"github.com/wyiu/aerodocs/hub/internal/auth"
-	"github.com/wyiu/aerodocs/hub/internal/model"
-	"github.com/wyiu/aerodocs/hub/internal/store"
+	"github.com/wyiu/veyport/hub/internal/auth"
+	"github.com/wyiu/veyport/hub/internal/model"
+	"github.com/wyiu/veyport/hub/internal/store"
 )
 
 func TestRunAdmin_NoArgs(t *testing.T) {
 	err := runAdmin(nil)
-	if err == nil || !strings.Contains(err.Error(), "usage: aerodocs admin") {
+	if err == nil || !strings.Contains(err.Error(), "usage: veyport admin") {
 		t.Fatalf("expected usage error, got %v", err)
 	}
 }

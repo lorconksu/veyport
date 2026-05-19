@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/wyiu/aerodocs/hub/internal/model"
+	"github.com/wyiu/veyport/hub/internal/model"
 )
 
 func TestListServers_Admin(t *testing.T) {
@@ -128,7 +128,7 @@ func TestCreateServer_InstallCommandUsesRequestHostPort(t *testing.T) {
 }
 
 func TestCreateServer_InstallCommandUsesConfiguredPublicBaseURL(t *testing.T) {
-	t.Setenv("AERODOCS_PUBLIC_BASE_URL", "http://10.10.1.95:8082")
+	t.Setenv("VEYPORT_PUBLIC_BASE_URL", "http://10.10.1.95:8082")
 
 	s := testServer(t)
 	token := registerAndGetAdminToken(t, s)

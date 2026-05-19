@@ -7,7 +7,7 @@
 | **Minimum Resources** | e2-small (2 vCPU, 2 GB RAM) |
 | **Estimated Cost** | ~$15-20/month (GCE) or ~$20-35/month (Cloud Run) |
 
-This guide covers deploying AeroDocs Hub on GCP using Compute Engine with Docker or Cloud Run, with Cloud Load Balancer for HTTPS and gRPC traffic.
+This guide covers deploying Veyport Hub on GCP using Compute Engine with Docker or Cloud Run, with Cloud Load Balancer for HTTPS and gRPC traffic.
 
 ---
 
@@ -17,11 +17,11 @@ This guide covers deploying AeroDocs Hub on GCP using Compute Engine with Docker
 flowchart TB
     subgraph Internet
         Browser["Browser"]
-        Agent["AeroDocs Agent"]
+        Agent["Veyport Agent"]
     end
 
     subgraph GCP
-        CloudDNS["Cloud DNS<br/>aerodocs.example.com"]
+        CloudDNS["Cloud DNS<br/>veyport.example.com"]
         ManagedCert["Managed SSL Certificate"]
 
         subgraph VPC["VPC Network"]
@@ -33,7 +33,7 @@ flowchart TB
             end
 
             subgraph OptionB["Option B: Cloud Run"]
-                CR["Cloud Run Service<br/>yiucloud/aerodocs<br/>min-instances: 1"]
+                CR["Cloud Run Service<br/>yiucloud/veyport<br/>min-instances: 1"]
                 FS["Filestore / GCS FUSE<br/>/data"]
             end
         end
@@ -79,50 +79,50 @@ gcloud services enable \
 
 ```bash
 # Allow HTTPS traffic (web UI)
-gcloud compute firewall-rules create aerodocs-allow-https \
+gcloud compute firewall-rules create veyport-allow-https \
   --direction=INGRESS \
   --priority=1000 \
   --network=default \
   --action=ALLOW \
   --rules=tcp:443 \
   --source-ranges=0.0.0.0/0 \
-  --target-tags=aerodocs
+  --target-tags=veyport
 
 # Allow gRPC traffic (agent connections)
-gcloud compute firewall-rules create aerodocs-allow-grpc \
+gcloud compute firewall-rules create veyport-allow-grpc \
   --direction=INGRESS \
   --priority=1000 \
   --network=default \
   --action=ALLOW \
   --rules=tcp:9443 \
   --source-ranges=0.0.0.0/0 \
-  --target-tags=aerodocs
+  --target-tags=veyport
 
 # Allow health checks from GCP load balancer ranges
-gcloud compute firewall-rules create aerodocs-allow-health-check \
+gcloud compute firewall-rules create veyport-allow-health-check \
   --direction=INGRESS \
   --priority=1000 \
   --network=default \
   --action=ALLOW \
   --rules=tcp:8081,tcp:9090 \
   --source-ranges=130.211.0.0/22,35.191.0.0/16 \
-  --target-tags=aerodocs
+  --target-tags=veyport
 
 # Allow SSH (management)
-gcloud compute firewall-rules create aerodocs-allow-ssh \
+gcloud compute firewall-rules create veyport-allow-ssh \
   --direction=INGRESS \
   --priority=1000 \
   --network=default \
   --action=ALLOW \
   --rules=tcp:22 \
   --source-ranges=<YOUR_IP>/32 \
-  --target-tags=aerodocs
+  --target-tags=veyport
 ```
 
 ### 2. Create a persistent disk for data
 
 ```bash
-gcloud compute disks create aerodocs-data \
+gcloud compute disks create veyport-data \
   --size=10GB \
   --type=pd-ssd \
   --zone=us-central1-a
@@ -138,14 +138,14 @@ gcloud compute disks create aerodocs-data \
 | **Data disk** | 10 GB pd-ssd (attached above) |
 
 ```bash
-gcloud compute instances create aerodocs-hub \
+gcloud compute instances create veyport-hub \
   --machine-type=e2-small \
   --zone=us-central1-a \
   --image-family=ubuntu-2404-lts-amd64 \
   --image-project=ubuntu-os-cloud \
   --boot-disk-size=20GB \
-  --disk=name=aerodocs-data,device-name=aerodocs-data,mode=rw \
-  --tags=aerodocs \
+  --disk=name=veyport-data,device-name=veyport-data,mode=rw \
+  --tags=veyport \
   --metadata=startup-script='#!/bin/bash
 set -euo pipefail
 
@@ -156,19 +156,19 @@ systemctl start docker
 
 # Mount the data disk
 if ! mountpoint -q /data; then
-  mkfs.ext4 -F /dev/disk/by-id/google-aerodocs-data
+  mkfs.ext4 -F /dev/disk/by-id/google-veyport-data
   mkdir -p /data
-  mount /dev/disk/by-id/google-aerodocs-data /data
-  echo "/dev/disk/by-id/google-aerodocs-data /data ext4 defaults,nofail 0 2" >> /etc/fstab
+  mount /dev/disk/by-id/google-veyport-data /data
+  echo "/dev/disk/by-id/google-veyport-data /data ext4 defaults,nofail 0 2" >> /etc/fstab
 fi
 
-# Deploy AeroDocs
-mkdir -p /opt/aerodocs && cd /opt/aerodocs
+# Deploy Veyport
+mkdir -p /opt/veyport && cd /opt/veyport
 cat > docker-compose.yml << COMPOSE
 services:
-  aerodocs:
-    image: yiucloud/aerodocs:latest
-    container_name: aerodocs
+  veyport:
+    image: yiucloud/veyport:latest
+    container_name: veyport
     ports:
       - "8081:8081"
       - "9090:9090"
@@ -184,9 +184,9 @@ docker compose up -d'
 
 ```bash
 # Create a snapshot of the data disk
-gcloud compute disks snapshot aerodocs-data \
+gcloud compute disks snapshot veyport-data \
   --zone=us-central1-a \
-  --snapshot-names=aerodocs-backup-$(date +%Y%m%d)
+  --snapshot-names=veyport-backup-$(date +%Y%m%d)
 ```
 
 ---
@@ -203,10 +203,10 @@ SQLite requires a POSIX file system. For Cloud Run, use Filestore (NFS) or Cloud
 
 ```bash
 # Create a Filestore instance (~$20/month for 1 TB HDD minimum)
-gcloud filestore instances create aerodocs-fs \
+gcloud filestore instances create veyport-fs \
   --zone=us-central1-a \
   --tier=BASIC_HDD \
-  --file-share=name=aerodocs_data,capacity=1TB \
+  --file-share=name=veyport_data,capacity=1TB \
   --network=name=default
 ```
 
@@ -216,15 +216,15 @@ Cloud Storage FUSE mounts a GCS bucket as a local file system. Note that it has 
 
 ```bash
 # Create a GCS bucket
-gcloud storage buckets create gs://aerodocs-data-<PROJECT_ID> \
+gcloud storage buckets create gs://veyport-data-<PROJECT_ID> \
   --location=us-central1
 ```
 
 ### 2. Deploy to Cloud Run
 
 ```bash
-gcloud run deploy aerodocs \
-  --image=yiucloud/aerodocs:latest \
+gcloud run deploy veyport \
+  --image=yiucloud/veyport:latest \
   --port=8081 \
   --cpu=1 \
   --memory=1Gi \
@@ -233,8 +233,8 @@ gcloud run deploy aerodocs \
   --allow-unauthenticated \
   --region=us-central1 \
   --execution-environment=gen2 \
-  --add-volume=name=aerodocs-data,type=nfs,location=<FILESTORE_IP>:/aerodocs_data \
-  --add-volume-mount=volume=aerodocs-data,mount-path=/data
+  --add-volume=name=veyport-data,type=nfs,location=<FILESTORE_IP>:/veyport_data \
+  --add-volume-mount=volume=veyport-data,mount-path=/data
 ```
 
 > **Important:** Set `--min-instances=1` to avoid cold starts. Cold starts would terminate active WebSocket and gRPC connections from agents, causing temporary disconnects.
@@ -245,8 +245,8 @@ Cloud Run supports gRPC natively. However, the default Cloud Run URL only expose
 
 ```bash
 # Create a second Cloud Run service for gRPC (or use port 9090 directly)
-gcloud run deploy aerodocs-grpc \
-  --image=yiucloud/aerodocs:latest \
+gcloud run deploy veyport-grpc \
+  --image=yiucloud/veyport:latest \
   --port=9090 \
   --use-http2 \
   --cpu=1 \
@@ -256,8 +256,8 @@ gcloud run deploy aerodocs-grpc \
   --allow-unauthenticated \
   --region=us-central1 \
   --execution-environment=gen2 \
-  --add-volume=name=aerodocs-data,type=nfs,location=<FILESTORE_IP>:/aerodocs_data \
-  --add-volume-mount=volume=aerodocs-data,mount-path=/data
+  --add-volume=name=veyport-data,type=nfs,location=<FILESTORE_IP>:/veyport_data \
+  --add-volume-mount=volume=veyport-data,mount-path=/data
 ```
 
 > **Note:** The `--use-http2` flag is required for gRPC services on Cloud Run.
@@ -272,16 +272,16 @@ Use a Global External Application Load Balancer for HTTPS and gRPC with managed 
 
 ```bash
 # NEG for the HTTP service
-gcloud compute network-endpoint-groups create aerodocs-http-neg \
+gcloud compute network-endpoint-groups create veyport-http-neg \
   --region=us-central1 \
   --network-endpoint-type=serverless \
-  --cloud-run-service=aerodocs
+  --cloud-run-service=veyport
 
 # NEG for the gRPC service
-gcloud compute network-endpoint-groups create aerodocs-grpc-neg \
+gcloud compute network-endpoint-groups create veyport-grpc-neg \
   --region=us-central1 \
   --network-endpoint-type=serverless \
-  --cloud-run-service=aerodocs-grpc
+  --cloud-run-service=veyport-grpc
 ```
 
 For Compute Engine, create instance groups instead of serverless NEGs.
@@ -290,27 +290,27 @@ For Compute Engine, create instance groups instead of serverless NEGs.
 
 ```bash
 # HTTP backend (web UI and REST API)
-gcloud compute backend-services create aerodocs-http-backend \
+gcloud compute backend-services create veyport-http-backend \
   --global \
   --protocol=HTTP \
   --port-name=http \
-  --health-checks=aerodocs-http-hc
+  --health-checks=veyport-http-hc
 
-gcloud compute backend-services add-backend aerodocs-http-backend \
+gcloud compute backend-services add-backend veyport-http-backend \
   --global \
-  --network-endpoint-group=aerodocs-http-neg \
+  --network-endpoint-group=veyport-http-neg \
   --network-endpoint-group-region=us-central1
 
 # gRPC backend (agent connections) - uses HTTP/2 protocol
-gcloud compute backend-services create aerodocs-grpc-backend \
+gcloud compute backend-services create veyport-grpc-backend \
   --global \
   --protocol=HTTP2 \
   --port-name=grpc \
-  --health-checks=aerodocs-grpc-hc
+  --health-checks=veyport-grpc-hc
 
-gcloud compute backend-services add-backend aerodocs-grpc-backend \
+gcloud compute backend-services add-backend veyport-grpc-backend \
   --global \
-  --network-endpoint-group=aerodocs-grpc-neg \
+  --network-endpoint-group=veyport-grpc-neg \
   --network-endpoint-group-region=us-central1
 ```
 
@@ -318,29 +318,29 @@ gcloud compute backend-services add-backend aerodocs-grpc-backend \
 
 ```bash
 # URL map for port 443 (default to HTTP backend)
-gcloud compute url-maps create aerodocs-url-map \
-  --default-service=aerodocs-http-backend
+gcloud compute url-maps create veyport-url-map \
+  --default-service=veyport-http-backend
 
 # Reserve a global static IP
-gcloud compute addresses create aerodocs-ip --global
+gcloud compute addresses create veyport-ip --global
 
 # HTTPS proxy for port 443
-gcloud compute target-https-proxies create aerodocs-https-proxy \
-  --url-map=aerodocs-url-map \
-  --ssl-certificates=aerodocs-cert
+gcloud compute target-https-proxies create veyport-https-proxy \
+  --url-map=veyport-url-map \
+  --ssl-certificates=veyport-cert
 
 # Forwarding rule for HTTPS (port 443)
-gcloud compute forwarding-rules create aerodocs-https-rule \
+gcloud compute forwarding-rules create veyport-https-rule \
   --global \
-  --address=aerodocs-ip \
-  --target-https-proxy=aerodocs-https-proxy \
+  --address=veyport-ip \
+  --target-https-proxy=veyport-https-proxy \
   --ports=443
 
 # Forwarding rule for gRPC (port 9443)
-gcloud compute forwarding-rules create aerodocs-grpc-rule \
+gcloud compute forwarding-rules create veyport-grpc-rule \
   --global \
-  --address=aerodocs-ip \
-  --target-https-proxy=aerodocs-grpc-proxy \
+  --address=veyport-ip \
+  --target-https-proxy=veyport-grpc-proxy \
   --ports=9443
 ```
 
@@ -350,17 +350,17 @@ gcloud compute forwarding-rules create aerodocs-grpc-rule \
 
 ```bash
 # Create a DNS zone
-gcloud dns managed-zones create aerodocs-zone \
+gcloud dns managed-zones create veyport-zone \
   --dns-name=example.com \
-  --description="AeroDocs DNS zone"
+  --description="Veyport DNS zone"
 
 # Get the static IP
-STATIC_IP=$(gcloud compute addresses describe aerodocs-ip \
+STATIC_IP=$(gcloud compute addresses describe veyport-ip \
   --global --format="value(address)")
 
 # Create an A record
-gcloud dns record-sets create aerodocs.example.com \
-  --zone=aerodocs-zone \
+gcloud dns record-sets create veyport.example.com \
+  --zone=veyport-zone \
   --type=A \
   --ttl=300 \
   --rrdatas="$STATIC_IP"
@@ -369,7 +369,7 @@ gcloud dns record-sets create aerodocs.example.com \
 Update your domain registrar's nameservers to point to the Cloud DNS nameservers shown by:
 
 ```bash
-gcloud dns managed-zones describe aerodocs-zone --format="value(nameServers)"
+gcloud dns managed-zones describe veyport-zone --format="value(nameServers)"
 ```
 
 ---
@@ -379,8 +379,8 @@ gcloud dns managed-zones describe aerodocs-zone --format="value(nameServers)"
 Google-managed SSL certificates are free and automatically renewed:
 
 ```bash
-gcloud compute ssl-certificates create aerodocs-cert \
-  --domains=aerodocs.example.com \
+gcloud compute ssl-certificates create veyport-cert \
+  --domains=veyport.example.com \
   --global
 ```
 
@@ -389,7 +389,7 @@ The certificate is provisioned automatically once DNS is pointing to the load ba
 Check certificate status:
 
 ```bash
-gcloud compute ssl-certificates describe aerodocs-cert --global \
+gcloud compute ssl-certificates describe veyport-cert --global \
   --format="value(managed.status)"
 # Expected: ACTIVE
 ```
@@ -401,10 +401,10 @@ gcloud compute ssl-certificates describe aerodocs-cert --global \
 Once the Hub is accessible via the load balancer, install agents on managed servers:
 
 ```bash
-curl -sSL https://aerodocs.example.com/install.sh | sudo bash -s -- \
+curl -sSL https://veyport.example.com/install.sh | sudo bash -s -- \
   --token '<token>' \
-  --hub 'aerodocs.example.com:9443' \
-  --url 'https://aerodocs.example.com'
+  --hub 'veyport.example.com:9443' \
+  --url 'https://veyport.example.com'
 ```
 
 For agents running on GCE instances within the same VPC, they can use the internal load balancer IP to avoid egress charges.
@@ -416,43 +416,45 @@ For agents running on GCE instances within the same VPC, they can use the intern
 | Agent -> Hub | gRPC (HTTP/2) | 9443 (via Load Balancer) | Must be reachable from agent host |
 | Hub -> Agent | None | -- | Agents always dial out; Hub never initiates |
 
+Browser terminal sessions use the existing agent gRPC stream. You do not need to expose SSH or any additional inbound port on managed instances.
+
 ---
 
 ## Verify Installation
 
 ```bash
 # Check the web UI is accessible
-curl -s -o /dev/null -w "%{http_code}" https://aerodocs.example.com/login
+curl -s -o /dev/null -w "%{http_code}" https://veyport.example.com/login
 # Expected: 200
 
 # Check managed certificate status
-gcloud compute ssl-certificates describe aerodocs-cert --global \
+gcloud compute ssl-certificates describe veyport-cert --global \
   --format="value(managed.status)"
 # Expected: ACTIVE
 
 # Check Compute Engine instance status
-gcloud compute instances describe aerodocs-hub \
+gcloud compute instances describe veyport-hub \
   --zone=us-central1-a \
   --format="value(status)"
 # Expected: RUNNING
 
 # Check Cloud Run service status
-gcloud run services describe aerodocs \
+gcloud run services describe veyport \
   --region=us-central1 \
   --format="value(status.conditions[0].status)"
 # Expected: True
 
 # Check load balancer backend health
-gcloud compute backend-services get-health aerodocs-http-backend --global
+gcloud compute backend-services get-health veyport-http-backend --global
 
 # SSH into the GCE instance and check Docker logs
-gcloud compute ssh aerodocs-hub --zone=us-central1-a \
-  --command="docker compose -f /opt/aerodocs/docker-compose.yml logs --tail=20"
+gcloud compute ssh veyport-hub --zone=us-central1-a \
+  --command="docker compose -f /opt/veyport/docker-compose.yml logs --tail=20"
 
 # Test gRPC connectivity (requires grpcurl)
-grpcurl aerodocs.example.com:9443 list
+grpcurl veyport.example.com:9443 list
 ```
 
-Open the Hub in a browser at `https://aerodocs.example.com`, create the initial admin account, and register an agent to confirm end-to-end connectivity.
+Open the Hub in a browser at `https://veyport.example.com`, create the initial admin account, and register an agent to confirm end-to-end connectivity.
 
 For detailed reverse proxy configuration, see [[Proxy-Configuration]].

@@ -4,7 +4,7 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/wyiu/aerodocs/hub/internal/auth"
+	"github.com/wyiu/veyport/hub/internal/auth"
 )
 
 func (s *Server) routes() http.Handler {

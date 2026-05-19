@@ -23,14 +23,14 @@ COPY proto/ proto/
 COPY hub/ hub/
 COPY --from=frontend /app/web/dist hub/web/dist
 ARG VERSION=dev
-RUN cd hub && CGO_ENABLED=1 go build -ldflags="-s -w -X github.com/wyiu/aerodocs/hub/internal/server.Version=${VERSION}" -o /out/aerodocs ./cmd/aerodocs/
+RUN cd hub && CGO_ENABLED=1 go build -ldflags="-s -w -X github.com/wyiu/veyport/hub/internal/server.Version=${VERSION}" -o /out/veyport ./cmd/veyport/
 
 # Build Agent (pure Go, cross-compile for linux/amd64 and linux/arm64)
 COPY agent/ agent/
-RUN cd agent && CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -ldflags="-s -w" -o /out/aerodocs-agent-linux-amd64 ./cmd/aerodocs-agent/
-RUN cd agent && CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -ldflags="-s -w" -o /out/aerodocs-agent-linux-arm64 ./cmd/aerodocs-agent/
-RUN sha256sum /out/aerodocs-agent-linux-amd64 | awk '{print $1}' > /out/aerodocs-agent-linux-amd64.sha256
-RUN sha256sum /out/aerodocs-agent-linux-arm64 | awk '{print $1}' > /out/aerodocs-agent-linux-arm64.sha256
+RUN cd agent && CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -ldflags="-s -w" -o /out/veyport-agent-linux-amd64 ./cmd/veyport-agent/
+RUN cd agent && CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -ldflags="-s -w" -o /out/veyport-agent-linux-arm64 ./cmd/veyport-agent/
+RUN sha256sum /out/veyport-agent-linux-amd64 | awk '{print $1}' > /out/veyport-agent-linux-amd64.sha256
+RUN sha256sum /out/veyport-agent-linux-arm64 | awk '{print $1}' > /out/veyport-agent-linux-arm64.sha256
 
 # Stage 3: Minimal runtime (Wolfi — glibc-based, fast CVE patching, no systemd/ncurses/tar)
 FROM cgr.dev/chainguard/wolfi-base:latest
@@ -40,23 +40,23 @@ RUN apk add --no-cache ca-certificates-bundle tzdata \
     "glibc-locale-posix>=2.43-r7" \
     "ld-linux>=2.43-r7" \
     "libcrypt1>=2.43-r7" && \
-    adduser -D -s /bin/false aerodocs && \
-    mkdir -p /data && chown aerodocs:aerodocs /data
+    adduser -D -s /bin/false veyport && \
+    mkdir -p /data && chown veyport:veyport /data
 
 WORKDIR /app
 
-COPY --from=backend /out/aerodocs /app/aerodocs
-COPY --from=backend /out/aerodocs-agent-linux-amd64 /app/aerodocs-agent-linux-amd64
-COPY --from=backend /out/aerodocs-agent-linux-arm64 /app/aerodocs-agent-linux-arm64
-COPY --from=backend /out/aerodocs-agent-linux-amd64.sha256 /app/aerodocs-agent-linux-amd64.sha256
-COPY --from=backend /out/aerodocs-agent-linux-arm64.sha256 /app/aerodocs-agent-linux-arm64.sha256
+COPY --from=backend /out/veyport /app/veyport
+COPY --from=backend /out/veyport-agent-linux-amd64 /app/veyport-agent-linux-amd64
+COPY --from=backend /out/veyport-agent-linux-arm64 /app/veyport-agent-linux-arm64
+COPY --from=backend /out/veyport-agent-linux-amd64.sha256 /app/veyport-agent-linux-amd64.sha256
+COPY --from=backend /out/veyport-agent-linux-arm64.sha256 /app/veyport-agent-linux-arm64.sha256
 COPY hub/static/install.sh /app/static/install.sh
 
-RUN chown -R aerodocs:aerodocs /app
-USER aerodocs
+RUN chown -R veyport:veyport /app
+USER veyport
 
 VOLUME /data
 EXPOSE 8081 9090
 
-ENTRYPOINT ["/app/aerodocs"]
-CMD ["--addr", ":8081", "--grpc-addr", ":9090", "--db", "/data/aerodocs.db", "--agent-bin-dir", "/app"]
+ENTRYPOINT ["/app/veyport"]
+CMD ["--addr", ":8081", "--grpc-addr", ":9090", "--db", "/data/veyport.db", "--agent-bin-dir", "/app"]

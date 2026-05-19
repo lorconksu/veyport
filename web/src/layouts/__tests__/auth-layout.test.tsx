@@ -10,7 +10,7 @@ vi.mock('react-router-dom', () => ({
 // Mock Logo component
 vi.mock('@/components/logo', () => ({
   Logo: ({ layout, className }: { layout?: string; className?: string }) => (
-    <img data-testid="logo" data-layout={layout} className={className} alt="AeroDocs" />
+    <img data-testid="logo" data-layout={layout} className={className} alt="Veyport" />
   ),
 }))
 

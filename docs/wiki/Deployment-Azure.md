@@ -7,7 +7,7 @@
 | **Minimum Resources** | 1 vCPU, 1 GB RAM |
 | **Estimated Cost** | ~$25-35/month (ACI) or ~$15-30/month (App Service B1) |
 
-This guide covers deploying AeroDocs Hub on Azure using Azure Container Instances or Azure App Service, with Application Gateway for HTTPS and gRPC traffic.
+This guide covers deploying Veyport Hub on Azure using Azure Container Instances or Azure App Service, with Application Gateway for HTTPS and gRPC traffic.
 
 ---
 
@@ -17,23 +17,23 @@ This guide covers deploying AeroDocs Hub on Azure using Azure Container Instance
 flowchart TB
     subgraph Internet
         Browser["Browser"]
-        Agent["AeroDocs Agent"]
+        Agent["Veyport Agent"]
     end
 
     subgraph Azure
-        DNS["Azure DNS<br/>aerodocs.example.com"]
+        DNS["Azure DNS<br/>veyport.example.com"]
         Cert["Managed Certificate"]
 
         subgraph VNet["Virtual Network"]
             AppGW["Application Gateway v2<br/>HTTPS :443 + gRPC :9443"]
 
             subgraph OptionA["Option A: Container Instances"]
-                ACI["Azure Container Instance<br/>yiucloud/aerodocs"]
+                ACI["Azure Container Instance<br/>yiucloud/veyport"]
                 AzFiles["Azure Files Share<br/>/data"]
             end
 
             subgraph OptionB["Option B: App Service"]
-                AppSvc["App Service (Container)<br/>yiucloud/aerodocs"]
+                AppSvc["App Service (Container)<br/>yiucloud/veyport"]
                 AppStorage["Persistent Storage Mount<br/>/data"]
             end
         end
@@ -57,7 +57,7 @@ flowchart TB
 
 - Azure CLI (`az`) installed and authenticated
 - An Azure subscription
-- A resource group created for AeroDocs resources
+- A resource group created for Veyport resources
 - A registered domain name
 
 ```bash
@@ -66,7 +66,7 @@ az login
 az account set --subscription <SUBSCRIPTION_ID>
 
 # Create a resource group
-az group create --name aerodocs-rg --location eastus
+az group create --name veyport-rg --location eastus
 ```
 
 ---
@@ -80,21 +80,21 @@ ACI provides a simple way to run a container without managing VMs. It supports A
 ```bash
 # Create a storage account
 az storage account create \
-  --name aerodocsstorage \
-  --resource-group aerodocs-rg \
+  --name veyportstorage \
+  --resource-group veyport-rg \
   --location eastus \
   --sku Standard_LRS
 
 # Get the storage key
 STORAGE_KEY=$(az storage account keys list \
-  --account-name aerodocsstorage \
-  --resource-group aerodocs-rg \
+  --account-name veyportstorage \
+  --resource-group veyport-rg \
   --query "[0].value" -o tsv)
 
 # Create the file share
 az storage share create \
-  --name aerodocs-data \
-  --account-name aerodocsstorage \
+  --name veyport-data \
+  --account-name veyportstorage \
   --account-key "$STORAGE_KEY"
 ```
 
@@ -102,18 +102,18 @@ az storage share create \
 
 ```bash
 az container create \
-  --resource-group aerodocs-rg \
-  --name aerodocs \
-  --image yiucloud/aerodocs:latest \
+  --resource-group veyport-rg \
+  --name veyport \
+  --image yiucloud/veyport:latest \
   --cpu 1 \
   --memory 1 \
   --ports 8081 9090 \
   --ip-address Private \
-  --vnet aerodocs-vnet \
+  --vnet veyport-vnet \
   --subnet aci-subnet \
-  --azure-file-volume-account-name aerodocsstorage \
+  --azure-file-volume-account-name veyportstorage \
   --azure-file-volume-account-key "$STORAGE_KEY" \
-  --azure-file-volume-share-name aerodocs-data \
+  --azure-file-volume-share-name veyport-data \
   --azure-file-volume-mount-path /data \
   --restart-policy Always
 ```
@@ -123,13 +123,13 @@ az container create \
 ```bash
 # Create NSG
 az network nsg create \
-  --resource-group aerodocs-rg \
-  --name aerodocs-nsg
+  --resource-group veyport-rg \
+  --name veyport-nsg
 
 # Allow HTTPS from Application Gateway
 az network nsg rule create \
-  --resource-group aerodocs-rg \
-  --nsg-name aerodocs-nsg \
+  --resource-group veyport-rg \
+  --nsg-name veyport-nsg \
   --name AllowHTTPS \
   --priority 100 \
   --source-address-prefixes 10.0.1.0/24 \
@@ -139,8 +139,8 @@ az network nsg rule create \
 
 # Allow gRPC from Application Gateway
 az network nsg rule create \
-  --resource-group aerodocs-rg \
-  --nsg-name aerodocs-nsg \
+  --resource-group veyport-rg \
+  --nsg-name veyport-nsg \
   --name AllowGRPC \
   --priority 110 \
   --source-address-prefixes 10.0.1.0/24 \
@@ -152,7 +152,7 @@ az network nsg rule create \
 ### 4. View logs
 
 ```bash
-az container logs --resource-group aerodocs-rg --name aerodocs
+az container logs --resource-group veyport-rg --name veyport
 ```
 
 ---
@@ -165,8 +165,8 @@ App Service provides managed hosting with built-in scaling, TLS, and custom doma
 
 ```bash
 az appservice plan create \
-  --name aerodocs-plan \
-  --resource-group aerodocs-rg \
+  --name veyport-plan \
+  --resource-group veyport-rg \
   --sku B1 \
   --is-linux
 ```
@@ -181,15 +181,15 @@ az appservice plan create \
 
 ```bash
 az webapp create \
-  --resource-group aerodocs-rg \
-  --plan aerodocs-plan \
-  --name aerodocs-hub \
-  --deployment-container-image-name yiucloud/aerodocs:latest
+  --resource-group veyport-rg \
+  --plan veyport-plan \
+  --name veyport-hub \
+  --deployment-container-image-name yiucloud/veyport:latest
 
 # Configure the container port
 az webapp config appsettings set \
-  --resource-group aerodocs-rg \
-  --name aerodocs-hub \
+  --resource-group veyport-rg \
+  --name veyport-hub \
   --settings WEBSITES_PORT=8081
 ```
 
@@ -198,24 +198,24 @@ az webapp config appsettings set \
 ```bash
 # Mount Azure Files for SQLite persistence
 az webapp config storage-account add \
-  --resource-group aerodocs-rg \
-  --name aerodocs-hub \
-  --custom-id aerodocs-data \
+  --resource-group veyport-rg \
+  --name veyport-hub \
+  --custom-id veyport-data \
   --storage-type AzureFiles \
-  --share-name aerodocs-data \
-  --account-name aerodocsstorage \
+  --share-name veyport-data \
+  --account-name veyportstorage \
   --access-key "$STORAGE_KEY" \
   --mount-path /data
 ```
 
 ### 4. Enable WebSocket support
 
-AeroDocs uses WebSocket connections for real-time updates:
+Veyport uses WebSocket connections for real-time updates:
 
 ```bash
 az webapp config set \
-  --resource-group aerodocs-rg \
-  --name aerodocs-hub \
+  --resource-group veyport-rg \
+  --name veyport-hub \
   --web-sockets-enabled true
 ```
 
@@ -230,21 +230,21 @@ Application Gateway v2 supports gRPC traffic via HTTP/2 backend connections, mak
 ```bash
 # Create a public IP
 az network public-ip create \
-  --resource-group aerodocs-rg \
-  --name aerodocs-appgw-ip \
+  --resource-group veyport-rg \
+  --name veyport-appgw-ip \
   --sku Standard \
   --allocation-method Static
 
 # Create the Application Gateway
 az network application-gateway create \
-  --resource-group aerodocs-rg \
-  --name aerodocs-appgw \
+  --resource-group veyport-rg \
+  --name veyport-appgw \
   --location eastus \
   --sku Standard_v2 \
   --capacity 1 \
-  --vnet-name aerodocs-vnet \
+  --vnet-name veyport-vnet \
   --subnet appgw-subnet \
-  --public-ip-address aerodocs-appgw-ip \
+  --public-ip-address veyport-appgw-ip \
   --http-settings-port 8081 \
   --http-settings-protocol Http \
   --frontend-port 443
@@ -257,8 +257,8 @@ Application Gateway v2 supports HTTP/2 to backend targets, which is required for
 ```bash
 # Create HTTP/2 backend settings for gRPC
 az network application-gateway http-settings create \
-  --resource-group aerodocs-rg \
-  --gateway-name aerodocs-appgw \
+  --resource-group veyport-rg \
+  --gateway-name veyport-appgw \
   --name grpc-settings \
   --port 9090 \
   --protocol Http \
@@ -272,15 +272,15 @@ az network application-gateway http-settings create \
 ```bash
 # HTTPS listener for web UI (port 443)
 az network application-gateway frontend-port create \
-  --resource-group aerodocs-rg \
-  --gateway-name aerodocs-appgw \
+  --resource-group veyport-rg \
+  --gateway-name veyport-appgw \
   --name https-port \
   --port 443
 
 # gRPC listener (port 9443)
 az network application-gateway frontend-port create \
-  --resource-group aerodocs-rg \
-  --gateway-name aerodocs-appgw \
+  --resource-group veyport-rg \
+  --gateway-name veyport-appgw \
   --name grpc-port \
   --port 9443
 ```
@@ -296,19 +296,19 @@ Create routing rules to direct HTTPS traffic to port 8081 and gRPC traffic to po
 ```bash
 # Create the DNS zone
 az network dns zone create \
-  --resource-group aerodocs-rg \
+  --resource-group veyport-rg \
   --name example.com
 
 # Create an A record pointing to the Application Gateway public IP
 APPGW_IP=$(az network public-ip show \
-  --resource-group aerodocs-rg \
-  --name aerodocs-appgw-ip \
+  --resource-group veyport-rg \
+  --name veyport-appgw-ip \
   --query ipAddress -o tsv)
 
 az network dns record-set a add-record \
-  --resource-group aerodocs-rg \
+  --resource-group veyport-rg \
   --zone-name example.com \
-  --record-set-name aerodocs \
+  --record-set-name veyport \
   --ipv4-address "$APPGW_IP"
 ```
 
@@ -321,20 +321,20 @@ az network dns record-set a add-record \
 ```bash
 # Add custom domain
 az webapp config hostname add \
-  --resource-group aerodocs-rg \
-  --webapp-name aerodocs-hub \
-  --hostname aerodocs.example.com
+  --resource-group veyport-rg \
+  --webapp-name veyport-hub \
+  --hostname veyport.example.com
 
 # Create a managed certificate
 az webapp config ssl create \
-  --resource-group aerodocs-rg \
-  --name aerodocs-hub \
-  --hostname aerodocs.example.com
+  --resource-group veyport-rg \
+  --name veyport-hub \
+  --hostname veyport.example.com
 
 # Bind the certificate
 az webapp config ssl bind \
-  --resource-group aerodocs-rg \
-  --name aerodocs-hub \
+  --resource-group veyport-rg \
+  --name veyport-hub \
   --certificate-thumbprint <THUMBPRINT> \
   --ssl-type SNI
 ```
@@ -346,9 +346,9 @@ Upload a certificate to Application Gateway or use Azure Key Vault integration f
 ```bash
 # Upload a PFX certificate
 az network application-gateway ssl-cert create \
-  --resource-group aerodocs-rg \
-  --gateway-name aerodocs-appgw \
-  --name aerodocs-cert \
+  --resource-group veyport-rg \
+  --gateway-name veyport-appgw \
+  --name veyport-cert \
   --cert-file /path/to/cert.pfx \
   --cert-password '<password>'
 ```
@@ -360,10 +360,10 @@ az network application-gateway ssl-cert create \
 Once the Hub is accessible, install agents on managed servers:
 
 ```bash
-curl -sSL https://aerodocs.example.com/install.sh | sudo bash -s -- \
+curl -sSL https://veyport.example.com/install.sh | sudo bash -s -- \
   --token '<token>' \
-  --hub 'aerodocs.example.com:9443' \
-  --url 'https://aerodocs.example.com'
+  --hub 'veyport.example.com:9443' \
+  --url 'https://veyport.example.com'
 ```
 
 For agents running on Azure VMs within the same VNet, they can connect to the Application Gateway's private IP or directly to the container's internal IP to avoid traversing the public internet.
@@ -375,39 +375,41 @@ For agents running on Azure VMs within the same VNet, they can connect to the Ap
 | Agent -> Hub | gRPC (HTTP/2) | 9443 (via App Gateway) | Must be reachable from agent host |
 | Hub -> Agent | None | -- | Agents always dial out; Hub never initiates |
 
+Browser terminal sessions use the existing agent gRPC stream. You do not need to expose SSH or any additional inbound port on managed VMs.
+
 ---
 
 ## Verify Installation
 
 ```bash
 # Check the web UI is accessible
-curl -s -o /dev/null -w "%{http_code}" https://aerodocs.example.com/login
+curl -s -o /dev/null -w "%{http_code}" https://veyport.example.com/login
 # Expected: 200
 
 # Check ACI container status
 az container show \
-  --resource-group aerodocs-rg \
-  --name aerodocs \
+  --resource-group veyport-rg \
+  --name veyport \
   --query "instanceView.state" -o tsv
 
 # Check App Service status
 az webapp show \
-  --resource-group aerodocs-rg \
-  --name aerodocs-hub \
+  --resource-group veyport-rg \
+  --name veyport-hub \
   --query "state" -o tsv
 
 # View container logs (ACI)
-az container logs --resource-group aerodocs-rg --name aerodocs
+az container logs --resource-group veyport-rg --name veyport
 
 # View App Service logs
-az webapp log tail --resource-group aerodocs-rg --name aerodocs-hub
+az webapp log tail --resource-group veyport-rg --name veyport-hub
 
 # Check Application Gateway health
 az network application-gateway show-backend-health \
-  --resource-group aerodocs-rg \
-  --name aerodocs-appgw
+  --resource-group veyport-rg \
+  --name veyport-appgw
 ```
 
-Open the Hub in a browser at `https://aerodocs.example.com`, create the initial admin account, and register an agent to confirm end-to-end connectivity.
+Open the Hub in a browser at `https://veyport.example.com`, create the initial admin account, and register an agent to confirm end-to-end connectivity.
 
 For detailed reverse proxy configuration, see [[Proxy-Configuration]].

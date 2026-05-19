@@ -66,7 +66,14 @@ describe('AppShell', () => {
   it('renders the Logo', async () => {
     renderWithProviders(<AppShell />)
     await waitFor(() => {
-      expect(screen.getByAltText('AeroDocs')).toBeInTheDocument()
+      expect(screen.getByAltText('Veyport')).toBeInTheDocument()
+    })
+  })
+
+  it('renders a larger dashboard header logo', async () => {
+    renderWithProviders(<AppShell />)
+    await waitFor(() => {
+      expect(screen.getByAltText('Veyport')).toHaveClass('w-40')
     })
   })
 

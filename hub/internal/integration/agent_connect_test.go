@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/wyiu/aerodocs/agent/agentclient"
+	"github.com/wyiu/veyport/agent/agentclient"
 )
 
 // newTestAgentClient creates an agent client configured for testing.

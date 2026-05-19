@@ -177,7 +177,7 @@ export function NotificationsTab() {
                 <input
                   id="smtp-from"
                   type="text"
-                  placeholder="AeroDocs <noreply@example.com>"
+                  placeholder="Veyport <noreply@example.com>"
                   value={form.from}
                   onChange={e => handleFormChange('from', e.target.value)}
                   className="w-full bg-elevated border border-border rounded px-3 py-2 text-sm text-text-primary placeholder:text-text-faint focus:outline-none focus:border-accent"

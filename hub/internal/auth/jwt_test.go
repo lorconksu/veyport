@@ -4,7 +4,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/wyiu/aerodocs/hub/internal/auth"
+	"github.com/wyiu/veyport/hub/internal/auth"
 )
 
 const (

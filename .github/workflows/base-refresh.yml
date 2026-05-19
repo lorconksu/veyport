@@ -39,7 +39,7 @@ jobs:
       - name: Compute image metadata
         id: meta
         env:
-          REPOSITORY: yiucloud/aerodocs
+          REPOSITORY: yiucloud/veyport
         run: |
           DATE_TAG="$(date -u +%Y%m%d)"
           SHORT_SHA="${GITHUB_SHA::7}"
@@ -72,7 +72,7 @@ jobs:
         uses: docker/setup-buildx-action@v4
         with:
           driver: cloud
-          endpoint: "yiucloud/aerodocs-builder"
+          endpoint: "yiucloud/veyport-builder"
 
       - name: Build and push
         uses: docker/build-push-action@v7
@@ -94,6 +94,6 @@ jobs:
         uses: docker/scout-action@v1.20.3
         with:
           command: cves
-          image: yiucloud/aerodocs:latest
+          image: yiucloud/veyport:latest
           summary: true
           write-comment: false

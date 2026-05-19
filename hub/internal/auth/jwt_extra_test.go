@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/wyiu/aerodocs/hub/internal/auth"
+	"github.com/wyiu/veyport/hub/internal/auth"
 )
 
 // TestValidateToken_InvalidSigningMethod verifies that a token with wrong signing method is rejected.

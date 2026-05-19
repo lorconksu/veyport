@@ -13,7 +13,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	"github.com/wyiu/aerodocs/hub/internal/model"
+	"github.com/wyiu/veyport/hub/internal/model"
 )
 
 var hostPattern = regexp.MustCompile(`^[a-zA-Z0-9._:\-]+$`)
@@ -91,7 +91,7 @@ func (s *Server) resolveGRPCTarget(host string) string {
 }
 
 func (s *Server) resolvePublicBaseURL(r *http.Request) (string, error) {
-	if raw := strings.TrimSpace(os.Getenv("AERODOCS_PUBLIC_BASE_URL")); raw != "" {
+	if raw := strings.TrimSpace(os.Getenv("VEYPORT_PUBLIC_BASE_URL")); raw != "" {
 		parsed, err := url.Parse(raw)
 		if err != nil || parsed.Host == "" || (parsed.Scheme != "http" && parsed.Scheme != "https") {
 			return "", fmt.Errorf("invalid public base url")
@@ -373,7 +373,7 @@ func (s *Server) handleAgentBinary(w http.ResponseWriter, r *http.Request) {
 		respondError(w, http.StatusNotFound, "unsupported platform")
 		return
 	}
-	filename := fmt.Sprintf("aerodocs-agent-%s-%s", osName, arch)
+	filename := fmt.Sprintf("veyport-agent-%s-%s", osName, arch)
 	binaryPath := filepath.Join(s.agentBinDir, filename)
 	if _, err := os.Stat(binaryPath); os.IsNotExist(err) {
 		respondError(w, http.StatusNotFound, "agent binary not found")
@@ -391,7 +391,7 @@ func (s *Server) handleAgentBinaryChecksum(w http.ResponseWriter, r *http.Reques
 		respondError(w, http.StatusNotFound, "unsupported platform")
 		return
 	}
-	filename := fmt.Sprintf("aerodocs-agent-%s-%s.sha256", osName, arch)
+	filename := fmt.Sprintf("veyport-agent-%s-%s.sha256", osName, arch)
 	checksumPath := filepath.Join(s.agentBinDir, filename)
 	data, err := os.ReadFile(checksumPath)
 	if err != nil {

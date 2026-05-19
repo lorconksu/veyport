@@ -8,9 +8,9 @@ import (
 )
 
 const (
-	cookieAccess  = "aerodocs_access"
-	cookieRefresh = "aerodocs_refresh"
-	cookieCSRF    = "aerodocs_csrf"
+	cookieAccess  = "veyport_access"
+	cookieRefresh = "veyport_refresh"
+	cookieCSRF    = "veyport_csrf"
 	bearerPrefix  = "Bearer "
 )
 
@@ -114,4 +114,3 @@ func readCSRFCookie(r *http.Request) string {
 func isUsingBearerAuth(r *http.Request) bool {
 	return strings.HasPrefix(r.Header.Get("Authorization"), bearerPrefix)
 }
-

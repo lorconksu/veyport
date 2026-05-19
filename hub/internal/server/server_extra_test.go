@@ -10,7 +10,7 @@ import (
 	"testing/fstest"
 	"time"
 
-	"github.com/wyiu/aerodocs/hub/internal/store"
+	"github.com/wyiu/veyport/hub/internal/store"
 )
 
 // testEmbedFS creates a fake embed.FS-compatible filesystem for SPA handler tests.
@@ -25,8 +25,8 @@ func testEmbedFS() *embed.FS {
 // testMapFS creates an fstest.MapFS simulating the embedded frontend.
 func testMapFS() fstest.MapFS {
 	return fstest.MapFS{
-		testIndexHTML:  {Data: []byte("<!doctype html><html><body>app</body></html>")},
-		"favicon.svg":  {Data: []byte("<svg></svg>")},
+		testIndexHTML:    {Data: []byte("<!doctype html><html><body>app</body></html>")},
+		"favicon.svg":    {Data: []byte("<svg></svg>")},
 		"assets/main.js": {Data: []byte("console.log('app')")},
 	}
 }

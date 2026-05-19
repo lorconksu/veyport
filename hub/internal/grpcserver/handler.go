@@ -17,12 +17,12 @@ import (
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/proto"
 
-	"github.com/wyiu/aerodocs/hub/internal/ca"
-	"github.com/wyiu/aerodocs/hub/internal/connmgr"
-	"github.com/wyiu/aerodocs/hub/internal/model"
-	"github.com/wyiu/aerodocs/hub/internal/notify"
-	"github.com/wyiu/aerodocs/hub/internal/store"
-	pb "github.com/wyiu/aerodocs/proto/aerodocs/v1"
+	"github.com/wyiu/veyport/hub/internal/ca"
+	"github.com/wyiu/veyport/hub/internal/connmgr"
+	"github.com/wyiu/veyport/hub/internal/model"
+	"github.com/wyiu/veyport/hub/internal/notify"
+	"github.com/wyiu/veyport/hub/internal/store"
+	pb "github.com/wyiu/veyport/proto/veyport/v1"
 )
 
 type Handler struct {

@@ -12,13 +12,13 @@ import (
 	"testing"
 	"time"
 
-	"github.com/wyiu/aerodocs/hub/internal/auth"
-	"github.com/wyiu/aerodocs/hub/internal/ca"
-	"github.com/wyiu/aerodocs/hub/internal/connmgr"
-	"github.com/wyiu/aerodocs/hub/internal/grpcserver"
-	"github.com/wyiu/aerodocs/hub/internal/model"
-	"github.com/wyiu/aerodocs/hub/internal/server"
-	"github.com/wyiu/aerodocs/hub/internal/store"
+	"github.com/wyiu/veyport/hub/internal/auth"
+	"github.com/wyiu/veyport/hub/internal/ca"
+	"github.com/wyiu/veyport/hub/internal/connmgr"
+	"github.com/wyiu/veyport/hub/internal/grpcserver"
+	"github.com/wyiu/veyport/hub/internal/model"
+	"github.com/wyiu/veyport/hub/internal/server"
+	"github.com/wyiu/veyport/hub/internal/store"
 )
 
 const (
@@ -26,8 +26,8 @@ const (
 	httpURLFormat = "http://%s%s"
 	// bearerPrefix is the Authorization header prefix for bearer tokens.
 	bearerPrefix  = "Bearer "
-	cookieAccess  = "aerodocs_access"
-	cookieRefresh = "aerodocs_refresh"
+	cookieAccess  = "veyport_access"
+	cookieRefresh = "veyport_refresh"
 )
 
 // TestHarness holds all components for an in-process hub integration test.

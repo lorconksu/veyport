@@ -3,12 +3,12 @@ package store_test
 import (
 	"testing"
 
-	"github.com/wyiu/aerodocs/hub/internal/model"
+	"github.com/wyiu/veyport/hub/internal/model"
 )
 
 const (
-	testUserID1  = "user-1"
-	testVarLog   = "/var/log"
+	testUserID1 = "user-1"
+	testVarLog  = "/var/log"
 )
 
 func TestCreatePermission(t *testing.T) {

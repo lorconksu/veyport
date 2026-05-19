@@ -3,7 +3,7 @@ package auth_test
 import (
 	"testing"
 
-	"github.com/wyiu/aerodocs/hub/internal/auth"
+	"github.com/wyiu/veyport/hub/internal/auth"
 )
 
 func TestGenerateAPIToken(t *testing.T) {

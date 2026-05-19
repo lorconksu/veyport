@@ -8,18 +8,18 @@ This page lists common issues and their solutions, organised by category.
 
 ### I forgot my password
 
-AeroDocs does not have a "forgot password" email flow. Ask an admin to delete your account and create a new one, or (if the admin has server access) use the CLI break-glass command to reset your credentials.
+Veyport does not have a "forgot password" email flow. Ask an admin to delete your account and create a new one, or (if the admin has server access) use the CLI break-glass command to reset your credentials.
 
 ### My TOTP code isn't working
 
-- Make sure you are entering the code for the **AeroDocs** entry in your authenticator app, not a different service.
+- Make sure you are entering the code for the **Veyport** entry in your authenticator app, not a different service.
 - Check that your phone's clock is set to automatic/network time. TOTP codes are time-based and will fail if the clock is skewed.
 - If you added the account manually (not via QR code), verify you entered the setup key correctly.
 - Ask an admin to disable your 2FA from Settings > Users so you can re-enroll.
 
 ### I'm locked out after too many attempts
 
-AeroDocs enforces separate auth rate limits per IP address:
+Veyport enforces separate auth rate limits per IP address:
 
 - Login and registration: 10 attempts per minute
 - TOTP verification: 3 attempts per minute
@@ -28,10 +28,10 @@ Wait one minute and try again. These limits are IP-based, not per-account.
 
 ### I'm the only admin and lost my authenticator
 
-Someone with shell access to the AeroDocs server must run the CLI break-glass command:
+Someone with shell access to the Veyport server must run the CLI break-glass command:
 
 ```bash
-./bin/aerodocs admin reset-totp --username <your-username> --db aerodocs.db
+./bin/veyport admin reset-totp --username <your-username> --db veyport.db
 ```
 
 This resets your TOTP and prints a temporary password to the terminal. Log in with the temporary password and you will be prompted to set up a new authenticator.
@@ -53,10 +53,10 @@ The agent has not registered with the Hub yet. Check the following:
 
 The agent was previously connected but has lost its connection. Check:
 
-- Is the agent service running? `systemctl status aerodocs-agent`
+- Is the agent service running? `systemctl status veyport-agent`
 - Can the server reach the Hub? Check network connectivity.
 - Is the Hub's gRPC endpoint reachable from the agent? This is usually port `9090` directly, or the external address configured via `--grpc-external-addr` when using a proxy or load balancer.
-- Restart the agent: `sudo systemctl restart aerodocs-agent`
+- Restart the agent: `sudo systemctl restart veyport-agent`
 
 ### Server status isn't updating
 
@@ -90,7 +90,7 @@ This was a layout bug fixed in v1.2.16. Update your Hub to v1.2.16 or later. Aft
 
 ### A path I expect is not visible
 
-The path may be on the sensitive path blocklist. AeroDocs prevents agents from exposing certain restricted filesystem paths (e.g. `/etc/shadow`, private key directories). If you need access to a blocked path, check the Hub's blocklist configuration. This is a security feature and cannot be overridden from the UI.
+The path may be on the sensitive path blocklist. Veyport prevents agents from exposing certain restricted filesystem paths (e.g. `/etc/shadow`, private key directories). If you need access to a blocked path, check the Hub's blocklist configuration. This is a security feature and cannot be overridden from the UI.
 
 ---
 
@@ -109,6 +109,36 @@ The grep filter is a **case-insensitive substring match**, not a regex. Check:
 - Your spelling is correct.
 - The text you are filtering for actually appears in the log output.
 - Clear the filter field and verify that unfiltered lines are appearing.
+
+---
+
+## Terminal Issues
+
+### I do not see the Terminal button
+
+- The server must be online. Terminal access is hidden while the agent is offline.
+- Admins can open terminal sessions on any online server.
+- LDAP users must be in the configured terminal access group (`veyport-terminal-users` by default) and must have a root (`/`) path assignment on that server.
+- Local non-admin users cannot open terminal sessions.
+
+### Terminal says "terminal execution user not available"
+
+The Hub could not map the logged-in LDAP identity to a Linux account name for the agent to run as. Check that LDAP login is returning a username attribute, that the user's `ldap_username` is populated in Veyport, and that the same account is resolvable on the target server through NSS, SSSD, or the local account database.
+
+### Terminal says "root server assignment required"
+
+LDAP terminal access requires both the terminal LDAP group and a root (`/`) assignment on the target server. Ask an admin to open the server's Admin Tools panel and grant that user `/`.
+
+### Terminal connects and immediately closes
+
+- Check that the agent service is still online: `systemctl status veyport-agent`
+- Confirm the target account has a valid shell and home directory on the agent host.
+- Review agent logs: `journalctl -u veyport-agent -f`
+- If a working directory was requested, confirm that path exists and is accessible by the execution user.
+
+### API tokens cannot use terminal endpoints
+
+Terminal endpoints require an interactive browser session. CLI-created API tokens are intentionally rejected so long-lived automation tokens cannot be used for interactive shell access.
 
 ---
 
@@ -155,8 +185,8 @@ The Dropzone tab is only visible to admin users. Viewers cannot upload files. If
 ### Agent won't connect after install
 
 - Check that the firewall allows outbound connections to the Hub's gRPC endpoint. This is usually `9090` directly, or the external address configured via `--grpc-external-addr` (often `9443` behind a proxy).
-- Verify the Hub gRPC address in the agent configuration file (`/etc/aerodocs/agent.conf`).
-- Check agent logs: `journalctl -u aerodocs-agent -f`
+- Verify the Hub gRPC address in the agent configuration file (`/etc/veyport/agent.conf`).
+- Check agent logs: `journalctl -u veyport-agent -f`
 - If mTLS is enabled, ensure the agent's certificate is valid and not expired.
 
 ### Agent shows proxy IP instead of real IP
@@ -165,14 +195,14 @@ The IP shown for an agent comes from the gRPC registration and heartbeat data, n
 
 ### Agent keeps reconnecting
 
-- The Hub may be restarting or under heavy load. Check Hub service logs: `journalctl -u aerodocs -f`
+- The Hub may be restarting or under heavy load. Check Hub service logs: `journalctl -u veyport -f`
 - Network instability between the agent and Hub can cause repeated disconnects.
 - Check if the Hub is running out of memory or file descriptors.
 - The agent refreshes its reported IP on reconnect, so IP changes should be handled once the connection stabilizes.
 
 ### mTLS certificate errors
 
-- Verify the agent's certificate has not expired: `openssl x509 -in /etc/aerodocs/agent.crt -noout -dates`
+- Verify the agent's certificate has not expired: `openssl x509 -in /etc/veyport/agent.crt -noout -dates`
 - Ensure the CA certificate on the Hub matches the one that signed the agent's certificate.
 - Check that the system clock on both the agent and Hub is correct (certificate validation is time-sensitive).
 
@@ -198,6 +228,6 @@ This is by design. You cannot delete your own account - another admin must do it
 
 If none of the above solves your issue:
 
-1. Check the Hub logs: `journalctl -u aerodocs -f`
-2. Check the agent logs on the affected server: `journalctl -u aerodocs-agent -f`
+1. Check the Hub logs: `journalctl -u veyport -f`
+2. Check the agent logs on the affected server: `journalctl -u veyport-agent -f`
 3. File an issue on GitHub with the relevant log output and a description of what you expected to happen.

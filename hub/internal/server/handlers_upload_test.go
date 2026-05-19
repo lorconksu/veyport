@@ -11,7 +11,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/wyiu/aerodocs/hub/internal/model"
+	"github.com/wyiu/veyport/hub/internal/model"
 )
 
 // TestHandleUploadFile_NoFile verifies that uploading without a file field returns 400.

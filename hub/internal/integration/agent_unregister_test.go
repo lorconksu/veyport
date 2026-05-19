@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/wyiu/aerodocs/agent/agentclient"
+	"github.com/wyiu/veyport/agent/agentclient"
 )
 
 // startTestAgent creates and starts an agent client, returning the cancel func and error channel.

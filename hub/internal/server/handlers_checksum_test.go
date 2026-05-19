@@ -18,10 +18,10 @@ func TestHandleAgentBinaryChecksum_Success(t *testing.T) {
 	fakeBinary := []byte("fake-agent-binary-content")
 	expectedChecksum := "abc123def456"
 
-	if err := os.WriteFile(filepath.Join(tmpDir, "aerodocs-agent-linux-amd64"), fakeBinary, 0755); err != nil {
+	if err := os.WriteFile(filepath.Join(tmpDir, "veyport-agent-linux-amd64"), fakeBinary, 0755); err != nil {
 		t.Fatalf("write fake binary: %v", err)
 	}
-	if err := os.WriteFile(filepath.Join(tmpDir, "aerodocs-agent-linux-amd64.sha256"), []byte(expectedChecksum+"\n"), 0644); err != nil {
+	if err := os.WriteFile(filepath.Join(tmpDir, "veyport-agent-linux-amd64.sha256"), []byte(expectedChecksum+"\n"), 0644); err != nil {
 		t.Fatalf("write checksum file: %v", err)
 	}
 

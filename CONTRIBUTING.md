@@ -1,8 +1,8 @@
 # Contributing
 
-Thanks for your interest in AeroDocs.
+Thanks for your interest in Veyport.
 
-AeroDocs is a maintainer-led project. Issues for bugs and feature requests are welcome. Pull requests are generally discouraged unless they are small, obvious fixes or the project maintainer has asked for one first.
+Veyport is a maintainer-led project. Issues for bugs and feature requests are welcome. Pull requests are generally discouraged unless they are small, obvious fixes or the project maintainer has asked for one first.
 
 ## Before You Start
 

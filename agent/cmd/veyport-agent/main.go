@@ -13,14 +13,14 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/wyiu/aerodocs/agent/internal/client"
-	"github.com/wyiu/aerodocs/agent/internal/sysinfo"
+	"github.com/wyiu/veyport/agent/internal/client"
+	"github.com/wyiu/veyport/agent/internal/sysinfo"
 )
 
 const version = "0.1.0"
-const defaultConfigPath = "/etc/aerodocs/agent.conf"
-const defaultCertDir = "/etc/aerodocs/tls/"
-const defaultDropzoneDir = "/tmp/aerodocs-dropzone"
+const defaultConfigPath = "/etc/veyport/agent.conf"
+const defaultCertDir = "/etc/veyport/tls/"
+const defaultDropzoneDir = "/tmp/veyport-dropzone"
 
 type agentConfig struct {
 	ServerID        string   `json:"server_id"`
@@ -75,7 +75,7 @@ func main() {
 			if cfg != nil || serverID == "" {
 				return
 			}
-			unregToken := os.Getenv("AERODOCS_UNREGISTER_TOKEN")
+			unregToken := os.Getenv("VEYPORT_UNREGISTER_TOKEN")
 			saveNewConfig(*configPath, hubAddr, serverID, hubCAPin, unregToken)
 		},
 	})
@@ -83,7 +83,7 @@ func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
-	log.Printf("AeroDocs Agent v%s starting — hub=%s", version, hubAddr)
+	log.Printf("Veyport Agent v%s starting — hub=%s", version, hubAddr)
 
 	err := c.Run(ctx)
 	if err != nil && ctx.Err() == nil {
@@ -91,7 +91,7 @@ func main() {
 	}
 
 	if cfg == nil && c.ServerID() != "" {
-		unregToken := os.Getenv("AERODOCS_UNREGISTER_TOKEN")
+		unregToken := os.Getenv("VEYPORT_UNREGISTER_TOKEN")
 		saveNewConfig(*configPath, hubAddr, c.ServerID(), hubCAPin, unregToken)
 	}
 

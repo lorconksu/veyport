@@ -1,7 +1,7 @@
 #!/bin/bash
 set -euo pipefail
 
-# AeroDocs Agent Installer
+# Veyport Agent Installer
 # Usage: curl -sSL https://<hub>/install.sh | sudo bash -s -- --token <TOKEN> --hub <GRPC_ADDR>
 # When piped from curl, --force is implied (no interactive prompt).
 # To run interactively: bash install.sh --token <TOKEN> --hub <GRPC_ADDR>
@@ -77,9 +77,9 @@ fi
 
 # --- Check for existing installation ---
 EXISTING=false
-if systemctl is-active --quiet aerodocs-agent 2>/dev/null; then
+if systemctl is-active --quiet veyport-agent 2>/dev/null; then
   EXISTING=true
-elif [[ -f /usr/local/bin/aerodocs-agent ]] || [[ -f /etc/systemd/system/aerodocs-agent.service ]]; then
+elif [[ -f /usr/local/bin/veyport-agent ]] || [[ -f /etc/systemd/system/veyport-agent.service ]]; then
   EXISTING=true
 fi
 
@@ -88,8 +88,8 @@ if [[ "$EXISTING" = true ]]; then
     echo "==> Existing installation detected — replacing automatically."
   else
     echo ""
-    echo "    An existing AeroDocs Agent installation was detected."
-    if systemctl is-active --quiet aerodocs-agent 2>/dev/null; then
+    echo "    An existing Veyport Agent installation was detected."
+    if systemctl is-active --quiet veyport-agent 2>/dev/null; then
       echo "    Status: RUNNING"
     else
       echo "    Status: installed but not running"
@@ -113,24 +113,24 @@ if [[ "$EXISTING" = true ]]; then
   fi
 
   # Unregister old server from Hub before teardown
-  if [[ -x /usr/local/bin/aerodocs-agent ]]; then
+  if [[ -x /usr/local/bin/veyport-agent ]]; then
     echo "==> Removing old server from Hub..."
     # Source existing env file for the unregister token
-    if [[ -f /etc/aerodocs/agent.env ]]; then
+    if [[ -f /etc/veyport/agent.env ]]; then
       set +u
-      . /etc/aerodocs/agent.env
+      . /etc/veyport/agent.env
       set -u
     fi
-    /usr/local/bin/aerodocs-agent --self-unregister 2>/dev/null || true
+    /usr/local/bin/veyport-agent --self-unregister 2>/dev/null || true
   fi
   echo "==> Removing previous installation..."
-  systemctl stop aerodocs-agent 2>/dev/null || true
-  systemctl disable aerodocs-agent 2>/dev/null || true
-  pkill -9 -f aerodocs-agent 2>/dev/null || true
+  systemctl stop veyport-agent 2>/dev/null || true
+  systemctl disable veyport-agent 2>/dev/null || true
+  pkill -9 -f veyport-agent 2>/dev/null || true
   sleep 1
-  rm -f /usr/local/bin/aerodocs-agent
-  rm -f /etc/aerodocs/agent.conf
-  rm -f /etc/systemd/system/aerodocs-agent.service
+  rm -f /usr/local/bin/veyport-agent
+  rm -f /etc/veyport/agent.conf
+  rm -f /etc/systemd/system/veyport-agent.service
   systemctl daemon-reload 2>/dev/null || true
 fi
 
@@ -147,12 +147,12 @@ if [[ -z "$URL" ]]; then
 fi
 DOWNLOAD_URL="${URL}/install/${OS}/${ARCH}"
 
-echo "==> Downloading AeroDocs Agent (${OS}-${ARCH})..."
-curl -fsSL "$DOWNLOAD_URL" -o /usr/local/bin/aerodocs-agent
-chmod +x /usr/local/bin/aerodocs-agent
+echo "==> Downloading Veyport Agent (${OS}-${ARCH})..."
+curl -fsSL "$DOWNLOAD_URL" -o /usr/local/bin/veyport-agent
+chmod +x /usr/local/bin/veyport-agent
 
 # Verify binary was downloaded
-if [[ ! -x /usr/local/bin/aerodocs-agent ]]; then
+if [[ ! -x /usr/local/bin/veyport-agent ]]; then
   echo "ERROR: Failed to download agent binary" >&2
   exit 1
 fi
@@ -161,12 +161,12 @@ fi
 echo "==> Verifying checksum..."
 EXPECTED_SHA=$(curl -fsSL "${DOWNLOAD_URL}/sha256" 2>/dev/null | awk '{print $1}' || true)
 if [[ "$EXPECTED_SHA" =~ ^[a-fA-F0-9]{64}$ ]]; then
-  ACTUAL_SHA=$(sha256sum /usr/local/bin/aerodocs-agent | awk '{print $1}')
+  ACTUAL_SHA=$(sha256sum /usr/local/bin/veyport-agent | awk '{print $1}')
   if [[ "$EXPECTED_SHA" != "$ACTUAL_SHA" ]]; then
     echo "ERROR: Checksum verification failed!" >&2
     echo "  Expected: $EXPECTED_SHA" >&2
     echo "  Actual:   $ACTUAL_SHA" >&2
-    rm -f /usr/local/bin/aerodocs-agent
+    rm -f /usr/local/bin/veyport-agent
     exit 1
   fi
   echo "    Checksum OK."
@@ -176,31 +176,31 @@ fi
 
 # --- Create config directory ---
 echo "==> Creating config directory..."
-mkdir -p /etc/aerodocs
+mkdir -p /etc/veyport
 
 # --- Write credentials to a restricted file (not visible in ps output) ---
 echo "==> Writing agent credentials..."
-cat > /etc/aerodocs/agent.env <<'ENVEOF'
-AERODOCS_HUB=__HUB_ADDR__
-AERODOCS_TOKEN=__REG_TOKEN__
-AERODOCS_UNREGISTER_TOKEN=__UNREG_TOKEN__
-AERODOCS_HUB_CA_PIN=__CA_PIN__
+cat > /etc/veyport/agent.env <<'ENVEOF'
+VEYPORT_HUB=__HUB_ADDR__
+VEYPORT_TOKEN=__REG_TOKEN__
+VEYPORT_UNREGISTER_TOKEN=__UNREG_TOKEN__
+VEYPORT_HUB_CA_PIN=__CA_PIN__
 ENVEOF
-sed -i "s|__HUB_ADDR__|${HUB}|g; s|__REG_TOKEN__|${TOKEN}|g; s|__UNREG_TOKEN__|${UNREGISTER_TOKEN}|g; s|__CA_PIN__|${CA_PIN}|g" /etc/aerodocs/agent.env
-chmod 600 /etc/aerodocs/agent.env
+sed -i "s|__HUB_ADDR__|${HUB}|g; s|__REG_TOKEN__|${TOKEN}|g; s|__UNREG_TOKEN__|${UNREGISTER_TOKEN}|g; s|__CA_PIN__|${CA_PIN}|g" /etc/veyport/agent.env
+chmod 600 /etc/veyport/agent.env
 
 # --- Install systemd service ---
 echo "==> Installing systemd service..."
-cat > /etc/systemd/system/aerodocs-agent.service <<'EOF'
+cat > /etc/systemd/system/veyport-agent.service <<'EOF'
 [Unit]
-Description=AeroDocs Agent
+Description=Veyport Agent
 After=network-online.target
 Wants=network-online.target
 
 [Service]
 Type=simple
-EnvironmentFile=/etc/aerodocs/agent.env
-ExecStart=/bin/sh -eu -c 'if [ -f /etc/aerodocs/agent.conf ]; then exec /usr/local/bin/aerodocs-agent; else exec /usr/local/bin/aerodocs-agent --hub "$AERODOCS_HUB" --token "$AERODOCS_TOKEN" --ca-pin "$AERODOCS_HUB_CA_PIN"; fi'
+EnvironmentFile=/etc/veyport/agent.env
+ExecStart=/bin/sh -eu -c 'if [ -f /etc/veyport/agent.conf ]; then exec /usr/local/bin/veyport-agent; else exec /usr/local/bin/veyport-agent --hub "$VEYPORT_HUB" --token "$VEYPORT_TOKEN" --ca-pin "$VEYPORT_HUB_CA_PIN"; fi'
 Restart=always
 RestartSec=5
 
@@ -209,7 +209,7 @@ WantedBy=multi-user.target
 EOF
 
 systemctl daemon-reload
-systemctl enable --now aerodocs-agent
+systemctl enable --now veyport-agent
 
 # --- Verify agent started and registered ---
 echo "==> Waiting for agent to register..."
@@ -217,11 +217,11 @@ TRIES=0
 MAX_TRIES=10
 while [[ $TRIES -lt $MAX_TRIES ]]; do
   sleep 2
-  if journalctl -u aerodocs-agent --no-pager -n 5 2>/dev/null | grep -q "registered successfully\|connected to hub"; then
+  if journalctl -u veyport-agent --no-pager -n 5 2>/dev/null | grep -q "registered successfully\|connected to hub"; then
     echo ""
-    echo "==> AeroDocs Agent installed and connected!"
-    echo "    Service: systemctl status aerodocs-agent"
-    echo "    Logs:    journalctl -u aerodocs-agent -f"
+    echo "==> Veyport Agent installed and connected!"
+    echo "    Service: systemctl status veyport-agent"
+    echo "    Logs:    journalctl -u veyport-agent -f"
     exit 0
   fi
   TRIES=$((TRIES + 1))
@@ -230,6 +230,6 @@ done
 
 # If we get here, registration didn't succeed in time
 echo ""
-echo "==> AeroDocs Agent installed but registration not confirmed yet."
-echo "    Check the logs: journalctl -u aerodocs-agent -f"
+echo "==> Veyport Agent installed but registration not confirmed yet."
+echo "    Check the logs: journalctl -u veyport-agent -f"
 echo "    The agent will keep retrying in the background."

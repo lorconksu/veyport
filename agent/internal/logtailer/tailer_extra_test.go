@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	pb "github.com/wyiu/aerodocs/proto/aerodocs/v1"
+	pb "github.com/wyiu/veyport/proto/veyport/v1"
 )
 
 const (
@@ -210,8 +210,8 @@ func TestIsBlockedPath(t *testing.T) {
 		{"/etc/gshadow", true},
 		{"/etc/sudoers", true},
 		{"/etc/sudoers.d/myconfig", true},
-		{"/etc/aerodocs", true},
-		{"/etc/aerodocs/config.yaml", true},
+		{"/etc/veyport", true},
+		{"/etc/veyport/config.yaml", true},
 		{"/root/.ssh", true},
 		{"/root/.ssh/authorized_keys", true},
 		{"/proc/self", true},

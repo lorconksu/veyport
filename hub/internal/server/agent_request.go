@@ -5,7 +5,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	pb "github.com/wyiu/aerodocs/proto/aerodocs/v1"
+	pb "github.com/wyiu/veyport/proto/veyport/v1"
 )
 
 // requireAgent checks agent connectivity and returns the server ID.

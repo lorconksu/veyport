@@ -7,7 +7,7 @@
 | **Minimum Instance** | t3.small (2 vCPU, 2 GB RAM) |
 | **Estimated Cost** | ~$15-25/month (EC2) or ~$30-40/month (ECS Fargate) |
 
-This guide covers deploying AeroDocs Hub on AWS using either EC2 with Docker or ECS Fargate, with an Application Load Balancer for HTTPS and gRPC traffic.
+This guide covers deploying Veyport Hub on AWS using either EC2 with Docker or ECS Fargate, with an Application Load Balancer for HTTPS and gRPC traffic.
 
 ---
 
@@ -17,11 +17,11 @@ This guide covers deploying AeroDocs Hub on AWS using either EC2 with Docker or 
 flowchart TB
     subgraph Internet
         Browser["Browser"]
-        Agent["AeroDocs Agent"]
+        Agent["Veyport Agent"]
     end
 
     subgraph AWS
-        R53["Route 53<br/>aerodocs.example.com"]
+        R53["Route 53<br/>veyport.example.com"]
         ACM["ACM Certificate"]
 
         subgraph VPC
@@ -33,7 +33,7 @@ flowchart TB
             end
 
             subgraph OptionB["Option B: ECS Fargate"]
-                ECS["ECS Task<br/>yiucloud/aerodocs"]
+                ECS["ECS Task<br/>yiucloud/veyport"]
                 EFS["EFS Volume<br/>/data"]
             end
         end
@@ -68,32 +68,32 @@ flowchart TB
 ```bash
 # Create the security group
 aws ec2 create-security-group \
-  --group-name aerodocs-sg \
-  --description "AeroDocs Hub security group" \
+  --group-name veyport-sg \
+  --description "Veyport Hub security group" \
   --vpc-id vpc-xxxxxxxx
 
 # Allow HTTPS from anywhere (web UI)
 aws ec2 authorize-security-group-ingress \
-  --group-name aerodocs-sg \
+  --group-name veyport-sg \
   --protocol tcp --port 443 --cidr 0.0.0.0/0
 
 # Allow gRPC from anywhere (agent connections)
 aws ec2 authorize-security-group-ingress \
-  --group-name aerodocs-sg \
+  --group-name veyport-sg \
   --protocol tcp --port 9443 --cidr 0.0.0.0/0
 
 # Allow SSH from your IP (management)
 aws ec2 authorize-security-group-ingress \
-  --group-name aerodocs-sg \
+  --group-name veyport-sg \
   --protocol tcp --port 22 --cidr <YOUR_IP>/32
 
 # Allow ALB health checks (internal VPC traffic)
 aws ec2 authorize-security-group-ingress \
-  --group-name aerodocs-sg \
+  --group-name veyport-sg \
   --protocol tcp --port 8081 --source-group <ALB_SG_ID>
 
 aws ec2 authorize-security-group-ingress \
-  --group-name aerodocs-sg \
+  --group-name veyport-sg \
   --protocol tcp --port 9090 --source-group <ALB_SG_ID>
 ```
 
@@ -108,7 +108,7 @@ aws ec2 authorize-security-group-ingress \
 
 ### 3. User data script
 
-Use this as the EC2 user data to automatically install Docker and deploy AeroDocs on first boot:
+Use this as the EC2 user data to automatically install Docker and deploy Veyport on first boot:
 
 ```bash
 #!/bin/bash
@@ -131,13 +131,13 @@ mkdir -p /data
 mount /dev/xvdf /data
 echo '/dev/xvdf /data xfs defaults,nofail 0 2' >> /etc/fstab
 
-# Deploy AeroDocs
-mkdir -p /opt/aerodocs && cd /opt/aerodocs
+# Deploy Veyport
+mkdir -p /opt/veyport && cd /opt/veyport
 cat > docker-compose.yml << 'COMPOSE'
 services:
-  aerodocs:
-    image: yiucloud/aerodocs:latest
-    container_name: aerodocs
+  veyport:
+    image: yiucloud/veyport:latest
+    container_name: veyport
     ports:
       - "8081:8081"
       - "9090:9090"
@@ -157,7 +157,7 @@ Attach a dedicated EBS volume for the SQLite database. This allows you to snapsh
 # Create a snapshot for backup
 aws ec2 create-snapshot \
   --volume-id vol-xxxxxxxx \
-  --description "AeroDocs DB backup $(date +%Y%m%d)"
+  --description "Veyport DB backup $(date +%Y%m%d)"
 ```
 
 ---
@@ -173,7 +173,7 @@ SQLite requires a POSIX file system. Use EFS for persistent storage across Farga
 aws efs create-file-system \
   --performance-mode generalPurpose \
   --throughput-mode bursting \
-  --tags Key=Name,Value=aerodocs-data
+  --tags Key=Name,Value=veyport-data
 
 # Create a mount target in each subnet
 aws efs create-mount-target \
@@ -184,11 +184,11 @@ aws efs create-mount-target \
 
 ### 2. Task definition
 
-Create `aerodocs-task.json`:
+Create `veyport-task.json`:
 
 ```json
 {
-  "family": "aerodocs",
+  "family": "veyport",
   "networkMode": "awsvpc",
   "requiresCompatibilities": ["FARGATE"],
   "cpu": "512",
@@ -197,8 +197,8 @@ Create `aerodocs-task.json`:
   "taskRoleArn": "arn:aws:iam::ACCOUNT_ID:role/ecsTaskRole",
   "containerDefinitions": [
     {
-      "name": "aerodocs",
-      "image": "yiucloud/aerodocs:latest",
+      "name": "veyport",
+      "image": "yiucloud/veyport:latest",
       "essential": true,
       "portMappings": [
         { "containerPort": 8081, "protocol": "tcp" },
@@ -206,14 +206,14 @@ Create `aerodocs-task.json`:
       ],
       "mountPoints": [
         {
-          "sourceVolume": "aerodocs-data",
+          "sourceVolume": "veyport-data",
           "containerPath": "/data"
         }
       ],
       "logConfiguration": {
         "logDriver": "awslogs",
         "options": {
-          "awslogs-group": "/ecs/aerodocs",
+          "awslogs-group": "/ecs/veyport",
           "awslogs-region": "us-east-1",
           "awslogs-stream-prefix": "ecs"
         }
@@ -222,10 +222,10 @@ Create `aerodocs-task.json`:
   ],
   "volumes": [
     {
-      "name": "aerodocs-data",
+      "name": "veyport-data",
       "efsVolumeConfiguration": {
         "fileSystemId": "fs-xxxxxxxx",
-        "rootDirectory": "/aerodocs",
+        "rootDirectory": "/veyport",
         "transitEncryption": "ENABLED"
       }
     }
@@ -235,7 +235,7 @@ Create `aerodocs-task.json`:
 
 ```bash
 # Register the task definition
-aws ecs register-task-definition --cli-input-json file://aerodocs-task.json
+aws ecs register-task-definition --cli-input-json file://veyport-task.json
 ```
 
 ### 3. Create the ECS service
@@ -243,14 +243,14 @@ aws ecs register-task-definition --cli-input-json file://aerodocs-task.json
 ```bash
 aws ecs create-service \
   --cluster default \
-  --service-name aerodocs \
-  --task-definition aerodocs \
+  --service-name veyport \
+  --task-definition veyport \
   --desired-count 1 \
   --launch-type FARGATE \
   --network-configuration "awsvpcConfiguration={subnets=[subnet-xxx],securityGroups=[sg-xxx],assignPublicIp=ENABLED}" \
   --load-balancers \
-    "targetGroupArn=arn:aws:elasticloadbalancing:...:targetgroup/aerodocs-http/xxx,containerName=aerodocs,containerPort=8081" \
-    "targetGroupArn=arn:aws:elasticloadbalancing:...:targetgroup/aerodocs-grpc/xxx,containerName=aerodocs,containerPort=9090"
+    "targetGroupArn=arn:aws:elasticloadbalancing:...:targetgroup/veyport-http/xxx,containerName=veyport,containerPort=8081" \
+    "targetGroupArn=arn:aws:elasticloadbalancing:...:targetgroup/veyport-grpc/xxx,containerName=veyport,containerPort=9090"
 ```
 
 ---
@@ -264,7 +264,7 @@ The ALB handles TLS termination for both HTTPS (web UI) and gRPC (agent connecti
 ```bash
 # HTTP target group (web UI and REST API)
 aws elbv2 create-target-group \
-  --name aerodocs-http \
+  --name veyport-http \
   --protocol HTTP \
   --port 8081 \
   --vpc-id vpc-xxxxxxxx \
@@ -274,7 +274,7 @@ aws elbv2 create-target-group \
 
 # gRPC target group (agent connections)
 aws elbv2 create-target-group \
-  --name aerodocs-grpc \
+  --name veyport-grpc \
   --protocol HTTP \
   --port 9090 \
   --vpc-id vpc-xxxxxxxx \
@@ -288,7 +288,7 @@ aws elbv2 create-target-group \
 
 ```bash
 aws elbv2 create-load-balancer \
-  --name aerodocs-alb \
+  --name veyport-alb \
   --subnets subnet-xxx subnet-yyy \
   --security-groups sg-xxxxxxxx \
   --scheme internet-facing \
@@ -300,19 +300,19 @@ aws elbv2 create-load-balancer \
 ```bash
 # HTTPS listener on port 443 (web UI)
 aws elbv2 create-listener \
-  --load-balancer-arn arn:aws:elasticloadbalancing:...:loadbalancer/app/aerodocs-alb/xxx \
+  --load-balancer-arn arn:aws:elasticloadbalancing:...:loadbalancer/app/veyport-alb/xxx \
   --protocol HTTPS \
   --port 443 \
   --certificates CertificateArn=arn:aws:acm:...:certificate/xxx \
-  --default-actions Type=forward,TargetGroupArn=arn:aws:...:targetgroup/aerodocs-http/xxx
+  --default-actions Type=forward,TargetGroupArn=arn:aws:...:targetgroup/veyport-http/xxx
 
 # HTTPS listener on port 9443 (gRPC)
 aws elbv2 create-listener \
-  --load-balancer-arn arn:aws:elasticloadbalancing:...:loadbalancer/app/aerodocs-alb/xxx \
+  --load-balancer-arn arn:aws:elasticloadbalancing:...:loadbalancer/app/veyport-alb/xxx \
   --protocol HTTPS \
   --port 9443 \
   --certificates CertificateArn=arn:aws:acm:...:certificate/xxx \
-  --default-actions Type=forward,TargetGroupArn=arn:aws:...:targetgroup/aerodocs-grpc/xxx
+  --default-actions Type=forward,TargetGroupArn=arn:aws:...:targetgroup/veyport-grpc/xxx
 ```
 
 ---
@@ -327,11 +327,11 @@ aws route53 change-resource-record-sets \
     "Changes": [{
       "Action": "UPSERT",
       "ResourceRecordSet": {
-        "Name": "aerodocs.example.com",
+        "Name": "veyport.example.com",
         "Type": "A",
         "AliasTarget": {
           "HostedZoneId": "Z35SXDOTRQ7X7K",
-          "DNSName": "aerodocs-alb-123456.us-east-1.elb.amazonaws.com",
+          "DNSName": "veyport-alb-123456.us-east-1.elb.amazonaws.com",
           "EvaluateTargetHealth": true
         }
       }
@@ -347,7 +347,7 @@ Request a free TLS certificate from AWS Certificate Manager:
 
 ```bash
 aws acm request-certificate \
-  --domain-name aerodocs.example.com \
+  --domain-name veyport.example.com \
   --validation-method DNS \
   --region us-east-1
 ```
@@ -361,10 +361,10 @@ Complete the DNS validation by creating the CNAME record provided by ACM in your
 Once the Hub is accessible via the ALB, install agents on managed servers:
 
 ```bash
-curl -sSL https://aerodocs.example.com/install.sh | sudo bash -s -- \
+curl -sSL https://veyport.example.com/install.sh | sudo bash -s -- \
   --token '<token>' \
-  --hub 'aerodocs.example.com:9443' \
-  --url 'https://aerodocs.example.com'
+  --hub 'veyport.example.com:9443' \
+  --url 'https://veyport.example.com'
 ```
 
 For agents running on EC2 instances within the same VPC, they can connect directly to the internal ALB DNS name to avoid traversing the public internet.
@@ -373,29 +373,31 @@ For agents running on EC2 instances within the same VPC, they can connect direct
 
 Ensure the ALB security group allows inbound traffic on port 9443 from the agent instances (or from `0.0.0.0/0` if agents are external).
 
+Browser terminal sessions use the existing agent gRPC stream. You do not need to expose SSH or any additional inbound port on managed instances.
+
 ---
 
 ## Verify Installation
 
 ```bash
 # Check the web UI is accessible
-curl -s -o /dev/null -w "%{http_code}" https://aerodocs.example.com/login
+curl -s -o /dev/null -w "%{http_code}" https://veyport.example.com/login
 # Expected: 200
 
 # Check ALB target health
 aws elbv2 describe-target-health \
-  --target-group-arn arn:aws:...:targetgroup/aerodocs-http/xxx
+  --target-group-arn arn:aws:...:targetgroup/veyport-http/xxx
 
 # Check ECS service status (Fargate)
-aws ecs describe-services --cluster default --services aerodocs
+aws ecs describe-services --cluster default --services veyport
 
 # Check EC2 instance Docker logs
-ssh ec2-user@<instance-ip> "docker compose -f /opt/aerodocs/docker-compose.yml logs --tail=20"
+ssh ec2-user@<instance-ip> "docker compose -f /opt/veyport/docker-compose.yml logs --tail=20"
 
 # Test gRPC connectivity (requires grpcurl)
 grpcurl -plaintext <instance-ip>:9090 list
 ```
 
-Open the Hub in a browser at `https://aerodocs.example.com`, create the initial admin account, and register an agent to confirm end-to-end connectivity through the ALB.
+Open the Hub in a browser at `https://veyport.example.com`, create the initial admin account, and register an agent to confirm end-to-end connectivity through the ALB.
 
 For detailed reverse proxy configuration, see [[Proxy-Configuration]].

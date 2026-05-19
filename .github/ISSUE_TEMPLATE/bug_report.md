@@ -1,6 +1,6 @@
 ---
 name: Bug report
-about: Report a reproducible bug in AeroDocs
+about: Report a reproducible bug in Veyport
 title: "[Bug]: "
 ---
 
@@ -24,7 +24,7 @@ What happened instead?
 
 ## Environment
 
-- AeroDocs version:
+- Veyport version:
 - Deployment method:
 - Browser or client:
 - OS:

@@ -1,8 +1,8 @@
-# AeroDocs Hub API Reference
+# Veyport Hub API Reference
 
 > **TL;DR**
-> - **What:** 40+ REST API endpoints covering auth, user management, server operations, audit logs, notifications, SMTP config, hub settings, and agent installation
-> - **Who:** Frontend developers, integration builders, and anyone automating AeroDocs
+> - **What:** 45+ REST API endpoints covering auth, user management, server operations, terminal sessions, audit logs, notifications, SMTP config, hub settings, and agent installation
+> - **Who:** Frontend developers, integration builders, and anyone automating Veyport
 > - **Why:** Complete reference for every HTTP endpoint with request/response schemas
 > - **Where:** All endpoints served by the Hub on the HTTP port (default :8081)
 > - **When:** After authentication - most endpoints require a valid JWT access token or CLI-created API token
@@ -25,6 +25,7 @@
 11. [Server Removal Endpoints](#server-removal-endpoints)
 12. [Hub Settings Endpoints](#hub-settings-endpoints)
 13. [SMTP and Notification Endpoints](#smtp-and-notification-endpoints)
+14. [Terminal Endpoints](#terminal-endpoints)
 
 ---
 
@@ -34,7 +35,7 @@
 |---|---|
 | Base URL | `http://<hub-host>:8081` (dev) or `https://<hub-domain>` (prod) |
 | Content Type | `application/json` (request and response) |
-| Browser Auth | `aerodocs_access` and `aerodocs_refresh` secure cookies, plus `aerodocs_csrf` for mutating requests |
+| Browser Auth | `veyport_access` and `veyport_refresh` secure cookies, plus `veyport_csrf` for mutating requests |
 | API Client Auth | `Authorization: Bearer <JWT access token or CLI-created API token>` |
 | Pagination | `?limit=N&offset=N` (default limit varies, max 100) |
 | CORS | Enabled in dev mode for `http://localhost:5173` |
@@ -48,7 +49,7 @@ For browser sessions, successful login and refresh flows set auth cookies and ma
 
 ## Authentication Flow
 
-AeroDocs uses four JWT token types. In browser-driven flows, the resulting access and refresh tokens are set as secure cookies.
+Veyport uses four JWT token types. In browser-driven flows, the resulting access and refresh tokens are set as secure cookies.
 
 | Token Type | Purpose | Lifetime |
 |---|---|---|
@@ -57,7 +58,7 @@ AeroDocs uses four JWT token types. In browser-driven flows, the resulting acces
 | **Access** | General-purpose API token. Required by most endpoints. | Short-lived |
 | **Refresh** | Long-lived token used to obtain a new access/refresh pair via `/api/auth/refresh`. | Long-lived |
 
-For non-browser automation, AeroDocs also supports opaque API tokens created with the Hub CLI. These are not JWTs, are stored as SHA-256 hashes at rest, and are recommended over automating a human password + TOTP secret.
+For non-browser automation, Veyport also supports opaque API tokens created with the Hub CLI. These are not JWTs, are stored as SHA-256 hashes at rest, and are recommended over automating a human password + TOTP secret.
 
 ### Machine Authentication
 
@@ -65,18 +66,18 @@ Create a dedicated low-privilege user for automation, then mint an API token on 
 
 ```bash
 # Docker deployment
-docker exec aerodocs /app/aerodocs admin create-api-token \
+docker exec veyport /app/veyport admin create-api-token \
   --username scanner \
   --name nightly-scan \
   --expires-in 720h \
-  --db /data/aerodocs.db
+  --db /data/veyport.db
 
 # Bare-metal deployment
-./bin/aerodocs admin create-api-token \
+./bin/veyport admin create-api-token \
   --username scanner \
   --name nightly-scan \
   --expires-in 720h \
-  --db /var/lib/aerodocs/aerodocs.db
+  --db /var/lib/veyport/veyport.db
 ```
 
 Use the returned token with the standard Bearer header:
@@ -316,7 +317,7 @@ Complete login by providing a TOTP code (second factor).
 }
 ```
 
-On success, the Hub also sets `aerodocs_access`, `aerodocs_refresh`, and `aerodocs_csrf` cookies for browser clients.
+On success, the Hub also sets `veyport_access`, `veyport_refresh`, and `veyport_csrf` cookies for browser clients.
 
 **Error Cases:**
 - `401` - Invalid or expired TOTP token, invalid TOTP code, user not found
@@ -337,7 +338,7 @@ Exchange a refresh token for a new access/refresh token pair.
 
 | Property | Value |
 |---|---|
-| Auth | None. Browser clients usually send the `aerodocs_refresh` cookie; non-browser clients may send `refresh_token` in the JSON body |
+| Auth | None. Browser clients usually send the `veyport_refresh` cookie; non-browser clients may send `refresh_token` in the JSON body |
 | Rate Limited | Yes (30 requests / 60s) |
 
 **Request Body:**
@@ -354,7 +355,7 @@ Exchange a refresh token for a new access/refresh token pair.
 {}
 ```
 
-On success, the Hub rotates the refresh token and sets new `aerodocs_access`, `aerodocs_refresh`, and `aerodocs_csrf` cookies.
+On success, the Hub rotates the refresh token and sets new `veyport_access`, `veyport_refresh`, and `veyport_csrf` cookies.
 
 **Error Cases:**
 - `401` - Invalid or expired refresh token
@@ -385,7 +386,7 @@ Generate a new TOTP secret and QR URL. The secret is stored but not yet enabled.
 ```json
 {
   "secret": "JBSWY3DPEHPK3PXP",
-  "qr_url": "otpauth://totp/AeroDocs:admin?secret=JBSWY3DPEHPK3PXP&issuer=AeroDocs"
+  "qr_url": "otpauth://totp/Veyport:admin?secret=JBSWY3DPEHPK3PXP&issuer=Veyport"
 }
 ```
 
@@ -437,7 +438,7 @@ Verify and enable TOTP by providing a valid code. For users created with a tempo
 }
 ```
 
-On success, the Hub also sets `aerodocs_access`, `aerodocs_refresh`, and `aerodocs_csrf` cookies for browser clients.
+On success, the Hub also sets `veyport_access`, `veyport_refresh`, and `veyport_csrf` cookies for browser clients.
 
 **Error Cases:**
 - `401` - Invalid TOTP code
@@ -641,6 +642,8 @@ List all users.
       "username": "admin",
       "email": "admin@example.com",
       "role": "admin",
+      "auth_provider": "local",
+      "terminal_access": false,
       "totp_enabled": true,
       "avatar": null,
       "created_at": "2025-01-01T00:00:00Z",
@@ -690,6 +693,8 @@ Create a new user. A temporary password is auto-generated.
     "username": "newuser",
     "email": "newuser@example.com",
     "role": "viewer",
+    "auth_provider": "local",
+    "terminal_access": false,
     "totp_enabled": false,
     "avatar": null,
     "created_at": "2025-01-01T00:00:00Z",
@@ -742,6 +747,8 @@ Update a user's role.
     "username": "newuser",
     "email": "newuser@example.com",
     "role": "admin",
+    "auth_provider": "local",
+    "terminal_access": false,
     "totp_enabled": false,
     "avatar": null,
     "created_at": "2025-01-01T00:00:00Z",
@@ -840,13 +847,19 @@ List audit log entries with optional filters.
 
 **Available action types:**
 
-User actions: `user.login`, `user.login_failed`, `user.login_totp_failed`, `user.registered`, `user.totp_setup`, `user.totp_enabled`, `user.totp_disabled`, `user.created`, `user.totp_reset`, `user.password_changed`, `user.role_updated`, `user.deleted`
+User actions: `user.login`, `user.login_failed`, `user.login_totp_failed`, `user.registered`, `user.totp_setup`, `user.totp_enabled`, `user.totp_disabled`, `user.created`, `user.totp_reset`, `user.password_changed`, `user.password_reuse_rejected`, `user.role_updated`, `user.deleted`
 
-Server actions: `server.created`, `server.updated`, `server.deleted`, `server.batch_deleted`, `server.registered`, `server.connected`, `server.disconnected`, `server.unregistered`
+Server actions: `server.created`, `server.updated`, `server.deleted`, `server.batch_deleted`, `server.registered`, `server.registration_failed`, `server.connected`, `server.disconnected`, `server.unregistered`
 
 File/path actions: `file.read`, `file.uploaded`, `path.granted`, `path.revoked`
 
 Log actions: `log.tail_started`
+
+Terminal actions: `terminal.opened`, `terminal.closed`
+
+API token actions: `api_token.created`, `api_token.revoked`
+
+Audit governance actions: `audit.exported`, `audit.review_completed`, `audit.filter_saved`, `audit.filter_deleted`, `audit.retention_updated`, `audit.retention_executed`, `audit.flag_created`
 
 **Response (200):**
 
@@ -1437,7 +1450,7 @@ curl - N 'https://hub.example.com/api/servers/SERVER_UUID/logs/tail?path=/var/lo
 
 ### 30. POST /api/servers/{id}/upload
 
-Upload a file to a server's dropzone (`/tmp/aerodocs-dropzone/` on the agent).
+Upload a file to a server's dropzone (`/tmp/veyport-dropzone/` on the agent).
 
 | Property | Value |
 |---|---|
@@ -1477,7 +1490,7 @@ curl - X POST https://hub.example.com/api/servers/SERVER_UUID/upload \
 
 ### 31. GET /api/servers/{id}/dropzone
 
-List files in a server's dropzone directory (`/tmp/aerodocs-dropzone/`).
+List files in a server's dropzone directory (`/tmp/veyport-dropzone/`).
 
 | Property | Value |
 |---|---|
@@ -1493,7 +1506,7 @@ List files in a server's dropzone directory (`/tmp/aerodocs-dropzone/`).
   "files": [
     {
       "name": "config.tar.gz",
-      "path": "/tmp/aerodocs-dropzone/config.tar.gz",
+      "path": "/tmp/veyport-dropzone/config.tar.gz",
       "is_dir": false,
       "size": 2048576,
       "mod_time": "2025-01-01T12:00:00Z",
@@ -1580,7 +1593,7 @@ Download the agent binary for a specific platform.
 - `os` - Operating system (only `linux` is supported)
 - `arch` - Architecture (`amd64` or `arm64`)
 
-**Response:** Binary file download with `Content-Disposition: attachment; filename=aerodocs-agent-linux-amd64`
+**Response:** Binary file download with `Content-Disposition: attachment; filename=veyport-agent-linux-amd64`
 
 **Error Cases:**
 - `404` - Unsupported platform or binary not found
@@ -1668,7 +1681,7 @@ Get the Hub configuration (currently the gRPC external address).
 
 ```json
 {
-  "grpc_external_addr": "aerodocs.example.com:9443"
+  "grpc_external_addr": "veyport.example.com:9443"
 }
 ```
 
@@ -1693,7 +1706,7 @@ Update the Hub configuration.
 
 ```json
 {
-  "grpc_external_addr": "aerodocs.example.com:9443"
+  "grpc_external_addr": "veyport.example.com:9443"
 }
 ```
 
@@ -1717,7 +1730,7 @@ Update the Hub configuration.
 curl - X PUT https://hub.example.com/api/settings/hub \
   - H 'Authorization: Bearer <access_token>' \
   - H 'Content-Type: application/json' \
-  - d '{"grpc_external_addr":"aerodocs.example.com:9443"}'
+  - d '{"grpc_external_addr":"veyport.example.com:9443"}'
 ```
 
 ---
@@ -1739,7 +1752,7 @@ Get the current SMTP configuration. The password field is omitted from the respo
   "host": "smtp.example.com",
   "port": 587,
   "username": "notifications@example.com",
-  "from": "AeroDocs <notifications@example.com>",
+  "from": "Veyport <notifications@example.com>",
   "tls": true,
   "enabled": true
 }
@@ -1770,7 +1783,7 @@ Update the SMTP configuration. Invalidates the cached SMTP config immediately.
   "port": 587,
   "username": "notifications@example.com",
   "password": "smtp-password",
-  "from": "AeroDocs <notifications@example.com>",
+  "from": "Veyport <notifications@example.com>",
   "tls": true,
   "enabled": true
 }
@@ -1790,7 +1803,7 @@ Update the SMTP configuration. Invalidates the cached SMTP config immediately.
 curl - X PUT https://hub.example.com/api/settings/smtp \
   - H 'Authorization: Bearer <access_token>' \
   - H 'Content-Type: application/json' \
-  - d '{"host":"smtp.example.com","port":587,"username":"user","password":"pass","from":"AeroDocs <user@example.com>","tls":true,"enabled":true}'
+  - d '{"host":"smtp.example.com","port":587,"username":"user","password":"pass","from":"Veyport <user@example.com>","tls":true,"enabled":true}'
 ```
 
 ---
@@ -1959,3 +1972,147 @@ List notification delivery log entries. Supports pagination.
 curl 'https://hub.example.com/api/notifications/log?limit=20' \
   - H 'Authorization: Bearer <access_token>'
 ```
+
+---
+
+## Terminal Endpoints
+
+Terminal endpoints require an interactive browser access token. CLI-created API tokens are rejected. Access is limited to admins and LDAP users who have terminal access from LDAP group mapping plus a root (`/`) assignment on the target server.
+
+### 45. POST /api/servers/{id}/terminal/sessions
+
+Create a terminal session on an online server.
+
+| Property | Value |
+|---|---|
+| Auth | Interactive access token, terminal access required |
+| Rate Limit | 3600 requests/minute shared across terminal endpoints |
+
+**Path Parameters:**
+- `id` - Server UUID
+
+**Request Body:**
+
+```json
+{
+  "cols": 120,
+  "rows": 32,
+  "cwd": "/home/alice"
+}
+```
+
+`cwd` is optional. If provided, it must be a valid absolute path.
+
+**Response (201):**
+
+```json
+{
+  "session_id": "session-uuid"
+}
+```
+
+**Error Cases:**
+- `400` - Invalid request body or invalid `cwd`
+- `403` - Terminal access required, interactive login required, or root assignment required
+- `502` - Agent failed to open the terminal
+- `504` - Agent did not respond in time
+
+---
+
+### 46. GET /api/servers/{id}/terminal/sessions/{sessionId}/stream
+
+Attach to a terminal session event stream. Only one stream can attach to a session.
+
+| Property | Value |
+|---|---|
+| Auth | Interactive access token, terminal access required |
+| Response Type | `text/event-stream` |
+
+**SSE Data Events:**
+
+```
+data: <base64-encoded-terminal-bytes>
+```
+
+**SSE Exit Events:**
+
+```
+event: exit
+data: {"exit_code":0,"error":""}
+```
+
+The Hub closes the terminal session when the stream disconnects.
+
+**Error Cases:**
+- `404` - Terminal session not found
+- `409` - Stream already attached
+
+---
+
+### 47. POST /api/servers/{id}/terminal/sessions/{sessionId}/input
+
+Send terminal input to an active session.
+
+| Property | Value |
+|---|---|
+| Auth | Interactive access token, terminal access required |
+
+**Request Body:**
+
+```json
+{
+  "data": "whoami\n"
+}
+```
+
+`data` is limited to 8192 bytes per request.
+
+**Response:** `202 Accepted`
+
+**Error Cases:**
+- `400` - Invalid request body or input too large
+- `404` - Terminal session not found
+- `409` - Terminal session is closed
+- `502` - Failed to send input to the agent
+
+---
+
+### 48. POST /api/servers/{id}/terminal/sessions/{sessionId}/resize
+
+Resize an active terminal session.
+
+| Property | Value |
+|---|---|
+| Auth | Interactive access token, terminal access required |
+
+**Request Body:**
+
+```json
+{
+  "cols": 120,
+  "rows": 32
+}
+```
+
+**Response:** `202 Accepted`
+
+**Error Cases:**
+- `400` - Invalid request body
+- `404` - Terminal session not found
+- `409` - Terminal session is closed
+- `502` - Failed to send resize event to the agent
+
+---
+
+### 49. DELETE /api/servers/{id}/terminal/sessions/{sessionId}
+
+Close an active terminal session.
+
+| Property | Value |
+|---|---|
+| Auth | Interactive access token, terminal access required |
+
+**Response:** `204 No Content`
+
+**Error Cases:**
+- `404` - Terminal session not found

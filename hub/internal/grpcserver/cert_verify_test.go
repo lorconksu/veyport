@@ -9,9 +9,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/wyiu/aerodocs/hub/internal/ca"
-	"github.com/wyiu/aerodocs/hub/internal/model"
-	pb "github.com/wyiu/aerodocs/proto/aerodocs/v1"
+	"github.com/wyiu/veyport/hub/internal/ca"
+	"github.com/wyiu/veyport/hub/internal/model"
+	pb "github.com/wyiu/veyport/proto/veyport/v1"
 )
 
 const (

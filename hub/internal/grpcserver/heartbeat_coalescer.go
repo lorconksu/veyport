@@ -4,7 +4,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/wyiu/aerodocs/hub/internal/store"
+	"github.com/wyiu/veyport/hub/internal/store"
 )
 
 // HeartbeatCoalescer rate-limits last_seen_at DB writes to at most once per

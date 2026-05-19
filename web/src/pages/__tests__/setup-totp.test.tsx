@@ -41,7 +41,7 @@ const mockApiFetchWithToken = apiFetchWithToken as ReturnType<typeof vi.fn>
 import { useLocation } from 'react-router-dom'
 const mockUseLocation = useLocation as ReturnType<typeof vi.fn>
 
-const totpData = { secret: 'ABCDEFGHIJKLMNOP', qr_url: 'otpauth://totp/AeroDocs?secret=ABCDEFGHIJKLMNOP' }
+const totpData = { secret: 'ABCDEFGHIJKLMNOP', qr_url: 'otpauth://totp/Veyport?secret=ABCDEFGHIJKLMNOP' }
 
 function renderPage() {
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } })

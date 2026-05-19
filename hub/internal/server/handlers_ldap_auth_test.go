@@ -12,7 +12,7 @@ import (
 	"time"
 
 	ldap "github.com/go-ldap/ldap/v3"
-	"github.com/wyiu/aerodocs/hub/internal/model"
+	"github.com/wyiu/veyport/hub/internal/model"
 )
 
 type fakeLDAPAuthenticator struct {
@@ -88,7 +88,7 @@ func TestHandleLogin_LDAPCreatesShadowUserAndRequiresTOTPSetup(t *testing.T) {
 			Email:      "alice@example.com",
 			DN:         "uid=alice,ou=people,dc=example,dc=com",
 			ExternalID: "entry-alice",
-			Groups:     []string{"aerodocs-viewers", "aerodocs-terminal-users"},
+			Groups:     []string{"veyport-viewers", "veyport-terminal-users"},
 		},
 	}
 
@@ -107,7 +107,7 @@ func TestHandleLogin_LDAPCreatesShadowUserAndRequiresTOTPSetup(t *testing.T) {
 		t.Fatalf("decode login response: %v", err)
 	}
 	if !resp.RequiresTOTPSetup || resp.SetupToken == "" {
-		t.Fatalf("expected LDAP login to require AeroDocs TOTP setup, got %+v", resp)
+		t.Fatalf("expected LDAP login to require Veyport TOTP setup, got %+v", resp)
 	}
 
 	user, err := s.store.GetUserByUsername("alice")
@@ -154,7 +154,7 @@ func TestAuthenticateLDAPLoginMapsAdminAndTerminalAccess(t *testing.T) {
 			Email:      "carol@example.com",
 			DN:         "uid=carol,ou=people,dc=example,dc=com",
 			ExternalID: "entry-carol",
-			Groups:     []string{"aerodocs-admins", "aerodocs-terminal-users"},
+			Groups:     []string{"veyport-admins", "veyport-terminal-users"},
 		},
 	}
 
@@ -390,8 +390,8 @@ func TestLDAPBindAuthenticatorAuthenticateSuccess(t *testing.T) {
 			},
 			{
 				Entries: []*ldap.Entry{
-					ldap.NewEntry("cn=aerodocs-admins,ou=groups,dc=example,dc=com", map[string][]string{"cn": {"aerodocs-admins"}}),
-					ldap.NewEntry("cn=aerodocs-terminal-users,ou=groups,dc=example,dc=com", map[string][]string{"cn": {"aerodocs-terminal-users"}}),
+					ldap.NewEntry("cn=veyport-admins,ou=groups,dc=example,dc=com", map[string][]string{"cn": {"veyport-admins"}}),
+					ldap.NewEntry("cn=veyport-terminal-users,ou=groups,dc=example,dc=com", map[string][]string{"cn": {"veyport-terminal-users"}}),
 				},
 			},
 		},
@@ -422,8 +422,8 @@ func TestLDAPBindAuthenticatorAuthenticateSuccess(t *testing.T) {
 	if identity.Username != "alice" || identity.Email != "alice@example.com" || identity.ExternalID != "entry-alice" {
 		t.Fatalf("unexpected identity: %+v", identity)
 	}
-	if !hasAnyLDAPGroup(identity.Groups, []string{"aerodocs-admins"}) ||
-		!hasAnyLDAPGroup(identity.Groups, []string{"aerodocs-terminal-users"}) {
+	if !hasAnyLDAPGroup(identity.Groups, []string{"veyport-admins"}) ||
+		!hasAnyLDAPGroup(identity.Groups, []string{"veyport-terminal-users"}) {
 		t.Fatalf("expected mapped groups, got %#v", identity.Groups)
 	}
 	if len(conn.binds) != 3 {
@@ -542,7 +542,7 @@ func ldapSearchCaseAuthenticator(conn *fakeLDAPConn) ldapBindAuthenticator {
 }
 
 func TestMapLDAPRolePriorityAndNoMatch(t *testing.T) {
-	role, ok := mapLDAPRole([]string{"aerodocs-viewers", "aerodocs-admins"})
+	role, ok := mapLDAPRole([]string{"veyport-viewers", "veyport-admins"})
 	if !ok || role != model.RoleAdmin {
 		t.Fatalf("expected admin role priority, got role=%s ok=%v", role, ok)
 	}
@@ -550,7 +550,7 @@ func TestMapLDAPRolePriorityAndNoMatch(t *testing.T) {
 	if ok || role != "" {
 		t.Fatalf("expected no role match, got role=%s ok=%v", role, ok)
 	}
-	if hasAnyLDAPGroup([]string{"ipausers"}, []string{"aerodocs-admins"}) {
+	if hasAnyLDAPGroup([]string{"ipausers"}, []string{"veyport-admins"}) {
 		t.Fatal("did not expect unrelated group match")
 	}
 }

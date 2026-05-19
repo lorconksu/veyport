@@ -5,7 +5,7 @@ import (
 	"sync"
 	"time"
 
-	pb "github.com/wyiu/aerodocs/proto/aerodocs/v1"
+	pb "github.com/wyiu/veyport/proto/veyport/v1"
 )
 
 type AgentConn struct {

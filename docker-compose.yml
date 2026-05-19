@@ -1,13 +1,13 @@
 services:
-  aerodocs:
-    image: yiucloud/aerodocs:${AERODOCS_VERSION:-latest}
-    container_name: aerodocs
+  veyport:
+    image: yiucloud/veyport:${VEYPORT_VERSION:-latest}
+    container_name: veyport
     ports:
       - "8081:8081"
       - "127.0.0.1:9090:9090"  # gRPC - agents connect via Traefik, not directly
     volumes:
-      - aerodocs-data:/data
+      - veyport-data:/data
     restart: unless-stopped
 
 volumes:
-  aerodocs-data:
+  veyport-data:

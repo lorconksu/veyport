@@ -7,7 +7,7 @@ beforeEach(() => {
   vi.stubGlobal('fetch', mockFetch)
   mockFetch.mockReset()
   // Clear cookies
-  document.cookie = 'aerodocs_csrf=; expires=Thu, 01 Jan 1970 00:00:00 GMT'
+  document.cookie = 'veyport_csrf=; expires=Thu, 01 Jan 1970 00:00:00 GMT'
   // Reset window.location.href stub
   Object.defineProperty(window, 'location', {
     value: { href: '' },
@@ -62,7 +62,7 @@ describe('apiFetch', () => {
   })
 
   it('includes X-CSRF-Token header when CSRF cookie exists', async () => {
-    document.cookie = 'aerodocs_csrf=csrf-token-abc'
+    document.cookie = 'veyport_csrf=csrf-token-abc'
     mockFetch.mockResolvedValueOnce(makeResponse({ ok: true }))
     await apiFetch('/protected')
     const [, init] = mockFetch.mock.calls[0]
@@ -163,7 +163,7 @@ describe('apiFetch', () => {
   })
 
   it('includes CSRF token in refresh request when cookie exists', async () => {
-    document.cookie = 'aerodocs_csrf=my-csrf'
+    document.cookie = 'veyport_csrf=my-csrf'
     mockFetch.mockResolvedValueOnce(makeResponse({ error: 'Unauthorized' }, 401))
     mockFetch.mockResolvedValueOnce(makeResponse({ ok: true }))
     mockFetch.mockResolvedValueOnce(makeResponse({ data: 'ok' }))
@@ -231,7 +231,7 @@ describe('apiFetchWithToken', () => {
   })
 
   it('includes CSRF token when cookie exists', async () => {
-    document.cookie = 'aerodocs_csrf=csrf-for-setup'
+    document.cookie = 'veyport_csrf=csrf-for-setup'
     mockFetch.mockResolvedValueOnce(makeResponse({ ok: true }))
     await apiFetchWithToken('/setup', 'tok')
     const [, init] = mockFetch.mock.calls[0]

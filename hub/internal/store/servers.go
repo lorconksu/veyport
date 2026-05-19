@@ -6,7 +6,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/wyiu/aerodocs/hub/internal/model"
+	"github.com/wyiu/veyport/hub/internal/model"
 )
 
 func (s *Store) CreateServer(srv *model.Server) error {

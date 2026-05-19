@@ -1,7 +1,7 @@
 package model
 
 const (
-	AuditCatalogLastUpdated      = "2026-04-16T00:00:00Z"
+	AuditCatalogLastUpdated      = "2026-05-17T00:00:00Z"
 	auditCategoryUserManagement  = "User Management"
 	auditCategoryAgentLifecycle  = "Agent Lifecycle"
 	auditCategoryFileAccess      = "File Access"
@@ -43,6 +43,8 @@ var AuditCatalog = []AuditCatalogEntry{
 	{Action: AuditAuditFilterSaved, Label: "Audit filter saved", Category: auditCategoryAuditGovernance, Outcome: AuditOutcomeSuccess, ActorType: AuditActorTypeUser, ResourceType: "audit"},
 	{Action: AuditAuditFilterDeleted, Label: "Audit filter deleted", Category: auditCategoryAuditGovernance, Outcome: AuditOutcomeSuccess, ActorType: AuditActorTypeUser, ResourceType: "audit"},
 	{Action: AuditAuditRetentionUpdated, Label: "Audit retention updated", Category: auditCategoryAuditGovernance, Outcome: AuditOutcomeSuccess, ActorType: AuditActorTypeUser, ResourceType: "audit"},
+	{Action: AuditAuditRetentionExecuted, Label: "Audit retention executed", Category: auditCategoryAuditGovernance, Outcome: AuditOutcomeSuccess, ActorType: AuditActorTypeUser, ResourceType: "audit"},
+	{Action: AuditAuditFlagCreated, Label: "Audit flag created", Category: auditCategoryAuditGovernance, Outcome: AuditOutcomeSuccess, ActorType: AuditActorTypeUser, ResourceType: "audit"},
 	{Action: AuditAPITokenCreated, Label: "API token created", Category: auditCategoryUserManagement, Outcome: AuditOutcomeSuccess, ActorType: AuditActorTypeSystem, ResourceType: "api_token"},
 	{Action: AuditAPITokenRevoked, Label: "API token revoked", Category: auditCategoryUserManagement, Outcome: AuditOutcomeSuccess, ActorType: AuditActorTypeSystem, ResourceType: "api_token"},
 }

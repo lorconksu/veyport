@@ -3,13 +3,13 @@ package store_test
 import (
 	"testing"
 
-	"github.com/wyiu/aerodocs/hub/internal/store"
+	"github.com/wyiu/veyport/hub/internal/store"
 )
 
 // TestNew_InvalidPath verifies that opening a DB at an unwritable path returns an error.
 func TestNew_InvalidPath(t *testing.T) {
 	// /dev/null/noexist is an invalid path — the parent is /dev/null (not a dir)
-	_, err := store.New("/dev/null/nope/aerodocs.db")
+	_, err := store.New("/dev/null/nope/veyport.db")
 	if err == nil {
 		t.Fatal("expected error for invalid DB path")
 	}

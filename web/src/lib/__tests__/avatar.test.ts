@@ -35,13 +35,13 @@ describe('avatar', () => {
 
     it('returns stored color from localStorage when valid', () => {
       const validColor = AVATAR_COLORS[2]
-      localStorage.setItem('aerodocs_avatar_color', validColor)
+      localStorage.setItem('veyport_avatar_color', validColor)
       const result = getAvatarColor('admin')
       expect(result).toBe(validColor)
     })
 
     it('falls back to hash-derived color when stored color is not in AVATAR_COLORS', () => {
-      localStorage.setItem('aerodocs_avatar_color', '#123456')
+      localStorage.setItem('veyport_avatar_color', '#123456')
       const result = getAvatarColor('admin')
       expect(AVATAR_COLORS).toContain(result)
     })
@@ -60,7 +60,7 @@ describe('avatar', () => {
   describe('setAvatarColor', () => {
     it('stores the color in localStorage', () => {
       setAvatarColor('#3b82f6')
-      expect(localStorage.getItem('aerodocs_avatar_color')).toBe('#3b82f6')
+      expect(localStorage.getItem('veyport_avatar_color')).toBe('#3b82f6')
     })
 
     it('stored color is returned by getAvatarColor when valid', () => {

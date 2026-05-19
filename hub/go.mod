@@ -1,4 +1,4 @@
-module github.com/wyiu/aerodocs/hub
+module github.com/wyiu/veyport/hub
 
 go 1.26.3
 
@@ -12,7 +12,7 @@ require (
 
 require (
 	github.com/go-ldap/ldap/v3 v3.4.13
-	github.com/wyiu/aerodocs/agent v0.0.0-00010101000000-000000000000
+	github.com/wyiu/veyport/agent v0.0.0-00010101000000-000000000000
 )
 
 require (
@@ -27,7 +27,7 @@ require (
 	github.com/mattn/go-isatty v0.0.20 // indirect
 	github.com/ncruces/go-strftime v1.0.0 // indirect
 	github.com/remyoudompheng/bigfft v0.0.0-20230129092748-24d4a6f8daec // indirect
-	github.com/wyiu/aerodocs/proto v0.0.0
+	github.com/wyiu/veyport/proto v0.0.0
 	golang.org/x/net v0.53.0 // indirect
 	golang.org/x/sys v0.43.0 // indirect
 	golang.org/x/text v0.36.0 // indirect
@@ -39,6 +39,6 @@ require (
 	modernc.org/memory v1.11.0 // indirect
 )
 
-replace github.com/wyiu/aerodocs/proto => ../proto
+replace github.com/wyiu/veyport/proto => ../proto
 
-replace github.com/wyiu/aerodocs/agent => ../agent
+replace github.com/wyiu/veyport/agent => ../agent

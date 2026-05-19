@@ -200,7 +200,7 @@ func TestListDir_UnreadableDir(t *testing.T) {
 
 	dir := t.TempDir()
 	noReadDir := filepath.Join(dir, "no-read")
-	os.MkdirAll(noReadDir, 0000) // NOSONAR — test fixture requires specific permissions
+	os.MkdirAll(noReadDir, 0000)    // NOSONAR — test fixture requires specific permissions
 	defer os.Chmod(noReadDir, 0755) // NOSONAR — restore permissions for cleanup
 
 	resp, err := ListDir(noReadDir)
@@ -449,7 +449,7 @@ func TestReadFile_NoReadPermission(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "noperm.txt")
 	os.WriteFile(path, []byte("secret"), 0644)
-	os.Chmod(path, 0000) // NOSONAR — test fixture requires specific permissions
+	os.Chmod(path, 0000)       // NOSONAR — test fixture requires specific permissions
 	defer os.Chmod(path, 0644) // NOSONAR — restore permissions for cleanup
 
 	resp, err := ReadFile(path, 0, 100)

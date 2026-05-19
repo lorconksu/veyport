@@ -1,48 +1,43 @@
 <p align="center">
-  <img src="web/public/aerodoc-vertical.png" alt="AeroDocs" width="160" />
+  <img src="web/public/veyport-dark-vertical.png" alt="Veyport" width="180" />
 </p>
 
 <p align="center">
   <strong>Secure remote file access and server operations from one web UI</strong><br>
-  Browse files, stream logs, and move data across your servers from a self-hosted control plane built for small fleets.
+  Browse files, stream logs, open governed terminal sessions, and move data across your servers from a self-hosted control plane built for small fleets.
 </p>
 
 <p align="center">
-  <a href="https://github.com/lorconksu/aerodocs/actions/workflows/ci.yml">
-    <img src="https://img.shields.io/github/actions/workflow/status/lorconksu/aerodocs/ci.yml?branch=main&label=CI" alt="CI status" />
+  <a href="https://github.com/lorconksu/veyport/actions/workflows/ci.yml">
+    <img src="https://img.shields.io/github/actions/workflow/status/lorconksu/veyport/ci.yml?branch=main&label=CI" alt="CI status" />
   </a>
-  <a href="https://sonarcloud.io/summary/new_code?id=lorconksu_aerodocs">
-    <img src="https://sonarcloud.io/api/project_badges/measure?project=lorconksu_aerodocs&metric=alert_status" alt="Quality Gate Status" />
+  <a href="https://sonarcloud.io/summary/new_code?id=lorconksu_veyport">
+    <img src="https://sonarcloud.io/api/project_badges/measure?project=lorconksu_veyport&metric=alert_status" alt="Quality Gate Status" />
   </a>
-  <a href="https://github.com/lorconksu/aerodocs/releases">
-    <img src="https://img.shields.io/github/v/release/lorconksu/aerodocs?sort=semver&label=release" alt="Latest release" />
+  <a href="https://github.com/lorconksu/veyport/releases">
+    <img src="https://img.shields.io/github/v/release/lorconksu/veyport?sort=semver&label=release" alt="Latest release" />
   </a>
   <img src="https://img.shields.io/badge/go-1.26+-00ADD8?logo=go&logoColor=white" alt="Go 1.26+" />
   <img src="https://img.shields.io/badge/react-19-20232A?logo=react" alt="React 19" />
-  <a href="https://github.com/lorconksu/aerodocs/blob/main/LICENSE">
+  <a href="https://github.com/lorconksu/veyport/blob/main/LICENSE">
     <img src="https://img.shields.io/badge/license-Apache%202.0-0f766e" alt="License Apache 2.0" />
   </a>
 </p>
 
 <p align="center">
-  <img src="docs/wiki/screenshots/dashboard.png" alt="AeroDocs Dashboard" width="800" />
+  <img src="docs/wiki/screenshots/dashboard.png" alt="Veyport Dashboard" width="800" />
 </p>
 
-## What is AeroDocs?
+## What is Veyport?
 
-AeroDocs gives you secure, day-to-day access to your servers through one self-hosted web interface. Browse remote file systems, stream logs in real time, and transfer files without handing out SSH keys or bouncing between terminal sessions.
+Veyport gives you secure, day-to-day access to your servers through one self-hosted web interface. Browse remote file systems, stream logs in real time, open governed shell sessions, and transfer files without handing out SSH keys or bouncing between terminal sessions.
 
 It runs as a single binary with no external dependencies. The Hub embeds the full React frontend and uses SQLite for storage, so setup stays lightweight: no separate database, no extra services, and no runtime sprawl. Deploy it once and connect your agents.
 
-AeroDocs is built for home lab operators and small teams who need dependable access, clear audit trails, and tight operational control. Every action is logged, every user requires 2FA, and permissions are scoped per-server and per-path.
+Veyport is built for home lab operators and small teams who need dependable access, clear audit trails, and tight operational control. Every action is logged, every user requires 2FA, and permissions are scoped per-server and per-path.
 
-AeroDocs is open source software licensed under the Apache License 2.0. The
-software license does not grant rights to the `AeroDocs` name or logos; see
-[TRADEMARKS.md](TRADEMARKS.md) for branding rules and [CONTRIBUTING.md](CONTRIBUTING.md)
-for issue and pull-request expectations.
-
-AeroDocs is open source software licensed under the Apache License 2.0. The
-software license does not grant rights to the `AeroDocs` name or logos; see
+Veyport is open source software licensed under the Apache License 2.0. The
+software license does not grant rights to the `Veyport` name or logos; see
 [TRADEMARKS.md](TRADEMARKS.md) for branding rules and [CONTRIBUTING.md](CONTRIBUTING.md)
 for issue and pull-request expectations.
 
@@ -50,19 +45,20 @@ for issue and pull-request expectations.
 
 - **Fleet Dashboard** — At-a-glance health overview of all connected servers with live status, search, and filtering
 - **Real-time Log Tailing** — Live log streaming over SSE with server-side grep/filter, pause/resume, and terminal-like UI
+- **Live Browser Terminal** — xterm-based shell sessions over the existing agent stream for admins and authorized LDAP users
 - **Remote File Browser** — Browse remote file systems with syntax highlighting for 16 languages; resizable sidebar, refresh button, and binaries/forbidden paths shown but greyed out
 - **Secure File Transfers (Dropzone)** — Admin-only drag-and-drop chunked file uploads to a quarantined staging directory on the target server
 - **Email Notifications** — 8 configurable alert types (agent connect/disconnect, file uploads, login events, and more)
-- **Audit Logging** — Immutable record of every action with 23 event types — who did what, when, and from where
+- **Audit Logging** — Immutable record of security and workflow actions, including auth, server lifecycle, file access, terminal, API token, and audit-governance events
 - **2FA (TOTP)** — Mandatory TOTP-based two-factor authentication for all users, no exceptions
 - **Role-Based Access** — Admin, Auditor, and Viewer roles with per-server, per-path permissions enforced at both Hub and Agent layers
 - **mTLS Agent Communication** — Hub-issued 12-hour ECDSA P-256 client certificates with automatic in-stream renewal
 
 ## Architecture
 
-AeroDocs uses a **Hub-and-Spoke** model. The Hub is the central server that hosts the web UI, REST API, and SQLite database. Agents are lightweight binaries deployed on each remote server, maintaining persistent gRPC streams back to the Hub.
+Veyport uses a **Hub-and-Spoke** model. The Hub is the central server that hosts the web UI, REST API, and SQLite database. Agents are lightweight binaries deployed on each remote server, maintaining persistent gRPC streams back to the Hub.
 
-![AeroDocs Architecture](docs/screenshots/aerodocs-architecture.png)
+![Veyport Architecture](docs/screenshots/veyport-architecture.png)
 
 - **Hub** — Central Go server. Serves the web UI, exposes REST APIs, manages SQLite, and enforces all authentication and permissions. Runs HTTP on `:8081` and gRPC on `:9090`.
 - **Agent** — Lightweight Go binary on each remote server. Maintains a persistent bidirectional gRPC stream to the Hub, executing file, log, and upload commands on demand.
@@ -74,9 +70,9 @@ For the full architecture breakdown, see [Architecture](docs/wiki/Architecture.m
 
 ```bash
 # Download the compose file
-curl -O https://raw.githubusercontent.com/lorconksu/aerodocs/main/docker-compose.yml
+curl -O https://raw.githubusercontent.com/lorconksu/veyport/main/docker-compose.yml
 
-# Start AeroDocs
+# Start Veyport
 docker compose up -d
 ```
 
@@ -135,8 +131,8 @@ The agent installs as a systemd service, connects to the Hub over gRPC with mTLS
 - [Deployment Guide](docs/wiki/Deployment.md) — Docker-first deployment and runtime flags
 - [Proxy Configuration](docs/wiki/Proxy-Configuration.md) — Reverse proxy and gRPC passthrough setup
 - [Development Guide](docs/wiki/Development.md) — Local development workflow and test commands
-- [SonarCloud](https://sonarcloud.io/summary/new_code?id=lorconksu_aerodocs) — Public code quality, coverage, and maintainability dashboard
+- [SonarCloud](https://sonarcloud.io/summary/new_code?id=lorconksu_veyport) — Public code quality, coverage, and maintainability dashboard
 
 ## License
 
-AeroDocs is open source software licensed under the [Apache License 2.0](LICENSE). See [NOTICE](NOTICE) for attribution details and [TRADEMARKS.md](TRADEMARKS.md) for name and branding rules.
+Veyport is open source software licensed under the [Apache License 2.0](LICENSE). See [NOTICE](NOTICE) for attribution details and [TRADEMARKS.md](TRADEMARKS.md) for name and branding rules.

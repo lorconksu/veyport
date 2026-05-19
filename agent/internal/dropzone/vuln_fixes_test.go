@@ -7,7 +7,7 @@ import (
 )
 
 const (
-	testVulnFileTxt    = "file.txt"
+	testVulnFileTxt     = "file.txt"
 	testUploadReqPrefix = ".upload-req-1"
 )
 

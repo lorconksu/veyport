@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/wyiu/aerodocs/hub/internal/model"
+	"github.com/wyiu/veyport/hub/internal/model"
 )
 
 func (s *Store) CreateAPIToken(token *model.APIToken) error {

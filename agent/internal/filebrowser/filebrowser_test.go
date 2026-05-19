@@ -199,10 +199,10 @@ func TestValidatePath_BlockedPaths(t *testing.T) {
 		{"/proc/1/cmdline", true},
 		{"/proc/kcore", true},
 		{"/sys/kernel/security", true},
-		{"/etc/passwd", false},          // not blocked — readable by all
-		{"/var/log/syslog", false},       // normal path
-		{"/etc/shadowbackup", false},     // not a prefix match
-		{"/proc", false},                 // /proc itself is not blocked, only /proc/*
+		{"/etc/passwd", false},       // not blocked — readable by all
+		{"/var/log/syslog", false},   // normal path
+		{"/etc/shadowbackup", false}, // not a prefix match
+		{"/proc", false},             // /proc itself is not blocked, only /proc/*
 	}
 	for _, tt := range tests {
 		err := validatePath(tt.path)

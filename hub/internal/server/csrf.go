@@ -65,7 +65,7 @@ func (s *Server) csrfMiddleware(next http.Handler) http.Handler {
 			return
 		}
 
-		// Validate CSRF: X-CSRF-Token header must match aerodocs_csrf cookie.
+		// Validate CSRF: X-CSRF-Token header must match veyport_csrf cookie.
 		if !csrfTokensMatch(r) {
 			respondError(w, http.StatusForbidden, "CSRF validation failed")
 			return

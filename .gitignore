@@ -1,8 +1,8 @@
 .superpowers/
 
 # Go
-hub/aerodocs
-agent/aerodocs-agent
+hub/veyport
+agent/veyport-agent
 bin/
 *.test
 
@@ -37,7 +37,12 @@ web/coverage/
 docs-internal/
 node_modules/
 *.png
+!docs/screenshots/*.png
+!docs/wiki/screenshots/*.png
+!web/public/favicon.png
+!web/public/veyport-*.png
 .env
+.dev-certs/
 scripts/nightly-security-scan.sh
 
 # Temporary development scripts

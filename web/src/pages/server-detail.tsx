@@ -1525,7 +1525,7 @@ export function ServerDetailPage() {
   const [markdownView, setMarkdownView] = useState<'raw' | 'rendered'>('rendered')
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false)
   const [sidebarWidth, setSidebarWidth] = useState(() => {
-    const saved = sessionStorage.getItem('aerodocs-sidebar-width')
+    const saved = sessionStorage.getItem('veyport-sidebar-width')
     return saved ? Number(saved) : 288
   })
   const [isDragging, setIsDragging] = useState(false)
@@ -1705,7 +1705,7 @@ export function ServerDetailPage() {
         const delta = ev.clientX - startX
         const newWidth = Math.min(600, Math.max(200, startWidth + delta))
         setSidebarWidth(newWidth)
-        sessionStorage.setItem('aerodocs-sidebar-width', String(newWidth))
+        sessionStorage.setItem('veyport-sidebar-width', String(newWidth))
       }
 
       const handleMouseUp = () => {
@@ -1722,7 +1722,7 @@ export function ServerDetailPage() {
 
   const handleResetWidth = useCallback(() => {
     setSidebarWidth(288)
-    sessionStorage.setItem('aerodocs-sidebar-width', '288')
+    sessionStorage.setItem('veyport-sidebar-width', '288')
   }, [])
 
   // Reset tree state when server changes

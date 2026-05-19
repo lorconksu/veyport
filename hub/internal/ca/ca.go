@@ -1,4 +1,4 @@
-// Package ca provides certificate authority operations for AeroDocs mTLS.
+// Package ca provides certificate authority operations for Veyport mTLS.
 package ca
 
 import (
@@ -14,8 +14,8 @@ import (
 	"net"
 	"time"
 
-	"github.com/wyiu/aerodocs/hub/internal/auth"
-	"github.com/wyiu/aerodocs/hub/internal/store"
+	"github.com/wyiu/veyport/hub/internal/auth"
+	"github.com/wyiu/veyport/hub/internal/store"
 )
 
 // loadExistingCA decodes and decrypts an existing CA from hex-encoded DER values.
@@ -109,7 +109,7 @@ func InitCA(st *store.Store, jwtSecret string) (*x509.Certificate, *ecdsa.Privat
 }
 
 // GenerateCA creates an ECDSA P-256 CA keypair with a self-signed certificate.
-// The certificate has a 10-year validity, CN="AeroDocs CA", IsCA=true,
+// The certificate has a 10-year validity, CN="Veyport CA", IsCA=true,
 // and KeyUsage of CertSign|CRLSign.
 func GenerateCA() (*x509.Certificate, *ecdsa.PrivateKey, error) {
 	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
@@ -125,7 +125,7 @@ func GenerateCA() (*x509.Certificate, *ecdsa.PrivateKey, error) {
 	now := time.Now()
 	template := &x509.Certificate{
 		SerialNumber:          serial,
-		Subject:               pkix.Name{CommonName: "AeroDocs CA"},
+		Subject:               pkix.Name{CommonName: "Veyport CA"},
 		NotBefore:             now,
 		NotAfter:              now.Add(10 * 365 * 24 * time.Hour),
 		IsCA:                  true,

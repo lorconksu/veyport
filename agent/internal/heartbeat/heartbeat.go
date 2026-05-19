@@ -3,8 +3,8 @@ package heartbeat
 import (
 	"time"
 
-	"github.com/wyiu/aerodocs/agent/internal/sysinfo"
-	pb "github.com/wyiu/aerodocs/proto/aerodocs/v1"
+	"github.com/wyiu/veyport/agent/internal/sysinfo"
+	pb "github.com/wyiu/veyport/proto/veyport/v1"
 )
 
 func BuildMessage(serverID string) *pb.AgentMessage {

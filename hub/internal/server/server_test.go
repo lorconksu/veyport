@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/wyiu/aerodocs/hub/internal/store"
+	"github.com/wyiu/veyport/hub/internal/store"
 )
 
 func TestNew_CreatesServer(t *testing.T) {

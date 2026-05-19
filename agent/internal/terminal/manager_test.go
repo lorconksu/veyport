@@ -13,7 +13,7 @@ import (
 	"testing"
 	"time"
 
-	pb "github.com/wyiu/aerodocs/proto/aerodocs/v1"
+	pb "github.com/wyiu/veyport/proto/veyport/v1"
 )
 
 func TestExecutionIdentityForRunAsBlankUsesAgentUser(t *testing.T) {
@@ -27,7 +27,7 @@ func TestExecutionIdentityForRunAsBlankUsesAgentUser(t *testing.T) {
 }
 
 func TestExecutionIdentityForRunAsUnknownUser(t *testing.T) {
-	_, err := executionIdentityForRunAs("aerodocs-definitely-missing-user")
+	_, err := executionIdentityForRunAs("veyport-definitely-missing-user")
 	if err == nil {
 		t.Fatal("expected unknown run-as user to fail")
 	}
@@ -100,14 +100,14 @@ func TestExecutionIdentityForRunAsFallsBackToNSS(t *testing.T) {
 }
 
 func TestBuildTerminalEnvDoesNotInheritProcessSecrets(t *testing.T) {
-	t.Setenv("AERODOCS_AGENT_SECRET", "do-not-leak")
+	t.Setenv("VEYPORT_AGENT_SECRET", "do-not-leak")
 	env := buildTerminalEnv("/bin/bash", &executionIdentity{
 		username: "ldapuser",
 		homeDir:  "/home/ldapuser",
 	})
 
 	for _, entry := range env {
-		if strings.HasPrefix(entry, "AERODOCS_AGENT_SECRET=") {
+		if strings.HasPrefix(entry, "VEYPORT_AGENT_SECRET=") {
 			t.Fatalf("terminal env inherited process secret: %v", env)
 		}
 	}
@@ -188,12 +188,12 @@ func TestManagerOpenInputResizeAndExit(t *testing.T) {
 	if err := m.Resize("session-pty", 100, 32); err != nil {
 		t.Fatalf("resize terminal: %v", err)
 	}
-	if err := m.Input("session-pty", []byte("printf aerodocs-ready\\n; exit\n")); err != nil {
+	if err := m.Input("session-pty", []byte("printf veyport-ready\\n; exit\n")); err != nil {
 		t.Fatalf("write terminal input: %v", err)
 	}
 
 	data := waitForTerminalExit(t, sendCh, "session-pty", 3*time.Second)
-	if !strings.Contains(data, "aerodocs-ready") {
+	if !strings.Contains(data, "veyport-ready") {
 		t.Fatalf("expected command output, got %q", data)
 	}
 	if _, err := m.get("session-pty"); !errorsIsSessionNotFound(err) {

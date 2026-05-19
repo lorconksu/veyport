@@ -1,12 +1,12 @@
 // Package agentclient provides a public API for creating and running an
-// AeroDocs agent client. It wraps the internal client package so that
+// Veyport agent client. It wraps the internal client package so that
 // external modules (e.g., integration tests in the hub module) can use it.
 package agentclient
 
 import (
 	"context"
 
-	"github.com/wyiu/aerodocs/agent/internal/client"
+	"github.com/wyiu/veyport/agent/internal/client"
 )
 
 // Config mirrors client.Config for external consumers.

@@ -4,7 +4,7 @@ import (
 	"context"
 	"testing"
 
-	pb "github.com/wyiu/aerodocs/proto/aerodocs/v1"
+	pb "github.com/wyiu/veyport/proto/veyport/v1"
 	"google.golang.org/grpc/metadata"
 )
 
@@ -32,14 +32,14 @@ func (m *mockStream) Context() context.Context {
 	return context.Background()
 }
 
-func (m *mockStream) SendMsg(v interface{}) error         { return nil }
-func (m *mockStream) RecvMsg(v interface{}) error         { return nil }
-func (m *mockStream) SetHeader(metadata.MD) error         { return nil }
-func (m *mockStream) SendHeader(metadata.MD) error        { return nil }
+func (m *mockStream) SendMsg(v interface{}) error  { return nil }
+func (m *mockStream) RecvMsg(v interface{}) error  { return nil }
+func (m *mockStream) SetHeader(metadata.MD) error  { return nil }
+func (m *mockStream) SendHeader(metadata.MD) error { return nil }
 func (m *mockStream) SetTrailer(metadata.MD) {
 	// no-op: mock stub for testing
 }
-func (m *mockStream) SendAndClose(*pb.HubMessage) error   { return nil }
+func (m *mockStream) SendAndClose(*pb.HubMessage) error { return nil }
 
 // TestSendToAgent_Connected verifies that SendToAgent sends to a connected stream.
 func TestSendToAgent_Connected(t *testing.T) {

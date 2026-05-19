@@ -3,11 +3,11 @@ package store_test
 import (
 	"testing"
 
-	"github.com/wyiu/aerodocs/hub/internal/store"
+	"github.com/wyiu/veyport/hub/internal/store"
 )
 
 const (
-	testMemoryDB   = ":memory:"
+	testMemoryDB    = ":memory:"
 	testCreateStore = "create store: %v"
 )
 

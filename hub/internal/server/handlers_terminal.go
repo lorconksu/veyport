@@ -9,9 +9,9 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	"github.com/wyiu/aerodocs/hub/internal/grpcserver"
-	"github.com/wyiu/aerodocs/hub/internal/model"
-	pb "github.com/wyiu/aerodocs/proto/aerodocs/v1"
+	"github.com/wyiu/veyport/hub/internal/grpcserver"
+	"github.com/wyiu/veyport/hub/internal/model"
+	pb "github.com/wyiu/veyport/proto/veyport/v1"
 )
 
 const (

@@ -1,6 +1,6 @@
 // CSRF token is stored in a non-httpOnly cookie readable by JS
 export function getCSRFToken(): string {
-  const match = /(?:^|;\s*)aerodocs_csrf=([^;]+)/.exec(document.cookie)
+  const match = /(?:^|;\s*)veyport_csrf=([^;]+)/.exec(document.cookie)
   return match ? match[1] : ''
 }
 

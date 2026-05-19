@@ -3,7 +3,7 @@ package store
 import (
 	"fmt"
 
-	"github.com/wyiu/aerodocs/hub/internal/model"
+	"github.com/wyiu/veyport/hub/internal/model"
 )
 
 // GetNotificationPreferences returns all event types with the user's enabled/disabled state.

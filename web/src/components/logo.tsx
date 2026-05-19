@@ -1,24 +1,41 @@
 interface LogoProps {
   layout?: 'vertical' | 'horizontal'
+  mode?: 'light' | 'dark'
   className?: string
 }
 
-export function Logo({ layout = 'horizontal', className = '' }: Readonly<LogoProps>) {
+const logoSources = {
+  dark: {
+    horizontal: '/veyport-dark-horizontal.png',
+    vertical: '/veyport-dark-vertical.png',
+  },
+  light: {
+    horizontal: '/veyport-horizontal.png',
+    vertical: '/veyport-vertical.png',
+  },
+} as const
+
+function logoClassName(defaultWidth: string, className: string): string {
+  const hasWidthOverride = /(?:^|\s)!?w-/.test(className)
+  return [hasWidthOverride ? '' : defaultWidth, 'h-auto', className].filter(Boolean).join(' ')
+}
+
+export function Logo({ layout = 'horizontal', mode = 'dark', className = '' }: Readonly<LogoProps>) {
   if (layout === 'vertical') {
     return (
       <img
-        src="/aerodoc-vertical.png"
-        alt="AeroDocs"
-        className={`w-20 h-auto ${className}`}
+        src={logoSources[mode].vertical}
+        alt="Veyport"
+        className={logoClassName('w-20', className)}
       />
     )
   }
 
   return (
     <img
-      src="/aerodoc-horizontal.png"
-      alt="AeroDocs"
-      className={`w-28 h-auto ${className}`}
+      src={logoSources[mode].horizontal}
+      alt="Veyport"
+      className={logoClassName('w-28', className)}
     />
   )
 }

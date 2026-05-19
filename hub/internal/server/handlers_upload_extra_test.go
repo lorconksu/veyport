@@ -9,11 +9,11 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/wyiu/aerodocs/hub/internal/connmgr"
-	"github.com/wyiu/aerodocs/hub/internal/grpcserver"
-	"github.com/wyiu/aerodocs/hub/internal/notify"
-	"github.com/wyiu/aerodocs/hub/internal/store"
-	pb "github.com/wyiu/aerodocs/proto/aerodocs/v1"
+	"github.com/wyiu/veyport/hub/internal/connmgr"
+	"github.com/wyiu/veyport/hub/internal/grpcserver"
+	"github.com/wyiu/veyport/hub/internal/notify"
+	"github.com/wyiu/veyport/hub/internal/store"
+	pb "github.com/wyiu/veyport/proto/veyport/v1"
 	"google.golang.org/grpc/metadata"
 )
 
@@ -493,8 +493,8 @@ func (m *mockGRPCStreamFailedAck) Send(msg *pb.HubMessage) error {
 
 func (m *mockGRPCStreamFailedAck) Recv() (*pb.AgentMessage, error) { return nil, nil }
 func (m *mockGRPCStreamFailedAck) Context() context.Context        { return context.Background() }
-func (m *mockGRPCStreamFailedAck) SendMsg(interface{}) error        { return nil }
-func (m *mockGRPCStreamFailedAck) RecvMsg(interface{}) error        { return nil }
+func (m *mockGRPCStreamFailedAck) SendMsg(interface{}) error       { return nil }
+func (m *mockGRPCStreamFailedAck) RecvMsg(interface{}) error       { return nil }
 func (m *mockGRPCStreamFailedAck) SetHeader(metadata.MD) error     { return nil }
 func (m *mockGRPCStreamFailedAck) SendHeader(metadata.MD) error    { return nil }
 func (m *mockGRPCStreamFailedAck) SetTrailer(metadata.MD) {
@@ -524,8 +524,8 @@ func (m *mockGRPCStreamWrongAckType) Send(msg *pb.HubMessage) error {
 
 func (m *mockGRPCStreamWrongAckType) Recv() (*pb.AgentMessage, error) { return nil, nil }
 func (m *mockGRPCStreamWrongAckType) Context() context.Context        { return context.Background() }
-func (m *mockGRPCStreamWrongAckType) SendMsg(interface{}) error        { return nil }
-func (m *mockGRPCStreamWrongAckType) RecvMsg(interface{}) error        { return nil }
+func (m *mockGRPCStreamWrongAckType) SendMsg(interface{}) error       { return nil }
+func (m *mockGRPCStreamWrongAckType) RecvMsg(interface{}) error       { return nil }
 func (m *mockGRPCStreamWrongAckType) SetHeader(metadata.MD) error     { return nil }
 func (m *mockGRPCStreamWrongAckType) SendHeader(metadata.MD) error    { return nil }
 func (m *mockGRPCStreamWrongAckType) SetTrailer(metadata.MD) {
@@ -599,8 +599,8 @@ func (m *mockGRPCStreamFileListError) Send(msg *pb.HubMessage) error {
 
 func (m *mockGRPCStreamFileListError) Recv() (*pb.AgentMessage, error) { return nil, nil }
 func (m *mockGRPCStreamFileListError) Context() context.Context        { return context.Background() }
-func (m *mockGRPCStreamFileListError) SendMsg(interface{}) error        { return nil }
-func (m *mockGRPCStreamFileListError) RecvMsg(interface{}) error        { return nil }
+func (m *mockGRPCStreamFileListError) SendMsg(interface{}) error       { return nil }
+func (m *mockGRPCStreamFileListError) RecvMsg(interface{}) error       { return nil }
 func (m *mockGRPCStreamFileListError) SetHeader(metadata.MD) error     { return nil }
 func (m *mockGRPCStreamFileListError) SendHeader(metadata.MD) error    { return nil }
 func (m *mockGRPCStreamFileListError) SetTrailer(metadata.MD) {
@@ -654,8 +654,8 @@ func (m *mockGRPCStreamDeleteFailed) Send(msg *pb.HubMessage) error {
 
 func (m *mockGRPCStreamDeleteFailed) Recv() (*pb.AgentMessage, error) { return nil, nil }
 func (m *mockGRPCStreamDeleteFailed) Context() context.Context        { return context.Background() }
-func (m *mockGRPCStreamDeleteFailed) SendMsg(interface{}) error        { return nil }
-func (m *mockGRPCStreamDeleteFailed) RecvMsg(interface{}) error        { return nil }
+func (m *mockGRPCStreamDeleteFailed) SendMsg(interface{}) error       { return nil }
+func (m *mockGRPCStreamDeleteFailed) RecvMsg(interface{}) error       { return nil }
 func (m *mockGRPCStreamDeleteFailed) SetHeader(metadata.MD) error     { return nil }
 func (m *mockGRPCStreamDeleteFailed) SendHeader(metadata.MD) error    { return nil }
 func (m *mockGRPCStreamDeleteFailed) SetTrailer(metadata.MD) {

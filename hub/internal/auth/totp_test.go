@@ -4,11 +4,11 @@ import (
 	"testing"
 
 	"github.com/pquerna/otp/totp"
-	"github.com/wyiu/aerodocs/hub/internal/auth"
+	"github.com/wyiu/veyport/hub/internal/auth"
 )
 
 func TestGenerateTOTPSecret(t *testing.T) {
-	key, err := auth.GenerateTOTPSecret("admin", "AeroDocs")
+	key, err := auth.GenerateTOTPSecret("admin", "Veyport")
 	if err != nil {
 		t.Fatalf("generate secret: %v", err)
 	}
@@ -22,7 +22,7 @@ func TestGenerateTOTPSecret(t *testing.T) {
 }
 
 func TestValidateTOTPCode(t *testing.T) {
-	key, _ := auth.GenerateTOTPSecret("admin", "AeroDocs")
+	key, _ := auth.GenerateTOTPSecret("admin", "Veyport")
 
 	// Generate a valid code
 	code, err := totp.GenerateCode(key.Secret(), auth.TOTPTime())
@@ -40,7 +40,7 @@ func TestValidateTOTPCode(t *testing.T) {
 }
 
 func TestGenerateValidCode(t *testing.T) {
-	key, err := auth.GenerateTOTPSecret("admin", "AeroDocs")
+	key, err := auth.GenerateTOTPSecret("admin", "Veyport")
 	if err != nil {
 		t.Fatalf("generate secret: %v", err)
 	}

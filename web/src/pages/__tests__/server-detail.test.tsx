@@ -1526,12 +1526,12 @@ describe('onToggleMarkdownView (line 1806)', () => {
       fireEvent.mouseUp(document)
 
       // Sidebar should have been resized (stored in sessionStorage)
-      expect(sessionStorage.getItem('aerodocs-sidebar-width')).toBe('400')
+      expect(sessionStorage.getItem('veyport-sidebar-width')).toBe('400')
     })
 
     it('resets sidebar width on double-click', async () => {
       // Set a non-default width first
-      sessionStorage.setItem('aerodocs-sidebar-width', '400')
+      sessionStorage.setItem('veyport-sidebar-width', '400')
 
       mockApiFetch.mockImplementation((url: string) => {
         if (url.includes('/my-paths')) return Promise.resolve({ paths: ['/etc'] })
@@ -1544,7 +1544,7 @@ describe('onToggleMarkdownView (line 1806)', () => {
       const divider = screen.getByLabelText('Resize sidebar')
       fireEvent.doubleClick(divider)
 
-      expect(sessionStorage.getItem('aerodocs-sidebar-width')).toBe('288')
+      expect(sessionStorage.getItem('veyport-sidebar-width')).toBe('288')
     })
 
     it('clamps sidebar width to min 200 and max 600', async () => {
@@ -1562,13 +1562,13 @@ describe('onToggleMarkdownView (line 1806)', () => {
       fireEvent.mouseDown(divider, { clientX: 288 })
       fireEvent.mouseMove(document, { clientX: 50 })
       fireEvent.mouseUp(document)
-      expect(sessionStorage.getItem('aerodocs-sidebar-width')).toBe('200')
+      expect(sessionStorage.getItem('veyport-sidebar-width')).toBe('200')
 
       // Try to drag above maximum (600)
       fireEvent.mouseDown(divider, { clientX: 200 })
       fireEvent.mouseMove(document, { clientX: 900 })
       fireEvent.mouseUp(document)
-      expect(sessionStorage.getItem('aerodocs-sidebar-width')).toBe('600')
+      expect(sessionStorage.getItem('veyport-sidebar-width')).toBe('600')
     })
   })
 })

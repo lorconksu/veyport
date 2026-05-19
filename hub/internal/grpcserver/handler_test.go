@@ -11,16 +11,16 @@ import (
 	"net"
 	"testing"
 
-	"github.com/wyiu/aerodocs/hub/internal/ca"
+	"github.com/wyiu/veyport/hub/internal/ca"
 	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/peer"
 
-	"github.com/wyiu/aerodocs/hub/internal/connmgr"
-	"github.com/wyiu/aerodocs/hub/internal/model"
-	"github.com/wyiu/aerodocs/hub/internal/notify"
-	"github.com/wyiu/aerodocs/hub/internal/store"
-	pb "github.com/wyiu/aerodocs/proto/aerodocs/v1"
+	"github.com/wyiu/veyport/hub/internal/connmgr"
+	"github.com/wyiu/veyport/hub/internal/model"
+	"github.com/wyiu/veyport/hub/internal/notify"
+	"github.com/wyiu/veyport/hub/internal/store"
+	pb "github.com/wyiu/veyport/proto/veyport/v1"
 )
 
 // mockStream implements pb.AgentService_ConnectServer for testing.

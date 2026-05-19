@@ -11,7 +11,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/wyiu/aerodocs/hub/internal/model"
+	"github.com/wyiu/veyport/hub/internal/model"
 )
 
 // TestGetSMTPConfig_Default verifies that an empty store returns a default config.
@@ -427,7 +427,7 @@ func TestTestSMTP_Success(t *testing.T) {
 	putBody := mustJSON(t, model.SMTPConfig{
 		Host:    testLocalhost,
 		Port:    addr.Port,
-		From:    "noreply@aerodocs.local",
+		From:    "noreply@veyport.local",
 		Enabled: true,
 	})
 	putReq := httptest.NewRequest("PUT", testSMTPPath, putBody)

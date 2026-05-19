@@ -13,11 +13,11 @@ import (
 	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/keepalive"
 
-	"github.com/wyiu/aerodocs/hub/internal/ca"
-	"github.com/wyiu/aerodocs/hub/internal/connmgr"
-	"github.com/wyiu/aerodocs/hub/internal/notify"
-	"github.com/wyiu/aerodocs/hub/internal/store"
-	pb "github.com/wyiu/aerodocs/proto/aerodocs/v1"
+	"github.com/wyiu/veyport/hub/internal/ca"
+	"github.com/wyiu/veyport/hub/internal/connmgr"
+	"github.com/wyiu/veyport/hub/internal/notify"
+	"github.com/wyiu/veyport/hub/internal/store"
+	pb "github.com/wyiu/veyport/proto/veyport/v1"
 )
 
 type Server struct {
@@ -97,8 +97,8 @@ func New(cfg Config) *Server {
 		if host, _, err := net.SplitHostPort(cfg.Addr); err == nil && host != "" {
 			sanHosts = append(sanHosts, host)
 		}
-		sanHosts = append(sanHosts, "aerodocs-hub", "localhost")
-		serverCert, serverKey, err := ca.GenerateServerCert(cfg.CACert, cfg.CAKey, "aerodocs-hub", sanHosts...)
+		sanHosts = append(sanHosts, "veyport-hub", "localhost")
+		serverCert, serverKey, err := ca.GenerateServerCert(cfg.CACert, cfg.CAKey, "veyport-hub", sanHosts...)
 		if err != nil {
 			log.Fatalf("grpc: generate server TLS cert: %v", err)
 		}
@@ -134,7 +134,7 @@ func (s *Server) Start() error {
 	if err != nil {
 		return fmt.Errorf("grpc listen: %w", err)
 	}
-	fmt.Printf("AeroDocs gRPC server listening on %s\n", s.addr)
+	fmt.Printf("Veyport gRPC server listening on %s\n", s.addr)
 	return s.grpcServer.Serve(lis)
 }
 

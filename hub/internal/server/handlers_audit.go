@@ -7,8 +7,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/wyiu/aerodocs/hub/internal/model"
-	"github.com/wyiu/aerodocs/hub/internal/store"
+	"github.com/wyiu/veyport/hub/internal/model"
+	"github.com/wyiu/veyport/hub/internal/store"
 )
 
 const errAuditFilterJSONInvalid = "filters_json must be valid JSON and at most 16KB"

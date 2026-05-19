@@ -6,7 +6,7 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	"github.com/wyiu/aerodocs/hub/internal/model"
+	"github.com/wyiu/veyport/hub/internal/model"
 )
 
 // TestHandleInstallScript_NotFound verifies the install script endpoint handles missing file.
@@ -128,7 +128,7 @@ func TestHandleCreateServer_ProductionMode(t *testing.T) {
 	s := testServer(t)
 	// Override isDev to false for this test
 	s.isDev = false
-	s.grpcExternalAddr = "aerodocs.example.com:9443"
+	s.grpcExternalAddr = "veyport.example.com:9443"
 
 	adminToken := registerAndGetAdminToken(t, s)
 
@@ -136,7 +136,7 @@ func TestHandleCreateServer_ProductionMode(t *testing.T) {
 		"name": "prod-server",
 	}))
 	req.Header.Set("Authorization", testBearerPrefix+adminToken)
-	req.Host = "aerodocs.example.com"
+	req.Host = "veyport.example.com"
 	rec := httptest.NewRecorder()
 	s.routes().ServeHTTP(rec, req)
 
@@ -149,7 +149,7 @@ func TestHandleCreateServer_ProductionMode(t *testing.T) {
 func TestHandleCreateServer_ProductionModeWithPort(t *testing.T) {
 	s := testServer(t)
 	s.isDev = false
-	s.grpcExternalAddr = "aerodocs.example.com:9443"
+	s.grpcExternalAddr = "veyport.example.com:9443"
 
 	adminToken := registerAndGetAdminToken(t, s)
 
@@ -157,7 +157,7 @@ func TestHandleCreateServer_ProductionModeWithPort(t *testing.T) {
 		"name": "prod-server-port",
 	}))
 	req.Header.Set("Authorization", testBearerPrefix+adminToken)
-	req.Host = "aerodocs.example.com:8443"
+	req.Host = "veyport.example.com:8443"
 	rec := httptest.NewRecorder()
 	s.routes().ServeHTTP(rec, req)
 

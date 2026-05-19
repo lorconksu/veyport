@@ -18,9 +18,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/wyiu/aerodocs/agent/internal/certs"
-	"github.com/wyiu/aerodocs/agent/internal/dropzone"
-	pb "github.com/wyiu/aerodocs/proto/aerodocs/v1"
+	"github.com/wyiu/veyport/agent/internal/certs"
+	"github.com/wyiu/veyport/agent/internal/dropzone"
+	pb "github.com/wyiu/veyport/proto/veyport/v1"
 	"google.golang.org/grpc/metadata"
 )
 

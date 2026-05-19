@@ -27,11 +27,11 @@ func TestMain(m *testing.M) {
 		log.Fatalf("create covdata dir: %v", err)
 	}
 
-	agentBinaryPath = filepath.Join(tmpDir, "aerodocs-agent")
+	agentBinaryPath = filepath.Join(tmpDir, "veyport-agent")
 
 	// Build from the agent directory (hub/internal/integration → repo root → agent)
 	agentDir := filepath.Join("..", "..", "..", "agent")
-	cmd := exec.Command("go", "build", "-cover", "-o", agentBinaryPath, "./cmd/aerodocs-agent/")
+	cmd := exec.Command("go", "build", "-cover", "-o", agentBinaryPath, "./cmd/veyport-agent/")
 	cmd.Dir = agentDir
 	cmd.Env = append(os.Environ(), "CGO_ENABLED=0")
 	out, err := cmd.CombinedOutput()

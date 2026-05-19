@@ -9,7 +9,7 @@ const AVATAR_COLORS = [
   '#6366f1', // indigo
 ]
 
-const AVATAR_COLOR_KEY = 'aerodocs_avatar_color'
+const AVATAR_COLOR_KEY = 'veyport_avatar_color'
 
 export function getAvatarColor(username: string): string {
   const stored = localStorage.getItem(AVATAR_COLOR_KEY)

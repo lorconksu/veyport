@@ -25,13 +25,13 @@ import (
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/keepalive"
 
-	"github.com/wyiu/aerodocs/agent/internal/certs"
-	"github.com/wyiu/aerodocs/agent/internal/dropzone"
-	"github.com/wyiu/aerodocs/agent/internal/filebrowser"
-	"github.com/wyiu/aerodocs/agent/internal/heartbeat"
-	"github.com/wyiu/aerodocs/agent/internal/logtailer"
-	"github.com/wyiu/aerodocs/agent/internal/terminal"
-	pb "github.com/wyiu/aerodocs/proto/aerodocs/v1"
+	"github.com/wyiu/veyport/agent/internal/certs"
+	"github.com/wyiu/veyport/agent/internal/dropzone"
+	"github.com/wyiu/veyport/agent/internal/filebrowser"
+	"github.com/wyiu/veyport/agent/internal/heartbeat"
+	"github.com/wyiu/veyport/agent/internal/logtailer"
+	"github.com/wyiu/veyport/agent/internal/terminal"
+	pb "github.com/wyiu/veyport/proto/veyport/v1"
 )
 
 type Config struct {
@@ -42,7 +42,7 @@ type Config struct {
 	IPAddress       string
 	OS              string
 	AgentVersion    string
-	CertDir         string // directory for mTLS cert storage; empty uses /etc/aerodocs/tls/
+	CertDir         string // directory for mTLS cert storage; empty uses /etc/veyport/tls/
 	UnregisterToken string
 	Insecure        bool
 	AllowedPaths    []string
@@ -53,7 +53,7 @@ type Config struct {
 
 const (
 	maxTailSessions   = 50
-	dropzonePathAlias = "aerodocs://dropzone"
+	dropzonePathAlias = "veyport://dropzone"
 )
 
 var errReconnectWithMTLS = errors.New("reconnect required to authenticate with issued client certificate")
@@ -82,7 +82,7 @@ type Client struct {
 func New(cfg Config) *Client {
 	certDir := cfg.CertDir
 	if certDir == "" {
-		certDir = "/etc/aerodocs/tls/"
+		certDir = "/etc/veyport/tls/"
 	}
 	dropzoneDir := cfg.DropzoneDir
 	if dropzoneDir == "" {
@@ -846,15 +846,15 @@ func (c *Client) selfCleanup() {
 	log.Printf("starting self-cleanup")
 
 	// Remove agent binary and config
-	os.Remove("/usr/local/bin/aerodocs-agent")
-	os.RemoveAll("/etc/aerodocs/")
+	os.Remove("/usr/local/bin/veyport-agent")
+	os.RemoveAll("/etc/veyport/")
 	os.RemoveAll(c.dropzone.Dir())
 
 	// Disable and remove the systemd service using a sanitized environment
 	cleanEnv := []string{"PATH=/usr/sbin:/usr/bin:/sbin:/bin"}
 	cmds := [][]string{
-		{"systemctl", "disable", "aerodocs-agent"},
-		{"systemctl", "stop", "aerodocs-agent"},
+		{"systemctl", "disable", "veyport-agent"},
+		{"systemctl", "stop", "veyport-agent"},
 		{"systemctl", "daemon-reload"},
 	}
 	for _, args := range cmds {
@@ -862,7 +862,7 @@ func (c *Client) selfCleanup() {
 		cmd.Env = cleanEnv
 		_ = cmd.Run()
 	}
-	os.Remove("/etc/systemd/system/aerodocs-agent.service")
+	os.Remove("/etc/systemd/system/veyport-agent.service")
 
 	log.Printf("self-cleanup complete")
 }

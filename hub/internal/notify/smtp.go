@@ -6,7 +6,7 @@ import (
 	"net/smtp"
 	"strings"
 
-	"github.com/wyiu/aerodocs/hub/internal/model"
+	"github.com/wyiu/veyport/hub/internal/model"
 )
 
 // SendEmail sends a plain-text email using the provided SMTP configuration.
@@ -92,4 +92,3 @@ func buildMessage(from, to, subject, body string) string {
 	sb.WriteString(body)
 	return sb.String()
 }
-

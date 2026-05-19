@@ -4,8 +4,8 @@ set -euo pipefail
 # Ensure we're at repo root
 cd "$(dirname "$0")/../.."
 
-CONTAINER_NAME="aerodocs-smoke-$$"
-IMAGE_NAME="aerodocs-smoke:$$"
+CONTAINER_NAME="veyport-smoke-$$"
+IMAGE_NAME="veyport-smoke:$$"
 HTTP_PORT=18081
 GRPC_PORT=19090
 

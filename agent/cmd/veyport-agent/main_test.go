@@ -70,7 +70,7 @@ func TestRunSelfUnregister_MissingTokenFailsEvenWithEnvVar(t *testing.T) {
 	}
 
 	// Set env var — it should NOT be used as fallback
-	t.Setenv("AERODOCS_UNREGISTER_TOKEN", "env-var-token")
+	t.Setenv("VEYPORT_UNREGISTER_TOKEN", "env-var-token")
 
 	// Load config and verify token is empty (env var not consulted)
 	loaded, err := loadConfig(configPath)

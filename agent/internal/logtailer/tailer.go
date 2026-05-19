@@ -11,7 +11,7 @@ import (
 	"strings"
 	"time"
 
-	pb "github.com/wyiu/aerodocs/proto/aerodocs/v1"
+	pb "github.com/wyiu/veyport/proto/veyport/v1"
 )
 
 const pollInterval = 500 * time.Millisecond
@@ -24,7 +24,7 @@ var blockedPaths = []string{
 	"/etc/gshadow",
 	"/etc/sudoers",
 	"/etc/sudoers.d",
-	"/etc/aerodocs",
+	"/etc/veyport",
 	"/root/.ssh",
 	"/proc/self",
 	"/proc/kcore",

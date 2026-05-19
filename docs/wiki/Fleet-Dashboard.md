@@ -1,8 +1,8 @@
 # Fleet Dashboard
 
-The Fleet Dashboard is the main screen of AeroDocs. It shows all the servers that have been registered with your Hub.
+The Fleet Dashboard is the main screen of Veyport. It shows all the servers that have been registered with your Hub.
 
-![Fleet Dashboard](screenshots/dashboard.png)
+![Fleet Dashboard](screenshots/dashboard-veyport.png)
 
 > **Admin vs Viewer:** All users can view the Fleet Dashboard, search/filter servers, and click into server details. Only admins can add, edit, or unregister servers.
 
@@ -16,7 +16,7 @@ Each server is displayed as a card showing:
 - **Status indicator** - a coloured dot showing whether the server is reachable
 - **Hostname and IP address** - populated automatically when the agent registers
 - **Operating system** - detected by the agent
-- **Agent version** - the version of the AeroDocs agent running on that server
+- **Agent version** - the version of the Veyport agent running on that server
 - **Labels** - any tags you assigned when creating the server
 - **Last seen** - when the Hub last received a heartbeat from the agent
 
@@ -64,13 +64,13 @@ Only admins can add servers.
 3. Enter a **Name** for the server (this is just a label - it does not have to match the actual hostname).
 4. Optionally add **Labels** to help you organise servers (e.g. `env:production`, `region:eu-west`).
 5. Click **Add Server**.
-6. AeroDocs creates the server record and generates a one-time install command. It will look something like:
+6. Veyport creates the server record and generates a one-time install command. It will look something like:
 
    ```
-   curl -fsSL https://aerodocs.example.com/install.sh | bash -s -- --token <token>
+   curl -fsSL https://veyport.example.com/install.sh | bash -s -- --token <token>
    ```
 
-7. Copy the command and run it on the target server as root (or with `sudo`). The script downloads and installs the AeroDocs agent, then registers the server with the Hub using the embedded token.
+7. Copy the command and run it on the target server as root (or with `sudo`). The script downloads and installs the Veyport agent, then registers the server with the Hub using the embedded token.
 8. Once the agent connects, the server card changes from amber (Pending) to green (Online) automatically - no page refresh needed.
 
 The registration token is single-use and expires after a short period. If you do not run the command in time, delete the server and add it again to get a fresh token.
@@ -115,9 +115,9 @@ Only admins can unregister servers.
 
 When you unregister a server, the Hub sends a cleanup command to the agent on that machine. The agent will:
 
-1. Stop the `aerodocs-agent` systemd service
+1. Stop the `veyport-agent` systemd service
 2. Remove the agent binary
-3. Remove the configuration file (`/etc/aerodocs/agent.conf`)
+3. Remove the configuration file (`/etc/veyport/agent.conf`)
 4. Remove the dropzone staging directory
 
 Once cleanup is confirmed, the server record is deleted from the Hub database.

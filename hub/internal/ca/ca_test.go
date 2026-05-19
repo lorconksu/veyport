@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/wyiu/aerodocs/hub/internal/ca"
+	"github.com/wyiu/veyport/hub/internal/ca"
 )
 
 const (
@@ -17,7 +17,7 @@ const (
 	testGenerateCAErrFmt      = "GenerateCA() error: %v"
 	testGenerateKeyErrFmt     = "GenerateKey error: %v"
 	testCreateCSRErrFmt       = "CreateCertificateRequest error: %v"
-	testServerCN              = "aerodocs-hub"
+	testServerCN              = "veyport-hub"
 	testGenerateServerCertFmt = "GenerateServerCert() error: %v"
 )
 
@@ -37,8 +37,8 @@ func TestGenerateCA(t *testing.T) {
 	if !cert.IsCA {
 		t.Error("expected IsCA=true")
 	}
-	if cert.Subject.CommonName != "AeroDocs CA" {
-		t.Errorf("expected CN='AeroDocs CA', got %q", cert.Subject.CommonName)
+	if cert.Subject.CommonName != "Veyport CA" {
+		t.Errorf("expected CN='Veyport CA', got %q", cert.Subject.CommonName)
 	}
 	if cert.KeyUsage&x509.KeyUsageCertSign == 0 {
 		t.Error("expected KeyUsageCertSign")
@@ -270,7 +270,7 @@ func TestGenerateServerCert_BasicFields(t *testing.T) {
 		t.Fatal("expected non-nil cert and key")
 	}
 	if cert.Subject.CommonName != testServerCN {
-		t.Errorf("expected CN=aerodocs-hub, got %s", cert.Subject.CommonName)
+		t.Errorf("expected CN=veyport-hub, got %s", cert.Subject.CommonName)
 	}
 	if len(cert.ExtKeyUsage) == 0 || cert.ExtKeyUsage[0] != x509.ExtKeyUsageServerAuth {
 		t.Error("expected ServerAuth extended key usage")
@@ -283,12 +283,12 @@ func TestGenerateServerCert_WithDNSSANs(t *testing.T) {
 		t.Fatalf(testGenerateCAFmt, err)
 	}
 
-	cert, _, err := ca.GenerateServerCert(caCert, caKey, testServerCN, "aerodocs.example.com", "localhost")
+	cert, _, err := ca.GenerateServerCert(caCert, caKey, testServerCN, "veyport.example.com", "localhost")
 	if err != nil {
 		t.Fatalf(testGenerateServerCertFmt, err)
 	}
 
-	expected := map[string]bool{"aerodocs.example.com": false, "localhost": false}
+	expected := map[string]bool{"veyport.example.com": false, "localhost": false}
 	for _, name := range cert.DNSNames {
 		if _, ok := expected[name]; ok {
 			expected[name] = true

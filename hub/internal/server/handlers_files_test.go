@@ -6,7 +6,7 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	"github.com/wyiu/aerodocs/hub/internal/model"
+	"github.com/wyiu/veyport/hub/internal/model"
 )
 
 // TestValidateRequestPath tests the path validation helper directly.
@@ -66,9 +66,9 @@ func TestIsPathAllowed(t *testing.T) {
 	s.store.CreatePermission(viewerID, serverID, testVarLog)
 
 	tests := []struct {
-		name          string
-		path          string
-		wantAllowed   bool
+		name        string
+		path        string
+		wantAllowed bool
 	}{
 		{"exact match allowed", testVarLog, true},
 		{"child path allowed", "/var/log/syslog", true},

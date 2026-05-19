@@ -1,10 +1,10 @@
 # Server Detail
 
-The Server Detail page is the per-server workspace in AeroDocs. Open it by clicking a server name on the [[Fleet Dashboard]].
+The Server Detail page is the per-server workspace in Veyport. Open it by clicking a server name on the [[Fleet Dashboard]].
 
 ![Server Detail](screenshots/server-detail.png)
 
-> **Admin vs Viewer:** Viewers can browse the file tree and tail logs on servers where they have been granted path access. Only admins can upload files via the Dropzone and manage path access permissions.
+> **Admin vs Viewer:** Viewers can browse the file tree and tail logs on servers where they have been granted path access. Terminal access is available to admins and LDAP users who are in the terminal access group and have a root (`/`) assignment on the server. Only admins can upload files via the Dropzone and manage path access permissions.
 
 ---
 
@@ -14,7 +14,7 @@ The page is divided into three main areas:
 
 1. **Header** - displays the server name, current status, hostname, IP address, OS, and agent version.
 2. **File Explorer sidebar** - a collapsible panel on the left for navigating the remote filesystem.
-3. **Main panel** - shows the currently viewed file, the Live Tail console, or the Dropzone uploader depending on what you have selected.
+3. **Main panel** - shows the currently viewed file, the Live Tail console, the Terminal workspace, or the Dropzone uploader depending on what you have selected.
 
 An additional **Admin Tools sidebar** is available on the right for admins, providing path access management controls.
 
@@ -87,6 +87,35 @@ Press **Ctrl+F** (or **Cmd+F** on Mac) while a file is open in the viewer to ope
 - The match count is shown next to the navigation buttons (e.g. `3 / 12`).
 - The search is **debounced** - there is a short delay before results update, which keeps large files responsive while you type.
 - Press **Escape** or click the close button to dismiss the search bar and clear highlights.
+
+---
+
+## Terminal
+
+![Terminal](screenshots/terminal.png)
+
+The Terminal workspace opens a live shell through the same outbound agent stream used for file browsing and log tailing. It is available only while the agent is online.
+
+### Who Can Use It
+
+- **Admins** can open a terminal on any online server.
+- **LDAP users** need membership in the configured terminal group (`veyport-terminal-users` by default) and a root (`/`) path assignment on that server.
+- **Local non-admin users** cannot open terminal sessions.
+
+LDAP terminal sessions run as the mapped LDAP username on the agent host. Local admin sessions run as the agent service identity.
+
+### Starting a Terminal Session
+
+1. Open the server from the Fleet Dashboard.
+2. Click the **Terminal** workspace button in the main panel toolbar.
+3. Wait for the session status to show **Live shell ready**.
+4. Type commands normally in the terminal pane.
+
+The terminal resizes with the browser panel. Closing the tab, switching away, or clicking the close control ends the server-side session.
+
+### Auditing
+
+Veyport records terminal open and close events in the audit log. The open event includes the session ID and execution user when available.
 
 ---
 

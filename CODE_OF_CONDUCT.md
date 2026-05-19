@@ -59,7 +59,7 @@ representative at an online or offline event.
 ## Enforcement
 
 Instances of abusive, harassing, or otherwise unacceptable behavior may be
-reported to the project maintainer at [abuse@aerodocs.xyz](mailto:abuse@aerodocs.xyz).
+reported to the project maintainer at [abuse@veyport.xyz](mailto:abuse@veyport.xyz).
 All complaints will be reviewed and investigated fairly on a best-effort basis.
 
 The project maintainer is obligated to respect the privacy and security of the

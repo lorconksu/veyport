@@ -2,7 +2,7 @@
 // versions:
 // 	protoc-gen-go v1.36.11
 // 	protoc        v3.21.12
-// source: proto/aerodocs/v1/agent.proto
+// source: proto/veyport/v1/agent.proto
 
 package v1
 
@@ -45,7 +45,7 @@ type AgentMessage struct {
 
 func (x *AgentMessage) Reset() {
 	*x = AgentMessage{}
-	mi := &file_proto_aerodocs_v1_agent_proto_msgTypes[0]
+	mi := &file_proto_veyport_v1_agent_proto_msgTypes[0]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -57,7 +57,7 @@ func (x *AgentMessage) String() string {
 func (*AgentMessage) ProtoMessage() {}
 
 func (x *AgentMessage) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_aerodocs_v1_agent_proto_msgTypes[0]
+	mi := &file_proto_veyport_v1_agent_proto_msgTypes[0]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -70,7 +70,7 @@ func (x *AgentMessage) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use AgentMessage.ProtoReflect.Descriptor instead.
 func (*AgentMessage) Descriptor() ([]byte, []int) {
-	return file_proto_aerodocs_v1_agent_proto_rawDescGZIP(), []int{0}
+	return file_proto_veyport_v1_agent_proto_rawDescGZIP(), []int{0}
 }
 
 func (x *AgentMessage) GetPayload() isAgentMessage_Payload {
@@ -291,7 +291,7 @@ type HubMessage struct {
 
 func (x *HubMessage) Reset() {
 	*x = HubMessage{}
-	mi := &file_proto_aerodocs_v1_agent_proto_msgTypes[1]
+	mi := &file_proto_veyport_v1_agent_proto_msgTypes[1]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -303,7 +303,7 @@ func (x *HubMessage) String() string {
 func (*HubMessage) ProtoMessage() {}
 
 func (x *HubMessage) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_aerodocs_v1_agent_proto_msgTypes[1]
+	mi := &file_proto_veyport_v1_agent_proto_msgTypes[1]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -316,7 +316,7 @@ func (x *HubMessage) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use HubMessage.ProtoReflect.Descriptor instead.
 func (*HubMessage) Descriptor() ([]byte, []int) {
-	return file_proto_aerodocs_v1_agent_proto_rawDescGZIP(), []int{1}
+	return file_proto_veyport_v1_agent_proto_rawDescGZIP(), []int{1}
 }
 
 func (x *HubMessage) GetPayload() isHubMessage_Payload {
@@ -553,7 +553,7 @@ type Heartbeat struct {
 
 func (x *Heartbeat) Reset() {
 	*x = Heartbeat{}
-	mi := &file_proto_aerodocs_v1_agent_proto_msgTypes[2]
+	mi := &file_proto_veyport_v1_agent_proto_msgTypes[2]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -565,7 +565,7 @@ func (x *Heartbeat) String() string {
 func (*Heartbeat) ProtoMessage() {}
 
 func (x *Heartbeat) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_aerodocs_v1_agent_proto_msgTypes[2]
+	mi := &file_proto_veyport_v1_agent_proto_msgTypes[2]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -578,7 +578,7 @@ func (x *Heartbeat) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Heartbeat.ProtoReflect.Descriptor instead.
 func (*Heartbeat) Descriptor() ([]byte, []int) {
-	return file_proto_aerodocs_v1_agent_proto_rawDescGZIP(), []int{2}
+	return file_proto_veyport_v1_agent_proto_rawDescGZIP(), []int{2}
 }
 
 func (x *Heartbeat) GetServerId() string {
@@ -618,7 +618,7 @@ type HeartbeatAck struct {
 
 func (x *HeartbeatAck) Reset() {
 	*x = HeartbeatAck{}
-	mi := &file_proto_aerodocs_v1_agent_proto_msgTypes[3]
+	mi := &file_proto_veyport_v1_agent_proto_msgTypes[3]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -630,7 +630,7 @@ func (x *HeartbeatAck) String() string {
 func (*HeartbeatAck) ProtoMessage() {}
 
 func (x *HeartbeatAck) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_aerodocs_v1_agent_proto_msgTypes[3]
+	mi := &file_proto_veyport_v1_agent_proto_msgTypes[3]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -643,7 +643,7 @@ func (x *HeartbeatAck) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use HeartbeatAck.ProtoReflect.Descriptor instead.
 func (*HeartbeatAck) Descriptor() ([]byte, []int) {
-	return file_proto_aerodocs_v1_agent_proto_rawDescGZIP(), []int{3}
+	return file_proto_veyport_v1_agent_proto_rawDescGZIP(), []int{3}
 }
 
 func (x *HeartbeatAck) GetTimestamp() int64 {
@@ -667,7 +667,7 @@ type RegisterAgent struct {
 
 func (x *RegisterAgent) Reset() {
 	*x = RegisterAgent{}
-	mi := &file_proto_aerodocs_v1_agent_proto_msgTypes[4]
+	mi := &file_proto_veyport_v1_agent_proto_msgTypes[4]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -679,7 +679,7 @@ func (x *RegisterAgent) String() string {
 func (*RegisterAgent) ProtoMessage() {}
 
 func (x *RegisterAgent) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_aerodocs_v1_agent_proto_msgTypes[4]
+	mi := &file_proto_veyport_v1_agent_proto_msgTypes[4]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -692,7 +692,7 @@ func (x *RegisterAgent) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RegisterAgent.ProtoReflect.Descriptor instead.
 func (*RegisterAgent) Descriptor() ([]byte, []int) {
-	return file_proto_aerodocs_v1_agent_proto_rawDescGZIP(), []int{4}
+	return file_proto_veyport_v1_agent_proto_rawDescGZIP(), []int{4}
 }
 
 func (x *RegisterAgent) GetToken() string {
@@ -750,7 +750,7 @@ type RegisterAck struct {
 
 func (x *RegisterAck) Reset() {
 	*x = RegisterAck{}
-	mi := &file_proto_aerodocs_v1_agent_proto_msgTypes[5]
+	mi := &file_proto_veyport_v1_agent_proto_msgTypes[5]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -762,7 +762,7 @@ func (x *RegisterAck) String() string {
 func (*RegisterAck) ProtoMessage() {}
 
 func (x *RegisterAck) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_aerodocs_v1_agent_proto_msgTypes[5]
+	mi := &file_proto_veyport_v1_agent_proto_msgTypes[5]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -775,7 +775,7 @@ func (x *RegisterAck) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RegisterAck.ProtoReflect.Descriptor instead.
 func (*RegisterAck) Descriptor() ([]byte, []int) {
-	return file_proto_aerodocs_v1_agent_proto_rawDescGZIP(), []int{5}
+	return file_proto_veyport_v1_agent_proto_rawDescGZIP(), []int{5}
 }
 
 func (x *RegisterAck) GetSuccess() bool {
@@ -825,7 +825,7 @@ type SystemInfo struct {
 
 func (x *SystemInfo) Reset() {
 	*x = SystemInfo{}
-	mi := &file_proto_aerodocs_v1_agent_proto_msgTypes[6]
+	mi := &file_proto_veyport_v1_agent_proto_msgTypes[6]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -837,7 +837,7 @@ func (x *SystemInfo) String() string {
 func (*SystemInfo) ProtoMessage() {}
 
 func (x *SystemInfo) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_aerodocs_v1_agent_proto_msgTypes[6]
+	mi := &file_proto_veyport_v1_agent_proto_msgTypes[6]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -850,7 +850,7 @@ func (x *SystemInfo) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SystemInfo.ProtoReflect.Descriptor instead.
 func (*SystemInfo) Descriptor() ([]byte, []int) {
-	return file_proto_aerodocs_v1_agent_proto_rawDescGZIP(), []int{6}
+	return file_proto_veyport_v1_agent_proto_rawDescGZIP(), []int{6}
 }
 
 func (x *SystemInfo) GetCpuPercent() float64 {
@@ -892,7 +892,7 @@ type FileListRequest struct {
 
 func (x *FileListRequest) Reset() {
 	*x = FileListRequest{}
-	mi := &file_proto_aerodocs_v1_agent_proto_msgTypes[7]
+	mi := &file_proto_veyport_v1_agent_proto_msgTypes[7]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -904,7 +904,7 @@ func (x *FileListRequest) String() string {
 func (*FileListRequest) ProtoMessage() {}
 
 func (x *FileListRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_aerodocs_v1_agent_proto_msgTypes[7]
+	mi := &file_proto_veyport_v1_agent_proto_msgTypes[7]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -917,7 +917,7 @@ func (x *FileListRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use FileListRequest.ProtoReflect.Descriptor instead.
 func (*FileListRequest) Descriptor() ([]byte, []int) {
-	return file_proto_aerodocs_v1_agent_proto_rawDescGZIP(), []int{7}
+	return file_proto_veyport_v1_agent_proto_rawDescGZIP(), []int{7}
 }
 
 func (x *FileListRequest) GetRequestId() string {
@@ -945,7 +945,7 @@ type FileListResponse struct {
 
 func (x *FileListResponse) Reset() {
 	*x = FileListResponse{}
-	mi := &file_proto_aerodocs_v1_agent_proto_msgTypes[8]
+	mi := &file_proto_veyport_v1_agent_proto_msgTypes[8]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -957,7 +957,7 @@ func (x *FileListResponse) String() string {
 func (*FileListResponse) ProtoMessage() {}
 
 func (x *FileListResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_aerodocs_v1_agent_proto_msgTypes[8]
+	mi := &file_proto_veyport_v1_agent_proto_msgTypes[8]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -970,7 +970,7 @@ func (x *FileListResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use FileListResponse.ProtoReflect.Descriptor instead.
 func (*FileListResponse) Descriptor() ([]byte, []int) {
-	return file_proto_aerodocs_v1_agent_proto_rawDescGZIP(), []int{8}
+	return file_proto_veyport_v1_agent_proto_rawDescGZIP(), []int{8}
 }
 
 func (x *FileListResponse) GetRequestId() string {
@@ -1007,7 +1007,7 @@ type FileNode struct {
 
 func (x *FileNode) Reset() {
 	*x = FileNode{}
-	mi := &file_proto_aerodocs_v1_agent_proto_msgTypes[9]
+	mi := &file_proto_veyport_v1_agent_proto_msgTypes[9]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1019,7 +1019,7 @@ func (x *FileNode) String() string {
 func (*FileNode) ProtoMessage() {}
 
 func (x *FileNode) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_aerodocs_v1_agent_proto_msgTypes[9]
+	mi := &file_proto_veyport_v1_agent_proto_msgTypes[9]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1032,7 +1032,7 @@ func (x *FileNode) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use FileNode.ProtoReflect.Descriptor instead.
 func (*FileNode) Descriptor() ([]byte, []int) {
-	return file_proto_aerodocs_v1_agent_proto_rawDescGZIP(), []int{9}
+	return file_proto_veyport_v1_agent_proto_rawDescGZIP(), []int{9}
 }
 
 func (x *FileNode) GetName() string {
@@ -1082,7 +1082,7 @@ type FileReadRequest struct {
 
 func (x *FileReadRequest) Reset() {
 	*x = FileReadRequest{}
-	mi := &file_proto_aerodocs_v1_agent_proto_msgTypes[10]
+	mi := &file_proto_veyport_v1_agent_proto_msgTypes[10]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1094,7 +1094,7 @@ func (x *FileReadRequest) String() string {
 func (*FileReadRequest) ProtoMessage() {}
 
 func (x *FileReadRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_aerodocs_v1_agent_proto_msgTypes[10]
+	mi := &file_proto_veyport_v1_agent_proto_msgTypes[10]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1107,7 +1107,7 @@ func (x *FileReadRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use FileReadRequest.ProtoReflect.Descriptor instead.
 func (*FileReadRequest) Descriptor() ([]byte, []int) {
-	return file_proto_aerodocs_v1_agent_proto_rawDescGZIP(), []int{10}
+	return file_proto_veyport_v1_agent_proto_rawDescGZIP(), []int{10}
 }
 
 func (x *FileReadRequest) GetRequestId() string {
@@ -1151,7 +1151,7 @@ type FileReadResponse struct {
 
 func (x *FileReadResponse) Reset() {
 	*x = FileReadResponse{}
-	mi := &file_proto_aerodocs_v1_agent_proto_msgTypes[11]
+	mi := &file_proto_veyport_v1_agent_proto_msgTypes[11]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1163,7 +1163,7 @@ func (x *FileReadResponse) String() string {
 func (*FileReadResponse) ProtoMessage() {}
 
 func (x *FileReadResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_aerodocs_v1_agent_proto_msgTypes[11]
+	mi := &file_proto_veyport_v1_agent_proto_msgTypes[11]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1176,7 +1176,7 @@ func (x *FileReadResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use FileReadResponse.ProtoReflect.Descriptor instead.
 func (*FileReadResponse) Descriptor() ([]byte, []int) {
-	return file_proto_aerodocs_v1_agent_proto_rawDescGZIP(), []int{11}
+	return file_proto_veyport_v1_agent_proto_rawDescGZIP(), []int{11}
 }
 
 func (x *FileReadResponse) GetRequestId() string {
@@ -1227,7 +1227,7 @@ type LogStreamRequest struct {
 
 func (x *LogStreamRequest) Reset() {
 	*x = LogStreamRequest{}
-	mi := &file_proto_aerodocs_v1_agent_proto_msgTypes[12]
+	mi := &file_proto_veyport_v1_agent_proto_msgTypes[12]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1239,7 +1239,7 @@ func (x *LogStreamRequest) String() string {
 func (*LogStreamRequest) ProtoMessage() {}
 
 func (x *LogStreamRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_aerodocs_v1_agent_proto_msgTypes[12]
+	mi := &file_proto_veyport_v1_agent_proto_msgTypes[12]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1252,7 +1252,7 @@ func (x *LogStreamRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use LogStreamRequest.ProtoReflect.Descriptor instead.
 func (*LogStreamRequest) Descriptor() ([]byte, []int) {
-	return file_proto_aerodocs_v1_agent_proto_rawDescGZIP(), []int{12}
+	return file_proto_veyport_v1_agent_proto_rawDescGZIP(), []int{12}
 }
 
 func (x *LogStreamRequest) GetRequestId() string {
@@ -1294,7 +1294,7 @@ type LogStreamChunk struct {
 
 func (x *LogStreamChunk) Reset() {
 	*x = LogStreamChunk{}
-	mi := &file_proto_aerodocs_v1_agent_proto_msgTypes[13]
+	mi := &file_proto_veyport_v1_agent_proto_msgTypes[13]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1306,7 +1306,7 @@ func (x *LogStreamChunk) String() string {
 func (*LogStreamChunk) ProtoMessage() {}
 
 func (x *LogStreamChunk) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_aerodocs_v1_agent_proto_msgTypes[13]
+	mi := &file_proto_veyport_v1_agent_proto_msgTypes[13]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1319,7 +1319,7 @@ func (x *LogStreamChunk) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use LogStreamChunk.ProtoReflect.Descriptor instead.
 func (*LogStreamChunk) Descriptor() ([]byte, []int) {
-	return file_proto_aerodocs_v1_agent_proto_rawDescGZIP(), []int{13}
+	return file_proto_veyport_v1_agent_proto_rawDescGZIP(), []int{13}
 }
 
 func (x *LogStreamChunk) GetRequestId() string {
@@ -1352,7 +1352,7 @@ type LogStreamStop struct {
 
 func (x *LogStreamStop) Reset() {
 	*x = LogStreamStop{}
-	mi := &file_proto_aerodocs_v1_agent_proto_msgTypes[14]
+	mi := &file_proto_veyport_v1_agent_proto_msgTypes[14]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1364,7 +1364,7 @@ func (x *LogStreamStop) String() string {
 func (*LogStreamStop) ProtoMessage() {}
 
 func (x *LogStreamStop) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_aerodocs_v1_agent_proto_msgTypes[14]
+	mi := &file_proto_veyport_v1_agent_proto_msgTypes[14]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1377,7 +1377,7 @@ func (x *LogStreamStop) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use LogStreamStop.ProtoReflect.Descriptor instead.
 func (*LogStreamStop) Descriptor() ([]byte, []int) {
-	return file_proto_aerodocs_v1_agent_proto_rawDescGZIP(), []int{14}
+	return file_proto_veyport_v1_agent_proto_rawDescGZIP(), []int{14}
 }
 
 func (x *LogStreamStop) GetRequestId() string {
@@ -1400,7 +1400,7 @@ type FileUploadRequest struct {
 
 func (x *FileUploadRequest) Reset() {
 	*x = FileUploadRequest{}
-	mi := &file_proto_aerodocs_v1_agent_proto_msgTypes[15]
+	mi := &file_proto_veyport_v1_agent_proto_msgTypes[15]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1412,7 +1412,7 @@ func (x *FileUploadRequest) String() string {
 func (*FileUploadRequest) ProtoMessage() {}
 
 func (x *FileUploadRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_aerodocs_v1_agent_proto_msgTypes[15]
+	mi := &file_proto_veyport_v1_agent_proto_msgTypes[15]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1425,7 +1425,7 @@ func (x *FileUploadRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use FileUploadRequest.ProtoReflect.Descriptor instead.
 func (*FileUploadRequest) Descriptor() ([]byte, []int) {
-	return file_proto_aerodocs_v1_agent_proto_rawDescGZIP(), []int{15}
+	return file_proto_veyport_v1_agent_proto_rawDescGZIP(), []int{15}
 }
 
 func (x *FileUploadRequest) GetRequestId() string {
@@ -1467,7 +1467,7 @@ type FileUploadAck struct {
 
 func (x *FileUploadAck) Reset() {
 	*x = FileUploadAck{}
-	mi := &file_proto_aerodocs_v1_agent_proto_msgTypes[16]
+	mi := &file_proto_veyport_v1_agent_proto_msgTypes[16]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1479,7 +1479,7 @@ func (x *FileUploadAck) String() string {
 func (*FileUploadAck) ProtoMessage() {}
 
 func (x *FileUploadAck) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_aerodocs_v1_agent_proto_msgTypes[16]
+	mi := &file_proto_veyport_v1_agent_proto_msgTypes[16]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1492,7 +1492,7 @@ func (x *FileUploadAck) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use FileUploadAck.ProtoReflect.Descriptor instead.
 func (*FileUploadAck) Descriptor() ([]byte, []int) {
-	return file_proto_aerodocs_v1_agent_proto_rawDescGZIP(), []int{16}
+	return file_proto_veyport_v1_agent_proto_rawDescGZIP(), []int{16}
 }
 
 func (x *FileUploadAck) GetRequestId() string {
@@ -1527,7 +1527,7 @@ type FileDeleteRequest struct {
 
 func (x *FileDeleteRequest) Reset() {
 	*x = FileDeleteRequest{}
-	mi := &file_proto_aerodocs_v1_agent_proto_msgTypes[17]
+	mi := &file_proto_veyport_v1_agent_proto_msgTypes[17]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1539,7 +1539,7 @@ func (x *FileDeleteRequest) String() string {
 func (*FileDeleteRequest) ProtoMessage() {}
 
 func (x *FileDeleteRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_aerodocs_v1_agent_proto_msgTypes[17]
+	mi := &file_proto_veyport_v1_agent_proto_msgTypes[17]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1552,7 +1552,7 @@ func (x *FileDeleteRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use FileDeleteRequest.ProtoReflect.Descriptor instead.
 func (*FileDeleteRequest) Descriptor() ([]byte, []int) {
-	return file_proto_aerodocs_v1_agent_proto_rawDescGZIP(), []int{17}
+	return file_proto_veyport_v1_agent_proto_rawDescGZIP(), []int{17}
 }
 
 func (x *FileDeleteRequest) GetRequestId() string {
@@ -1580,7 +1580,7 @@ type FileDeleteResponse struct {
 
 func (x *FileDeleteResponse) Reset() {
 	*x = FileDeleteResponse{}
-	mi := &file_proto_aerodocs_v1_agent_proto_msgTypes[18]
+	mi := &file_proto_veyport_v1_agent_proto_msgTypes[18]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1592,7 +1592,7 @@ func (x *FileDeleteResponse) String() string {
 func (*FileDeleteResponse) ProtoMessage() {}
 
 func (x *FileDeleteResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_aerodocs_v1_agent_proto_msgTypes[18]
+	mi := &file_proto_veyport_v1_agent_proto_msgTypes[18]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1605,7 +1605,7 @@ func (x *FileDeleteResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use FileDeleteResponse.ProtoReflect.Descriptor instead.
 func (*FileDeleteResponse) Descriptor() ([]byte, []int) {
-	return file_proto_aerodocs_v1_agent_proto_rawDescGZIP(), []int{18}
+	return file_proto_veyport_v1_agent_proto_rawDescGZIP(), []int{18}
 }
 
 func (x *FileDeleteResponse) GetRequestId() string {
@@ -1639,7 +1639,7 @@ type UnregisterRequest struct {
 
 func (x *UnregisterRequest) Reset() {
 	*x = UnregisterRequest{}
-	mi := &file_proto_aerodocs_v1_agent_proto_msgTypes[19]
+	mi := &file_proto_veyport_v1_agent_proto_msgTypes[19]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1651,7 +1651,7 @@ func (x *UnregisterRequest) String() string {
 func (*UnregisterRequest) ProtoMessage() {}
 
 func (x *UnregisterRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_aerodocs_v1_agent_proto_msgTypes[19]
+	mi := &file_proto_veyport_v1_agent_proto_msgTypes[19]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1664,7 +1664,7 @@ func (x *UnregisterRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use UnregisterRequest.ProtoReflect.Descriptor instead.
 func (*UnregisterRequest) Descriptor() ([]byte, []int) {
-	return file_proto_aerodocs_v1_agent_proto_rawDescGZIP(), []int{19}
+	return file_proto_veyport_v1_agent_proto_rawDescGZIP(), []int{19}
 }
 
 func (x *UnregisterRequest) GetRequestId() string {
@@ -1685,7 +1685,7 @@ type UnregisterAck struct {
 
 func (x *UnregisterAck) Reset() {
 	*x = UnregisterAck{}
-	mi := &file_proto_aerodocs_v1_agent_proto_msgTypes[20]
+	mi := &file_proto_veyport_v1_agent_proto_msgTypes[20]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1697,7 +1697,7 @@ func (x *UnregisterAck) String() string {
 func (*UnregisterAck) ProtoMessage() {}
 
 func (x *UnregisterAck) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_aerodocs_v1_agent_proto_msgTypes[20]
+	mi := &file_proto_veyport_v1_agent_proto_msgTypes[20]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1710,7 +1710,7 @@ func (x *UnregisterAck) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use UnregisterAck.ProtoReflect.Descriptor instead.
 func (*UnregisterAck) Descriptor() ([]byte, []int) {
-	return file_proto_aerodocs_v1_agent_proto_rawDescGZIP(), []int{20}
+	return file_proto_veyport_v1_agent_proto_rawDescGZIP(), []int{20}
 }
 
 func (x *UnregisterAck) GetRequestId() string {
@@ -1744,7 +1744,7 @@ type CertRenewRequest struct {
 
 func (x *CertRenewRequest) Reset() {
 	*x = CertRenewRequest{}
-	mi := &file_proto_aerodocs_v1_agent_proto_msgTypes[21]
+	mi := &file_proto_veyport_v1_agent_proto_msgTypes[21]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1756,7 +1756,7 @@ func (x *CertRenewRequest) String() string {
 func (*CertRenewRequest) ProtoMessage() {}
 
 func (x *CertRenewRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_aerodocs_v1_agent_proto_msgTypes[21]
+	mi := &file_proto_veyport_v1_agent_proto_msgTypes[21]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1769,7 +1769,7 @@ func (x *CertRenewRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CertRenewRequest.ProtoReflect.Descriptor instead.
 func (*CertRenewRequest) Descriptor() ([]byte, []int) {
-	return file_proto_aerodocs_v1_agent_proto_rawDescGZIP(), []int{21}
+	return file_proto_veyport_v1_agent_proto_rawDescGZIP(), []int{21}
 }
 
 func (x *CertRenewRequest) GetCsr() []byte {
@@ -1790,7 +1790,7 @@ type CertRenewResponse struct {
 
 func (x *CertRenewResponse) Reset() {
 	*x = CertRenewResponse{}
-	mi := &file_proto_aerodocs_v1_agent_proto_msgTypes[22]
+	mi := &file_proto_veyport_v1_agent_proto_msgTypes[22]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1802,7 +1802,7 @@ func (x *CertRenewResponse) String() string {
 func (*CertRenewResponse) ProtoMessage() {}
 
 func (x *CertRenewResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_aerodocs_v1_agent_proto_msgTypes[22]
+	mi := &file_proto_veyport_v1_agent_proto_msgTypes[22]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1815,7 +1815,7 @@ func (x *CertRenewResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CertRenewResponse.ProtoReflect.Descriptor instead.
 func (*CertRenewResponse) Descriptor() ([]byte, []int) {
-	return file_proto_aerodocs_v1_agent_proto_rawDescGZIP(), []int{22}
+	return file_proto_veyport_v1_agent_proto_rawDescGZIP(), []int{22}
 }
 
 func (x *CertRenewResponse) GetClientCert() []byte {
@@ -1853,7 +1853,7 @@ type TerminalOpenRequest struct {
 
 func (x *TerminalOpenRequest) Reset() {
 	*x = TerminalOpenRequest{}
-	mi := &file_proto_aerodocs_v1_agent_proto_msgTypes[23]
+	mi := &file_proto_veyport_v1_agent_proto_msgTypes[23]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1865,7 +1865,7 @@ func (x *TerminalOpenRequest) String() string {
 func (*TerminalOpenRequest) ProtoMessage() {}
 
 func (x *TerminalOpenRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_aerodocs_v1_agent_proto_msgTypes[23]
+	mi := &file_proto_veyport_v1_agent_proto_msgTypes[23]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1878,7 +1878,7 @@ func (x *TerminalOpenRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use TerminalOpenRequest.ProtoReflect.Descriptor instead.
 func (*TerminalOpenRequest) Descriptor() ([]byte, []int) {
-	return file_proto_aerodocs_v1_agent_proto_rawDescGZIP(), []int{23}
+	return file_proto_veyport_v1_agent_proto_rawDescGZIP(), []int{23}
 }
 
 func (x *TerminalOpenRequest) GetSessionId() string {
@@ -1927,7 +1927,7 @@ type TerminalOpenAck struct {
 
 func (x *TerminalOpenAck) Reset() {
 	*x = TerminalOpenAck{}
-	mi := &file_proto_aerodocs_v1_agent_proto_msgTypes[24]
+	mi := &file_proto_veyport_v1_agent_proto_msgTypes[24]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1939,7 +1939,7 @@ func (x *TerminalOpenAck) String() string {
 func (*TerminalOpenAck) ProtoMessage() {}
 
 func (x *TerminalOpenAck) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_aerodocs_v1_agent_proto_msgTypes[24]
+	mi := &file_proto_veyport_v1_agent_proto_msgTypes[24]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1952,7 +1952,7 @@ func (x *TerminalOpenAck) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use TerminalOpenAck.ProtoReflect.Descriptor instead.
 func (*TerminalOpenAck) Descriptor() ([]byte, []int) {
-	return file_proto_aerodocs_v1_agent_proto_rawDescGZIP(), []int{24}
+	return file_proto_veyport_v1_agent_proto_rawDescGZIP(), []int{24}
 }
 
 func (x *TerminalOpenAck) GetSessionId() string {
@@ -1986,7 +1986,7 @@ type TerminalInput struct {
 
 func (x *TerminalInput) Reset() {
 	*x = TerminalInput{}
-	mi := &file_proto_aerodocs_v1_agent_proto_msgTypes[25]
+	mi := &file_proto_veyport_v1_agent_proto_msgTypes[25]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1998,7 +1998,7 @@ func (x *TerminalInput) String() string {
 func (*TerminalInput) ProtoMessage() {}
 
 func (x *TerminalInput) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_aerodocs_v1_agent_proto_msgTypes[25]
+	mi := &file_proto_veyport_v1_agent_proto_msgTypes[25]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2011,7 +2011,7 @@ func (x *TerminalInput) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use TerminalInput.ProtoReflect.Descriptor instead.
 func (*TerminalInput) Descriptor() ([]byte, []int) {
-	return file_proto_aerodocs_v1_agent_proto_rawDescGZIP(), []int{25}
+	return file_proto_veyport_v1_agent_proto_rawDescGZIP(), []int{25}
 }
 
 func (x *TerminalInput) GetSessionId() string {
@@ -2039,7 +2039,7 @@ type TerminalResize struct {
 
 func (x *TerminalResize) Reset() {
 	*x = TerminalResize{}
-	mi := &file_proto_aerodocs_v1_agent_proto_msgTypes[26]
+	mi := &file_proto_veyport_v1_agent_proto_msgTypes[26]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2051,7 +2051,7 @@ func (x *TerminalResize) String() string {
 func (*TerminalResize) ProtoMessage() {}
 
 func (x *TerminalResize) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_aerodocs_v1_agent_proto_msgTypes[26]
+	mi := &file_proto_veyport_v1_agent_proto_msgTypes[26]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2064,7 +2064,7 @@ func (x *TerminalResize) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use TerminalResize.ProtoReflect.Descriptor instead.
 func (*TerminalResize) Descriptor() ([]byte, []int) {
-	return file_proto_aerodocs_v1_agent_proto_rawDescGZIP(), []int{26}
+	return file_proto_veyport_v1_agent_proto_rawDescGZIP(), []int{26}
 }
 
 func (x *TerminalResize) GetSessionId() string {
@@ -2098,7 +2098,7 @@ type TerminalData struct {
 
 func (x *TerminalData) Reset() {
 	*x = TerminalData{}
-	mi := &file_proto_aerodocs_v1_agent_proto_msgTypes[27]
+	mi := &file_proto_veyport_v1_agent_proto_msgTypes[27]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2110,7 +2110,7 @@ func (x *TerminalData) String() string {
 func (*TerminalData) ProtoMessage() {}
 
 func (x *TerminalData) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_aerodocs_v1_agent_proto_msgTypes[27]
+	mi := &file_proto_veyport_v1_agent_proto_msgTypes[27]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2123,7 +2123,7 @@ func (x *TerminalData) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use TerminalData.ProtoReflect.Descriptor instead.
 func (*TerminalData) Descriptor() ([]byte, []int) {
-	return file_proto_aerodocs_v1_agent_proto_rawDescGZIP(), []int{27}
+	return file_proto_veyport_v1_agent_proto_rawDescGZIP(), []int{27}
 }
 
 func (x *TerminalData) GetSessionId() string {
@@ -2151,7 +2151,7 @@ type TerminalExit struct {
 
 func (x *TerminalExit) Reset() {
 	*x = TerminalExit{}
-	mi := &file_proto_aerodocs_v1_agent_proto_msgTypes[28]
+	mi := &file_proto_veyport_v1_agent_proto_msgTypes[28]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2163,7 +2163,7 @@ func (x *TerminalExit) String() string {
 func (*TerminalExit) ProtoMessage() {}
 
 func (x *TerminalExit) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_aerodocs_v1_agent_proto_msgTypes[28]
+	mi := &file_proto_veyport_v1_agent_proto_msgTypes[28]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2176,7 +2176,7 @@ func (x *TerminalExit) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use TerminalExit.ProtoReflect.Descriptor instead.
 func (*TerminalExit) Descriptor() ([]byte, []int) {
-	return file_proto_aerodocs_v1_agent_proto_rawDescGZIP(), []int{28}
+	return file_proto_veyport_v1_agent_proto_rawDescGZIP(), []int{28}
 }
 
 func (x *TerminalExit) GetSessionId() string {
@@ -2209,7 +2209,7 @@ type TerminalClose struct {
 
 func (x *TerminalClose) Reset() {
 	*x = TerminalClose{}
-	mi := &file_proto_aerodocs_v1_agent_proto_msgTypes[29]
+	mi := &file_proto_veyport_v1_agent_proto_msgTypes[29]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2221,7 +2221,7 @@ func (x *TerminalClose) String() string {
 func (*TerminalClose) ProtoMessage() {}
 
 func (x *TerminalClose) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_aerodocs_v1_agent_proto_msgTypes[29]
+	mi := &file_proto_veyport_v1_agent_proto_msgTypes[29]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2234,7 +2234,7 @@ func (x *TerminalClose) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use TerminalClose.ProtoReflect.Descriptor instead.
 func (*TerminalClose) Descriptor() ([]byte, []int) {
-	return file_proto_aerodocs_v1_agent_proto_rawDescGZIP(), []int{29}
+	return file_proto_veyport_v1_agent_proto_rawDescGZIP(), []int{29}
 }
 
 func (x *TerminalClose) GetSessionId() string {
@@ -2244,48 +2244,49 @@ func (x *TerminalClose) GetSessionId() string {
 	return ""
 }
 
-var File_proto_aerodocs_v1_agent_proto protoreflect.FileDescriptor
+var File_proto_veyport_v1_agent_proto protoreflect.FileDescriptor
 
-const file_proto_aerodocs_v1_agent_proto_rawDesc = "" +
+const file_proto_veyport_v1_agent_proto_rawDesc = "" +
 	"\n" +
-	"\x1dproto/aerodocs/v1/agent.proto\x12\vaerodocs.v1\"\xf1\x06\n" +
-	"\fAgentMessage\x126\n" +
-	"\theartbeat\x18\x01 \x01(\v2\x16.aerodocs.v1.HeartbeatH\x00R\theartbeat\x128\n" +
-	"\bregister\x18\x02 \x01(\v2\x1a.aerodocs.v1.RegisterAgentH\x00R\bregister\x12M\n" +
+	"\x1cproto/veyport/v1/agent.proto\x12\n" +
+	"veyport.v1\"\xe5\x06\n" +
+	"\fAgentMessage\x125\n" +
+	"\theartbeat\x18\x01 \x01(\v2\x15.veyport.v1.HeartbeatH\x00R\theartbeat\x127\n" +
+	"\bregister\x18\x02 \x01(\v2\x19.veyport.v1.RegisterAgentH\x00R\bregister\x12L\n" +
 	"\x12file_list_response\x18\n" +
-	" \x01(\v2\x1d.aerodocs.v1.FileListResponseH\x00R\x10fileListResponse\x12G\n" +
-	"\x10log_stream_chunk\x18\v \x01(\v2\x1b.aerodocs.v1.LogStreamChunkH\x00R\x0elogStreamChunk\x12D\n" +
-	"\x0ffile_upload_ack\x18\f \x01(\v2\x1a.aerodocs.v1.FileUploadAckH\x00R\rfileUploadAck\x12M\n" +
-	"\x12file_read_response\x18\r \x01(\v2\x1d.aerodocs.v1.FileReadResponseH\x00R\x10fileReadResponse\x12S\n" +
-	"\x14file_delete_response\x18\x0f \x01(\v2\x1f.aerodocs.v1.FileDeleteResponseH\x00R\x12fileDeleteResponse\x12C\n" +
-	"\x0eunregister_ack\x18\x10 \x01(\v2\x1a.aerodocs.v1.UnregisterAckH\x00R\runregisterAck\x12M\n" +
-	"\x12cert_renew_request\x18\x11 \x01(\v2\x1d.aerodocs.v1.CertRenewRequestH\x00R\x10certRenewRequest\x12J\n" +
-	"\x11terminal_open_ack\x18\x12 \x01(\v2\x1c.aerodocs.v1.TerminalOpenAckH\x00R\x0fterminalOpenAck\x12@\n" +
-	"\rterminal_data\x18\x13 \x01(\v2\x19.aerodocs.v1.TerminalDataH\x00R\fterminalData\x12@\n" +
-	"\rterminal_exit\x18\x14 \x01(\v2\x19.aerodocs.v1.TerminalExitH\x00R\fterminalExitB\t\n" +
-	"\apayload\"\xb6\b\n" +
+	" \x01(\v2\x1c.veyport.v1.FileListResponseH\x00R\x10fileListResponse\x12F\n" +
+	"\x10log_stream_chunk\x18\v \x01(\v2\x1a.veyport.v1.LogStreamChunkH\x00R\x0elogStreamChunk\x12C\n" +
+	"\x0ffile_upload_ack\x18\f \x01(\v2\x19.veyport.v1.FileUploadAckH\x00R\rfileUploadAck\x12L\n" +
+	"\x12file_read_response\x18\r \x01(\v2\x1c.veyport.v1.FileReadResponseH\x00R\x10fileReadResponse\x12R\n" +
+	"\x14file_delete_response\x18\x0f \x01(\v2\x1e.veyport.v1.FileDeleteResponseH\x00R\x12fileDeleteResponse\x12B\n" +
+	"\x0eunregister_ack\x18\x10 \x01(\v2\x19.veyport.v1.UnregisterAckH\x00R\runregisterAck\x12L\n" +
+	"\x12cert_renew_request\x18\x11 \x01(\v2\x1c.veyport.v1.CertRenewRequestH\x00R\x10certRenewRequest\x12I\n" +
+	"\x11terminal_open_ack\x18\x12 \x01(\v2\x1b.veyport.v1.TerminalOpenAckH\x00R\x0fterminalOpenAck\x12?\n" +
+	"\rterminal_data\x18\x13 \x01(\v2\x18.veyport.v1.TerminalDataH\x00R\fterminalData\x12?\n" +
+	"\rterminal_exit\x18\x14 \x01(\v2\x18.veyport.v1.TerminalExitH\x00R\fterminalExitB\t\n" +
+	"\apayload\"\xa8\b\n" +
 	"\n" +
-	"HubMessage\x12@\n" +
-	"\rheartbeat_ack\x18\x01 \x01(\v2\x19.aerodocs.v1.HeartbeatAckH\x00R\fheartbeatAck\x12=\n" +
-	"\fregister_ack\x18\x02 \x01(\v2\x18.aerodocs.v1.RegisterAckH\x00R\vregisterAck\x12J\n" +
+	"HubMessage\x12?\n" +
+	"\rheartbeat_ack\x18\x01 \x01(\v2\x18.veyport.v1.HeartbeatAckH\x00R\fheartbeatAck\x12<\n" +
+	"\fregister_ack\x18\x02 \x01(\v2\x17.veyport.v1.RegisterAckH\x00R\vregisterAck\x12I\n" +
 	"\x11file_list_request\x18\n" +
-	" \x01(\v2\x1c.aerodocs.v1.FileListRequestH\x00R\x0ffileListRequest\x12M\n" +
-	"\x12log_stream_request\x18\v \x01(\v2\x1d.aerodocs.v1.LogStreamRequestH\x00R\x10logStreamRequest\x12P\n" +
-	"\x13file_upload_request\x18\f \x01(\v2\x1e.aerodocs.v1.FileUploadRequestH\x00R\x11fileUploadRequest\x12J\n" +
-	"\x11file_read_request\x18\r \x01(\v2\x1c.aerodocs.v1.FileReadRequestH\x00R\x0ffileReadRequest\x12D\n" +
-	"\x0flog_stream_stop\x18\x0e \x01(\v2\x1a.aerodocs.v1.LogStreamStopH\x00R\rlogStreamStop\x12P\n" +
-	"\x13file_delete_request\x18\x0f \x01(\v2\x1e.aerodocs.v1.FileDeleteRequestH\x00R\x11fileDeleteRequest\x12O\n" +
-	"\x12unregister_request\x18\x10 \x01(\v2\x1e.aerodocs.v1.UnregisterRequestH\x00R\x11unregisterRequest\x12P\n" +
-	"\x13cert_renew_response\x18\x11 \x01(\v2\x1e.aerodocs.v1.CertRenewResponseH\x00R\x11certRenewResponse\x12V\n" +
-	"\x15terminal_open_request\x18\x12 \x01(\v2 .aerodocs.v1.TerminalOpenRequestH\x00R\x13terminalOpenRequest\x12C\n" +
-	"\x0eterminal_input\x18\x13 \x01(\v2\x1a.aerodocs.v1.TerminalInputH\x00R\rterminalInput\x12F\n" +
-	"\x0fterminal_resize\x18\x14 \x01(\v2\x1b.aerodocs.v1.TerminalResizeH\x00R\x0eterminalResize\x12C\n" +
-	"\x0eterminal_close\x18\x15 \x01(\v2\x1a.aerodocs.v1.TerminalCloseH\x00R\rterminalCloseB\t\n" +
-	"\apayload\"\x9f\x01\n" +
+	" \x01(\v2\x1b.veyport.v1.FileListRequestH\x00R\x0ffileListRequest\x12L\n" +
+	"\x12log_stream_request\x18\v \x01(\v2\x1c.veyport.v1.LogStreamRequestH\x00R\x10logStreamRequest\x12O\n" +
+	"\x13file_upload_request\x18\f \x01(\v2\x1d.veyport.v1.FileUploadRequestH\x00R\x11fileUploadRequest\x12I\n" +
+	"\x11file_read_request\x18\r \x01(\v2\x1b.veyport.v1.FileReadRequestH\x00R\x0ffileReadRequest\x12C\n" +
+	"\x0flog_stream_stop\x18\x0e \x01(\v2\x19.veyport.v1.LogStreamStopH\x00R\rlogStreamStop\x12O\n" +
+	"\x13file_delete_request\x18\x0f \x01(\v2\x1d.veyport.v1.FileDeleteRequestH\x00R\x11fileDeleteRequest\x12N\n" +
+	"\x12unregister_request\x18\x10 \x01(\v2\x1d.veyport.v1.UnregisterRequestH\x00R\x11unregisterRequest\x12O\n" +
+	"\x13cert_renew_response\x18\x11 \x01(\v2\x1d.veyport.v1.CertRenewResponseH\x00R\x11certRenewResponse\x12U\n" +
+	"\x15terminal_open_request\x18\x12 \x01(\v2\x1f.veyport.v1.TerminalOpenRequestH\x00R\x13terminalOpenRequest\x12B\n" +
+	"\x0eterminal_input\x18\x13 \x01(\v2\x19.veyport.v1.TerminalInputH\x00R\rterminalInput\x12E\n" +
+	"\x0fterminal_resize\x18\x14 \x01(\v2\x1a.veyport.v1.TerminalResizeH\x00R\x0eterminalResize\x12B\n" +
+	"\x0eterminal_close\x18\x15 \x01(\v2\x19.veyport.v1.TerminalCloseH\x00R\rterminalCloseB\t\n" +
+	"\apayload\"\x9e\x01\n" +
 	"\tHeartbeat\x12\x1b\n" +
 	"\tserver_id\x18\x01 \x01(\tR\bserverId\x12\x1c\n" +
-	"\ttimestamp\x18\x02 \x01(\x03R\ttimestamp\x128\n" +
-	"\vsystem_info\x18\x03 \x01(\v2\x17.aerodocs.v1.SystemInfoR\n" +
+	"\ttimestamp\x18\x02 \x01(\x03R\ttimestamp\x127\n" +
+	"\vsystem_info\x18\x03 \x01(\v2\x16.veyport.v1.SystemInfoR\n" +
 	"systemInfo\x12\x1d\n" +
 	"\n" +
 	"ip_address\x18\x04 \x01(\tR\tipAddress\",\n" +
@@ -2316,11 +2317,11 @@ const file_proto_aerodocs_v1_agent_proto_rawDesc = "" +
 	"\x0fFileListRequest\x12\x1d\n" +
 	"\n" +
 	"request_id\x18\x01 \x01(\tR\trequestId\x12\x12\n" +
-	"\x04path\x18\x02 \x01(\tR\x04path\"t\n" +
+	"\x04path\x18\x02 \x01(\tR\x04path\"s\n" +
 	"\x10FileListResponse\x12\x1d\n" +
 	"\n" +
-	"request_id\x18\x01 \x01(\tR\trequestId\x12+\n" +
-	"\x05files\x18\x02 \x03(\v2\x15.aerodocs.v1.FileNodeR\x05files\x12\x14\n" +
+	"request_id\x18\x01 \x01(\tR\trequestId\x12*\n" +
+	"\x05files\x18\x02 \x03(\v2\x14.veyport.v1.FileNodeR\x05files\x12\x14\n" +
 	"\x05error\x18\x03 \x01(\tR\x05error\"y\n" +
 	"\bFileNode\x12\x12\n" +
 	"\x04name\x18\x01 \x01(\tR\x04name\x12\x12\n" +
@@ -2423,86 +2424,86 @@ const file_proto_aerodocs_v1_agent_proto_rawDesc = "" +
 	"\x05error\x18\x03 \x01(\tR\x05error\".\n" +
 	"\rTerminalClose\x12\x1d\n" +
 	"\n" +
-	"session_id\x18\x01 \x01(\tR\tsessionId2Q\n" +
-	"\fAgentService\x12A\n" +
-	"\aConnect\x12\x19.aerodocs.v1.AgentMessage\x1a\x17.aerodocs.v1.HubMessage(\x010\x01B,Z*github.com/wyiu/aerodocs/proto/aerodocs/v1b\x06proto3"
+	"session_id\x18\x01 \x01(\tR\tsessionId2O\n" +
+	"\fAgentService\x12?\n" +
+	"\aConnect\x12\x18.veyport.v1.AgentMessage\x1a\x16.veyport.v1.HubMessage(\x010\x01B*Z(github.com/wyiu/veyport/proto/veyport/v1b\x06proto3"
 
 var (
-	file_proto_aerodocs_v1_agent_proto_rawDescOnce sync.Once
-	file_proto_aerodocs_v1_agent_proto_rawDescData []byte
+	file_proto_veyport_v1_agent_proto_rawDescOnce sync.Once
+	file_proto_veyport_v1_agent_proto_rawDescData []byte
 )
 
-func file_proto_aerodocs_v1_agent_proto_rawDescGZIP() []byte {
-	file_proto_aerodocs_v1_agent_proto_rawDescOnce.Do(func() {
-		file_proto_aerodocs_v1_agent_proto_rawDescData = protoimpl.X.CompressGZIP(unsafe.Slice(unsafe.StringData(file_proto_aerodocs_v1_agent_proto_rawDesc), len(file_proto_aerodocs_v1_agent_proto_rawDesc)))
+func file_proto_veyport_v1_agent_proto_rawDescGZIP() []byte {
+	file_proto_veyport_v1_agent_proto_rawDescOnce.Do(func() {
+		file_proto_veyport_v1_agent_proto_rawDescData = protoimpl.X.CompressGZIP(unsafe.Slice(unsafe.StringData(file_proto_veyport_v1_agent_proto_rawDesc), len(file_proto_veyport_v1_agent_proto_rawDesc)))
 	})
-	return file_proto_aerodocs_v1_agent_proto_rawDescData
+	return file_proto_veyport_v1_agent_proto_rawDescData
 }
 
-var file_proto_aerodocs_v1_agent_proto_msgTypes = make([]protoimpl.MessageInfo, 30)
-var file_proto_aerodocs_v1_agent_proto_goTypes = []any{
-	(*AgentMessage)(nil),        // 0: aerodocs.v1.AgentMessage
-	(*HubMessage)(nil),          // 1: aerodocs.v1.HubMessage
-	(*Heartbeat)(nil),           // 2: aerodocs.v1.Heartbeat
-	(*HeartbeatAck)(nil),        // 3: aerodocs.v1.HeartbeatAck
-	(*RegisterAgent)(nil),       // 4: aerodocs.v1.RegisterAgent
-	(*RegisterAck)(nil),         // 5: aerodocs.v1.RegisterAck
-	(*SystemInfo)(nil),          // 6: aerodocs.v1.SystemInfo
-	(*FileListRequest)(nil),     // 7: aerodocs.v1.FileListRequest
-	(*FileListResponse)(nil),    // 8: aerodocs.v1.FileListResponse
-	(*FileNode)(nil),            // 9: aerodocs.v1.FileNode
-	(*FileReadRequest)(nil),     // 10: aerodocs.v1.FileReadRequest
-	(*FileReadResponse)(nil),    // 11: aerodocs.v1.FileReadResponse
-	(*LogStreamRequest)(nil),    // 12: aerodocs.v1.LogStreamRequest
-	(*LogStreamChunk)(nil),      // 13: aerodocs.v1.LogStreamChunk
-	(*LogStreamStop)(nil),       // 14: aerodocs.v1.LogStreamStop
-	(*FileUploadRequest)(nil),   // 15: aerodocs.v1.FileUploadRequest
-	(*FileUploadAck)(nil),       // 16: aerodocs.v1.FileUploadAck
-	(*FileDeleteRequest)(nil),   // 17: aerodocs.v1.FileDeleteRequest
-	(*FileDeleteResponse)(nil),  // 18: aerodocs.v1.FileDeleteResponse
-	(*UnregisterRequest)(nil),   // 19: aerodocs.v1.UnregisterRequest
-	(*UnregisterAck)(nil),       // 20: aerodocs.v1.UnregisterAck
-	(*CertRenewRequest)(nil),    // 21: aerodocs.v1.CertRenewRequest
-	(*CertRenewResponse)(nil),   // 22: aerodocs.v1.CertRenewResponse
-	(*TerminalOpenRequest)(nil), // 23: aerodocs.v1.TerminalOpenRequest
-	(*TerminalOpenAck)(nil),     // 24: aerodocs.v1.TerminalOpenAck
-	(*TerminalInput)(nil),       // 25: aerodocs.v1.TerminalInput
-	(*TerminalResize)(nil),      // 26: aerodocs.v1.TerminalResize
-	(*TerminalData)(nil),        // 27: aerodocs.v1.TerminalData
-	(*TerminalExit)(nil),        // 28: aerodocs.v1.TerminalExit
-	(*TerminalClose)(nil),       // 29: aerodocs.v1.TerminalClose
+var file_proto_veyport_v1_agent_proto_msgTypes = make([]protoimpl.MessageInfo, 30)
+var file_proto_veyport_v1_agent_proto_goTypes = []any{
+	(*AgentMessage)(nil),        // 0: veyport.v1.AgentMessage
+	(*HubMessage)(nil),          // 1: veyport.v1.HubMessage
+	(*Heartbeat)(nil),           // 2: veyport.v1.Heartbeat
+	(*HeartbeatAck)(nil),        // 3: veyport.v1.HeartbeatAck
+	(*RegisterAgent)(nil),       // 4: veyport.v1.RegisterAgent
+	(*RegisterAck)(nil),         // 5: veyport.v1.RegisterAck
+	(*SystemInfo)(nil),          // 6: veyport.v1.SystemInfo
+	(*FileListRequest)(nil),     // 7: veyport.v1.FileListRequest
+	(*FileListResponse)(nil),    // 8: veyport.v1.FileListResponse
+	(*FileNode)(nil),            // 9: veyport.v1.FileNode
+	(*FileReadRequest)(nil),     // 10: veyport.v1.FileReadRequest
+	(*FileReadResponse)(nil),    // 11: veyport.v1.FileReadResponse
+	(*LogStreamRequest)(nil),    // 12: veyport.v1.LogStreamRequest
+	(*LogStreamChunk)(nil),      // 13: veyport.v1.LogStreamChunk
+	(*LogStreamStop)(nil),       // 14: veyport.v1.LogStreamStop
+	(*FileUploadRequest)(nil),   // 15: veyport.v1.FileUploadRequest
+	(*FileUploadAck)(nil),       // 16: veyport.v1.FileUploadAck
+	(*FileDeleteRequest)(nil),   // 17: veyport.v1.FileDeleteRequest
+	(*FileDeleteResponse)(nil),  // 18: veyport.v1.FileDeleteResponse
+	(*UnregisterRequest)(nil),   // 19: veyport.v1.UnregisterRequest
+	(*UnregisterAck)(nil),       // 20: veyport.v1.UnregisterAck
+	(*CertRenewRequest)(nil),    // 21: veyport.v1.CertRenewRequest
+	(*CertRenewResponse)(nil),   // 22: veyport.v1.CertRenewResponse
+	(*TerminalOpenRequest)(nil), // 23: veyport.v1.TerminalOpenRequest
+	(*TerminalOpenAck)(nil),     // 24: veyport.v1.TerminalOpenAck
+	(*TerminalInput)(nil),       // 25: veyport.v1.TerminalInput
+	(*TerminalResize)(nil),      // 26: veyport.v1.TerminalResize
+	(*TerminalData)(nil),        // 27: veyport.v1.TerminalData
+	(*TerminalExit)(nil),        // 28: veyport.v1.TerminalExit
+	(*TerminalClose)(nil),       // 29: veyport.v1.TerminalClose
 }
-var file_proto_aerodocs_v1_agent_proto_depIdxs = []int32{
-	2,  // 0: aerodocs.v1.AgentMessage.heartbeat:type_name -> aerodocs.v1.Heartbeat
-	4,  // 1: aerodocs.v1.AgentMessage.register:type_name -> aerodocs.v1.RegisterAgent
-	8,  // 2: aerodocs.v1.AgentMessage.file_list_response:type_name -> aerodocs.v1.FileListResponse
-	13, // 3: aerodocs.v1.AgentMessage.log_stream_chunk:type_name -> aerodocs.v1.LogStreamChunk
-	16, // 4: aerodocs.v1.AgentMessage.file_upload_ack:type_name -> aerodocs.v1.FileUploadAck
-	11, // 5: aerodocs.v1.AgentMessage.file_read_response:type_name -> aerodocs.v1.FileReadResponse
-	18, // 6: aerodocs.v1.AgentMessage.file_delete_response:type_name -> aerodocs.v1.FileDeleteResponse
-	20, // 7: aerodocs.v1.AgentMessage.unregister_ack:type_name -> aerodocs.v1.UnregisterAck
-	21, // 8: aerodocs.v1.AgentMessage.cert_renew_request:type_name -> aerodocs.v1.CertRenewRequest
-	24, // 9: aerodocs.v1.AgentMessage.terminal_open_ack:type_name -> aerodocs.v1.TerminalOpenAck
-	27, // 10: aerodocs.v1.AgentMessage.terminal_data:type_name -> aerodocs.v1.TerminalData
-	28, // 11: aerodocs.v1.AgentMessage.terminal_exit:type_name -> aerodocs.v1.TerminalExit
-	3,  // 12: aerodocs.v1.HubMessage.heartbeat_ack:type_name -> aerodocs.v1.HeartbeatAck
-	5,  // 13: aerodocs.v1.HubMessage.register_ack:type_name -> aerodocs.v1.RegisterAck
-	7,  // 14: aerodocs.v1.HubMessage.file_list_request:type_name -> aerodocs.v1.FileListRequest
-	12, // 15: aerodocs.v1.HubMessage.log_stream_request:type_name -> aerodocs.v1.LogStreamRequest
-	15, // 16: aerodocs.v1.HubMessage.file_upload_request:type_name -> aerodocs.v1.FileUploadRequest
-	10, // 17: aerodocs.v1.HubMessage.file_read_request:type_name -> aerodocs.v1.FileReadRequest
-	14, // 18: aerodocs.v1.HubMessage.log_stream_stop:type_name -> aerodocs.v1.LogStreamStop
-	17, // 19: aerodocs.v1.HubMessage.file_delete_request:type_name -> aerodocs.v1.FileDeleteRequest
-	19, // 20: aerodocs.v1.HubMessage.unregister_request:type_name -> aerodocs.v1.UnregisterRequest
-	22, // 21: aerodocs.v1.HubMessage.cert_renew_response:type_name -> aerodocs.v1.CertRenewResponse
-	23, // 22: aerodocs.v1.HubMessage.terminal_open_request:type_name -> aerodocs.v1.TerminalOpenRequest
-	25, // 23: aerodocs.v1.HubMessage.terminal_input:type_name -> aerodocs.v1.TerminalInput
-	26, // 24: aerodocs.v1.HubMessage.terminal_resize:type_name -> aerodocs.v1.TerminalResize
-	29, // 25: aerodocs.v1.HubMessage.terminal_close:type_name -> aerodocs.v1.TerminalClose
-	6,  // 26: aerodocs.v1.Heartbeat.system_info:type_name -> aerodocs.v1.SystemInfo
-	9,  // 27: aerodocs.v1.FileListResponse.files:type_name -> aerodocs.v1.FileNode
-	0,  // 28: aerodocs.v1.AgentService.Connect:input_type -> aerodocs.v1.AgentMessage
-	1,  // 29: aerodocs.v1.AgentService.Connect:output_type -> aerodocs.v1.HubMessage
+var file_proto_veyport_v1_agent_proto_depIdxs = []int32{
+	2,  // 0: veyport.v1.AgentMessage.heartbeat:type_name -> veyport.v1.Heartbeat
+	4,  // 1: veyport.v1.AgentMessage.register:type_name -> veyport.v1.RegisterAgent
+	8,  // 2: veyport.v1.AgentMessage.file_list_response:type_name -> veyport.v1.FileListResponse
+	13, // 3: veyport.v1.AgentMessage.log_stream_chunk:type_name -> veyport.v1.LogStreamChunk
+	16, // 4: veyport.v1.AgentMessage.file_upload_ack:type_name -> veyport.v1.FileUploadAck
+	11, // 5: veyport.v1.AgentMessage.file_read_response:type_name -> veyport.v1.FileReadResponse
+	18, // 6: veyport.v1.AgentMessage.file_delete_response:type_name -> veyport.v1.FileDeleteResponse
+	20, // 7: veyport.v1.AgentMessage.unregister_ack:type_name -> veyport.v1.UnregisterAck
+	21, // 8: veyport.v1.AgentMessage.cert_renew_request:type_name -> veyport.v1.CertRenewRequest
+	24, // 9: veyport.v1.AgentMessage.terminal_open_ack:type_name -> veyport.v1.TerminalOpenAck
+	27, // 10: veyport.v1.AgentMessage.terminal_data:type_name -> veyport.v1.TerminalData
+	28, // 11: veyport.v1.AgentMessage.terminal_exit:type_name -> veyport.v1.TerminalExit
+	3,  // 12: veyport.v1.HubMessage.heartbeat_ack:type_name -> veyport.v1.HeartbeatAck
+	5,  // 13: veyport.v1.HubMessage.register_ack:type_name -> veyport.v1.RegisterAck
+	7,  // 14: veyport.v1.HubMessage.file_list_request:type_name -> veyport.v1.FileListRequest
+	12, // 15: veyport.v1.HubMessage.log_stream_request:type_name -> veyport.v1.LogStreamRequest
+	15, // 16: veyport.v1.HubMessage.file_upload_request:type_name -> veyport.v1.FileUploadRequest
+	10, // 17: veyport.v1.HubMessage.file_read_request:type_name -> veyport.v1.FileReadRequest
+	14, // 18: veyport.v1.HubMessage.log_stream_stop:type_name -> veyport.v1.LogStreamStop
+	17, // 19: veyport.v1.HubMessage.file_delete_request:type_name -> veyport.v1.FileDeleteRequest
+	19, // 20: veyport.v1.HubMessage.unregister_request:type_name -> veyport.v1.UnregisterRequest
+	22, // 21: veyport.v1.HubMessage.cert_renew_response:type_name -> veyport.v1.CertRenewResponse
+	23, // 22: veyport.v1.HubMessage.terminal_open_request:type_name -> veyport.v1.TerminalOpenRequest
+	25, // 23: veyport.v1.HubMessage.terminal_input:type_name -> veyport.v1.TerminalInput
+	26, // 24: veyport.v1.HubMessage.terminal_resize:type_name -> veyport.v1.TerminalResize
+	29, // 25: veyport.v1.HubMessage.terminal_close:type_name -> veyport.v1.TerminalClose
+	6,  // 26: veyport.v1.Heartbeat.system_info:type_name -> veyport.v1.SystemInfo
+	9,  // 27: veyport.v1.FileListResponse.files:type_name -> veyport.v1.FileNode
+	0,  // 28: veyport.v1.AgentService.Connect:input_type -> veyport.v1.AgentMessage
+	1,  // 29: veyport.v1.AgentService.Connect:output_type -> veyport.v1.HubMessage
 	29, // [29:30] is the sub-list for method output_type
 	28, // [28:29] is the sub-list for method input_type
 	28, // [28:28] is the sub-list for extension type_name
@@ -2510,12 +2511,12 @@ var file_proto_aerodocs_v1_agent_proto_depIdxs = []int32{
 	0,  // [0:28] is the sub-list for field type_name
 }
 
-func init() { file_proto_aerodocs_v1_agent_proto_init() }
-func file_proto_aerodocs_v1_agent_proto_init() {
-	if File_proto_aerodocs_v1_agent_proto != nil {
+func init() { file_proto_veyport_v1_agent_proto_init() }
+func file_proto_veyport_v1_agent_proto_init() {
+	if File_proto_veyport_v1_agent_proto != nil {
 		return
 	}
-	file_proto_aerodocs_v1_agent_proto_msgTypes[0].OneofWrappers = []any{
+	file_proto_veyport_v1_agent_proto_msgTypes[0].OneofWrappers = []any{
 		(*AgentMessage_Heartbeat)(nil),
 		(*AgentMessage_Register)(nil),
 		(*AgentMessage_FileListResponse)(nil),
@@ -2529,7 +2530,7 @@ func file_proto_aerodocs_v1_agent_proto_init() {
 		(*AgentMessage_TerminalData)(nil),
 		(*AgentMessage_TerminalExit)(nil),
 	}
-	file_proto_aerodocs_v1_agent_proto_msgTypes[1].OneofWrappers = []any{
+	file_proto_veyport_v1_agent_proto_msgTypes[1].OneofWrappers = []any{
 		(*HubMessage_HeartbeatAck)(nil),
 		(*HubMessage_RegisterAck)(nil),
 		(*HubMessage_FileListRequest)(nil),
@@ -2549,17 +2550,17 @@ func file_proto_aerodocs_v1_agent_proto_init() {
 	out := protoimpl.TypeBuilder{
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
-			RawDescriptor: unsafe.Slice(unsafe.StringData(file_proto_aerodocs_v1_agent_proto_rawDesc), len(file_proto_aerodocs_v1_agent_proto_rawDesc)),
+			RawDescriptor: unsafe.Slice(unsafe.StringData(file_proto_veyport_v1_agent_proto_rawDesc), len(file_proto_veyport_v1_agent_proto_rawDesc)),
 			NumEnums:      0,
 			NumMessages:   30,
 			NumExtensions: 0,
 			NumServices:   1,
 		},
-		GoTypes:           file_proto_aerodocs_v1_agent_proto_goTypes,
-		DependencyIndexes: file_proto_aerodocs_v1_agent_proto_depIdxs,
-		MessageInfos:      file_proto_aerodocs_v1_agent_proto_msgTypes,
+		GoTypes:           file_proto_veyport_v1_agent_proto_goTypes,
+		DependencyIndexes: file_proto_veyport_v1_agent_proto_depIdxs,
+		MessageInfos:      file_proto_veyport_v1_agent_proto_msgTypes,
 	}.Build()
-	File_proto_aerodocs_v1_agent_proto = out.File
-	file_proto_aerodocs_v1_agent_proto_goTypes = nil
-	file_proto_aerodocs_v1_agent_proto_depIdxs = nil
+	File_proto_veyport_v1_agent_proto = out.File
+	file_proto_veyport_v1_agent_proto_goTypes = nil
+	file_proto_veyport_v1_agent_proto_depIdxs = nil
 }

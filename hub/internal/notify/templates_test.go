@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/wyiu/aerodocs/hub/internal/model"
+	"github.com/wyiu/veyport/hub/internal/model"
 )
 
 const testProdServer01 = "prod-server-01"
@@ -57,8 +57,8 @@ func TestRenderEmail_AllEventTypes(t *testing.T) {
 			if body == "" {
 				t.Errorf("expected non-empty body for event %q", tt.eventType)
 			}
-			if !strings.HasPrefix(subject, "[AeroDocs] ") {
-				t.Errorf("subject should start with '[AeroDocs] ', got: %q", subject)
+			if !strings.HasPrefix(subject, "[Veyport] ") {
+				t.Errorf("subject should start with '[Veyport] ', got: %q", subject)
 			}
 		})
 	}
@@ -86,7 +86,7 @@ func TestRenderEmail_MultiPlaceholder(t *testing.T) {
 		"ip":       "10.0.0.1",
 	})
 
-	if !strings.Contains(subject, "[AeroDocs]") {
+	if !strings.Contains(subject, "[Veyport]") {
 		t.Errorf("subject missing prefix, got: %q", subject)
 	}
 	if !strings.Contains(body, "mallory") {
@@ -106,8 +106,8 @@ func TestRenderEmail_UnknownEventFallback(t *testing.T) {
 	if body == "" {
 		t.Error("expected non-empty body for unknown event")
 	}
-	if !strings.HasPrefix(subject, "[AeroDocs] ") {
-		t.Errorf("subject should start with '[AeroDocs] ', got: %q", subject)
+	if !strings.HasPrefix(subject, "[Veyport] ") {
+		t.Errorf("subject should start with '[Veyport] ', got: %q", subject)
 	}
 	// The fallback should mention the event type somewhere
 	if !strings.Contains(body, "unknown.event.type") {

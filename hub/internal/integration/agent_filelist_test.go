@@ -11,7 +11,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/wyiu/aerodocs/agent/agentclient"
+	"github.com/wyiu/veyport/agent/agentclient"
 )
 
 func TestFileListThroughGRPC(t *testing.T) {

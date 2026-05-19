@@ -46,13 +46,13 @@ jobs:
         uses: docker/setup-buildx-action@v4
         with:
           driver: cloud
-          endpoint: "yiucloud/aerodocs-builder"
+          endpoint: "yiucloud/veyport-builder"
 
       - name: Docker meta
         id: meta
         uses: docker/metadata-action@v6
         with:
-          images: yiucloud/aerodocs
+          images: yiucloud/veyport
           tags: |
             type=semver,pattern={{version}}
             type=semver,pattern={{major}}.{{minor}}
@@ -92,7 +92,7 @@ jobs:
         uses: docker/scout-action@v1.20.3
         with:
           command: cves
-          image: yiucloud/aerodocs:${{ env.IMAGE_TAG }}
+          image: yiucloud/veyport:${{ env.IMAGE_TAG }}
           summary: true
           write-comment: false
 
@@ -103,8 +103,8 @@ jobs:
 
       - name: Grype container scan
         run: |
-          grype "yiucloud/aerodocs:${IMAGE_TAG}" -o json > grype-results.json || true
-          grype "yiucloud/aerodocs:${IMAGE_TAG}" -o table > grype-results.txt || true
+          grype "yiucloud/veyport:${IMAGE_TAG}" -o json > grype-results.json || true
+          grype "yiucloud/veyport:${IMAGE_TAG}" -o table > grype-results.txt || true
           python3 - <<'PY'
           import json
           import os
@@ -157,7 +157,7 @@ jobs:
             sh -s -- -b /usr/local/bin v1.42.3
 
       - name: Generate SBOM with Syft
-        run: syft scan "yiucloud/aerodocs:${IMAGE_TAG}" -o spdx-json=sbom.spdx.json
+        run: syft scan "yiucloud/veyport:${IMAGE_TAG}" -o spdx-json=sbom.spdx.json
 
       - name: Upload SBOM
         uses: actions/upload-artifact@v7
@@ -178,13 +178,13 @@ jobs:
           password: ${{ secrets.DOCKERHUB_TOKEN }}
 
       - name: Pull image
-        run: docker pull "yiucloud/aerodocs:$IMAGE_TAG"
+        run: docker pull "yiucloud/veyport:$IMAGE_TAG"
 
       - name: Export image filesystem
         run: |
-          docker create --name aerodocs-scan "yiucloud/aerodocs:$IMAGE_TAG"
-          docker export aerodocs-scan -o image-fs.tar
-          docker rm aerodocs-scan
+          docker create --name veyport-scan "yiucloud/veyport:$IMAGE_TAG"
+          docker export veyport-scan -o image-fs.tar
+          docker rm veyport-scan
 
       - name: Install ClamAV
         run: |

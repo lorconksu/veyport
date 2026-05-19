@@ -8,9 +8,9 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/wyiu/aerodocs/hub/internal/auth"
-	"github.com/wyiu/aerodocs/hub/internal/model"
-	"github.com/wyiu/aerodocs/hub/internal/notify"
+	"github.com/wyiu/veyport/hub/internal/auth"
+	"github.com/wyiu/veyport/hub/internal/model"
+	"github.com/wyiu/veyport/hub/internal/notify"
 )
 
 const redactedValue = "********"
@@ -119,7 +119,7 @@ func (s *Server) handleTestSMTP(w http.ResponseWriter, r *http.Request) {
 	// Force enabled for the test send so SendEmail doesn't skip it
 	cfg.Enabled = true
 
-	if err := notify.SendEmail(cfg, req.Recipient, "AeroDocs SMTP Test", "This is a test email from AeroDocs. Your SMTP configuration is working correctly."); err != nil {
+	if err := notify.SendEmail(cfg, req.Recipient, "Veyport SMTP Test", "This is a test email from Veyport. Your SMTP configuration is working correctly."); err != nil {
 		log.Printf("SMTP test send failed: %v", err)
 		respondError(w, http.StatusBadGateway, "failed to send test email — check SMTP settings and server logs")
 		return

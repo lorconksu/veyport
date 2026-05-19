@@ -2,7 +2,7 @@
 // versions:
 // - protoc-gen-go-grpc v1.6.1
 // - protoc             v3.21.12
-// source: proto/aerodocs/v1/agent.proto
+// source: proto/veyport/v1/agent.proto
 
 package v1
 
@@ -19,7 +19,7 @@ import (
 const _ = grpc.SupportPackageIsVersion9
 
 const (
-	AgentService_Connect_FullMethodName = "/aerodocs.v1.AgentService/Connect"
+	AgentService_Connect_FullMethodName = "/veyport.v1.AgentService/Connect"
 )
 
 // AgentServiceClient is the client API for AgentService service.
@@ -102,7 +102,7 @@ type AgentService_ConnectServer = grpc.BidiStreamingServer[AgentMessage, HubMess
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
 var AgentService_ServiceDesc = grpc.ServiceDesc{
-	ServiceName: "aerodocs.v1.AgentService",
+	ServiceName: "veyport.v1.AgentService",
 	HandlerType: (*AgentServiceServer)(nil),
 	Methods:     []grpc.MethodDesc{},
 	Streams: []grpc.StreamDesc{
@@ -113,5 +113,5 @@ var AgentService_ServiceDesc = grpc.ServiceDesc{
 			ClientStreams: true,
 		},
 	},
-	Metadata: "proto/aerodocs/v1/agent.proto",
+	Metadata: "proto/veyport/v1/agent.proto",
 }

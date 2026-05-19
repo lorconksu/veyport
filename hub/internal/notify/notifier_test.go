@@ -12,8 +12,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/wyiu/aerodocs/hub/internal/model"
-	"github.com/wyiu/aerodocs/hub/internal/store"
+	"github.com/wyiu/veyport/hub/internal/model"
+	"github.com/wyiu/veyport/hub/internal/store"
 )
 
 const (
@@ -111,7 +111,7 @@ func TestNotifier_SendsWhenConfigured(t *testing.T) {
 	smtpCfgs := []struct{ k, v string }{
 		{"smtp_host", testLocalhost},
 		{"smtp_port", strconv.Itoa(addr.Port)},
-		{"smtp_from", "noreply@aerodocs.local"},
+		{"smtp_from", "noreply@veyport.local"},
 		{"smtp_enabled", "true"},
 	}
 	for _, c := range smtpCfgs {

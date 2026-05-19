@@ -99,7 +99,7 @@ func TestHandleChangePassword_InvalidatesOldToken(t *testing.T) {
 	refreshReq := httptest.NewRequest("POST", testRefreshPath, mustJSON(t, map[string]string{}))
 	refreshReq.Header.Set("Authorization", testBearerPrefix+token)
 	// Add the access token as a cookie too for the refresh endpoint
-	refreshReq.AddCookie(&http.Cookie{Name: "aerodocs_access", Value: token})
+	refreshReq.AddCookie(&http.Cookie{Name: "veyport_access", Value: token})
 
 	// Change password
 	req := httptest.NewRequest("PUT", testPasswordPath, mustJSON(t, map[string]string{

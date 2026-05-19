@@ -3,7 +3,7 @@ import { getCSRFToken, clearTokens } from '../auth'
 describe('auth', () => {
   beforeEach(() => {
     // Clear cookies
-    document.cookie = 'aerodocs_csrf=; expires=Thu, 01 Jan 1970 00:00:00 GMT'
+    document.cookie = 'veyport_csrf=; expires=Thu, 01 Jan 1970 00:00:00 GMT'
     vi.restoreAllMocks()
   })
 
@@ -13,13 +13,13 @@ describe('auth', () => {
     })
 
     it('returns the CSRF token from cookie', () => {
-      document.cookie = 'aerodocs_csrf=test-csrf-token-123'
+      document.cookie = 'veyport_csrf=test-csrf-token-123'
       expect(getCSRFToken()).toBe('test-csrf-token-123')
     })
 
     it('returns the CSRF token when multiple cookies exist', () => {
       document.cookie = 'other_cookie=abc'
-      document.cookie = 'aerodocs_csrf=my-csrf-value'
+      document.cookie = 'veyport_csrf=my-csrf-value'
       document.cookie = 'another=xyz'
       expect(getCSRFToken()).toBe('my-csrf-value')
     })

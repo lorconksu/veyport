@@ -1,4 +1,4 @@
-module github.com/wyiu/aerodocs/proto
+module github.com/wyiu/veyport/proto
 
 go 1.26.3
 

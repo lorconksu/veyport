@@ -1,8 +1,8 @@
-# AeroDocs Development Guide
+# Veyport Development Guide
 
 > **TL;DR**
 > - **What:** Local development setup with Go backend + Vite frontend dev server
-> - **Who:** Contributors and developers working on AeroDocs
+> - **Who:** Contributors and developers working on Veyport
 > - **Why:** Hot-reload frontend, API proxy, full-stack local testing
 > - **Where:** Two terminals: `make dev-hub` (Go on :8080) + `make dev-web` (Vite on :5173)
 > - **When:** After cloning the repo and installing prerequisites (Go 1.26+, Node 25+, Make)
@@ -20,8 +20,8 @@
 ## Clone and Setup
 
 ```bash
-git clone https://github.com/lorconksu/aerodocs.git
-cd aerodocs
+git clone https://github.com/lorconksu/veyport.git
+cd veyport
 
 # Install frontend dependencies
 cd web && npm install && cd ..
@@ -31,7 +31,7 @@ cd web && npm install && cd ..
 
 ## Proto Generation
 
-The agent-hub gRPC contract is defined in `proto/aerodocs/v1/agent.proto`. After modifying the proto file, regenerate the Go bindings.
+The agent-hub gRPC contract is defined in `proto/veyport/v1/agent.proto`. After modifying the proto file, regenerate the Go bindings.
 
 **Prerequisites:**
 
@@ -65,7 +65,7 @@ The development environment runs two processes - open two terminal windows.
 make dev-hub
 ```
 
-This runs `go run ./cmd/aerodocs/ --dev --addr :8080 --grpc-addr :9090` from the `hub/` directory. The `--dev` flag enables permissive CORS so the Vite dev server can make cross-origin API requests, and disables serving the embedded frontend (Vite handles that instead). Both the HTTP API and gRPC agent listener start together.
+This runs `go run ./cmd/veyport/ --dev --addr :8080 --grpc-addr :9090` from the `hub/` directory. The `--dev` flag enables permissive CORS so the Vite dev server can make cross-origin API requests, and disables serving the embedded frontend (Vite handles that instead). Both the HTTP API and gRPC agent listener start together.
 
 **Terminal 2 - Vite dev server (UI on :5173):**
 
@@ -74,6 +74,18 @@ make dev-web
 ```
 
 This runs `npm run dev` from the `web/` directory. Navigate to `http://localhost:5173` in your browser.
+
+### Local LAN testing with login
+
+When testing from another machine on the LAN, use HTTPS instead of plain HTTP:
+
+```bash
+make dev-web-lan
+```
+
+The Hub always sets `Secure` auth cookies. Browsers will not persist those cookies over `http://<lan-ip>:5173`, which makes login appear to loop even when the password is correct. The `dev-web-lan` target starts Vite on `0.0.0.0:5173` with a local self-signed certificate and proxies API requests to the running Hub. If a Hub is already listening on `127.0.0.1:8081`, that target is used; otherwise it falls back to `127.0.0.1:8080`. Override it explicitly with `VITE_API_PROXY_TARGET=http://127.0.0.1:<port> make dev-web-lan`.
+
+Open the `https://<lan-ip>:5173/` URL shown by the command and accept the browser warning for the self-signed certificate.
 
 On first run, you'll be directed to the setup page to create your admin account and configure TOTP.
 
@@ -99,7 +111,7 @@ Any request the browser makes to `/api/*` is forwarded by Vite to the Go Hub on 
 make build
 ```
 
-Output: `bin/aerodocs` - a single self-contained binary.
+Output: `bin/veyport` - a single self-contained binary.
 
 ---
 
@@ -144,8 +156,8 @@ make build-agent
 ```
 
 This produces:
-- `bin/aerodocs-agent-linux-amd64`
-- `bin/aerodocs-agent-linux-arm64`
+- `bin/veyport-agent-linux-amd64`
+- `bin/veyport-agent-linux-arm64`
 
 Place these in the Hub's `--agent-bin-dir` so they are served via `/install/{os}/{arch}`.
 
@@ -158,7 +170,7 @@ To exercise the full Hub + Agent stack locally:
 **Terminal 1 - Start the Hub:**
 
 ```bash
-./bin/aerodocs \
+./bin/veyport \
   --addr :8080 \
   --grpc-addr :9090 \
   --db test.db \
@@ -173,7 +185,7 @@ To exercise the full Hub + Agent stack locally:
 **Terminal 2 - Run the agent:**
 
 ```bash
-./bin/aerodocs-agent-linux-amd64 \
+./bin/veyport-agent-linux-amd64 \
   --hub localhost:9090 \
   --token <REGISTRATION_TOKEN>
 ```
@@ -185,17 +197,17 @@ The agent connects over insecure gRPC (no TLS - detected automatically because t
 ## Project Structure Walkthrough
 
 ```
-aerodocs/
+veyport/
 ├── Makefile                    # Build orchestration
 ├── proto/
-│   └── aerodocs/
+│   └── veyport/
 │       └── v1/
 │           └── agent.proto     # gRPC service definition for Hub-Agent communication
 ├── hub/
 │   ├── embed.go                # go:embed directive pointing at web/dist
 │   ├── go.mod / go.sum
 │   ├── cmd/
-│   │   └── aerodocs/
+│   │   └── veyport/
 │   │       ├── main.go         # Flag parsing, wiring, graceful shutdown
 │   │       └── admin.go        # CLI admin subcommands
 │   └── internal/
@@ -228,6 +240,8 @@ aerodocs/
 │       │   ├── handlers_users.go
 │       │   ├── handlers_audit.go
 │       │   ├── handlers_notifications.go  # SMTP config, notification preferences, notification log
+│       │   ├── handlers_terminal.go       # Browser terminal session lifecycle
+│       │   ├── ldap_auth.go               # LDAP bind/search authentication and group mapping
 │       │   └── handlers_hub_config.go     # Hub settings (gRPC external address)
 │       └── store/
 │           ├── store.go        # Store struct, New(), DB pragma setup
@@ -239,7 +253,7 @@ aerodocs/
 ├── agent/
 │   ├── go.mod / go.sum
 │   ├── cmd/
-│   │   └── aerodocs-agent/
+│   │   └── veyport-agent/
 │   │       └── main.go         # Entry point: flags, config load/save, wiring
 │   └── internal/
 │       ├── client/             # gRPC stream client with reconnect backoff
@@ -247,6 +261,7 @@ aerodocs/
 │       ├── filebrowser/        # Directory listing and file reading
 │       ├── heartbeat/          # Periodic heartbeat sender (10s interval)
 │       ├── logtailer/          # Poll-based file tailing with grep support
+│       ├── terminal/           # PTY lifecycle, execution-user resolution, resize/input handling
 │       └── sysinfo/            # CPU, memory, disk, uptime collection
 └── web/
     ├── vite.config.ts
@@ -357,6 +372,7 @@ Create a new page in `web/src/pages/` and add the route in `web/src/App.tsx`. Us
 - No global state. Dependencies are injected via the `Server` struct and `Config`.
 - All SQL queries are in the `store` package. Handlers must not construct SQL.
 - Audit log entries should be written for all user-facing state changes. See `model.Audit*` constants for the naming pattern (`resource.action`).
+- Terminal endpoints must remain browser-interactive only. Keep `interactiveOnly`, `terminalAccessOnly`, and the per-server root assignment check together when adding terminal behavior.
 
 ### TypeScript / React
 

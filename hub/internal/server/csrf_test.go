@@ -14,22 +14,22 @@ var ok200 = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 })
 
 const (
-	testExpected403     = "expected 403, got %d"
-	testExampleHost     = "example.com"
-	testExampleOrigin   = "https://example.com"
-	testExampleAPI      = "https://example.com/api/test"
-	testExampleHTTPAPI  = "http://example.com/api/test"
-	testExamplePortHost = "example.com:8080"
-	testExamplePortAPI  = "https://example.com:8080/api/test"
+	testExpected403       = "expected 403, got %d"
+	testExampleHost       = "example.com"
+	testExampleOrigin     = "https://example.com"
+	testExampleAPI        = "https://example.com/api/test"
+	testExampleHTTPAPI    = "http://example.com/api/test"
+	testExamplePortHost   = "example.com:8080"
+	testExamplePortAPI    = "https://example.com:8080/api/test"
 	testExamplePortOrigin = "https://example.com:8080"
-	testExamplePortSSE  = "https://example.com:8080/api/something"
+	testExamplePortSSE    = "https://example.com:8080/api/something"
 )
 
 func TestCSRFMiddleware_BlocksMutationWithoutToken(t *testing.T) {
 	handler := testServer(t).csrfMiddleware(ok200)
 
 	req := httptest.NewRequest(http.MethodPost, testAPISomething, nil)
-	req.AddCookie(&http.Cookie{Name: "aerodocs_csrf", Value: "tok123"})
+	req.AddCookie(&http.Cookie{Name: "veyport_csrf", Value: "tok123"})
 	// No X-CSRF-Token header.
 
 	rr := httptest.NewRecorder()
@@ -44,7 +44,7 @@ func TestCSRFMiddleware_AllowsMatchingToken(t *testing.T) {
 	handler := testServer(t).csrfMiddleware(ok200)
 
 	req := httptest.NewRequest(http.MethodPost, testAPISomething, nil)
-	req.AddCookie(&http.Cookie{Name: "aerodocs_csrf", Value: "tok123"})
+	req.AddCookie(&http.Cookie{Name: "veyport_csrf", Value: "tok123"})
 	req.Header.Set(testCSRFTokenHdr, "tok123")
 
 	rr := httptest.NewRecorder()
@@ -59,7 +59,7 @@ func TestCSRFMiddleware_MismatchToken(t *testing.T) {
 	handler := testServer(t).csrfMiddleware(ok200)
 
 	req := httptest.NewRequest(http.MethodPost, testAPISomething, nil)
-	req.AddCookie(&http.Cookie{Name: "aerodocs_csrf", Value: "tok123"})
+	req.AddCookie(&http.Cookie{Name: "veyport_csrf", Value: "tok123"})
 	req.Header.Set(testCSRFTokenHdr, "different-value")
 
 	rr := httptest.NewRecorder()
@@ -203,7 +203,7 @@ func TestCSRFMiddleware_RejectsInvalidOrigin(t *testing.T) {
 	req := httptest.NewRequest(http.MethodPost, testAPISomething, nil)
 	req.Host = secureExampleHost
 	req.Header.Set("Origin", "https://evil.com")
-	req.AddCookie(&http.Cookie{Name: "aerodocs_csrf", Value: "tok123"})
+	req.AddCookie(&http.Cookie{Name: "veyport_csrf", Value: "tok123"})
 	req.Header.Set(testCSRFTokenHdr, "tok123")
 
 	rr := httptest.NewRecorder()
@@ -227,7 +227,7 @@ func TestCSRFMiddleware_AllowsMatchingOrigin(t *testing.T) {
 	req.Host = secureExampleHost
 	req.TLS = &tls.ConnectionState{}
 	req.Header.Set("Origin", secureExampleOrigin)
-	req.AddCookie(&http.Cookie{Name: "aerodocs_csrf", Value: "tok123"})
+	req.AddCookie(&http.Cookie{Name: "veyport_csrf", Value: "tok123"})
 	req.Header.Set(testCSRFTokenHdr, "tok123")
 
 	rr := httptest.NewRecorder()
@@ -247,7 +247,7 @@ func TestCSRFMiddleware_AllowsLoopbackHTTPOriginInProduction(t *testing.T) {
 	req := httptest.NewRequest(http.MethodPost, localhostOrigin+"/api/something", nil)
 	req.Host = "localhost:8081"
 	req.Header.Set("Origin", localhostOrigin)
-	req.AddCookie(&http.Cookie{Name: "aerodocs_csrf", Value: "tok123"})
+	req.AddCookie(&http.Cookie{Name: "veyport_csrf", Value: "tok123"})
 	req.Header.Set(testCSRFTokenHdr, "tok123")
 
 	rr := httptest.NewRecorder()
@@ -272,7 +272,7 @@ func TestCSRFMiddleware_RejectsMismatchedPortOrigin(t *testing.T) {
 	req.Host = examplePortHost
 	req.TLS = &tls.ConnectionState{}
 	req.Header.Set("Origin", secureExampleOrigin)
-	req.AddCookie(&http.Cookie{Name: "aerodocs_csrf", Value: "tok123"})
+	req.AddCookie(&http.Cookie{Name: "veyport_csrf", Value: "tok123"})
 	req.Header.Set(testCSRFTokenHdr, "tok123")
 
 	rr := httptest.NewRecorder()
@@ -288,7 +288,7 @@ func TestCSRFMiddleware_AccessCookiePresent_RequiresCSRF(t *testing.T) {
 
 	// Access cookie present but no CSRF cookie/header = should be blocked.
 	req := httptest.NewRequest(http.MethodPost, testAPISomething, nil)
-	req.AddCookie(&http.Cookie{Name: "aerodocs_access", Value: "some-token"})
+	req.AddCookie(&http.Cookie{Name: "veyport_access", Value: "some-token"})
 
 	rr := httptest.NewRecorder()
 	handler.ServeHTTP(rr, req)
