@@ -70,9 +70,6 @@ jobs:
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v4
-        with:
-          driver: cloud
-          endpoint: "yiucloud/veyport-builder"
 
       - name: Build and push
         uses: docker/build-push-action@v7
