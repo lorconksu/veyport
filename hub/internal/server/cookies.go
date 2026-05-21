@@ -12,6 +12,12 @@ const (
 	cookieRefresh = "veyport_refresh"
 	cookieCSRF    = "veyport_csrf"
 	bearerPrefix  = "Bearer "
+
+	// Legacy v1.x cookie names — cleared on logout for one release so browsers
+	// that retain them from a pre-v2 session drop them on next sign-out.
+	legacyCookieAccess  = "aerodocs_access"
+	legacyCookieRefresh = "aerodocs_refresh"
+	legacyCookieCSRF    = "aerodocs_csrf"
 )
 
 // setAuthCookies sets the access, refresh, and CSRF cookies on the response.
@@ -50,29 +56,37 @@ func setAuthCookies(w http.ResponseWriter, accessToken, refreshToken string) {
 	})
 }
 
-// clearAuthCookies clears all auth cookies by setting MaxAge to -1.
+// clearAuthCookies clears all auth cookies by setting MaxAge to -1. Also clears
+// the legacy v1.x cookie names so browsers that still carry them from a pre-v2
+// session drop them on logout.
 func clearAuthCookies(w http.ResponseWriter) {
-	http.SetCookie(w, &http.Cookie{ // NOSONAR — clearing cookie (MaxAge=-1); HttpOnly not relevant for deletion
-		Name:     cookieAccess,
-		Path:     "/",
-		MaxAge:   -1,
-		Secure:   true,
-		SameSite: http.SameSiteStrictMode,
-	})
-	http.SetCookie(w, &http.Cookie{ // NOSONAR — clearing cookie (MaxAge=-1); HttpOnly not relevant for deletion
-		Name:     cookieRefresh,
-		Path:     "/api/auth/refresh",
-		MaxAge:   -1,
-		Secure:   true,
-		SameSite: http.SameSiteStrictMode,
-	})
-	http.SetCookie(w, &http.Cookie{ // NOSONAR — clearing cookie (MaxAge=-1); CSRF cookie intentionally not HttpOnly (double-submit pattern)
-		Name:     cookieCSRF,
-		Path:     "/",
-		MaxAge:   -1,
-		Secure:   true,
-		SameSite: http.SameSiteStrictMode,
-	})
+	for _, name := range []string{cookieAccess, legacyCookieAccess} {
+		http.SetCookie(w, &http.Cookie{ // NOSONAR — clearing cookie (MaxAge=-1); HttpOnly not relevant for deletion
+			Name:     name,
+			Path:     "/",
+			MaxAge:   -1,
+			Secure:   true,
+			SameSite: http.SameSiteStrictMode,
+		})
+	}
+	for _, name := range []string{cookieRefresh, legacyCookieRefresh} {
+		http.SetCookie(w, &http.Cookie{ // NOSONAR — clearing cookie (MaxAge=-1); HttpOnly not relevant for deletion
+			Name:     name,
+			Path:     "/api/auth/refresh",
+			MaxAge:   -1,
+			Secure:   true,
+			SameSite: http.SameSiteStrictMode,
+		})
+	}
+	for _, name := range []string{cookieCSRF, legacyCookieCSRF} {
+		http.SetCookie(w, &http.Cookie{ // NOSONAR — clearing cookie (MaxAge=-1); CSRF cookie intentionally not HttpOnly (double-submit pattern)
+			Name:     name,
+			Path:     "/",
+			MaxAge:   -1,
+			Secure:   true,
+			SameSite: http.SameSiteStrictMode,
+		})
+	}
 }
 
 // readAccessToken reads the access token from the cookie first, falling back

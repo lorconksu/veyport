@@ -81,13 +81,25 @@ func TestClearAuthCookies(t *testing.T) {
 	clearAuthCookies(w)
 
 	cookies := w.Result().Cookies()
-	if len(cookies) != 3 {
-		t.Fatalf("expected 3 cookies, got %d", len(cookies))
+	// 3 current cookies + 3 legacy v1.x cookies cleared in the same response.
+	if len(cookies) != 6 {
+		t.Fatalf("expected 6 cookies, got %d", len(cookies))
 	}
 
 	for _, c := range cookies {
 		if c.MaxAge != -1 {
 			t.Errorf("cookie %q MaxAge = %d, want -1", c.Name, c.MaxAge)
+		}
+	}
+
+	// Each cookie name we expect to clear should be present exactly once.
+	expectedNames := []string{
+		cookieAccess, cookieRefresh, cookieCSRF,
+		legacyCookieAccess, legacyCookieRefresh, legacyCookieCSRF,
+	}
+	for _, name := range expectedNames {
+		if findCookie(cookies, name) == nil {
+			t.Errorf("missing %s cookie in clear response", name)
 		}
 	}
 }

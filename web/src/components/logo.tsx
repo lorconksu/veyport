@@ -16,7 +16,7 @@ const logoSources = {
 } as const
 
 function logoClassName(defaultWidth: string, className: string): string {
-  const hasWidthOverride = /(?:^|\s)!?w-/.test(className)
+  const hasWidthOverride = /(?:^|\s)(?:[a-z-]+:)*!?w-/.test(className)
   return [hasWidthOverride ? '' : defaultWidth, 'h-auto', className].filter(Boolean).join(' ')
 }
 

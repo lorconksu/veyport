@@ -19,6 +19,7 @@ const (
 	terminalStreamAttachDelay     = 30 * time.Second
 	errTerminalServiceUnavailable = "terminal service unavailable"
 	errTerminalSessionNotFound    = "terminal session not found"
+	terminalSessionIDDetailPrefix = "session_id="
 )
 
 type createTerminalSessionRequest struct {
@@ -105,7 +106,7 @@ func (s *Server) handleCreateTerminalSession(w http.ResponseWriter, r *http.Requ
 	ip := clientIP(r)
 	s.expireUnattachedTerminalSession(serverID, sessionID, userID, ip)
 
-	detail := "session_id=" + sessionID
+	detail := terminalSessionIDDetailPrefix + sessionID
 	if req.Cwd != "" {
 		detail += fmt.Sprintf(" cwd=%q", req.Cwd)
 	}
@@ -197,7 +198,7 @@ func (s *Server) expireUnattachedTerminalSession(serverID, sessionID, userID, ip
 			})
 		}
 		uid, srvID, addr := userID, serverID, ip
-		detail := "session_id=" + sessionID + " expired_unattached"
+		detail := terminalSessionIDDetailPrefix + sessionID + " expired_unattached"
 		entry := model.AuditEntry{
 			ID:     uuid.NewString(),
 			Action: model.AuditTerminalClosed,
@@ -390,7 +391,7 @@ func (s *Server) closeTerminalSession(r *http.Request, serverID, sessionID strin
 
 	userID := UserIDFromContext(r.Context())
 	ip := clientIP(r)
-	detail := "session_id=" + sessionID
+	detail := terminalSessionIDDetailPrefix + sessionID
 	s.auditLogRequest(r, model.AuditEntry{
 		UserID:    &userID,
 		Action:    model.AuditTerminalClosed,

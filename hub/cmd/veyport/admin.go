@@ -16,6 +16,7 @@ import (
 const (
 	adminUsage         = "usage: veyport admin <command>\ncommands: reset-totp, create-api-token, list-api-tokens, revoke-api-token"
 	defaultAdminDBPath = "veyport.db"
+	dbPathFlagUsage    = "SQLite database path"
 )
 
 func runAdmin(args []string) error {
@@ -40,7 +41,7 @@ func runAdmin(args []string) error {
 func runResetTOTP(args []string) error {
 	fs := newAdminFlagSet("reset-totp")
 	username := fs.String("username", "", "username to reset TOTP for")
-	dbPath := fs.String("db", defaultAdminDBPath, "SQLite database path")
+	dbPath := fs.String("db", defaultAdminDBPath, dbPathFlagUsage)
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -104,7 +105,7 @@ func runCreateAPIToken(args []string) error {
 	fs := newAdminFlagSet("create-api-token")
 	username := fs.String("username", "", "username that owns the token")
 	name := fs.String("name", "", "human-readable token name")
-	dbPath := fs.String("db", defaultAdminDBPath, "SQLite database path")
+	dbPath := fs.String("db", defaultAdminDBPath, dbPathFlagUsage)
 	expiresIn := fs.Duration("expires-in", 30*24*time.Hour, "token lifetime (0 for no expiry)")
 	if err := fs.Parse(args); err != nil {
 		return err
@@ -173,7 +174,7 @@ func runCreateAPIToken(args []string) error {
 func runListAPITokens(args []string) error {
 	fs := newAdminFlagSet("list-api-tokens")
 	username := fs.String("username", "", "username that owns the tokens")
-	dbPath := fs.String("db", defaultAdminDBPath, "SQLite database path")
+	dbPath := fs.String("db", defaultAdminDBPath, dbPathFlagUsage)
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -217,7 +218,7 @@ func runListAPITokens(args []string) error {
 func runRevokeAPIToken(args []string) error {
 	fs := newAdminFlagSet("revoke-api-token")
 	tokenID := fs.String("id", "", "token ID to revoke")
-	dbPath := fs.String("db", defaultAdminDBPath, "SQLite database path")
+	dbPath := fs.String("db", defaultAdminDBPath, dbPathFlagUsage)
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
