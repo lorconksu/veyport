@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/wyiu/veyport/hub"
 	"github.com/wyiu/veyport/hub/internal/model"
 )
 
@@ -387,7 +388,14 @@ func (s *Server) handleBatchDeleteServers(w http.ResponseWriter, r *http.Request
 }
 
 func (s *Server) handleInstallScript(w http.ResponseWriter, r *http.Request) {
-	http.ServeFile(w, r, "static/install.sh")
+	if len(hub.InstallScript) == 0 {
+		respondError(w, http.StatusNotFound, "install script not available")
+		return
+	}
+	w.Header().Set("Content-Type", "text/x-shellscript; charset=utf-8")
+	if _, err := w.Write(hub.InstallScript); err != nil {
+		log.Printf("install script write failed: %v", err)
+	}
 }
 
 func (s *Server) handleAgentBinary(w http.ResponseWriter, r *http.Request) {
@@ -423,7 +431,9 @@ func (s *Server) handleAgentBinaryChecksum(w http.ResponseWriter, r *http.Reques
 		return
 	}
 	w.Header().Set("Content-Type", "text/plain")
-	w.Write([]byte(strings.TrimSpace(string(data))))
+	if _, err := w.Write([]byte(strings.TrimSpace(string(data)))); err != nil {
+		log.Printf("checksum write failed: %v", err)
+	}
 }
 
 // isValidGRPCAddr validates a gRPC address (host:port format).

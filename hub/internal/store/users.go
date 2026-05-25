@@ -232,8 +232,24 @@ func (s *Store) DeleteUser(userID string) error {
 	if _, err := tx.Exec("UPDATE audit_logs SET user_id = NULL WHERE user_id = ?", userID); err != nil {
 		return fmt.Errorf("nullify audit logs: %w", err)
 	}
-	if _, err := tx.Exec("DELETE FROM notification_preferences WHERE user_id = ?", userID); err != nil {
-		return fmt.Errorf("delete notification preferences: %w", err)
+	// Explicit cleanup of cascade-dependent tables. SQLite's foreign_keys pragma
+	// is per-connection, so we don't rely on ON DELETE CASCADE alone; doing the
+	// deletes ourselves inside the transaction guarantees the audit/compliance
+	// pipeline never sees orphaned rows even if a pool connection regresses.
+	cleanupQueries := []string{
+		"DELETE FROM notification_preferences WHERE user_id = ?",
+		"DELETE FROM notification_log WHERE user_id = ?",
+		"DELETE FROM api_tokens WHERE user_id = ?",
+		"DELETE FROM permissions WHERE user_id = ?",
+		"DELETE FROM password_history WHERE user_id = ?",
+		"DELETE FROM audit_saved_filters WHERE created_by = ?",
+		"DELETE FROM audit_reviews WHERE reviewer_id = ?",
+		"DELETE FROM audit_flags WHERE created_by = ?",
+	}
+	for _, q := range cleanupQueries {
+		if _, err := tx.Exec(q, userID); err != nil {
+			return fmt.Errorf("cleanup %s: %w", q, err)
+		}
 	}
 
 	result, err := tx.Exec("DELETE FROM users WHERE id = ?", userID)
