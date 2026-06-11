@@ -54,8 +54,8 @@
 
 ### Remaining for User Story 1 (gap G3, G4)
 
-- [ ] T015 [US1] Integration test: PUT `/api/settings/ldap` persists config and `ldap_auth` sign-in consumes it via injected fake directory (pattern: auth_flow_test.go) in hub/internal/integration/ldap_config_test.go
-- [ ] T016 [P] [US1] Playwright E2E: Directory tab renders for admin, save with missing required field shows named validation error, in tests/e2e/tests/05-settings-directory.spec.ts
+- [X] T015 [US1] Integration test: PUT `/api/settings/ldap` persists config and `ldap_auth` sign-in consumes it via injected fake directory (pattern: auth_flow_test.go) in hub/internal/integration/ldap_config_test.go
+- [X] T016 [P] [US1] Playwright E2E: Directory tab renders for admin, save with missing required field shows named validation error, in tests/e2e/tests/05-settings-directory.spec.ts
 
 **Checkpoint**: US1 fully covered at unit, integration, and UI-E2E levels.
 
@@ -75,7 +75,7 @@
 
 ### Remaining for User Story 2 (gap G4)
 
-- [ ] T020 [US2] Playwright E2E: "Test connection" against an unreachable host shows failure feedback without altering saved config, in tests/e2e/tests/05-settings-directory.spec.ts (after T016 — same file)
+- [X] T020 [US2] Playwright E2E: "Test connection" against an unreachable host shows failure feedback without altering saved config, in tests/e2e/tests/05-settings-directory.spec.ts (after T016 — same file)
 
 **Checkpoint**: US2 verified end-to-end without requiring a live directory (unreachable-host path).
 
@@ -96,7 +96,7 @@
 
 ### Remaining for User Story 3 (gap G3)
 
-- [ ] T025 [US3] Extend integration test: configured group→role mappings resolve to correct role and terminal permission at sign-in (highest-privilege wins), in hub/internal/integration/ldap_config_test.go (after T015 — same file)
+- [X] T025 [US3] Extend integration test: configured group→role mappings resolve to correct role and terminal permission at sign-in (highest-privilege wins), in hub/internal/integration/ldap_config_test.go (after T015 — same file)
 
 **Checkpoint**: Role mapping proven at the integration level, not just unit level.
 
@@ -122,9 +122,9 @@
 
 **Purpose**: Constitution compliance items required before merge (gaps G7, G8, G9).
 
-- [ ] T029 [P] Update docs-internal/engineering/security-model.md: config-secret encryption scheme (`enc:` prefix, JWT-secret-derived key), write-only bind password semantics, insecure-transport opt-in, `ldap.config_updated` audit action (gap G7)
-- [ ] T030 [P] Split unrelated agent certificate-expiry changes (agent/internal/certs/certs.go, certs_test.go, agent/internal/client/client.go, client_test.go and hub/static/install.sh if related) out of this branch into a separate branch/PR, or document justification in the PR description (gap G8)
-- [ ] T031 Full verification run: `make test`, `cd web && npx vitest run`, integration suite, and confirm `sonar-project.properties` gained no new exclusions for this feature's files (constitution G1/G2)
+- [X] T029 [P] Update docs-internal/engineering/security-model.md: config-secret encryption scheme (`enc:` prefix, JWT-secret-derived key), write-only bind password semantics, insecure-transport opt-in, `ldap.config_updated` audit action (gap G7)
+- [X] T030 [P] Split unrelated agent certificate-expiry changes (agent/internal/certs/certs.go, certs_test.go, agent/internal/client/client.go, client_test.go and hub/static/install.sh if related) out of this branch into a separate branch/PR, or document justification in the PR description (gap G8)
+- [X] T031 Full verification run: `make test`, `cd web && npx vitest run`, integration suite, and confirm `sonar-project.properties` gained no new exclusions for this feature's files (constitution G1/G2)
 - [ ] T032 Runtime verification on the dev environment per quickstart.md §3–§5: deploy branch, exercise Directory tab (save, test connection, validation errors), confirm audit entry and `bind_password` never returned (gap G9)
 
 ---
