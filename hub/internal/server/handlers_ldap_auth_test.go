@@ -410,7 +410,7 @@ func TestLDAPBindAuthenticatorAuthenticateSuccess(t *testing.T) {
 			ExternalIDAttribute: "entryUUID",
 			GroupNameAttribute:  "cn",
 		},
-		dial: func(LDAPConfig) (ldapConnection, error) {
+		dial: func(LDAPConfig) (LDAPConnection, error) {
 			return conn, nil
 		},
 	}
@@ -459,7 +459,7 @@ func TestLDAPBindAuthenticatorAuthenticateInvalidUserBind(t *testing.T) {
 			EmailAttribute:      "mail",
 			ExternalIDAttribute: "entryUUID",
 		},
-		dial: func(LDAPConfig) (ldapConnection, error) {
+		dial: func(LDAPConfig) (LDAPConnection, error) {
 			return conn, nil
 		},
 	}
@@ -535,7 +535,7 @@ func ldapSearchCaseAuthenticator(conn *fakeLDAPConn) ldapBindAuthenticator {
 			ExternalIDAttribute: "entryUUID",
 			GroupNameAttribute:  "cn",
 		},
-		dial: func(LDAPConfig) (ldapConnection, error) {
+		dial: func(LDAPConfig) (LDAPConnection, error) {
 			return conn, nil
 		},
 	}

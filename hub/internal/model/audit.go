@@ -82,6 +82,10 @@ const (
 )
 
 const (
+	AuditLDAPConfigUpdated = "ldap.config_updated"
+)
+
+const (
 	AuditAuditExported          = "audit.exported"
 	AuditAuditReviewCompleted   = "audit.review_completed"
 	AuditAuditFilterSaved       = "audit.filter_saved"

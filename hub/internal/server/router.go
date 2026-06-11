@@ -66,6 +66,11 @@ func (s *Server) routes() http.Handler {
 	mux.Handle("GET /api/settings/hub", loggingMiddleware(s.authMiddleware(auth.TokenTypeAccess, s.adminOnly(http.HandlerFunc(s.handleGetHubConfig)))))
 	mux.Handle("PUT /api/settings/hub", loggingMiddleware(s.authMiddleware(auth.TokenTypeAccess, s.adminOnly(http.HandlerFunc(s.handleUpdateHubConfig)))))
 
+	// Directory configuration endpoints
+	mux.Handle("GET /api/settings/ldap", loggingMiddleware(s.authMiddleware(auth.TokenTypeAccess, s.adminOnly(http.HandlerFunc(s.handleGetLDAPConfig)))))
+	mux.Handle("PUT /api/settings/ldap", loggingMiddleware(s.authMiddleware(auth.TokenTypeAccess, s.adminOnly(http.HandlerFunc(s.handleUpdateLDAPConfig)))))
+	mux.Handle("POST /api/settings/ldap/test", loggingMiddleware(s.authMiddleware(auth.TokenTypeAccess, s.adminOnly(http.HandlerFunc(s.handleTestLDAPConfig)))))
+
 	// Notification endpoints
 	mux.Handle("GET /api/settings/smtp", loggingMiddleware(s.authMiddleware(auth.TokenTypeAccess, s.adminOnly(http.HandlerFunc(s.handleGetSMTPConfig)))))
 	mux.Handle("PUT /api/settings/smtp", loggingMiddleware(s.authMiddleware(auth.TokenTypeAccess, s.adminOnly(http.HandlerFunc(s.handleUpdateSMTPConfig)))))

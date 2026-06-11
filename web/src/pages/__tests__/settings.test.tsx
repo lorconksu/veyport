@@ -1,6 +1,6 @@
 import { render, screen, fireEvent, waitFor } from '@testing-library/react'
 import { vi } from 'vitest'
-import { BrowserRouter, MemoryRouter } from 'react-router-dom'
+import { MemoryRouter } from 'react-router-dom'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { SettingsPage } from '../settings'
 
@@ -65,19 +65,23 @@ describe('SettingsPage', () => {
     expect(screen.getByText('Settings')).toBeInTheDocument()
   })
 
-  it('shows Profile and Users tabs for admin', () => {
+  it('shows Profile, Users, Directory, and Notifications tabs for admin', () => {
     renderPage()
     expect(screen.getByRole('button', { name: 'Profile' })).toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'Users' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Directory' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Notifications' })).toBeInTheDocument()
   })
 
-  it('does not show Users tab for non-admin', () => {
+  it('does not show admin-only tabs for non-admin', () => {
     mockUseAuth.mockReturnValue({
       user: { id: 'u2', username: 'viewer', email: 'v@b.com', role: 'viewer', totp_enabled: true, avatar: null, created_at: '', updated_at: '' },
       login: vi.fn(),
     })
     renderPage()
     expect(screen.queryByRole('button', { name: 'Users' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Directory' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Notifications' })).not.toBeInTheDocument()
   })
 
   it('shows avatar section with username initial', () => {
@@ -805,6 +809,38 @@ describe('SettingsPage', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Notifications' }))
     await waitFor(() => {
       expect(screen.getByText('SMTP Configuration')).toBeInTheDocument()
+    })
+  })
+
+  it('clicking Directory tab switches to DirectoryTab for admin', async () => {
+    mockApiFetch.mockResolvedValueOnce({
+      enabled: true,
+      url: 'ldaps://freeipa.yiucloud.com:636',
+      bind_dn: '',
+      bind_password: '',
+      bind_password_set: false,
+      user_base_dn: '',
+      group_base_dn: '',
+      user_search_filter: '(uid={username})',
+      group_search_filter: '(|(member={dn})(memberUid={username}))',
+      username_attribute: 'uid',
+      email_attribute: 'mail',
+      external_id_attribute: 'entryUUID',
+      group_name_attribute: 'cn',
+      start_tls: false,
+      tls_server_name: '',
+      ca_cert_pem: '',
+      allow_insecure_transport: false,
+      admin_groups: ['freeipa-admins'],
+      auditor_groups: [],
+      viewer_groups: [],
+      terminal_groups: ['bastion-users'],
+    })
+    renderPage()
+
+    fireEvent.click(screen.getByRole('button', { name: 'Directory' }))
+    await waitFor(() => {
+      expect(screen.getByText('LDAP Directory')).toBeInTheDocument()
     })
   })
 
