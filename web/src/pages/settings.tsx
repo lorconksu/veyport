@@ -10,6 +10,7 @@ import type { ChangePasswordRequest, User, Role, TOTPDisableRequest } from '@/ty
 import { CreateUserModal } from '@/pages/create-user-modal'
 import { NotificationsTab } from '@/pages/settings-notifications-tab'
 import { PreferencesTab } from '@/pages/settings-preferences-tab'
+import { DirectoryTab } from '@/pages/settings-directory-tab'
 
 function roleBadgeTone(role: Role): string {
   switch (role) {
@@ -547,8 +548,9 @@ export function SettingsPage() {
   const [searchParams, setSearchParams] = useSearchParams()
   const tabFromUrl = searchParams.get('tab')
 
-  const resolveTab = (): 'profile' | 'users' | 'notifications' | 'alerts' => {
+  const resolveTab = (): 'profile' | 'users' | 'directory' | 'notifications' | 'alerts' => {
     if (tabFromUrl === 'users' && isAdmin) return 'users'
+    if (tabFromUrl === 'directory' && isAdmin) return 'directory'
     if (tabFromUrl === 'notifications' && isAdmin) return 'notifications'
     if (tabFromUrl === 'alerts') return 'alerts'
     return 'profile'
@@ -556,7 +558,7 @@ export function SettingsPage() {
 
   const activeTab = resolveTab()
 
-  const setActiveTab = (tab: 'profile' | 'users' | 'notifications' | 'alerts') => {
+  const setActiveTab = (tab: 'profile' | 'users' | 'directory' | 'notifications' | 'alerts') => {
     setSearchParams({ tab }, { replace: true })
   }
 
@@ -590,6 +592,18 @@ export function SettingsPage() {
         )}
         {isAdmin && (
           <button
+            onClick={() => setActiveTab('directory')}
+            className={`px-4 py-2 text-sm font-medium border-b-2 transition-colors ${
+              activeTab === 'directory'
+                ? 'border-accent text-text-primary'
+                : 'border-transparent text-text-muted hover:text-text-secondary'
+            }`}
+          >
+            Directory
+          </button>
+        )}
+        {isAdmin && (
+          <button
             onClick={() => setActiveTab('notifications')}
             className={`px-4 py-2 text-sm font-medium border-b-2 transition-colors ${
               activeTab === 'notifications'
@@ -615,6 +629,7 @@ export function SettingsPage() {
       {/* Tab content */}
       {activeTab === 'profile' && <ProfileTab />}
       {activeTab === 'users' && isAdmin && <UsersTab />}
+      {activeTab === 'directory' && isAdmin && <DirectoryTab />}
       {activeTab === 'notifications' && isAdmin && <NotificationsTab />}
       {activeTab === 'alerts' && <PreferencesTab />}
     </div>

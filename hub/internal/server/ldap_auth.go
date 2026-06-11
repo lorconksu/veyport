@@ -5,6 +5,7 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"log"
 	"net/url"
@@ -47,7 +48,15 @@ type LDAPConfig struct {
 	AllowInsecure       bool
 }
 
-type ldapConnection interface {
+type LDAPGroupMappings struct {
+	RoleGroups     map[model.Role][]string
+	TerminalGroups []string
+}
+
+// LDAPConnection is the subset of an LDAP client connection used by the hub.
+// It is exported so tests (including integration tests) can substitute a fake
+// directory via SetLDAPDialer.
+type LDAPConnection interface {
 	Bind(username, password string) error
 	Search(searchRequest *ldap.SearchRequest) (*ldap.SearchResult, error)
 	Close() error
@@ -55,9 +64,16 @@ type ldapConnection interface {
 	StartTLS(config *tls.Config) error
 }
 
+// SetLDAPDialer overrides how directory connections are established for both
+// sign-in and the test-connection endpoint. A nil dialer restores the default.
+// Intended for tests.
+func (s *Server) SetLDAPDialer(dial func(LDAPConfig) (LDAPConnection, error)) {
+	s.ldapDial = dial
+}
+
 type ldapBindAuthenticator struct {
 	cfg  LDAPConfig
-	dial func(LDAPConfig) (ldapConnection, error)
+	dial func(LDAPConfig) (LDAPConnection, error)
 }
 
 var defaultLDAPRoleGroups = map[model.Role][]string{
@@ -86,7 +102,8 @@ func (s *Server) authenticateLDAPLogin(ctx context.Context, username, password s
 	if err != nil {
 		return nil, err
 	}
-	role, ok := mapLDAPRole(identity.Groups)
+	mappings := s.loadLDAPGroupMappings()
+	role, ok := mapLDAPRole(identity.Groups, mappings)
 	if !ok {
 		return nil, fmt.Errorf("LDAP user is not authorized for Veyport")
 	}
@@ -97,7 +114,7 @@ func (s *Server) authenticateLDAPLogin(ctx context.Context, username, password s
 		ExternalID:     identity.ExternalID,
 		LDAPDN:         identity.DN,
 		LDAPUsername:   firstNonEmpty(identity.Username, username),
-		TerminalAccess: hasAnyLDAPGroup(identity.Groups, defaultLDAPTerminalGroups),
+		TerminalAccess: hasAnyLDAPGroup(identity.Groups, mappings.TerminalGroups),
 	})
 }
 
@@ -115,7 +132,7 @@ func (s *Server) loadLDAPAuthenticator() (LDAPAuthenticator, error) {
 	if err := validateLDAPTransport(cfg); err != nil {
 		return nil, err
 	}
-	return &ldapBindAuthenticator{cfg: cfg}, nil
+	return &ldapBindAuthenticator{cfg: cfg, dial: s.ldapDial}, nil
 }
 
 func (s *Server) loadLDAPConfig() (LDAPConfig, error) {
@@ -169,6 +186,26 @@ func (s *Server) configBool(key string) bool {
 	return value == "true" || value == "1" || value == "yes" || value == "on"
 }
 
+func (s *Server) loadLDAPGroupMappings() LDAPGroupMappings {
+	defaults := defaultLDAPGroupMappings()
+	return LDAPGroupMappings{
+		RoleGroups: map[model.Role][]string{
+			model.RoleAdmin:   s.configLDAPGroupList("ldap.admin_groups", defaults.RoleGroups[model.RoleAdmin]),
+			model.RoleAuditor: s.configLDAPGroupList("ldap.auditor_groups", defaults.RoleGroups[model.RoleAuditor]),
+			model.RoleViewer:  s.configLDAPGroupList("ldap.viewer_groups", defaults.RoleGroups[model.RoleViewer]),
+		},
+		TerminalGroups: s.configLDAPGroupList("ldap.terminal_groups", defaults.TerminalGroups),
+	}
+}
+
+func (s *Server) configLDAPGroupList(key string, fallback []string) []string {
+	value, ok, err := s.store.LookupConfig(key)
+	if err != nil || !ok {
+		return cloneStringSlice(fallback)
+	}
+	return parseLDAPGroupList(value)
+}
+
 func (a *ldapBindAuthenticator) Authenticate(_ context.Context, username, password string) (LDAPIdentity, error) {
 	if strings.TrimSpace(username) == "" || password == "" {
 		return LDAPIdentity{}, fmt.Errorf(errInvalidLDAPCredentials)
@@ -211,14 +248,14 @@ func (a *ldapBindAuthenticator) Authenticate(_ context.Context, username, passwo
 	return identity, nil
 }
 
-func (a *ldapBindAuthenticator) connect() (ldapConnection, error) {
+func (a *ldapBindAuthenticator) connect() (LDAPConnection, error) {
 	if a.dial != nil {
 		return a.dial(a.cfg)
 	}
 	return dialLDAP(a.cfg)
 }
 
-func dialLDAP(cfg LDAPConfig) (ldapConnection, error) {
+func dialLDAP(cfg LDAPConfig) (LDAPConnection, error) {
 	tlsConfig, err := buildLDAPTLSConfig(cfg)
 	if err != nil {
 		return nil, err
@@ -278,7 +315,7 @@ func buildLDAPTLSConfig(cfg LDAPConfig) (*tls.Config, error) {
 	return tlsConfig, nil
 }
 
-func (a *ldapBindAuthenticator) findUser(conn ldapConnection, username string) (*ldap.Entry, error) {
+func (a *ldapBindAuthenticator) findUser(conn LDAPConnection, username string) (*ldap.Entry, error) {
 	filter := renderLDAPFilter(a.cfg.UserSearchFilter, map[string]string{
 		"username": username,
 	})
@@ -303,7 +340,7 @@ func (a *ldapBindAuthenticator) findUser(conn ldapConnection, username string) (
 	return result.Entries[0], nil
 }
 
-func (a *ldapBindAuthenticator) findGroups(conn ldapConnection, userDN, username string) []string {
+func (a *ldapBindAuthenticator) findGroups(conn LDAPConnection, userDN, username string) []string {
 	if a.cfg.GroupBaseDN == "" {
 		return nil
 	}
@@ -367,9 +404,24 @@ func decryptConfigSecret(jwtSecret, stored string) (string, error) {
 	return string(decrypted), nil
 }
 
-func mapLDAPRole(groups []string) (model.Role, bool) {
+func defaultLDAPGroupMappings() LDAPGroupMappings {
+	return LDAPGroupMappings{
+		RoleGroups: map[model.Role][]string{
+			model.RoleAdmin:   cloneStringSlice(defaultLDAPRoleGroups[model.RoleAdmin]),
+			model.RoleAuditor: cloneStringSlice(defaultLDAPRoleGroups[model.RoleAuditor]),
+			model.RoleViewer:  cloneStringSlice(defaultLDAPRoleGroups[model.RoleViewer]),
+		},
+		TerminalGroups: cloneStringSlice(defaultLDAPTerminalGroups),
+	}
+}
+
+func mapLDAPRole(groups []string, mappings ...LDAPGroupMappings) (model.Role, bool) {
+	active := defaultLDAPGroupMappings()
+	if len(mappings) > 0 {
+		active = mappings[0]
+	}
 	for _, role := range []model.Role{model.RoleAdmin, model.RoleAuditor, model.RoleViewer} {
-		if hasAnyLDAPGroup(groups, defaultLDAPRoleGroups[role]) {
+		if hasAnyLDAPGroup(groups, active.RoleGroups[role]) {
 			return role, true
 		}
 	}
@@ -387,6 +439,49 @@ func hasAnyLDAPGroup(groups, allowed []string) bool {
 		}
 	}
 	return false
+}
+
+func parseLDAPGroupList(value string) []string {
+	trimmed := strings.TrimSpace(value)
+	if trimmed == "" {
+		return nil
+	}
+	var groups []string
+	if strings.HasPrefix(trimmed, "[") {
+		if err := json.Unmarshal([]byte(trimmed), &groups); err == nil {
+			return normalizeLDAPGroupList(groups)
+		}
+	}
+	parts := strings.FieldsFunc(trimmed, func(r rune) bool {
+		return r == ',' || r == '\n' || r == '\r'
+	})
+	return normalizeLDAPGroupList(parts)
+}
+
+func normalizeLDAPGroupList(groups []string) []string {
+	seen := make(map[string]struct{}, len(groups))
+	clean := make([]string, 0, len(groups))
+	for _, group := range groups {
+		group = strings.TrimSpace(group)
+		if group == "" {
+			continue
+		}
+		if _, ok := seen[group]; ok {
+			continue
+		}
+		seen[group] = struct{}{}
+		clean = append(clean, group)
+	}
+	return clean
+}
+
+func cloneStringSlice(values []string) []string {
+	if values == nil {
+		return nil
+	}
+	cloned := make([]string, len(values))
+	copy(cloned, values)
+	return cloned
 }
 
 func firstNonEmpty(values ...string) string {
