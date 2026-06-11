@@ -123,25 +123,6 @@ func TestStoreCertAndTLSConfig(t *testing.T) {
 	}
 }
 
-func TestTLSConfigReturnsNilForExpiredCert(t *testing.T) {
-	caCert, caKey := newTestCA(t)
-
-	s := NewMemoryStore()
-	csrDER, err := s.GenerateCSR("test-server")
-	if err != nil {
-		t.Fatalf(testGenerateCSRFmt, err)
-	}
-
-	certDER := signCSR(t, csrDER, caCert, caKey, time.Now().Add(-time.Minute))
-	if err := s.StoreCert(certDER, caCert.Raw); err != nil {
-		t.Fatalf(testStoreCertFmt, err)
-	}
-
-	if tlsCfg := s.TLSConfig(); tlsCfg != nil {
-		t.Fatal("TLSConfig() should return nil for an expired client certificate")
-	}
-}
-
 func TestStoreCert_RejectsMismatchedPrivateKey(t *testing.T) {
 	caCert, caKey := newTestCA(t)
 

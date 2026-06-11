@@ -130,7 +130,6 @@ if [[ "$EXISTING" = true ]]; then
   sleep 1
   rm -f /usr/local/bin/veyport-agent
   rm -f /etc/veyport/agent.conf
-  rm -rf /etc/veyport/tls
   rm -f /etc/systemd/system/veyport-agent.service
   systemctl daemon-reload 2>/dev/null || true
 fi
