@@ -25,6 +25,7 @@ hub/web/dist/
 .playwright-mcp/
 .playwright-cli/
 claude.md
+CLAUDE.md
 
 # Database
 *.db
