@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/wyiu/veyport/hub/internal/model"
@@ -13,16 +14,24 @@ import (
 func TestHandleInstallScript_NotFound(t *testing.T) {
 	s := testServer(t)
 
-	// The install script endpoint serves a static file. Without the static dir,
-	// it will return 404 (or redirect). Either way, it shouldn't panic.
+	// The install script endpoint serves an embedded file. If the embed is
+	// populated, this will return 200. If empty (test environment without
+	// embedded asset), it should cleanly return 404 (not 500).
 	req := httptest.NewRequest("GET", "/install.sh", nil)
 	rec := httptest.NewRecorder()
 	s.routes().ServeHTTP(rec, req)
 
-	// Without static/install.sh present, we expect 404 (file not found)
-	// The important thing is the handler executes without panicking.
 	if rec.Code == http.StatusInternalServerError {
 		t.Fatalf("unexpected 500: %s", rec.Body.String())
+	}
+	if rec.Code != http.StatusOK && rec.Code != http.StatusNotFound {
+		t.Fatalf("expected 200 or 404, got %d: %s", rec.Code, rec.Body.String())
+	}
+	if rec.Code == http.StatusOK {
+		ct := rec.Header().Get("Content-Type")
+		if !strings.HasPrefix(ct, "text/x-shellscript") {
+			t.Fatalf("expected shellscript content type, got %q", ct)
+		}
 	}
 }
 

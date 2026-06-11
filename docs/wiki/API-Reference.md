@@ -1,7 +1,7 @@
 # Veyport Hub API Reference
 
 > **TL;DR**
-> - **What:** 45+ REST API endpoints covering auth, user management, server operations, terminal sessions, audit logs, notifications, SMTP config, hub settings, and agent installation
+> - **What:** 50+ REST API endpoints covering auth, user management, server operations, terminal sessions, audit logs, notifications, LDAP config, SMTP config, hub settings, and agent installation
 > - **Who:** Frontend developers, integration builders, and anyone automating Veyport
 > - **Why:** Complete reference for every HTTP endpoint with request/response schemas
 > - **Where:** All endpoints served by the Hub on the HTTP port (default :8081)
@@ -24,8 +24,9 @@
 10. [Installation Endpoints](#installation-endpoints)
 11. [Server Removal Endpoints](#server-removal-endpoints)
 12. [Hub Settings Endpoints](#hub-settings-endpoints)
-13. [SMTP and Notification Endpoints](#smtp-and-notification-endpoints)
-14. [Terminal Endpoints](#terminal-endpoints)
+13. [LDAP Directory Endpoints](#ldap-directory-endpoints)
+14. [SMTP and Notification Endpoints](#smtp-and-notification-endpoints)
+15. [Terminal Endpoints](#terminal-endpoints)
 
 ---
 
@@ -1735,9 +1736,124 @@ curl - X PUT https://hub.example.com/api/settings/hub \
 
 ---
 
+## LDAP Directory Endpoints
+
+### 39. GET /api/settings/ldap
+
+Get the current LDAP configuration. The bind password is write-only and is never returned; use `bind_password_set` to tell whether a password is already stored.
+
+| Property | Value |
+|---|---|
+| Auth | Access token (Bearer), admin only |
+
+**Response (200):**
+
+```json
+{
+  "enabled": true,
+  "url": "ldaps://freeipa.example.com:636",
+  "bind_dn": "uid=veyport,cn=sysaccounts,cn=etc,dc=example,dc=com",
+  "bind_password": "",
+  "bind_password_set": true,
+  "user_base_dn": "cn=users,cn=accounts,dc=example,dc=com",
+  "group_base_dn": "cn=groups,cn=accounts,dc=example,dc=com",
+  "user_search_filter": "(uid={username})",
+  "group_search_filter": "(|(member={dn})(memberUid={username}))",
+  "username_attribute": "uid",
+  "email_attribute": "mail",
+  "external_id_attribute": "entryUUID",
+  "group_name_attribute": "cn",
+  "start_tls": false,
+  "tls_server_name": "freeipa.example.com",
+  "ca_cert_pem": "",
+  "allow_insecure_transport": false,
+  "admin_groups": ["freeipa-admins"],
+  "auditor_groups": ["freeipa-auditors"],
+  "viewer_groups": ["freeipa-viewers"],
+  "terminal_groups": ["bastion-users"]
+}
+```
+
+---
+
+### 40. PUT /api/settings/ldap
+
+Update LDAP login, search, TLS, and group mapping settings. The bind password is encrypted before storage. Omit `bind_password` or send an empty string to keep the existing password; send `clear_bind_password: true` to clear it.
+
+| Property | Value |
+|---|---|
+| Auth | Access token (Bearer), admin only |
+
+**Request Body:**
+
+```json
+{
+  "enabled": true,
+  "url": "ldaps://freeipa.example.com:636",
+  "bind_dn": "uid=veyport,cn=sysaccounts,cn=etc,dc=example,dc=com",
+  "bind_password": "service-account-password",
+  "user_base_dn": "cn=users,cn=accounts,dc=example,dc=com",
+  "group_base_dn": "cn=groups,cn=accounts,dc=example,dc=com",
+  "user_search_filter": "(uid={username})",
+  "group_search_filter": "(|(member={dn})(memberUid={username}))",
+  "username_attribute": "uid",
+  "email_attribute": "mail",
+  "external_id_attribute": "entryUUID",
+  "group_name_attribute": "cn",
+  "start_tls": false,
+  "tls_server_name": "freeipa.example.com",
+  "ca_cert_pem": "",
+  "allow_insecure_transport": false,
+  "admin_groups": ["freeipa-admins"],
+  "auditor_groups": ["freeipa-auditors"],
+  "viewer_groups": ["freeipa-viewers"],
+  "terminal_groups": ["bastion-users"]
+}
+```
+
+**Validation:**
+- Enabled LDAP requires URL, user base DN, group base DN, and at least one role group
+- Plain `ldap://` requires StartTLS unless `allow_insecure_transport` is true
+- Bind DN requires a stored or submitted bind password
+- CA certificate PEM must parse as a valid certificate bundle when provided
+
+**Response (200):**
+
+```json
+{
+  "status": "ok"
+}
+```
+
+---
+
+### 41. POST /api/settings/ldap/test
+
+Test the submitted LDAP URL, TLS settings, and service bind credentials without requiring an end-user password.
+
+| Property | Value |
+|---|---|
+| Auth | Access token (Bearer), admin only |
+
+**Request Body:** Same schema as `PUT /api/settings/ldap`.
+
+**Response (200):**
+
+```json
+{
+  "status": "ok"
+}
+```
+
+**Error Cases:**
+- `400` - Invalid LDAP configuration
+- `502` - LDAP connection or service bind failed
+
+---
+
 ## SMTP and Notification Endpoints
 
-### 39. GET /api/settings/smtp
+### 42. GET /api/settings/smtp
 
 Get the current SMTP configuration. The password field is omitted from the response for security.
 
@@ -1767,7 +1883,7 @@ curl https://hub.example.com/api/settings/smtp \
 
 ---
 
-### 40. PUT /api/settings/smtp
+### 43. PUT /api/settings/smtp
 
 Update the SMTP configuration. Invalidates the cached SMTP config immediately.
 
@@ -1808,7 +1924,7 @@ curl - X PUT https://hub.example.com/api/settings/smtp \
 
 ---
 
-### 41. POST /api/settings/smtp/test
+### 44. POST /api/settings/smtp/test
 
 Send a test email to verify SMTP configuration. Requires SMTP settings to be saved first.
 
@@ -1847,7 +1963,7 @@ curl - X POST https://hub.example.com/api/settings/smtp/test \
 
 ---
 
-### 42. GET /api/notifications/preferences
+### 45. GET /api/notifications/preferences
 
 Get the current user's notification preferences. Returns all 8 event types with their enabled/disabled state.
 
@@ -1885,7 +2001,7 @@ curl https://hub.example.com/api/notifications/preferences \
 
 ---
 
-### 43. PUT /api/notifications/preferences
+### 46. PUT /api/notifications/preferences
 
 Update the current user's notification preferences.
 
@@ -1929,7 +2045,7 @@ curl - X PUT https://hub.example.com/api/notifications/preferences \
 
 ---
 
-### 44. GET /api/notifications/log
+### 47. GET /api/notifications/log
 
 List notification delivery log entries. Supports pagination.
 
@@ -1979,7 +2095,7 @@ curl 'https://hub.example.com/api/notifications/log?limit=20' \
 
 Terminal endpoints require an interactive browser access token. CLI-created API tokens are rejected. Access is limited to admins and LDAP users who have terminal access from LDAP group mapping plus a root (`/`) assignment on the target server.
 
-### 45. POST /api/servers/{id}/terminal/sessions
+### 48. POST /api/servers/{id}/terminal/sessions
 
 Create a terminal session on an online server.
 
@@ -2019,7 +2135,7 @@ Create a terminal session on an online server.
 
 ---
 
-### 46. GET /api/servers/{id}/terminal/sessions/{sessionId}/stream
+### 49. GET /api/servers/{id}/terminal/sessions/{sessionId}/stream
 
 Attach to a terminal session event stream. Only one stream can attach to a session.
 
@@ -2049,7 +2165,7 @@ The Hub closes the terminal session when the stream disconnects.
 
 ---
 
-### 47. POST /api/servers/{id}/terminal/sessions/{sessionId}/input
+### 50. POST /api/servers/{id}/terminal/sessions/{sessionId}/input
 
 Send terminal input to an active session.
 
@@ -2077,7 +2193,7 @@ Send terminal input to an active session.
 
 ---
 
-### 48. POST /api/servers/{id}/terminal/sessions/{sessionId}/resize
+### 51. POST /api/servers/{id}/terminal/sessions/{sessionId}/resize
 
 Resize an active terminal session.
 
@@ -2104,7 +2220,7 @@ Resize an active terminal session.
 
 ---
 
-### 49. DELETE /api/servers/{id}/terminal/sessions/{sessionId}
+### 52. DELETE /api/servers/{id}/terminal/sessions/{sessionId}
 
 Close an active terminal session.
 

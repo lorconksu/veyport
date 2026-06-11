@@ -67,6 +67,8 @@ jobs:
           cache-dependency-path: |
             hub/go.sum
             agent/go.sum
+      - name: Create frontend embed stub
+        run: mkdir -p hub/web/dist && touch hub/web/dist/index.html
       - name: Integration tests with coverage
         run: cd hub && go test ./internal/integration/ -v -timeout 120s -coverprofile=../coverage-integration.out -covermode=atomic -coverpkg=./internal/...
 

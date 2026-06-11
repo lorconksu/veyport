@@ -186,6 +186,177 @@ func TestCreateServer_InstallCommandPrefersDBStoredPublicBaseURL(t *testing.T) {
 	}
 }
 
+func TestCreateServer_LegacyAerodocsEnvVarFallback(t *testing.T) {
+	// Transitional shim: AERODOCS_PUBLIC_BASE_URL should populate the public
+	// base URL when VEYPORT_PUBLIC_BASE_URL is unset, so operators upgrading
+	// from v1.x don't fall through to the request Host header.
+	t.Setenv("VEYPORT_PUBLIC_BASE_URL", "")
+	t.Setenv("AERODOCS_PUBLIC_BASE_URL", "https://legacy.example:8443")
+	// Reset the one-shot warning sentinel so a subsequent test run still warns.
+	legacyPublicBaseURLWarn.Store(false)
+
+	s := testServer(t)
+	token := registerAndGetAdminToken(t, s)
+
+	body, _ := json.Marshal(model.CreateServerRequest{Name: "legacy-env-fallback"})
+	req := httptest.NewRequest("POST", "https://attacker.example/api/servers", bytes.NewReader(body))
+	req.Host = "attacker.example"
+	req.Header.Set("Authorization", testBearerPrefix+token)
+	rec := httptest.NewRecorder()
+	s.routes().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("expected 201, got %d: %s", rec.Code, rec.Body.String())
+	}
+	var resp model.CreateServerResponse
+	json.NewDecoder(rec.Body).Decode(&resp)
+	if !strings.Contains(resp.InstallCommand, "https://legacy.example:8443/install.sh") {
+		t.Fatalf("expected legacy AERODOCS_PUBLIC_BASE_URL to be honoured, got %q", resp.InstallCommand)
+	}
+	if strings.Contains(resp.InstallCommand, "attacker.example") {
+		t.Fatalf("install command leaked attacker-controlled host header: %q", resp.InstallCommand)
+	}
+}
+
+func TestCreateServer_VeyportEnvVarPreferredOverLegacy(t *testing.T) {
+	// When both env vars are set, the new VEYPORT_PUBLIC_BASE_URL wins.
+	t.Setenv("VEYPORT_PUBLIC_BASE_URL", "https://new.example:9443")
+	t.Setenv("AERODOCS_PUBLIC_BASE_URL", "https://legacy.example:8443")
+
+	s := testServer(t)
+	token := registerAndGetAdminToken(t, s)
+
+	body, _ := json.Marshal(model.CreateServerRequest{Name: "veyport-env-preferred"})
+	req := httptest.NewRequest("POST", "https://new.example/api/servers", bytes.NewReader(body))
+	req.Host = "new.example"
+	req.Header.Set("Authorization", testBearerPrefix+token)
+	rec := httptest.NewRecorder()
+	s.routes().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("expected 201, got %d: %s", rec.Code, rec.Body.String())
+	}
+	var resp model.CreateServerResponse
+	json.NewDecoder(rec.Body).Decode(&resp)
+	if !strings.Contains(resp.InstallCommand, "https://new.example:9443/install.sh") {
+		t.Fatalf("expected VEYPORT_PUBLIC_BASE_URL to win over legacy, got %q", resp.InstallCommand)
+	}
+	if strings.Contains(resp.InstallCommand, "legacy.example") {
+		t.Fatalf("install command should not contain legacy host, got %q", resp.InstallCommand)
+	}
+}
+
+func TestValidatePublicBaseURL(t *testing.T) {
+	tests := []struct {
+		name    string
+		input   string
+		want    string
+		wantErr bool
+	}{
+		{name: "https with port and path keeps URL but strips trailing slash", input: "https://hub.example:9443/", want: "https://hub.example:9443", wantErr: false},
+		{name: "http with port is accepted", input: "http://10.10.1.5:8080", want: "http://10.10.1.5:8080", wantErr: false},
+		{name: "missing scheme is rejected", input: "hub.example:9443", wantErr: true},
+		{name: "ftp scheme is rejected", input: "ftp://hub.example", wantErr: true},
+		{name: "empty host is rejected", input: "https://", wantErr: true},
+		{name: "garbage is rejected", input: "not a url", wantErr: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := validatePublicBaseURL(tt.input)
+			if tt.wantErr {
+				if err == nil {
+					t.Fatalf("validatePublicBaseURL(%q) = %q, want error", tt.input, got)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("validatePublicBaseURL(%q) error: %v", tt.input, err)
+			}
+			if got != tt.want {
+				t.Fatalf("validatePublicBaseURL(%q) = %q, want %q", tt.input, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestEnvPublicBaseURL(t *testing.T) {
+	t.Run("returns new env var when set", func(t *testing.T) {
+		t.Setenv("VEYPORT_PUBLIC_BASE_URL", "https://new.example")
+		t.Setenv("AERODOCS_PUBLIC_BASE_URL", "https://legacy.example")
+		if got := envPublicBaseURL(); got != "https://new.example" {
+			t.Fatalf("envPublicBaseURL() = %q, want new.example", got)
+		}
+	})
+	t.Run("falls back to legacy env var when new is empty", func(t *testing.T) {
+		t.Setenv("VEYPORT_PUBLIC_BASE_URL", "")
+		t.Setenv("AERODOCS_PUBLIC_BASE_URL", "https://legacy.example")
+		legacyPublicBaseURLWarn.Store(false)
+		if got := envPublicBaseURL(); got != "https://legacy.example" {
+			t.Fatalf("envPublicBaseURL() = %q, want legacy.example", got)
+		}
+	})
+	t.Run("deprecation warning fires at most once", func(t *testing.T) {
+		t.Setenv("VEYPORT_PUBLIC_BASE_URL", "")
+		t.Setenv("AERODOCS_PUBLIC_BASE_URL", "https://legacy.example")
+		legacyPublicBaseURLWarn.Store(false)
+		// First call should flip the sentinel to true (CompareAndSwap returns true).
+		_ = envPublicBaseURL()
+		if !legacyPublicBaseURLWarn.Load() {
+			t.Fatal("expected warn sentinel to be true after first call")
+		}
+		// Second call hits the CompareAndSwap-returns-false branch (no re-log).
+		if got := envPublicBaseURL(); got != "https://legacy.example" {
+			t.Fatalf("envPublicBaseURL() = %q on repeat call, want legacy.example", got)
+		}
+	})
+	t.Run("returns empty when both unset", func(t *testing.T) {
+		t.Setenv("VEYPORT_PUBLIC_BASE_URL", "")
+		t.Setenv("AERODOCS_PUBLIC_BASE_URL", "")
+		if got := envPublicBaseURL(); got != "" {
+			t.Fatalf("envPublicBaseURL() = %q, want empty", got)
+		}
+	})
+}
+
+func TestResolvePublicBaseURL_ErrorPaths(t *testing.T) {
+	// Make sure neither env var is set so we exercise the lower fallback
+	// branches in resolvePublicBaseURL.
+	t.Setenv("VEYPORT_PUBLIC_BASE_URL", "")
+	t.Setenv("AERODOCS_PUBLIC_BASE_URL", "")
+
+	t.Run("invalid request Host header rejected", func(t *testing.T) {
+		s := testServer(t)
+		req := httptest.NewRequest("GET", "http://localhost/", nil)
+		// A host containing a forbidden character (space) should fail hostPattern.
+		req.Host = "bad host"
+		if _, err := s.resolvePublicBaseURL(req); err == nil {
+			t.Fatal("expected an error for hostile request Host header")
+		}
+	})
+
+	t.Run("no request and no config returns error in prod mode", func(t *testing.T) {
+		// In dev mode we'd return the localhost default; force prod mode and
+		// provide neither a request Host nor a configured grpc-external-addr.
+		s := testServer(t)
+		s.isDev = false
+		s.grpcAddr = ""
+		s.grpcExternalAddr = ""
+		if _, err := s.resolvePublicBaseURL(nil); err == nil {
+			t.Fatal("expected an error when no public hub address is configured")
+		}
+	})
+
+	t.Run("malformed grpc-derived host rejected", func(t *testing.T) {
+		s := testServer(t)
+		s.isDev = false
+		// Inject a grpc target whose host won't match hostPattern (contains a space).
+		s.grpcExternalAddr = "bad host:9443"
+		if _, err := s.resolvePublicBaseURL(nil); err == nil {
+			t.Fatal("expected an error when grpc-derived host is malformed")
+		}
+	})
+}
+
 func TestCreateServer_InvalidDBStoredPublicBaseURLRejected(t *testing.T) {
 	s := testServer(t)
 	if err := s.store.SetConfig("public_base_url", "not a url"); err != nil {

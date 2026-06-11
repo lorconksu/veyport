@@ -35,6 +35,7 @@ func SendEmail(cfg model.SMTPConfig, to, subject, body string) error {
 func sendTLS(cfg model.SMTPConfig, addr string, auth smtp.Auth, to, msg string) error {
 	tlsCfg := &tls.Config{
 		ServerName: cfg.Host,
+		MinVersion: tls.VersionTLS12,
 	}
 
 	conn, err := tlsDialer("tcp", addr, tlsCfg)

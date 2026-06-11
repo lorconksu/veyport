@@ -34,6 +34,8 @@ const (
 	testUsersPrefix     = "/api/users/"
 	testSMTPPath        = "/api/settings/smtp"
 	testSMTPTestPath    = "/api/settings/smtp/test"
+	testLDAPPath        = "/api/settings/ldap"
+	testLDAPTestPath    = "/api/settings/ldap/test"
 	testPrefsPath       = "/api/notifications/preferences"
 	testNotifLogPath    = "/api/notifications/log"
 	testAuditLogsPath   = "/api/audit-logs"

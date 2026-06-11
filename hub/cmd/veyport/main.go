@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"syscall"
 	"time"
 
@@ -20,6 +21,8 @@ import (
 	"github.com/wyiu/veyport/hub/internal/server"
 	"github.com/wyiu/veyport/hub/internal/store"
 )
+
+const legacyDBName = "aerodocs.db"
 
 func main() {
 	if len(os.Args) > 1 && os.Args[1] == "admin" {
@@ -44,6 +47,19 @@ func runServer() error {
 	grpcExternalAddr := flag.String("grpc-external-addr", "", "external gRPC address for agent install commands (e.g. hub.example.com:9443)")
 	agentBinDir := flag.String("agent-bin-dir", "./bin", "directory containing agent binaries")
 	flag.Parse()
+
+	// Detect legacy aerodocs.db when the configured veyport.db doesn't exist on the
+	// same volume; refuse to start rather than silently presenting the fresh-install
+	// wizard against an empty DB while the populated legacy file sits beside it.
+	if _, err := os.Stat(*dbPath); os.IsNotExist(err) {
+		legacy := filepath.Join(filepath.Dir(*dbPath), legacyDBName)
+		if filepath.Base(*dbPath) != legacyDBName {
+			if _, lerr := os.Stat(legacy); lerr == nil {
+				return fmt.Errorf("legacy database %s detected but --db points at %s; "+
+					"rename %s to %s or pass --db %s to preserve data", legacy, *dbPath, legacy, *dbPath, legacy)
+			}
+		}
+	}
 
 	st, err := store.New(*dbPath)
 	if err != nil {

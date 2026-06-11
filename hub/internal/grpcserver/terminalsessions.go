@@ -126,6 +126,27 @@ func (ts *TerminalSessions) End(serverID, sessionID string, exitCode int32, err 
 	return true
 }
 
+// RemoveIfHubInitiated removes the session entry from the map and returns
+// (alreadyClosed, removed). When alreadyClosed is true the caller should
+// suppress the redundant TerminalClose gRPC send to the agent — the agent
+// already reported its exit via End().
+func (ts *TerminalSessions) RemoveIfHubInitiated(serverID, sessionID string) (bool, bool) {
+	key := makeKey(serverID, sessionID)
+	ts.mu.Lock()
+	defer ts.mu.Unlock()
+	s, ok := ts.sessions[key]
+	if !ok {
+		return false, false
+	}
+	alreadyClosed := s.closed
+	if !s.closed {
+		close(s.ch)
+		s.closed = true
+	}
+	delete(ts.sessions, key)
+	return alreadyClosed, true
+}
+
 func (ts *TerminalSessions) EndAll(serverID string, exitCode int32, err string) {
 	prefix := serverID + ":"
 	ts.mu.Lock()

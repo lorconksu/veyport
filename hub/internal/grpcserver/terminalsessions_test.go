@@ -153,6 +153,55 @@ func TestTerminalSessions_RemoveUnattached(t *testing.T) {
 	}
 }
 
+func TestTerminalSessions_RemoveIfHubInitiated(t *testing.T) {
+	t.Run("returns_false_when_missing", func(t *testing.T) {
+		ts := NewTerminalSessions()
+		alreadyClosed, removed := ts.RemoveIfHubInitiated("srv-x", "sess-x")
+		if removed {
+			t.Fatal("expected removed=false for missing session")
+		}
+		if alreadyClosed {
+			t.Fatal("expected alreadyClosed=false for missing session")
+		}
+	})
+
+	t.Run("hub_initiated_close_returns_alreadyClosed_false", func(t *testing.T) {
+		ts := NewTerminalSessions()
+		ch, _ := ts.Register("srv-1", "sess-1", "user-1", "")
+		alreadyClosed, removed := ts.RemoveIfHubInitiated("srv-1", "sess-1")
+		if !removed {
+			t.Fatal("expected removed=true")
+		}
+		if alreadyClosed {
+			t.Fatal("hub-initiated close should report alreadyClosed=false")
+		}
+		if _, ok := <-ch; ok {
+			t.Fatal("expected channel to be closed by RemoveIfHubInitiated")
+		}
+		if _, ok := ts.Get("srv-1", "sess-1"); ok {
+			t.Fatal("expected session entry to be removed from map")
+		}
+	})
+
+	t.Run("agent_initiated_then_remove_returns_alreadyClosed_true", func(t *testing.T) {
+		ts := NewTerminalSessions()
+		ts.Register("srv-1", "sess-2", "user-1", "")
+		if !ts.End("srv-1", "sess-2", 0, "") {
+			t.Fatal("expected End to succeed")
+		}
+		alreadyClosed, removed := ts.RemoveIfHubInitiated("srv-1", "sess-2")
+		if !removed {
+			t.Fatal("expected removed=true even when already closed")
+		}
+		if !alreadyClosed {
+			t.Fatal("expected alreadyClosed=true after agent-initiated End")
+		}
+		if _, ok := ts.Get("srv-1", "sess-2"); ok {
+			t.Fatal("expected session entry to be removed from map")
+		}
+	})
+}
+
 func TestTerminalSessions_EndAll(t *testing.T) {
 	ts := NewTerminalSessions()
 	ch1, _ := ts.Register("srv-1", "sess-1", "user-1", "")

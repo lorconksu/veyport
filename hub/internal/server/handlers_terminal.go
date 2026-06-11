@@ -19,6 +19,7 @@ const (
 	terminalStreamAttachDelay     = 30 * time.Second
 	errTerminalServiceUnavailable = "terminal service unavailable"
 	errTerminalSessionNotFound    = "terminal session not found"
+	terminalSessionIDDetailPrefix = "session_id="
 )
 
 type createTerminalSessionRequest struct {
@@ -103,9 +104,10 @@ func (s *Server) handleCreateTerminalSession(w http.ResponseWriter, r *http.Requ
 		return
 	}
 	ip := clientIP(r)
-	s.expireUnattachedTerminalSession(serverID, sessionID, userID, ip)
+	correlationID := RequestIDFromContext(r.Context())
+	s.expireUnattachedTerminalSession(serverID, sessionID, userID, ip, correlationID)
 
-	detail := "session_id=" + sessionID
+	detail := terminalSessionIDDetailPrefix + sessionID
 	if req.Cwd != "" {
 		detail += fmt.Sprintf(" cwd=%q", req.Cwd)
 	}
@@ -182,7 +184,7 @@ func (s *Server) handleTerminalStream(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-func (s *Server) expireUnattachedTerminalSession(serverID, sessionID, userID, ip string) {
+func (s *Server) expireUnattachedTerminalSession(serverID, sessionID, userID, ip, correlationID string) {
 	time.AfterFunc(terminalStreamAttachDelay, func() {
 		if s.terminalSessions == nil || !s.terminalSessions.RemoveUnattached(serverID, sessionID) {
 			return
@@ -197,7 +199,7 @@ func (s *Server) expireUnattachedTerminalSession(serverID, sessionID, userID, ip
 			})
 		}
 		uid, srvID, addr := userID, serverID, ip
-		detail := "session_id=" + sessionID + " expired_unattached"
+		detail := terminalSessionIDDetailPrefix + sessionID + " expired_unattached"
 		entry := model.AuditEntry{
 			ID:     uuid.NewString(),
 			Action: model.AuditTerminalClosed,
@@ -209,6 +211,9 @@ func (s *Server) expireUnattachedTerminalSession(serverID, sessionID, userID, ip
 		}
 		if addr != "" {
 			entry.IPAddress = &addr
+		}
+		if correlationID != "" {
+			entry.CorrelationID = &correlationID
 		}
 		_ = s.store.LogAudit(entry)
 	})
@@ -375,10 +380,13 @@ func (s *Server) closeTerminalSession(r *http.Request, serverID, sessionID strin
 	if s.terminalSessions == nil {
 		return
 	}
-	if !s.terminalSessions.Remove(serverID, sessionID) {
+	alreadyClosed, removed := s.terminalSessions.RemoveIfHubInitiated(serverID, sessionID)
+	if !removed {
 		return
 	}
-	if s.connMgr != nil {
+	// Suppress the TerminalClose gRPC send when the agent already reported
+	// its exit via End() — the session is already dead on the agent side.
+	if !alreadyClosed && s.connMgr != nil {
 		_ = s.connMgr.SendToAgent(serverID, &pb.HubMessage{
 			Payload: &pb.HubMessage_TerminalClose{
 				TerminalClose: &pb.TerminalClose{
@@ -390,7 +398,10 @@ func (s *Server) closeTerminalSession(r *http.Request, serverID, sessionID strin
 
 	userID := UserIDFromContext(r.Context())
 	ip := clientIP(r)
-	detail := "session_id=" + sessionID
+	detail := terminalSessionIDDetailPrefix + sessionID
+	if alreadyClosed {
+		detail += " agent_initiated"
+	}
 	s.auditLogRequest(r, model.AuditEntry{
 		UserID:    &userID,
 		Action:    model.AuditTerminalClosed,
