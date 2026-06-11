@@ -125,7 +125,7 @@
 - [X] T029 [P] Update docs-internal/engineering/security-model.md: config-secret encryption scheme (`enc:` prefix, JWT-secret-derived key), write-only bind password semantics, insecure-transport opt-in, `ldap.config_updated` audit action (gap G7)
 - [X] T030 [P] Split unrelated agent certificate-expiry changes (agent/internal/certs/certs.go, certs_test.go, agent/internal/client/client.go, client_test.go and hub/static/install.sh if related) out of this branch into a separate branch/PR, or document justification in the PR description (gap G8)
 - [X] T031 Full verification run: `make test`, `cd web && npx vitest run`, integration suite, and confirm `sonar-project.properties` gained no new exclusions for this feature's files (constitution G1/G2)
-- [ ] T032 Runtime verification on the dev environment per quickstart.md §3–§5: deploy branch, exercise Directory tab (save, test connection, validation errors), confirm audit entry and `bind_password` never returned (gap G9)
+- [X] T032 Runtime verification on the dev environment per quickstart.md §3–§5: deploy branch, exercise Directory tab (save, test connection, validation errors), confirm audit entry and `bind_password` never returned (gap G9)
 
 ---
 
