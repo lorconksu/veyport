@@ -450,6 +450,32 @@ func TestHandleMessage_HeartbeatAckIgnored(t *testing.T) {
 	}
 }
 
+func TestStartCertRenewalTicker_DoesNotSendAnotherCSRWhileRenewalInFlight(t *testing.T) {
+	certStore := certs.NewMemoryStore()
+	storeClientCert(t, certStore, "srv-renew", time.Now().Add(time.Hour))
+	c := &Client{
+		serverID:  "srv-renew",
+		certStore: certStore,
+	}
+	sendCh := make(chan *pb.AgentMessage, 10)
+	stop := make(chan struct{})
+	defer close(stop)
+
+	go c.startCertRenewalTicker(5*time.Millisecond, sendCh, stop)
+
+	first := waitForCertRenewalRequest(t, sendCh)
+	if first.GetCertRenewRequest() == nil {
+		t.Fatal("expected first renewal message to be CertRenewRequest")
+	}
+
+	select {
+	case extra := <-sendCh:
+		t.Fatalf("expected no second renewal request while one is in flight, got %T", extra.Payload)
+	case <-time.After(35 * time.Millisecond):
+		// ok
+	}
+}
+
 func TestHandleFileListRequest(t *testing.T) {
 	c := &Client{tailSessions: make(map[string]chan struct{})}
 	sendCh := make(chan *pb.AgentMessage, 1)
@@ -473,6 +499,70 @@ func TestHandleFileListRequest(t *testing.T) {
 		}
 	default:
 		t.Fatal("expected response on sendCh for /tmp")
+	}
+}
+
+func storeClientCert(t *testing.T, store *certs.Store, serverID string, notAfter time.Time) {
+	t.Helper()
+	caKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatalf("generate CA key: %v", err)
+	}
+	caTemplate := &x509.Certificate{
+		SerialNumber:          big.NewInt(100),
+		Subject:               pkix.Name{CommonName: "Test Agent CA"},
+		NotBefore:             time.Now().Add(-time.Hour),
+		NotAfter:              time.Now().Add(24 * time.Hour),
+		IsCA:                  true,
+		KeyUsage:              x509.KeyUsageCertSign | x509.KeyUsageCRLSign,
+		BasicConstraintsValid: true,
+	}
+	caDER, err := x509.CreateCertificate(rand.Reader, caTemplate, caTemplate, &caKey.PublicKey, caKey)
+	if err != nil {
+		t.Fatalf("create CA cert: %v", err)
+	}
+	caCert, err := x509.ParseCertificate(caDER)
+	if err != nil {
+		t.Fatalf("parse CA cert: %v", err)
+	}
+	csrDER, err := store.GenerateCSR(serverID)
+	if err != nil {
+		t.Fatalf("generate CSR: %v", err)
+	}
+	csr, err := x509.ParseCertificateRequest(csrDER)
+	if err != nil {
+		t.Fatalf("parse CSR: %v", err)
+	}
+	clientTemplate := &x509.Certificate{
+		SerialNumber: big.NewInt(101),
+		Subject:      csr.Subject,
+		NotBefore:    time.Now().Add(-time.Hour),
+		NotAfter:     notAfter,
+		KeyUsage:     x509.KeyUsageDigitalSignature,
+		ExtKeyUsage:  []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth},
+	}
+	clientDER, err := x509.CreateCertificate(rand.Reader, clientTemplate, caCert, csr.PublicKey, caKey)
+	if err != nil {
+		t.Fatalf("create client cert: %v", err)
+	}
+	if err := store.StoreCert(clientDER, caCert.Raw); err != nil {
+		t.Fatalf("store client cert: %v", err)
+	}
+}
+
+func waitForCertRenewalRequest(t *testing.T, sendCh <-chan *pb.AgentMessage) *pb.AgentMessage {
+	t.Helper()
+	timer := time.NewTimer(time.Second)
+	defer timer.Stop()
+	for {
+		select {
+		case msg := <-sendCh:
+			if msg.GetCertRenewRequest() != nil {
+				return msg
+			}
+		case <-timer.C:
+			t.Fatal("timed out waiting for CertRenewRequest")
+		}
 	}
 }
 
