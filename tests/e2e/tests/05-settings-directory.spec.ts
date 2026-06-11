@@ -49,8 +49,9 @@ test.describe('Settings - Directory tab', () => {
 
   test('test connection against unreachable host shows failure without saving', async ({ page }) => {
     await page.getByLabel('Enable LDAP').check()
-    // Reserved TEST-NET-1 address: connection fails fast and deterministically.
-    await page.getByLabel('LDAP URL').fill('ldaps://192.0.2.1:636')
+    // Closed port on the hub's own loopback: instant connection-refused,
+    // unlike blackholed addresses which hang on the 60s dial timeout.
+    await page.getByLabel('LDAP URL').fill('ldaps://127.0.0.1:1')
     await page.getByLabel('User Base DN').fill('ou=people,dc=example,dc=com')
     await page.getByLabel('Group Base DN').fill('ou=groups,dc=example,dc=com')
     await page.getByLabel('Admin Groups').fill('veyport-admins')

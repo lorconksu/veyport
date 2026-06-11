@@ -65,8 +65,8 @@ violation:
 - plain `ldap://` without `start_tls` requires `allow_insecure_transport: true`
 - `ca_cert_pem`, if set, must be a parseable certificate PEM
 
-**Response 200**: the updated configuration (same shape as GET — secret
-excluded).
+**Response 200**: `{ "status": "ok" }` — fetch the effective configuration
+via GET (the secret is never echoed back).
 
 **Side effects**: settings effective immediately (next sign-in uses them);
 audit entry `ldap.config_updated` recorded with non-secret change summary.
