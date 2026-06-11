@@ -38,10 +38,10 @@ without touching the server's deployment configuration.
    enables it, fills in server URL, bind credentials, and user base DN, and
    saves, **Then** the settings take effect immediately and directory users can
    sign in without a restart.
-3. **Given** the administrator enables directory integration but leaves the
-   server URL or user base DN empty, **When** they save, **Then** the save is
-   rejected with a message naming the missing field, and the previous
-   configuration remains in effect.
+3. **Given** the administrator enables directory integration but leaves a
+   required field empty (server URL, user base DN, or group base DN), **When**
+   they save, **Then** the save is rejected with a message naming the missing
+   field, and the previous configuration remains in effect.
 4. **Given** unsaved edits in the form, **When** the administrator reloads the
    page, **Then** the last saved configuration is shown (no partial state was
    applied).
@@ -169,9 +169,11 @@ P1 works.
   is stored. The password MUST be stored encrypted at rest.
 - **FR-005**: Administrators MUST be able to leave the stored bind password
   unchanged, replace it, or explicitly clear it — three distinct outcomes.
-- **FR-006**: When directory integration is enabled, the server URL and user
-  base DN MUST be required; saves missing them MUST be rejected with a message
-  naming the field. When disabled, these validations MUST NOT block saving.
+- **FR-006**: When directory integration is enabled, the server URL, user base
+  DN, and group base DN MUST be required; a bind password MUST be required
+  whenever a bind DN is set; and at least one role group mapping MUST exist.
+  Saves violating these rules MUST be rejected with a message naming the
+  field. When disabled, these validations MUST NOT block saving.
 - **FR-007**: Blank optional fields (search filters and attribute mappings)
   MUST fall back to documented defaults suitable for a standard directory
   deployment.
