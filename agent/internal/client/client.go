@@ -52,8 +52,10 @@ type Config struct {
 }
 
 const (
-	maxTailSessions   = 50
-	dropzonePathAlias = "veyport://dropzone"
+	maxTailSessions            = 50
+	dropzonePathAlias          = "veyport://dropzone"
+	certRenewalThreshold       = 6 * time.Hour
+	certRenewalResponseTimeout = time.Minute
 )
 
 var errReconnectWithMTLS = errors.New("reconnect required to authenticate with issued client certificate")
@@ -70,6 +72,9 @@ type Client struct {
 	maxBackoff      time.Duration
 	tailSessionsMu  sync.Mutex
 	tailSessions    map[string]chan struct{}
+	certRenewalMu   sync.Mutex
+	certRenewalSent bool
+	certRenewalAt   time.Time
 	dropzone        *dropzone.Dropzone
 	certStore       *certs.Store
 	unregisterToken string
@@ -509,6 +514,7 @@ func (c *Client) handleMessage(msg *pb.HubMessage, sendCh chan<- *pb.AgentMessag
 }
 
 func (c *Client) handleCertRenewResponse(p *pb.HubMessage_CertRenewResponse) {
+	c.clearCertRenewalInFlight()
 	resp := p.CertRenewResponse
 	if resp.Error != "" {
 		log.Printf("cert renewal rejected: %s", resp.Error)
@@ -525,6 +531,35 @@ func (c *Client) handleCertRenewResponse(p *pb.HubMessage_CertRenewResponse) {
 	log.Printf("mTLS certificate renewed (will use on next reconnect)")
 }
 
+func (c *Client) clearCertRenewalInFlight() {
+	c.certRenewalMu.Lock()
+	c.certRenewalSent = false
+	c.certRenewalAt = time.Time{}
+	c.certRenewalMu.Unlock()
+}
+
+func (c *Client) certRenewalInFlight(now time.Time) bool {
+	c.certRenewalMu.Lock()
+	defer c.certRenewalMu.Unlock()
+	if !c.certRenewalSent {
+		return false
+	}
+	if now.Sub(c.certRenewalAt) <= certRenewalResponseTimeout {
+		return true
+	}
+	log.Printf("cert renewal response timed out after %v; retrying", certRenewalResponseTimeout)
+	c.certRenewalSent = false
+	c.certRenewalAt = time.Time{}
+	return false
+}
+
+func (c *Client) markCertRenewalInFlight(now time.Time) {
+	c.certRenewalMu.Lock()
+	c.certRenewalSent = true
+	c.certRenewalAt = now
+	c.certRenewalMu.Unlock()
+}
+
 // startCertRenewalTicker checks cert expiry every 10s alongside heartbeats
 // and sends a CertRenewRequest when renewal is needed.
 func (c *Client) startCertRenewalTicker(interval time.Duration, sendCh chan<- *pb.AgentMessage, stop <-chan struct{}) {
@@ -535,7 +570,8 @@ func (c *Client) startCertRenewalTicker(interval time.Duration, sendCh chan<- *p
 		case <-stop:
 			return
 		case <-ticker.C:
-			if !c.certStore.HasCert() || !c.certStore.NeedsRenewal(6*time.Hour) {
+			now := time.Now()
+			if !c.certStore.HasCert() || !c.certStore.NeedsRenewal(certRenewalThreshold) || c.certRenewalInFlight(now) {
 				continue
 			}
 			csrDER, err := c.certStore.GenerateCSR(c.serverID)
@@ -543,12 +579,17 @@ func (c *Client) startCertRenewalTicker(interval time.Duration, sendCh chan<- *p
 				log.Printf("cert renewal CSR generation failed: %v", err)
 				continue
 			}
-			sendCh <- &pb.AgentMessage{
+			select {
+			case sendCh <- &pb.AgentMessage{
 				Payload: &pb.AgentMessage_CertRenewRequest{
 					CertRenewRequest: &pb.CertRenewRequest{
 						Csr: csrDER,
 					},
 				},
+			}:
+				c.markCertRenewalInFlight(now)
+			case <-stop:
+				return
 			}
 			log.Printf("sent cert renewal request")
 		}
