@@ -43,6 +43,7 @@ type Server struct {
 	tokenBlacklist    *auth.TokenBlacklist
 	notifier          *notify.Notifier
 	ldapAuthenticator LDAPAuthenticator
+	ldapDial          func(LDAPConfig) (ldapConnection, error)
 }
 
 type Config struct {

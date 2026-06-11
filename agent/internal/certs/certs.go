@@ -234,12 +234,16 @@ func verifyCertMatchesKey(cert *x509.Certificate, key *ecdsa.PrivateKey) error {
 // available. Returns nil if no cert/key/CA have been stored.
 func (s *Store) TLSConfig() *tls.Config {
 	s.mu.RLock()
+	cert := s.cert
 	certPEM := s.certPEM
 	keyPEM := s.keyPEM
 	caPEM := s.caPEM
 	s.mu.RUnlock()
 
 	if certPEM == nil || keyPEM == nil || caPEM == nil {
+		return nil
+	}
+	if cert == nil || !certUsableNow(cert) {
 		return nil
 	}
 
@@ -258,6 +262,11 @@ func (s *Store) TLSConfig() *tls.Config {
 		RootCAs:      caPool,
 		MinVersion:   tls.VersionTLS13,
 	}
+}
+
+func certUsableNow(cert *x509.Certificate) bool {
+	now := time.Now()
+	return !now.Before(cert.NotBefore) && now.Before(cert.NotAfter)
 }
 
 // NeedsRenewal returns true if the stored certificate expires within the

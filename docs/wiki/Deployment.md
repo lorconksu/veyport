@@ -279,7 +279,17 @@ The agent reconnects with **exponential backoff** - starting at 1 second and cap
 
 ## LDAP Login and Terminal Access
 
-Veyport can authenticate users against LDAP and map LDAP groups to Veyport roles. LDAP is currently configured through the Hub `_config` table by an operator with database access.
+Veyport can authenticate users against LDAP and map LDAP groups to Veyport roles. Admins can configure LDAP from **Settings > Directory** in the web UI. The Hub stores the same values in `_config`, so operators can still inspect or recover the configuration directly from the database when needed.
+
+The Directory tab supports:
+
+- Enabling or disabling LDAP login
+- LDAP URL, service bind DN, and write-only bind password
+- User and group search base DNs
+- Search filters and attribute mappings
+- StartTLS, TLS server name override, CA certificate PEM, and lab-only insecure transport
+- Configurable LDAP groups for admin, auditor, viewer, and terminal access
+- A service bind connection test
 
 ### LDAP configuration keys
 
@@ -301,10 +311,14 @@ Veyport can authenticate users against LDAP and map LDAP groups to Veyport roles
 | `ldap.tls_server_name` | Optional TLS server name override |
 | `ldap.ca_cert_pem` | Optional PEM CA bundle for LDAP server verification |
 | `ldap.allow_insecure_transport` | Allows plaintext LDAP only for lab use |
+| `ldap.admin_groups` | JSON array or comma-separated LDAP groups mapped to the Admin role |
+| `ldap.auditor_groups` | JSON array or comma-separated LDAP groups mapped to the Auditor role |
+| `ldap.viewer_groups` | JSON array or comma-separated LDAP groups mapped to the Viewer role |
+| `ldap.terminal_groups` | JSON array or comma-separated LDAP groups eligible for terminal access |
 
 LDAP transport is fail-closed by default. Use `ldaps://` or set `ldap.start_tls=true`; plaintext `ldap://` is rejected unless `ldap.allow_insecure_transport=true`.
 
-### Default group mapping
+### Group mapping
 
 | LDAP group | Veyport effect |
 |------------|----------------|
@@ -312,6 +326,8 @@ LDAP transport is fail-closed by default. Use `ldaps://` or set `ldap.start_tls=
 | `veyport-auditors` | Auditor role |
 | `veyport-viewers` | Viewer role |
 | `veyport-terminal-users` | Marks the LDAP user as eligible for terminal access |
+
+These are defaults only. Change them in **Settings > Directory** to match your LDAP or FreeIPA group names.
 
 Terminal access has an additional server-level gate. LDAP terminal users must also have a root (`/`) path assignment on the specific server. Local non-admin users cannot open terminal sessions.
 
