@@ -3,6 +3,7 @@ package server
 import (
 	"crypto/sha256"
 	"fmt"
+	"log"
 	"net"
 	"net/http"
 	"net/url"
@@ -10,13 +11,21 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/wyiu/veyport/hub"
 	"github.com/wyiu/veyport/hub/internal/model"
 )
 
-var hostPattern = regexp.MustCompile(`^[a-zA-Z0-9._:\-]+$`)
+var (
+	hostPattern              = regexp.MustCompile(`^[a-zA-Z0-9._:\-]+$`)
+	legacyPublicBaseURLWarn  atomic.Bool
+	errInvalidPublicBaseURL  = fmt.Errorf("invalid public base url")
+	errInvalidPublicHubAddr  = fmt.Errorf("invalid public hub address")
+	errPublicHubNotConfigured = fmt.Errorf("public hub address is not configured")
+)
 
 func hostFromAddr(addr string) string {
 	if h, _, err := net.SplitHostPort(addr); err == nil {
@@ -90,29 +99,45 @@ func (s *Server) resolveGRPCTarget(host string) string {
 	return target
 }
 
-func (s *Server) resolvePublicBaseURL(r *http.Request) (string, error) {
+// envPublicBaseURL returns the configured public base URL from env. Prefers the
+// new VEYPORT_PUBLIC_BASE_URL; falls back to the deprecated AERODOCS_PUBLIC_BASE_URL
+// with a one-shot warning log (transitional shim during the v1→v2 rebrand window).
+func envPublicBaseURL() string {
 	if raw := strings.TrimSpace(os.Getenv("VEYPORT_PUBLIC_BASE_URL")); raw != "" {
-		parsed, err := url.Parse(raw)
-		if err != nil || parsed.Host == "" || (parsed.Scheme != "http" && parsed.Scheme != "https") {
-			return "", fmt.Errorf("invalid public base url")
+		return raw
+	}
+	if legacy := strings.TrimSpace(os.Getenv("AERODOCS_PUBLIC_BASE_URL")); legacy != "" {
+		if legacyPublicBaseURLWarn.CompareAndSwap(false, true) {
+			log.Printf("warning: AERODOCS_PUBLIC_BASE_URL is deprecated; rename to VEYPORT_PUBLIC_BASE_URL")
 		}
-		return strings.TrimRight(raw, "/"), nil
+		return legacy
+	}
+	return ""
+}
+
+func validatePublicBaseURL(raw string) (string, error) {
+	parsed, err := url.Parse(raw)
+	if err != nil || parsed.Host == "" || (parsed.Scheme != "http" && parsed.Scheme != "https") {
+		return "", errInvalidPublicBaseURL
+	}
+	return strings.TrimRight(raw, "/"), nil
+}
+
+func (s *Server) resolvePublicBaseURL(r *http.Request) (string, error) {
+	if raw := envPublicBaseURL(); raw != "" {
+		return validatePublicBaseURL(raw)
 	}
 
 	if stored, err := s.store.GetConfig("public_base_url"); err == nil {
 		if trimmed := strings.TrimSpace(stored); trimmed != "" {
-			parsed, err := url.Parse(trimmed)
-			if err != nil || parsed.Host == "" || (parsed.Scheme != "http" && parsed.Scheme != "https") {
-				return "", fmt.Errorf("invalid public base url")
-			}
-			return strings.TrimRight(trimmed, "/"), nil
+			return validatePublicBaseURL(trimmed)
 		}
 	}
 
 	if r != nil && r.Host != "" {
 		host := r.Host
 		if !hostPattern.MatchString(host) {
-			return "", fmt.Errorf("invalid public hub address")
+			return "", errInvalidPublicHubAddr
 		}
 		return fmt.Sprintf("%s://%s", s.requestScheme(r), host), nil
 	}
@@ -123,12 +148,12 @@ func (s *Server) resolvePublicBaseURL(r *http.Request) (string, error) {
 
 	grpcTarget := s.resolveGRPCTarget("")
 	if grpcTarget == "" {
-		return "", fmt.Errorf("public hub address is not configured")
+		return "", errPublicHubNotConfigured
 	}
 
 	host := hostFromAddr(grpcTarget)
 	if host == "" || !hostPattern.MatchString(host) {
-		return "", fmt.Errorf("invalid public hub address")
+		return "", errInvalidPublicHubAddr
 	}
 
 	return fmt.Sprintf("https://%s", host), nil
@@ -363,7 +388,14 @@ func (s *Server) handleBatchDeleteServers(w http.ResponseWriter, r *http.Request
 }
 
 func (s *Server) handleInstallScript(w http.ResponseWriter, r *http.Request) {
-	http.ServeFile(w, r, "static/install.sh")
+	if len(hub.InstallScript) == 0 {
+		respondError(w, http.StatusNotFound, "install script not available")
+		return
+	}
+	w.Header().Set("Content-Type", "text/x-shellscript; charset=utf-8")
+	if _, err := w.Write(hub.InstallScript); err != nil {
+		log.Printf("install script write failed: %v", err)
+	}
 }
 
 func (s *Server) handleAgentBinary(w http.ResponseWriter, r *http.Request) {
@@ -399,7 +431,9 @@ func (s *Server) handleAgentBinaryChecksum(w http.ResponseWriter, r *http.Reques
 		return
 	}
 	w.Header().Set("Content-Type", "text/plain")
-	w.Write([]byte(strings.TrimSpace(string(data))))
+	if _, err := w.Write([]byte(strings.TrimSpace(string(data)))); err != nil {
+		log.Printf("checksum write failed: %v", err)
+	}
 }
 
 // isValidGRPCAddr validates a gRPC address (host:port format).

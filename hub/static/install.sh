@@ -75,6 +75,23 @@ if [[ "$OS" != "linux" ]]; then
   exit 1
 fi
 
+# --- Legacy (pre-v2 aerodocs-agent) cleanup ---
+# Hosts upgrading from v1.x ship with a separate aerodocs-agent unit that the
+# v2 hub will no longer accept (proto package rename). Tear it down before the
+# new install so the host doesn't end up running both units side by side.
+if systemctl is-active --quiet aerodocs-agent 2>/dev/null \
+   || [[ -f /usr/local/bin/aerodocs-agent ]] \
+   || [[ -f /etc/systemd/system/aerodocs-agent.service ]]; then
+  echo "==> Detected legacy aerodocs-agent installation — removing..."
+  systemctl stop aerodocs-agent 2>/dev/null || true
+  systemctl disable aerodocs-agent 2>/dev/null || true
+  pkill -9 -f aerodocs-agent 2>/dev/null || true
+  rm -f /usr/local/bin/aerodocs-agent
+  rm -f /etc/systemd/system/aerodocs-agent.service
+  rm -rf /etc/aerodocs
+  systemctl daemon-reload 2>/dev/null || true
+fi
+
 # --- Check for existing installation ---
 EXISTING=false
 if systemctl is-active --quiet veyport-agent 2>/dev/null; then

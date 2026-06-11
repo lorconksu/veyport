@@ -340,22 +340,30 @@ func TestLoadFromDiskRejectsInvalidPersistedMaterial(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			dir := t.TempDir()
-			writeValidDiskCerts(t, dir)
-			tt.corrupt(t, dir)
-
-			s := &Store{dir: dir}
-			err := s.loadFromDisk()
-			if err == nil {
-				t.Fatal("expected loadFromDisk to reject invalid persisted cert material")
-			}
-			if !strings.Contains(err.Error(), tt.wantErr) {
-				t.Fatalf("loadFromDisk error = %q, want to contain %q", err, tt.wantErr)
-			}
-			if s.HasCert() {
-				t.Fatal("expected invalid persisted cert material to leave store empty")
-			}
+			assertLoadFromDiskRejects(t, tt.corrupt, tt.wantErr)
 		})
+	}
+}
+
+// assertLoadFromDiskRejects sets up a valid on-disk certificate bundle, applies
+// the provided corruption, then asserts loadFromDisk rejects it with an error
+// containing wantErr and leaves the store empty.
+func assertLoadFromDiskRejects(t *testing.T, corrupt func(t *testing.T, dir string), wantErr string) {
+	t.Helper()
+	dir := t.TempDir()
+	writeValidDiskCerts(t, dir)
+	corrupt(t, dir)
+
+	s := &Store{dir: dir}
+	err := s.loadFromDisk()
+	if err == nil {
+		t.Fatal("expected loadFromDisk to reject invalid persisted cert material")
+	}
+	if !strings.Contains(err.Error(), wantErr) {
+		t.Fatalf("loadFromDisk error = %q, want to contain %q", err, wantErr)
+	}
+	if s.HasCert() {
+		t.Fatal("expected invalid persisted cert material to leave store empty")
 	}
 }
 
