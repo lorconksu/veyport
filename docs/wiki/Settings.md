@@ -5,6 +5,7 @@ The Settings page is accessible from the sidebar. The available tabs depend on y
 - **Profile** - available to every user
 - **Alerts** - available to every user
 - **Users** - admin only
+- **Directory** - admin only
 - **Notifications** - admin only
 
 Auditors do not get the admin-only Settings tabs, but they do have access to the [[Audit Logs]] page in the main sidebar.
@@ -86,6 +87,35 @@ The user's TOTP is cleared. The next time they log in, they will be taken throug
 Deleting a user is permanent and cannot be undone. Their audit log entries are preserved (the entries remain, but the user_id reference becomes orphaned).
 
 > **Note:** You cannot delete your own account. Another admin must do it for you.
+
+---
+
+## Directory Tab (Admin Only)
+
+The Directory tab lets admins configure LDAP login without direct database access.
+
+### LDAP Server
+
+Set the LDAP URL, bind DN, bind password, user base DN, and group base DN. The bind password is write-only: Veyport shows whether a password is stored, but never returns the secret to the browser.
+
+Use `ldaps://` for normal deployments. Plain `ldap://` is rejected unless StartTLS is enabled or insecure transport is explicitly allowed.
+
+### Role and Terminal Groups
+
+Map LDAP groups to Veyport access levels:
+
+- **Admin Groups** - users become Veyport admins
+- **Auditor Groups** - users can access audit workflows
+- **Viewer Groups** - users receive read-only operational access
+- **Terminal Groups** - users become eligible for browser terminal sessions
+
+Terminal group membership is not enough by itself. LDAP terminal users also need a root (`/`) path assignment on the target server.
+
+### Search and TLS
+
+FreeIPA-compatible defaults are prefilled for user filters, group filters, and common attributes. Adjust these if your directory uses different object classes or attribute names.
+
+Click **Test Connection** to validate the LDAP URL, TLS settings, and service bind before saving or after changing configuration.
 
 ---
 

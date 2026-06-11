@@ -322,6 +322,31 @@ export interface SMTPConfig {
   enabled: boolean
 }
 
+export interface LDAPConfig {
+  enabled: boolean
+  url: string
+  bind_dn: string
+  bind_password: string
+  bind_password_set: boolean
+  clear_bind_password?: boolean
+  user_base_dn: string
+  group_base_dn: string
+  user_search_filter: string
+  group_search_filter: string
+  username_attribute: string
+  email_attribute: string
+  external_id_attribute: string
+  group_name_attribute: string
+  start_tls: boolean
+  tls_server_name: string
+  ca_cert_pem: string
+  allow_insecure_transport: boolean
+  admin_groups: string[]
+  auditor_groups: string[]
+  viewer_groups: string[]
+  terminal_groups: string[]
+}
+
 export interface NotificationPreference {
   event_type: string
   label: string
