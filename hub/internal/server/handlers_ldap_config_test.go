@@ -249,7 +249,7 @@ func TestHandleTestLDAPConfigBindsServiceAccount(t *testing.T) {
 	s := testServer(t)
 	token := registerAndGetAdminToken(t, s)
 	conn := &fakeLDAPConn{}
-	s.ldapDial = func(cfg LDAPConfig) (ldapConnection, error) {
+	s.ldapDial = func(cfg LDAPConfig) (LDAPConnection, error) {
 		if cfg.URL != "ldaps://freeipa.yiucloud.com:636" {
 			t.Fatalf("unexpected LDAP URL %q", cfg.URL)
 		}

@@ -53,7 +53,10 @@ type LDAPGroupMappings struct {
 	TerminalGroups []string
 }
 
-type ldapConnection interface {
+// LDAPConnection is the subset of an LDAP client connection used by the hub.
+// It is exported so tests (including integration tests) can substitute a fake
+// directory via SetLDAPDialer.
+type LDAPConnection interface {
 	Bind(username, password string) error
 	Search(searchRequest *ldap.SearchRequest) (*ldap.SearchResult, error)
 	Close() error
@@ -61,9 +64,16 @@ type ldapConnection interface {
 	StartTLS(config *tls.Config) error
 }
 
+// SetLDAPDialer overrides how directory connections are established for both
+// sign-in and the test-connection endpoint. A nil dialer restores the default.
+// Intended for tests.
+func (s *Server) SetLDAPDialer(dial func(LDAPConfig) (LDAPConnection, error)) {
+	s.ldapDial = dial
+}
+
 type ldapBindAuthenticator struct {
 	cfg  LDAPConfig
-	dial func(LDAPConfig) (ldapConnection, error)
+	dial func(LDAPConfig) (LDAPConnection, error)
 }
 
 var defaultLDAPRoleGroups = map[model.Role][]string{
@@ -122,7 +132,7 @@ func (s *Server) loadLDAPAuthenticator() (LDAPAuthenticator, error) {
 	if err := validateLDAPTransport(cfg); err != nil {
 		return nil, err
 	}
-	return &ldapBindAuthenticator{cfg: cfg}, nil
+	return &ldapBindAuthenticator{cfg: cfg, dial: s.ldapDial}, nil
 }
 
 func (s *Server) loadLDAPConfig() (LDAPConfig, error) {
@@ -238,14 +248,14 @@ func (a *ldapBindAuthenticator) Authenticate(_ context.Context, username, passwo
 	return identity, nil
 }
 
-func (a *ldapBindAuthenticator) connect() (ldapConnection, error) {
+func (a *ldapBindAuthenticator) connect() (LDAPConnection, error) {
 	if a.dial != nil {
 		return a.dial(a.cfg)
 	}
 	return dialLDAP(a.cfg)
 }
 
-func dialLDAP(cfg LDAPConfig) (ldapConnection, error) {
+func dialLDAP(cfg LDAPConfig) (LDAPConnection, error) {
 	tlsConfig, err := buildLDAPTLSConfig(cfg)
 	if err != nil {
 		return nil, err
@@ -305,7 +315,7 @@ func buildLDAPTLSConfig(cfg LDAPConfig) (*tls.Config, error) {
 	return tlsConfig, nil
 }
 
-func (a *ldapBindAuthenticator) findUser(conn ldapConnection, username string) (*ldap.Entry, error) {
+func (a *ldapBindAuthenticator) findUser(conn LDAPConnection, username string) (*ldap.Entry, error) {
 	filter := renderLDAPFilter(a.cfg.UserSearchFilter, map[string]string{
 		"username": username,
 	})
@@ -330,7 +340,7 @@ func (a *ldapBindAuthenticator) findUser(conn ldapConnection, username string) (
 	return result.Entries[0], nil
 }
 
-func (a *ldapBindAuthenticator) findGroups(conn ldapConnection, userDN, username string) []string {
+func (a *ldapBindAuthenticator) findGroups(conn LDAPConnection, userDN, username string) []string {
 	if a.cfg.GroupBaseDN == "" {
 		return nil
 	}
