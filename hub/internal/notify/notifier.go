@@ -63,8 +63,8 @@ type Notifier struct {
 }
 
 // New creates a Notifier and starts the background worker goroutine.
-// The jwtSecret is used to decrypt encrypted SMTP passwords stored in the DB.
-// If jwtSecret is empty, encrypted passwords cannot be decrypted (backward compatible).
+// The storage key is used to decrypt encrypted SMTP passwords stored in the DB.
+// If the storage key is empty, encrypted passwords cannot be decrypted (backward compatible).
 func New(st *store.Store, jwtSecret ...string) *Notifier {
 	secret := ""
 	if len(jwtSecret) > 0 {

@@ -72,10 +72,15 @@ func runServer() error {
 		return fmt.Errorf("init JWT secret: %w", err)
 	}
 
-	notifier := notify.New(st, jwtSecret)
+	storageKey, err := server.InitStorageKey(st)
+	if err != nil {
+		return fmt.Errorf("init storage key: %w", err)
+	}
+
+	notifier := notify.New(st, storageKey)
 	defer notifier.Close()
 
-	caCert, caKey, err := ca.InitCA(st, jwtSecret)
+	caCert, caKey, err := ca.InitCA(st, storageKey)
 	if err != nil {
 		return fmt.Errorf("init CA: %w", err)
 	}
@@ -90,6 +95,7 @@ func runServer() error {
 		Addr:             *addr,
 		Store:            st,
 		JWTSecret:        jwtSecret,
+		StorageKey:       storageKey,
 		IsDev:            *dev,
 		FrontendFS:       &hub.FrontendFS,
 		AgentBinDir:      *agentBinDir,

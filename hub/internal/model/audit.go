@@ -85,6 +85,12 @@ const (
 	AuditLDAPConfigUpdated = "ldap.config_updated"
 )
 
+// JWT secret rotation and key-separation events
+const (
+	AuditJWTSecretRotated    = "auth.jwt_secret_rotated"
+	AuditStorageKeySeparated = "auth.storage_key_separated"
+)
+
 const (
 	AuditAuditExported          = "audit.exported"
 	AuditAuditReviewCompleted   = "audit.review_completed"

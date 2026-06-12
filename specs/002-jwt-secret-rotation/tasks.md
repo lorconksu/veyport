@@ -14,7 +14,7 @@
 
 ## Phase 1: Setup
 
-- [ ] T001 Verify green baseline on branch 002-jwt-secret-rotation: `cd hub && go build ./... && go vet ./...` and `go test ./internal/server/ -run TestInit -count=1` pass before any changes
+- [X] T001 Verify green baseline on branch 002-jwt-secret-rotation: `cd hub && go build ./... && go vet ./...` and `go test ./internal/server/ -run TestInit -count=1` pass before any changes
 
 ---
 
@@ -22,12 +22,12 @@
 
 **Purpose**: Storage-key separation — the mechanism every story depends on. TDD: T003 lands failing before T004–T006 make it pass.
 
-- [ ] T002 [P] Add audit constants `AuditJWTSecretRotated` (`auth.jwt_secret_rotated`) and `AuditStorageKeySeparated` (`auth.storage_key_separated`) in hub/internal/model/audit.go and register both in hub/internal/model/audit_catalog.go (contracts §3)
-- [ ] T003 [P] Write failing unit tests for `InitStorageKey` in hub/internal/server/storage_key_test.go: fresh install → two independent random keys; legacy install (jwt_signing_key + existing `enc:` ciphertexts, no storage_key) → storage_key adopts the signing-secret value and legacy ciphertexts still decrypt; already-separated → no-op; double-run idempotent (single `auth.storage_key_separated` audit event); empty-DB edge per data-model state machine
-- [ ] T004 Implement `InitStorageKey(st *store.Store) (string, error)` in hub/internal/server/server.go per research D1 (three-path init, audit on the legacy→separated transition, fatal on error) and add the storage key to server Config/struct alongside jwtSecret
-- [ ] T005 Switch all four encryption consumers from the JWT secret to the storage key: hub/internal/server/handlers_auth.go (encrypt/decryptTOTPSecret), hub/internal/server/ldap_auth.go (encryptConfigSecret/decryptConfigSecret signatures + call sites incl. hub/internal/server/handlers_ldap_config.go), hub/internal/server/handlers_notifications.go (encryptSMTPPassword); update in-package tests that construct servers with secrets
-- [ ] T006 Wire initialization order and external consumers in hub/cmd/veyport/main.go: `InitStorageKey` after `InitJWTSecret`, before `ca.InitCA` (pass storage key) and `notify.New` (pass storage key); update hub/internal/ca/ca.go doc comment and hub/internal/integration/testhelpers.go harness to mirror the order (contracts §4)
-- [ ] T007 Gate: `cd hub && go test ./internal/server/ ./internal/ca/ ./internal/notify/ -count=1` green, `go vet ./...` clean
+- [X] T002 [P] Add audit constants `AuditJWTSecretRotated` (`auth.jwt_secret_rotated`) and `AuditStorageKeySeparated` (`auth.storage_key_separated`) in hub/internal/model/audit.go and register both in hub/internal/model/audit_catalog.go (contracts §3)
+- [X] T003 [P] Write failing unit tests for `InitStorageKey` in hub/internal/server/storage_key_test.go: fresh install → two independent random keys; legacy install (jwt_signing_key + existing `enc:` ciphertexts, no storage_key) → storage_key adopts the signing-secret value and legacy ciphertexts still decrypt; already-separated → no-op; double-run idempotent (single `auth.storage_key_separated` audit event); empty-DB edge per data-model state machine
+- [X] T004 Implement `InitStorageKey(st *store.Store) (string, error)` in hub/internal/server/server.go per research D1 (three-path init, audit on the legacy→separated transition, fatal on error) and add the storage key to server Config/struct alongside jwtSecret
+- [X] T005 Switch all four encryption consumers from the JWT secret to the storage key: hub/internal/server/handlers_auth.go (encrypt/decryptTOTPSecret), hub/internal/server/ldap_auth.go (encryptConfigSecret/decryptConfigSecret signatures + call sites incl. hub/internal/server/handlers_ldap_config.go), hub/internal/server/handlers_notifications.go (encryptSMTPPassword); update in-package tests that construct servers with secrets
+- [X] T006 Wire initialization order and external consumers in hub/cmd/veyport/main.go: `InitStorageKey` after `InitJWTSecret`, before `ca.InitCA` (pass storage key) and `notify.New` (pass storage key); update hub/internal/ca/ca.go doc comment and hub/internal/integration/testhelpers.go harness to mirror the order (contracts §4)
+- [X] T007 Gate: `cd hub && go test ./internal/server/ ./internal/ca/ ./internal/notify/ -count=1` green, `go vet ./...` clean
 
 **Checkpoint**: Lifecycles separated — rotation can no longer strand encrypted data.
 
