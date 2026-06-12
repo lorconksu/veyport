@@ -77,7 +77,7 @@
 ## Phase 6: Polish & Cross-Cutting Concerns
 
 - [X] T016 Full verification: `make test`, `cd web && npx vitest run && npx tsc --noEmit`, `gofmt -l hub/internal hub/cmd`, confirm sonar-project.properties untouched (constitution G1/G2)
-- [ ] T017 Runtime verification on the test instance (veyport.yiucloud.com): build branch image, deploy, confirm `auth.storage_key_separated` fires once on upgrade startup, run `rotate-jwt-secret` per quickstart, walk verification checks 1–7 (old session dead, fresh login, LDAP test-connection passes, test email, agents connected, timestamp visible, audit entries)
+- [X] T017 Runtime verification on the test instance (veyport.yiucloud.com): build branch image, deploy, confirm `auth.storage_key_separated` fires once on upgrade startup, run `rotate-jwt-secret` per quickstart, walk verification checks 1–7 (old session dead, fresh login, LDAP test-connection passes, test email, agents connected, timestamp visible, audit entries)
 - [ ] T018 Open PR to main; after merge: upgrade CMMC 3.13.10 to Fully Addressed in /home/wyiu/personal/veyport-internal/engineering/cmmc-l2-mapping.md citing hub/internal/integration/jwt_rotation_test.go + the rotation CLI, recalc the SC scorecard line, and append the changelog entry to /home/wyiu/personal/veyport-internal/engineering/assessment-changelog-2026-06.md (evidence-or-flag standard)
 
 ---
