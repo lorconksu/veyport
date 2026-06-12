@@ -68,7 +68,7 @@
 - [X] T012 [P] [US3] Expose read-only `jwt_secret_rotated_at` in `GET /api/settings/hub` (hub/internal/server/handlers_hub_config.go; PUT ignores it per contracts §2) with unit test in hub/internal/server/handlers_hub_config_test.go asserting null-when-never-rotated and value-when-stamped
 - [X] T013 [P] [US3] Add read-only "Signing secret last rotated" display to the hub settings UI in web/src/pages/settings-notifications-tab.tsx (where hub config renders), add the field to web/src/types/api.ts, and extend web/src/pages/__tests__/settings-notifications-tab.test.tsx for both never-rotated and rotated states
 - [X] T014 [P] [US3] Document the rotation procedure in docs/wiki/Deployment.md (routine + compromise-response, session impact, restart step, backup/restore note from quickstart) and add `jwt_secret_rotated_at` to the hub settings section of docs/wiki/API-Reference.md
-- [ ] T015 [US3] Update the security model for the new key-management lifecycle in docs-internal/engineering/security-model.md AND the canonical copy in /home/wyiu/personal/veyport-internal/engineering/security-model.md: storage_key vs jwt_signing_key roles, rotation/invalidation layering table from data-model.md, and the research D1 honesty note (lifecycle decoupling, not at-rest strengthening) (FR-009)
+- [X] T015 [US3] Update the security model for the new key-management lifecycle in docs-internal/engineering/security-model.md AND the canonical copy in /home/wyiu/personal/veyport-internal/engineering/security-model.md: storage_key vs jwt_signing_key roles, rotation/invalidation layering table from data-model.md, and the research D1 honesty note (lifecycle decoupling, not at-rest strengthening) (FR-009)
 
 **Checkpoint**: All three stories complete.
 
@@ -76,7 +76,7 @@
 
 ## Phase 6: Polish & Cross-Cutting Concerns
 
-- [ ] T016 Full verification: `make test`, `cd web && npx vitest run && npx tsc --noEmit`, `gofmt -l hub/internal hub/cmd`, confirm sonar-project.properties untouched (constitution G1/G2)
+- [X] T016 Full verification: `make test`, `cd web && npx vitest run && npx tsc --noEmit`, `gofmt -l hub/internal hub/cmd`, confirm sonar-project.properties untouched (constitution G1/G2)
 - [ ] T017 Runtime verification on the test instance (veyport.yiucloud.com): build branch image, deploy, confirm `auth.storage_key_separated` fires once on upgrade startup, run `rotate-jwt-secret` per quickstart, walk verification checks 1–7 (old session dead, fresh login, LDAP test-connection passes, test email, agents connected, timestamp visible, audit entries)
 - [ ] T018 Open PR to main; after merge: upgrade CMMC 3.13.10 to Fully Addressed in /home/wyiu/personal/veyport-internal/engineering/cmmc-l2-mapping.md citing hub/internal/integration/jwt_rotation_test.go + the rotation CLI, recalc the SC scorecard line, and append the changelog entry to /home/wyiu/personal/veyport-internal/engineering/assessment-changelog-2026-06.md (evidence-or-flag standard)
 
