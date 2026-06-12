@@ -53,7 +53,7 @@
 
 **Independent Test**: A DB laid out like a v2.0.3 install (no storage_key) starts up, decrypts everything, audits the migration once; a subsequent rotation changes zero ciphertexts.
 
-- [ ] T011 [US2] Extend hub/internal/integration/jwt_rotation_test.go with the legacy-upgrade scenario: build a store with jwt_signing_key-derived `enc:` ciphertexts and no storage_key → run full init → all four consumers decrypt; exactly one `auth.storage_key_separated` audit event across two startups; rotation after migration leaves every ciphertext byte-identical and decryptable (FR-002/FR-003, spec US2 scenarios 1–3)
+- [X] T011 [US2] Extend hub/internal/integration/jwt_rotation_test.go with the legacy-upgrade scenario: build a store with jwt_signing_key-derived `enc:` ciphertexts and no storage_key → run full init → all four consumers decrypt; exactly one `auth.storage_key_separated` audit event across two startups; rotation after migration leaves every ciphertext byte-identical and decryptable (FR-002/FR-003, spec US2 scenarios 1–3)
 
 **Checkpoint**: Upgrade path proven on a populated database.
 
@@ -65,9 +65,9 @@
 
 **Independent Test**: After a rotation, `GET /api/settings/hub` and the hub settings UI show the timestamp; docs match actual behavior.
 
-- [ ] T012 [P] [US3] Expose read-only `jwt_secret_rotated_at` in `GET /api/settings/hub` (hub/internal/server/handlers_hub_config.go; PUT ignores it per contracts §2) with unit test in hub/internal/server/handlers_hub_config_test.go asserting null-when-never-rotated and value-when-stamped
-- [ ] T013 [P] [US3] Add read-only "Signing secret last rotated" display to the hub settings UI in web/src/pages/settings-notifications-tab.tsx (where hub config renders), add the field to web/src/types/api.ts, and extend web/src/pages/__tests__/settings-notifications-tab.test.tsx for both never-rotated and rotated states
-- [ ] T014 [P] [US3] Document the rotation procedure in docs/wiki/Deployment.md (routine + compromise-response, session impact, restart step, backup/restore note from quickstart) and add `jwt_secret_rotated_at` to the hub settings section of docs/wiki/API-Reference.md
+- [X] T012 [P] [US3] Expose read-only `jwt_secret_rotated_at` in `GET /api/settings/hub` (hub/internal/server/handlers_hub_config.go; PUT ignores it per contracts §2) with unit test in hub/internal/server/handlers_hub_config_test.go asserting null-when-never-rotated and value-when-stamped
+- [X] T013 [P] [US3] Add read-only "Signing secret last rotated" display to the hub settings UI in web/src/pages/settings-notifications-tab.tsx (where hub config renders), add the field to web/src/types/api.ts, and extend web/src/pages/__tests__/settings-notifications-tab.test.tsx for both never-rotated and rotated states
+- [X] T014 [P] [US3] Document the rotation procedure in docs/wiki/Deployment.md (routine + compromise-response, session impact, restart step, backup/restore note from quickstart) and add `jwt_secret_rotated_at` to the hub settings section of docs/wiki/API-Reference.md
 - [ ] T015 [US3] Update the security model for the new key-management lifecycle in docs-internal/engineering/security-model.md AND the canonical copy in /home/wyiu/personal/veyport-internal/engineering/security-model.md: storage_key vs jwt_signing_key roles, rotation/invalidation layering table from data-model.md, and the research D1 honesty note (lifecycle decoupling, not at-rest strengthening) (FR-009)
 
 **Checkpoint**: All three stories complete.

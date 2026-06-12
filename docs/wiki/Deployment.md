@@ -564,6 +564,53 @@ In practice the Hub does not hold exclusive locks on the database (WAL mode), so
 
 ---
 
+## CLI Break-Glass: Rotating the JWT Signing Secret
+
+Use `admin rotate-jwt-secret` when you need to invalidate all existing sessions and API tokens — either as part of a routine security cadence or in response to a suspected credential compromise.
+
+**When to rotate:**
+- **Routine:** Annually, or per your organisation's key-rotation policy.
+- **Compromise response:** Immediately if the database file or its signing secret may have been exposed.
+
+```bash
+# If running via Docker
+docker exec veyport /app/veyport admin rotate-jwt-secret --db /data/veyport.db
+
+# If running as a bare-metal binary
+./bin/veyport admin rotate-jwt-secret --db /var/lib/veyport/veyport.db
+```
+
+Without `--yes` the command prints an impact summary and asks for confirmation. Pass `--yes` for scripted use.
+
+**What this does:**
+1. Generates a new JWT signing secret and persists it to the database.
+2. Revokes all API tokens immediately (count reported on stdout).
+3. Invalidates all active user sessions — every user must sign in again.
+4. Encrypted settings (LDAP bind password, SMTP password, CA key) are unaffected; the storage key is separate from the signing secret.
+
+**After rotating, restart the Hub to apply the new secret:**
+
+```bash
+# Docker
+docker compose -f /opt/veyport/docker-compose.yml restart
+
+# Bare-metal
+systemctl restart veyport
+```
+
+**Verification checklist:**
+1. An access token issued before rotation is rejected (HTTP 401) on any API call.
+2. Fresh sign-in (password + TOTP) succeeds.
+3. Settings → Directory "Test Connection" passes.
+4. Test notification email sends successfully.
+5. Agents reconnect or remain connected.
+6. `GET /api/settings/hub` shows the updated `jwt_secret_rotated_at` timestamp.
+7. Audit log contains an `auth.jwt_secret_rotated` event with the revoked-token count.
+
+**Backup/restore note:** A database backup is self-consistent — it pairs the secret with its ciphertexts. Restoring a pre-rotation backup undoes the rotation. If the rotation was a compromise response, re-rotate immediately after restoring.
+
+---
+
 ## Updating / Redeploying
 
 ### Docker (recommended)

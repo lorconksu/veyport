@@ -6,7 +6,8 @@ import (
 )
 
 type hubConfigResponse struct {
-	GRPCExternalAddr string `json:"grpc_external_addr"`
+	GRPCExternalAddr   string  `json:"grpc_external_addr"`
+	JWTSecretRotatedAt *string `json:"jwt_secret_rotated_at,omitempty"`
 }
 
 type hubConfigRequest struct {
@@ -21,6 +22,11 @@ func (s *Server) handleGetHubConfig(w http.ResponseWriter, r *http.Request) {
 		cfg.GRPCExternalAddr = addr
 	} else if s.grpcExternalAddr != "" {
 		cfg.GRPCExternalAddr = s.grpcExternalAddr
+	}
+
+	// Read-only: timestamp of last JWT secret rotation; omitted when never rotated.
+	if rotatedAt, err := s.store.GetConfig("jwt_secret_rotated_at"); err == nil {
+		cfg.JWTSecretRotatedAt = &rotatedAt
 	}
 
 	respondJSON(w, http.StatusOK, cfg)
