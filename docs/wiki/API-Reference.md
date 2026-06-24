@@ -1682,9 +1682,15 @@ Get the Hub configuration (currently the gRPC external address).
 
 ```json
 {
-  "grpc_external_addr": "veyport.example.com:9443"
+  "grpc_external_addr": "veyport.example.com:9443",
+  "jwt_secret_rotated_at": "2026-06-12T04:10:00Z"
 }
 ```
+
+| Field | Notes |
+|---|---|
+| `grpc_external_addr` | Configured external gRPC address |
+| `jwt_secret_rotated_at` | RFC 3339 UTC timestamp of the last `admin rotate-jwt-secret` run. `null` until the secret has been rotated at least once. Read-only — ignored on PUT. |
 
 **cURL:**
 

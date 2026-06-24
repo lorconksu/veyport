@@ -785,8 +785,9 @@ func validateUsername(username string) error {
 }
 
 // encryptTOTPSecret encrypts a TOTP secret and returns it with "enc:" prefix.
+// Uses the storage key (not the JWT signing key) for at-rest encryption.
 func (s *Server) encryptTOTPSecret(secret string) (string, error) {
-	key := auth.DeriveKey(s.jwtSecret)
+	key := auth.DeriveKey(s.storageKey)
 	encrypted, err := auth.Encrypt([]byte(secret), key)
 	if err != nil {
 		return "", err
@@ -795,6 +796,7 @@ func (s *Server) encryptTOTPSecret(secret string) (string, error) {
 }
 
 // decryptTOTPSecret decrypts a TOTP secret that has the "enc:" prefix.
+// Uses the storage key (not the JWT signing key) for at-rest encryption.
 func (s *Server) decryptTOTPSecret(encrypted string) (string, error) {
 	if !strings.HasPrefix(encrypted, "enc:") {
 		return encrypted, nil
@@ -803,7 +805,7 @@ func (s *Server) decryptTOTPSecret(encrypted string) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("invalid encrypted TOTP secret format: %w", err)
 	}
-	key := auth.DeriveKey(s.jwtSecret)
+	key := auth.DeriveKey(s.storageKey)
 	decrypted, err := auth.Decrypt(data, key)
 	if err != nil {
 		return "", err

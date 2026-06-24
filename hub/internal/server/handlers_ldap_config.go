@@ -116,7 +116,7 @@ func (s *Server) handleUpdateLDAPConfig(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	configs, err := ldapConfigStoreValues(req, s.jwtSecret)
+	configs, err := ldapConfigStoreValues(req, s.storageKey)
 	if err != nil {
 		respondError(w, http.StatusInternalServerError, "failed to encrypt LDAP bind password")
 		return
@@ -273,7 +273,7 @@ func validateLDAPGroupMappings(req ldapConfigRequest) error {
 	return nil
 }
 
-func ldapConfigStoreValues(req ldapConfigRequest, jwtSecret string) (map[string]string, error) {
+func ldapConfigStoreValues(req ldapConfigRequest, storageKey string) (map[string]string, error) {
 	configs := map[string]string{
 		"ldap.enabled":                  strconv.FormatBool(req.Enabled),
 		"ldap.url":                      req.URL,
@@ -298,7 +298,7 @@ func ldapConfigStoreValues(req ldapConfigRequest, jwtSecret string) (map[string]
 	if req.ClearBindPassword {
 		configs["ldap.bind_password"] = ""
 	} else if req.BindPassword != "" && req.BindPassword != redactedValue {
-		encrypted, err := encryptConfigSecret(jwtSecret, req.BindPassword)
+		encrypted, err := encryptConfigSecret(storageKey, req.BindPassword)
 		if err != nil {
 			return nil, err
 		}

@@ -152,7 +152,7 @@ func (s *Server) loadLDAPConfig() (LDAPConfig, error) {
 		if !strings.HasPrefix(cfg.BindPassword, "enc:") {
 			log.Printf("warning: LDAP bind password is stored in plaintext (no enc: prefix); rotate via the admin UI to re-encrypt at rest")
 		}
-		decrypted, err := decryptConfigSecret(s.jwtSecret, cfg.BindPassword)
+		decrypted, err := decryptConfigSecret(s.storageKey, cfg.BindPassword)
 		if err != nil {
 			return LDAPConfig{}, fmt.Errorf("decrypt LDAP bind password: %w", err)
 		}
