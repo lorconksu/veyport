@@ -44,6 +44,27 @@ If either step fails, no session is created. The two-step process ensures that a
 
 ---
 
+## Signing In with a Directory Account (LDAP)
+
+If your administrator has enabled LDAP directory integration, you can sign in with your **directory username and password** (for example, your FreeIPA or Active Directory credentials) on the same login page - there is no separate "LDAP login" button.
+
+How it works:
+
+1. You enter your directory username and password. Veyport verifies them against the directory.
+2. On your **first** sign-in, Veyport automatically creates your account. Your role (Admin, Auditor, or Viewer) and terminal eligibility come from your directory group memberships - there is nothing to request or configure yourself.
+3. You complete the same mandatory 2FA enrollment as local users. Directory authentication replaces the password step, never the TOTP step.
+
+A few things to know:
+
+- If you belong to groups mapped to more than one role, you receive the highest-privilege role.
+- If you are not in any mapped group, sign-in is rejected - ask your admin to add you to the right directory group.
+- Directory password changes happen in your directory (not in Veyport); the **Change Password** option in Settings does not apply to LDAP accounts.
+- If the directory is unreachable, directory sign-ins fail but local accounts (including local admins) are unaffected.
+
+Admins configure directory integration in [[Settings]] under the **Directory** tab.
+
+---
+
 ## Troubleshooting
 
 ### I forgot my password
