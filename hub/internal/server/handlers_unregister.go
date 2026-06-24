@@ -13,8 +13,15 @@ import (
 )
 
 // selfUnregisterToken computes the HMAC-SHA256 token for a server's self-unregister endpoint.
+//
+// The token is minted once at registration and persisted in each agent's
+// agent.conf, so it must be keyed on the rotation-stable storageKey rather than
+// the rotatable jwtSecret. Keying it on jwtSecret would silently invalidate
+// every existing agent's re-install path on the next JWT secret rotation. This
+// mirrors all other at-rest credential consumers (TOTP, SMTP, LDAP, CA), which
+// the storage-key separation moved onto storageKey.
 func (s *Server) selfUnregisterToken(serverID string) string {
-	mac := hmac.New(sha256.New, []byte(s.jwtSecret))
+	mac := hmac.New(sha256.New, []byte(s.storageKey))
 	mac.Write([]byte("self-unregister:" + serverID))
 	return hex.EncodeToString(mac.Sum(nil))
 }
