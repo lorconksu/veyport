@@ -242,6 +242,7 @@ veyport/
 │       │   ├── handlers_notifications.go  # SMTP config, notification preferences, notification log
 │       │   ├── handlers_terminal.go       # Browser terminal session lifecycle
 │       │   ├── ldap_auth.go               # LDAP bind/search authentication and group mapping
+│       │   ├── handlers_ldap_config.go    # LDAP directory settings API (GET/PUT /api/settings/ldap, POST .../test)
 │       │   └── handlers_hub_config.go     # Hub settings (gRPC external address)
 │       └── store/
 │           ├── store.go        # Store struct, New(), DB pragma setup
