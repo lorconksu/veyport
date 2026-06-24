@@ -18,6 +18,7 @@ Everything you do in Veyport is tracked. There is a permanent record of who logg
 - Records every action in an immutable audit log
 - Requires two-factor authentication for every account - no exceptions
 - Supports multiple user accounts with Admin, Auditor, and Viewer roles
+- Signs users in against an existing LDAP directory (FreeIPA, OpenLDAP, Active Directory) with group-based role mapping, configured from the Settings &rarr; Directory tab
 - Sends email notifications for key events (server status changes, file uploads, user actions) via configurable SMTP
 - Secures agent-to-hub communication with mutual TLS (mTLS) for certificate-based authentication
 - Enforces sensitive path blocklists to prevent agents from exposing restricted filesystem paths
@@ -31,7 +32,7 @@ These guides cover features that require an admin role:
 
 - [[Getting Started]] - Initial setup and first admin account
 - [[Fleet Dashboard]] - Adding/removing servers, bulk operations
-- [[Settings]] - User management, role changes, 2FA reset, email notifications, alert preferences
+- [[Settings]] - User management, role changes, 2FA reset, LDAP directory integration, email notifications, alert preferences
 
 ---
 

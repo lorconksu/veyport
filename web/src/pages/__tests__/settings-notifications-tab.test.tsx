@@ -395,6 +395,89 @@ describe('NotificationsTab', () => {
     expect(sendButton).not.toBeDisabled()
   })
 
+  it('shows localized date when jwt_secret_rotated_at is set', async () => {
+    mockApiFetch.mockReset()
+    mockApiFetch.mockImplementation((url: string) => {
+      if (url === '/settings/smtp') return Promise.resolve(mockSMTPConfig)
+      if (url === '/notifications/log') return Promise.resolve({ entries: [], total: 0 })
+      if (url === '/settings/hub')
+        return Promise.resolve({ grpc_external_addr: '', jwt_secret_rotated_at: '2025-06-01T12:00:00Z' })
+      return Promise.resolve({})
+    })
+
+    renderTab()
+    await waitFor(() => {
+      expect(screen.getByText(/Signing secret last rotated:/)).toBeInTheDocument()
+    })
+    // The localized date should be present somewhere in the rendered output
+    const el = screen.getByText(/Signing secret last rotated:/)
+    expect(el.textContent).toMatch(/Signing secret last rotated:/)
+    // Should NOT show the "never" variant
+    expect(el.textContent).not.toMatch(/never/)
+  })
+
+  it('shows never variant when jwt_secret_rotated_at is null', async () => {
+    mockApiFetch.mockReset()
+    mockApiFetch.mockImplementation((url: string) => {
+      if (url === '/settings/smtp') return Promise.resolve(mockSMTPConfig)
+      if (url === '/notifications/log') return Promise.resolve({ entries: [], total: 0 })
+      if (url === '/settings/hub')
+        return Promise.resolve({ grpc_external_addr: '', jwt_secret_rotated_at: null })
+      return Promise.resolve({})
+    })
+
+    renderTab()
+    await waitFor(() => {
+      expect(screen.getByText(/Signing secret last rotated:/)).toBeInTheDocument()
+    })
+    const el = screen.getByText(/Signing secret last rotated:/)
+    expect(el.textContent).toMatch(/never \(initial secret\)/)
+  })
+
+  it('shows never variant when jwt_secret_rotated_at is absent', async () => {
+    mockApiFetch.mockReset()
+    mockApiFetch.mockImplementation((url: string) => {
+      if (url === '/settings/smtp') return Promise.resolve(mockSMTPConfig)
+      if (url === '/notifications/log') return Promise.resolve({ entries: [], total: 0 })
+      if (url === '/settings/hub') return Promise.resolve({ grpc_external_addr: '' })
+      return Promise.resolve({})
+    })
+
+    renderTab()
+    await waitFor(() => {
+      expect(screen.getByText(/Signing secret last rotated:/)).toBeInTheDocument()
+    })
+    const el = screen.getByText(/Signing secret last rotated:/)
+    expect(el.textContent).toMatch(/never \(initial secret\)/)
+  })
+
+  it('PUT body for hub config does not include jwt_secret_rotated_at', async () => {
+    mockApiFetch.mockReset()
+    mockApiFetch.mockImplementation((url: string, opts?: { method?: string; body?: string }) => {
+      if (url === '/settings/smtp') return Promise.resolve(mockSMTPConfig)
+      if (url === '/notifications/log') return Promise.resolve({ entries: [], total: 0 })
+      if (url === '/settings/hub' && (!opts?.method || opts.method === 'GET'))
+        return Promise.resolve({ grpc_external_addr: 'hub.example.com:9443', jwt_secret_rotated_at: '2025-06-01T12:00:00Z' })
+      if (url === '/settings/hub' && opts?.method === 'PUT') return Promise.resolve({ grpc_external_addr: 'hub.example.com:9443' })
+      return Promise.resolve({})
+    })
+
+    renderTab()
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: 'Save' })).toBeInTheDocument()
+    })
+
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }))
+
+    await waitFor(() => {
+      const calls = mockApiFetch.mock.calls
+      const putCall = calls.find(c => c[0] === '/settings/hub' && c[1]?.method === 'PUT')
+      expect(putCall).toBeTruthy()
+      const body = JSON.parse(putCall![1].body as string)
+      expect(body).not.toHaveProperty('jwt_secret_rotated_at')
+    })
+  })
+
   it('labels have correct htmlFor associations', async () => {
     renderTab()
     await waitFor(() => {

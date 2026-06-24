@@ -52,6 +52,7 @@ for issue and pull-request expectations.
 - **Audit Logging** — Immutable record of security and workflow actions, including auth, server lifecycle, file access, terminal, API token, and audit-governance events
 - **2FA (TOTP)** — Mandatory TOTP-based two-factor authentication for all users, no exceptions
 - **Role-Based Access** — Admin, Auditor, and Viewer roles with per-server, per-path permissions enforced at both Hub and Agent layers
+- **LDAP Directory Integration** — Sign in against your existing directory (FreeIPA, OpenLDAP, AD) with group-to-role mapping, configured entirely from the admin UI with a built-in connection tester
 - **mTLS Agent Communication** — Hub-issued 12-hour ECDSA P-256 client certificates with automatic in-stream renewal
 
 ## Architecture
@@ -117,6 +118,8 @@ The agent installs as a systemd service, connects to the Hub over gRPC with mTLS
 | Sensitive Paths | Blocklist enforcement at both Hub and Agent layers |
 | Agent Auth | mTLS with Hub-issued 12-hour ECDSA P-256 certificates |
 | SMTP Credentials | AES-256-GCM encryption at rest |
+| LDAP Bind Credentials | Encrypted at rest, write-only API (never returned after saving) |
+| LDAP Transport | LDAPS or StartTLS required unless insecure transport is explicitly opted in |
 | Token Blacklist | Persistent across restarts (SQLite-backed) |
 | Session Invalidation | Password change invalidates all sessions |
 | gRPC Limits | 256 KB max receive message size |

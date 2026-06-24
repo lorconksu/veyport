@@ -347,6 +347,11 @@ export interface LDAPConfig {
   terminal_groups: string[]
 }
 
+export interface HubConfig {
+  grpc_external_addr: string
+  jwt_secret_rotated_at?: string | null
+}
+
 export interface NotificationPreference {
   event_type: string
   label: string
