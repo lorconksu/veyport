@@ -68,7 +68,7 @@ func (s *Server) handleUpdateSMTPConfig(w http.ResponseWriter, r *http.Request) 
 		"smtp_enabled":  fmt.Sprintf("%t", req.Enabled),
 	}
 	if req.Password != "" && req.Password != redactedValue {
-		encrypted, err := encryptSMTPPassword(s.jwtSecret, req.Password)
+		encrypted, err := encryptSMTPPassword(s.storageKey, req.Password)
 		if err != nil {
 			respondError(w, http.StatusInternalServerError, "failed to encrypt SMTP password")
 			return
@@ -114,7 +114,7 @@ func (s *Server) handleTestSMTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	cfg := notify.LoadSMTPConfig(s.store, s.jwtSecret)
+	cfg := notify.LoadSMTPConfig(s.store, s.storageKey)
 
 	// Force enabled for the test send so SendEmail doesn't skip it
 	cfg.Enabled = true

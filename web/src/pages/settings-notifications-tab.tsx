@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { apiFetch } from '@/lib/api'
-import type { SMTPConfig, NotificationLogEntry } from '@/types/api'
+import type { SMTPConfig, NotificationLogEntry, HubConfig } from '@/types/api'
 
 export function NotificationsTab() {
   const queryClient = useQueryClient()
@@ -309,7 +309,7 @@ function HubConfigSection() {
 
   const { data, isLoading } = useQuery({
     queryKey: ['hub-config'],
-    queryFn: () => apiFetch<{ grpc_external_addr: string }>('/settings/hub'),
+    queryFn: () => apiFetch<HubConfig>('/settings/hub'),
   })
 
   useEffect(() => {
@@ -359,6 +359,18 @@ function HubConfigSection() {
                 Leave empty to use the default (hostname:9443).
               </p>
             </div>
+            <p className="text-xs text-text-muted">
+              Signing secret last rotated:{' '}
+              {data?.jwt_secret_rotated_at
+                ? new Date(data.jwt_secret_rotated_at).toLocaleString('en-US', {
+                    month: 'short',
+                    day: 'numeric',
+                    year: 'numeric',
+                    hour: '2-digit',
+                    minute: '2-digit',
+                  })
+                : 'never (initial secret)'}
+            </p>
             <button
               type="button"
               onClick={() => saveMutation.mutate()}

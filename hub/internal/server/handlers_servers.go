@@ -20,10 +20,10 @@ import (
 )
 
 var (
-	hostPattern              = regexp.MustCompile(`^[a-zA-Z0-9._:\-]+$`)
-	legacyPublicBaseURLWarn  atomic.Bool
-	errInvalidPublicBaseURL  = fmt.Errorf("invalid public base url")
-	errInvalidPublicHubAddr  = fmt.Errorf("invalid public hub address")
+	hostPattern               = regexp.MustCompile(`^[a-zA-Z0-9._:\-]+$`)
+	legacyPublicBaseURLWarn   atomic.Bool
+	errInvalidPublicBaseURL   = fmt.Errorf("invalid public base url")
+	errInvalidPublicHubAddr   = fmt.Errorf("invalid public hub address")
 	errPublicHubNotConfigured = fmt.Errorf("public hub address is not configured")
 )
 

@@ -92,10 +92,11 @@ func generateAndSaveCA(st *store.Store, encKey []byte) (*x509.Certificate, *ecds
 }
 
 // InitCA loads or creates the CA certificate and private key, storing them in the database.
-// The CA key is encrypted with AES-256-GCM using a key derived from the JWT secret.
+// The CA key is encrypted with AES-256-GCM using a key derived from the storage key
+// (the at-rest encryption key, separate from the JWT signing secret).
 // Returns the CA certificate and private key for use by the gRPC server.
-func InitCA(st *store.Store, jwtSecret string) (*x509.Certificate, *ecdsa.PrivateKey, error) {
-	encKey := auth.DeriveKey(jwtSecret)
+func InitCA(st *store.Store, storageKey string) (*x509.Certificate, *ecdsa.PrivateKey, error) {
+	encKey := auth.DeriveKey(storageKey)
 
 	// Try to load existing CA from database
 	certHex, certErr := st.GetConfig("ca_cert")

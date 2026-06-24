@@ -12,6 +12,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/wyiu/veyport/hub/internal/auth"
 	"github.com/wyiu/veyport/hub/internal/connmgr"
 	"github.com/wyiu/veyport/hub/internal/grpcserver"
@@ -27,6 +28,7 @@ type Server struct {
 	httpServer        *http.Server
 	store             *store.Store
 	jwtSecret         string
+	storageKey        string
 	isDev             bool
 	frontendFS        *embed.FS
 	agentBinDir       string
@@ -50,6 +52,7 @@ type Config struct {
 	Addr              string
 	Store             *store.Store
 	JWTSecret         string
+	StorageKey        string
 	IsDev             bool
 	FrontendFS        *embed.FS
 	AgentBinDir       string
@@ -65,9 +68,18 @@ type Config struct {
 }
 
 func New(cfg Config) *Server {
+	// storageKey is used for all at-rest encryption (TOTP, SMTP, LDAP, CA).
+	// Fall back to JWTSecret when StorageKey is not provided so that in-package
+	// unit tests that construct a Server without InitStorageKey continue to work.
+	storageKey := cfg.StorageKey
+	if storageKey == "" {
+		storageKey = cfg.JWTSecret
+	}
+
 	s := &Server{
 		store:             cfg.Store,
 		jwtSecret:         cfg.JWTSecret,
+		storageKey:        storageKey,
 		isDev:             cfg.IsDev,
 		frontendFS:        cfg.FrontendFS,
 		agentBinDir:       cfg.AgentBinDir,
@@ -193,6 +205,60 @@ func (s *Server) spaHandler() http.Handler {
 		w.WriteHeader(http.StatusOK)
 		w.Write(indexHTML)
 	})
+}
+
+// InitStorageKey initialises the at-rest encryption key used by all four
+// encryption consumers (TOTP secret, SMTP password, LDAP bind password,
+// CA private key). Three paths:
+//  1. storage_key already exists → return it (idempotent, no writes, no audit).
+//  2. jwt_signing_key exists (legacy install) → copy its value into storage_key,
+//     write one auth.storage_key_separated audit entry, return the value.
+//     The derived AES key is bit-identical so every existing ciphertext decrypts
+//     unchanged — zero re-encryption needed.
+//  3. Neither exists (fresh install) → generate 32 random bytes, hex-encode, persist.
+func InitStorageKey(st *store.Store) (string, error) {
+	// Path 1: storage_key already set — return it unchanged.
+	if existing, err := st.GetConfig("storage_key"); err == nil && existing != "" {
+		return existing, nil
+	}
+
+	// Path 2: legacy install — adopt the jwt_signing_key value.
+	if jwtKey, err := st.GetConfig("jwt_signing_key"); err == nil && jwtKey != "" {
+		if err := st.SetConfig("storage_key", jwtKey); err != nil {
+			return "", fmt.Errorf("store storage key (legacy adopt): %w", err)
+		}
+
+		// Write exactly one audit entry recording the migration source.
+		detail := `{"migrated_from": "jwt_signing_key"}`
+		_ = st.LogAudit(model.AuditEntry{
+			ID:        uuid.NewString(),
+			Action:    model.AuditStorageKeySeparated,
+			Outcome:   model.AuditOutcomeSuccess,
+			ActorType: model.AuditActorTypeSystem,
+			Detail:    &detail,
+		})
+
+		return jwtKey, nil
+	}
+
+	// Path 3: fresh install — generate an independent random storage key.
+	key := make([]byte, 32)
+	if _, err := rand.Read(key); err != nil {
+		return "", fmt.Errorf("generate random storage key: %w", err)
+	}
+	secret := hex.EncodeToString(key)
+
+	if err := st.SetConfig("storage_key", secret); err != nil {
+		return "", fmt.Errorf("store storage key: %w", err)
+	}
+
+	// Re-read to protect against TOCTOU race (mirrors InitJWTSecret pattern).
+	stored, err := st.GetConfig("storage_key")
+	if err != nil {
+		return "", fmt.Errorf("re-read storage key: %w", err)
+	}
+
+	return stored, nil
 }
 
 // InitJWTSecret generates a random JWT signing key on first run,

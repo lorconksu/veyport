@@ -155,6 +155,12 @@ Actions follow a `resource.action` naming pattern.
 | `api_token.created` | A CLI-created API token was created |
 | `api_token.revoked` | A CLI-created API token was revoked |
 
+### Configuration actions
+
+| Action | What it means |
+|--------|--------------|
+| `ldap.config_updated` | An admin saved LDAP directory settings from the Directory tab (the change summary never includes the bind password) |
+
 ### Audit governance actions
 
 | Action | What it means |

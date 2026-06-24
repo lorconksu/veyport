@@ -61,8 +61,15 @@ func StartHarness(t *testing.T) *TestHarness {
 		t.Fatalf("init jwt secret: %v", err)
 	}
 
-	// Initialize CA
-	caCert, caKey, err := ca.InitCA(st, jwtSecret)
+	// Initialize storage key (must run after InitJWTSecret, before InitCA and notify.New)
+	storageKey, err := server.InitStorageKey(st)
+	if err != nil {
+		st.Close()
+		t.Fatalf("init storage key: %v", err)
+	}
+
+	// Initialize CA (uses storage key for CA private key encryption)
+	caCert, caKey, err := ca.InitCA(st, storageKey)
 	if err != nil {
 		st.Close()
 		t.Fatalf("init CA: %v", err)
@@ -102,6 +109,7 @@ func StartHarness(t *testing.T) *TestHarness {
 		Addr:             httpAddr,
 		Store:            st,
 		JWTSecret:        jwtSecret,
+		StorageKey:       storageKey,
 		IsDev:            true,
 		FrontendFS:       nil,
 		AgentBinDir:      "",
