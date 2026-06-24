@@ -14,7 +14,7 @@ import (
 )
 
 const (
-	adminUsage         = "usage: veyport admin <command>\ncommands: reset-totp, create-api-token, list-api-tokens, revoke-api-token"
+	adminUsage         = "usage: veyport admin <command>\ncommands: reset-totp, create-api-token, list-api-tokens, revoke-api-token, rotate-jwt-secret"
 	defaultAdminDBPath = "veyport.db"
 	dbPathFlagUsage    = "SQLite database path"
 )
@@ -33,6 +33,8 @@ func runAdmin(args []string) error {
 		return runListAPITokens(args[1:])
 	case "revoke-api-token":
 		return runRevokeAPIToken(args[1:])
+	case "rotate-jwt-secret":
+		return runRotateJWTSecret(args[1:])
 	default:
 		return fmt.Errorf("unknown admin command: %s", args[0])
 	}

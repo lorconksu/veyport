@@ -1,7 +1,7 @@
 package model
 
 const (
-	AuditCatalogLastUpdated      = "2026-05-17T00:00:00Z"
+	AuditCatalogLastUpdated      = "2026-06-12T00:00:00Z"
 	auditCategoryUserManagement  = "User Management"
 	auditCategoryAgentLifecycle  = "Agent Lifecycle"
 	auditCategoryFileAccess      = "File Access"
@@ -47,4 +47,6 @@ var AuditCatalog = []AuditCatalogEntry{
 	{Action: AuditAuditFlagCreated, Label: "Audit flag created", Category: auditCategoryAuditGovernance, Outcome: AuditOutcomeSuccess, ActorType: AuditActorTypeUser, ResourceType: "audit"},
 	{Action: AuditAPITokenCreated, Label: "API token created", Category: auditCategoryUserManagement, Outcome: AuditOutcomeSuccess, ActorType: AuditActorTypeSystem, ResourceType: "api_token"},
 	{Action: AuditAPITokenRevoked, Label: "API token revoked", Category: auditCategoryUserManagement, Outcome: AuditOutcomeSuccess, ActorType: AuditActorTypeSystem, ResourceType: "api_token"},
+	{Action: AuditJWTSecretRotated, Label: "JWT signing secret rotated via admin CLI; all sessions invalidated and API tokens revoked", Category: "Authentication", Outcome: AuditOutcomeSuccess, ActorType: AuditActorTypeSystem, ResourceType: "jwt_secret"},
+	{Action: AuditStorageKeySeparated, Label: "One-time startup migration separating the storage encryption key from the JWT signing secret", Category: "Authentication", Outcome: AuditOutcomeSuccess, ActorType: AuditActorTypeSystem, ResourceType: "storage_key"},
 }
