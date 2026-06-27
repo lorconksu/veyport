@@ -32,6 +32,21 @@ func RotateJWTSecret(st *store.Store) (RotateResult, error) {
 		return RotateResult{}, fmt.Errorf("instance not initialized: jwt_signing_key not found in database")
 	}
 
+	// Guard: storage_key must already be separated before rotating.
+	//
+	// On a legacy install all at-rest secrets (TOTP, SMTP, LDAP, CA) are
+	// encrypted under a key derived from jwt_signing_key, and storage_key is
+	// only materialised at the first start of the upgraded server (see
+	// InitStorageKey's legacy-adopt path). If we rotated jwt_signing_key while
+	// storage_key was still absent, that later startup would adopt the *rotated*
+	// value as storage_key, orphaning every existing ciphertext — TOTP/SMTP/
+	// LDAP/CA would all silently fail to decrypt with no recovery path. Refuse
+	// fail-closed (no state written) and direct the operator to start the server
+	// once so the one-time key separation runs before rotating.
+	if storageKey, err := st.GetConfig("storage_key"); err != nil || storageKey == "" {
+		return RotateResult{}, fmt.Errorf("storage_key not yet separated: start the server once before rotating the JWT secret so at-rest secrets are not orphaned")
+	}
+
 	// Generate new key.
 	keyBytes := make([]byte, 32)
 	if _, err := rand.Read(keyBytes); err != nil {
