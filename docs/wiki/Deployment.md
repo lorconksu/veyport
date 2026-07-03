@@ -419,8 +419,8 @@ docker exec veyport /app/veyport admin create-api-token \
 Store the printed token in a root-only env file on the machine that runs the automation:
 
 ```bash
-sudo install -m 600 /dev/null /opt/veyport/nightly-security-scan.env
-sudo editor /opt/veyport/nightly-security-scan.env
+sudo install -m 600 /dev/null /etc/veyport/automation.env
+sudo editor /etc/veyport/automation.env
 ```
 
 Example contents:
@@ -428,27 +428,9 @@ Example contents:
 ```bash
 VEYPORT_SCAN_BASE_URL=https://veyport.example.com
 VEYPORT_API_TOKEN=adt_replace_me
-SONAR_TOKEN=replace_me
-CLAUDE_BIN=/home/wyiu/.local/bin/claude
 ```
 
-The sample file is included in the repo at `scripts/nightly-security-scan.env.example`.
-
-### Claude CLI auth for cron
-
-The nightly scan also depends on Claude CLI itself being authenticated. For unattended jobs, prefer a long-lived Claude token on the scan host:
-
-```bash
-/home/wyiu/.local/bin/claude setup-token
-```
-
-If you prefer the normal browser-backed login flow, refresh it with:
-
-```bash
-/home/wyiu/.local/bin/claude auth login
-```
-
-The nightly scan script now performs a short preflight request before the full run and exits early with a clear error if Claude auth is stale.
+Reference the token from your scripts as an `Authorization: Bearer $VEYPORT_API_TOKEN` header, and rotate it before the `--expires-in` window elapses by issuing a new token and updating the env file.
 
 ---
 
