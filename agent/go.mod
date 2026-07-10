@@ -1,6 +1,6 @@
 module github.com/wyiu/veyport/agent
 
-go 1.26.4
+go 1.26.5
 
 replace github.com/wyiu/veyport/proto => ../proto
 
