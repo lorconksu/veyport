@@ -1,6 +1,6 @@
 # Build args allow CI to override private DHI base images with public equivalents
 ARG NODE_IMAGE=dhi.io/node:25-debian13-dev
-ARG GO_IMAGE=dhi.io/golang:1.26.4-debian13-dev
+ARG GO_IMAGE=dhi.io/golang:1.26.5-debian13-dev
 
 # Stage 1: Build frontend (DHI hardened Node)
 FROM ${NODE_IMAGE} AS frontend
