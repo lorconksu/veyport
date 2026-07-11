@@ -70,6 +70,9 @@ vi.mock('highlight.js/lib/languages/yaml', () => ({ default: {} }))
 
 vi.mock('@/lib/api', () => ({
   apiFetch: vi.fn(),
+  listPendingReEnroll: vi.fn().mockResolvedValue([]),
+  approveReEnroll: vi.fn(),
+  denyReEnroll: vi.fn(),
 }))
 
 vi.mock('@/lib/auth', () => ({

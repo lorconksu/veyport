@@ -90,6 +90,28 @@ export async function apiFetch<T>(
   return res.json() as Promise<T>
 }
 
+// Re-enrollment API
+
+import type { ReEnrollRequest } from '@/types/api'
+
+export function listPendingReEnroll(): Promise<ReEnrollRequest[]> {
+  return apiFetch<ReEnrollRequest[]>('/servers/reenroll/pending')
+}
+
+export function approveReEnroll(serverId: string, requestId: string, totpCode: string): Promise<void> {
+  return apiFetch<void>(`/servers/${serverId}/reenroll/approve`, {
+    method: 'POST',
+    body: JSON.stringify({ request_id: requestId, totp_code: totpCode }),
+  })
+}
+
+export function denyReEnroll(serverId: string, requestId: string): Promise<void> {
+  return apiFetch<void>(`/servers/${serverId}/reenroll/deny`, {
+    method: 'POST',
+    body: JSON.stringify({ request_id: requestId }),
+  })
+}
+
 // Convenience for requests that use a specific token (setup/totp)
 // These tokens are NOT in cookies — they are passed via navigation state
 export async function apiFetchWithToken<T>(
