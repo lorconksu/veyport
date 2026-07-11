@@ -24,6 +24,14 @@ import (
 // Version is set at build time via -ldflags.
 var Version = "dev"
 
+// ReEnrollReleaser is the minimal interface the HTTP server needs from the gRPC
+// handler to approve a re-enrollment request. The concrete type is
+// *grpcserver.Handler, but the interface prevents a direct import cycle and
+// keeps the test surface small.
+type ReEnrollReleaser interface {
+	ReleaseKEK(serverID, decidedBy string) error
+}
+
 type Server struct {
 	httpServer        *http.Server
 	store             *store.Store
@@ -39,6 +47,7 @@ type Server struct {
 	pending           *grpcserver.PendingRequests
 	logSessions       *grpcserver.LogSessions
 	terminalSessions  *grpcserver.TerminalSessions
+	reEnrollReleaser  ReEnrollReleaser
 	logTailMu         sync.Mutex
 	logTailSessions   map[string]int
 	totpCache         *auth.TOTPUsedCodes
@@ -63,6 +72,7 @@ type Config struct {
 	Pending           *grpcserver.PendingRequests
 	LogSessions       *grpcserver.LogSessions
 	TerminalSessions  *grpcserver.TerminalSessions
+	ReEnrollReleaser  ReEnrollReleaser
 	Notifier          *notify.Notifier
 	LDAPAuthenticator LDAPAuthenticator
 }
@@ -90,6 +100,7 @@ func New(cfg Config) *Server {
 		pending:           cfg.Pending,
 		logSessions:       cfg.LogSessions,
 		terminalSessions:  cfg.TerminalSessions,
+		reEnrollReleaser:  cfg.ReEnrollReleaser,
 		logTailSessions:   make(map[string]int),
 		totpCache:         auth.NewTOTPUsedCodes(),
 		tokenBlacklist:    auth.NewTokenBlacklist(cfg.Store.DB()),
@@ -144,6 +155,12 @@ func (s *Server) installAuditObservers() {
 		}
 		s.notifier.Notify(model.NotifyAuditRecovered, context)
 	})
+}
+
+// SetReEnrollReleaser wires the gRPC handler into the HTTP server after both
+// are constructed (since grpcSrv is built after srv in main).
+func (s *Server) SetReEnrollReleaser(r ReEnrollReleaser) {
+	s.reEnrollReleaser = r
 }
 
 func (s *Server) Start() error {

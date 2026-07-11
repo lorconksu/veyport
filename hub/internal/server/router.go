@@ -84,6 +84,10 @@ func (s *Server) routes() http.Handler {
 	mux.Handle("POST /api/servers", loggingMiddleware(s.authMiddleware(auth.TokenTypeAccess, s.adminOnly(http.HandlerFunc(s.handleCreateServer)))))
 	// batch-delete must be registered before /{id} routes so Go's ServeMux matches the literal path first
 	mux.Handle("POST /api/servers/batch-delete", loggingMiddleware(s.authMiddleware(auth.TokenTypeAccess, s.adminOnly(http.HandlerFunc(s.handleBatchDeleteServers)))))
+	// Re-enrollment endpoints — literal paths must be registered before /{id} wildcard routes.
+	mux.Handle("GET /api/servers/reenroll/pending", loggingMiddleware(s.authMiddleware(auth.TokenTypeAccess, s.adminOnly(http.HandlerFunc(s.handleListPendingReEnroll)))))
+	mux.Handle("POST /api/servers/{id}/reenroll/approve", loggingMiddleware(s.authMiddleware(auth.TokenTypeAccess, s.adminOnly(http.HandlerFunc(s.handleReEnrollApprove)))))
+	mux.Handle("POST /api/servers/{id}/reenroll/deny", loggingMiddleware(s.authMiddleware(auth.TokenTypeAccess, s.adminOnly(http.HandlerFunc(s.handleReEnrollDeny)))))
 	mux.Handle("GET /api/servers/{id}", loggingMiddleware(s.authMiddleware(auth.TokenTypeAccess, http.HandlerFunc(s.handleGetServer))))
 	mux.Handle("PUT /api/servers/{id}", loggingMiddleware(s.authMiddleware(auth.TokenTypeAccess, s.adminOnly(http.HandlerFunc(s.handleUpdateServer)))))
 	mux.Handle("DELETE /api/servers/{id}", loggingMiddleware(s.authMiddleware(auth.TokenTypeAccess, s.adminOnly(http.HandlerFunc(s.handleDeleteServer)))))

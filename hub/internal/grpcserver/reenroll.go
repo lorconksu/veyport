@@ -2,6 +2,7 @@ package grpcserver
 
 import (
 	"crypto/ed25519"
+	"crypto/rand"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
@@ -18,6 +19,10 @@ import (
 // reEnrollApprovalTimeout is how long the stream goroutine waits for an admin to
 // approve/deny before auto-expiring the request.
 const reEnrollApprovalTimeout = 10 * time.Minute
+
+// reEnrollProofTimeout is how long ReleaseKEK waits for the agent to send its
+// proof after the KEK+challenge have been delivered via the stream.
+const reEnrollProofTimeout = 30 * time.Second
 
 // ---------------------------------------------------------------------------
 // Session registry
@@ -41,6 +46,7 @@ type reEnrollSession struct {
 	csr         []byte // CSR bytes from ReEnrollRequest; signed after proof
 	fingerprint string
 	challenge   []byte // set when approval arrives; echoed in ReEnrollApproved and verified against proof
+	decidedBy   string // set when approval arrives; propagated to UpdateReEnrollStatus
 
 	// approve: HTTP goroutine -> stream goroutine (buffered 1)
 	approve chan reEnrollApproval
@@ -192,6 +198,7 @@ func (h *Handler) handleReEnrollRequest(stream pb.AgentService_ConnectServer, re
 	select {
 	case appr := <-sess.approve:
 		sess.challenge = appr.challenge
+		sess.decidedBy = appr.decidedBy
 		return stream.Send(&pb.HubMessage{
 			Payload: &pb.HubMessage_ReenrollApproved{
 				ReenrollApproved: &pb.ReEnrollApproved{
@@ -277,6 +284,7 @@ func (h *Handler) handleReEnrollProof(stream pb.AgentService_ConnectServer, serv
 		log.Printf("reenroll proof: failed to sign CSR for %s: %v", serverID, err)
 		_ = sendDenied(fmt.Sprintf("cert issuance failed: %v", err))
 		sess.result <- err
+		_ = h.store.UpdateReEnrollStatus(sess.requestID, "denied", "")
 		h.clearReEnroll(serverID)
 		return nil
 	}
@@ -296,7 +304,7 @@ func (h *Handler) handleReEnrollProof(stream pb.AgentService_ConnectServer, serv
 	}
 
 	// 5. Update DB, signal HTTP goroutine, clean up.
-	_ = h.store.UpdateReEnrollStatus(sess.requestID, "approved", "")
+	_ = h.store.UpdateReEnrollStatus(sess.requestID, "approved", sess.decidedBy)
 	sess.result <- nil
 	h.clearReEnroll(serverID)
 
@@ -307,5 +315,55 @@ func (h *Handler) handleReEnrollProof(stream pb.AgentService_ConnectServer, serv
 	})
 
 	return nil
+}
+
+// ---------------------------------------------------------------------------
+// ReleaseKEK — called by the HTTP approve handler (Task 7)
+// ---------------------------------------------------------------------------
+
+// ReleaseKEK is the bridge from the HTTP approve handler to the blocked gRPC
+// stream goroutine. It:
+//  1. Looks up the live re-enrollment session for serverID.
+//  2. Decrypts the stored KEK from the database.
+//  3. Generates a random 32-byte challenge.
+//  4. Delivers the KEK + challenge to the stream goroutine via sess.approve.
+//  5. Waits (up to reEnrollProofTimeout) for the stream goroutine to verify
+//     the agent proof and post the outcome on sess.result.
+//
+// The KEK never leaves the grpcserver package: it is decrypted here and
+// forwarded directly to the stream goroutine over an in-process channel.
+func (h *Handler) ReleaseKEK(serverID, decidedBy string) error {
+	sess, ok := h.lookupReEnroll(serverID)
+	if !ok {
+		return errors.New("no pending re-enroll for server")
+	}
+
+	// Load and decrypt the stored KEK.
+	_, kekEncHex, _, err := h.store.GetNodeCrypto(serverID)
+	if err != nil {
+		return fmt.Errorf("get node crypto for %s: %w", serverID, err)
+	}
+	kek, err := h.openKEK(kekEncHex)
+	if err != nil {
+		return fmt.Errorf("decrypt KEK for %s: %w", serverID, err)
+	}
+
+	// Generate a fresh random challenge.
+	challenge := make([]byte, 32)
+	if _, err := rand.Read(challenge); err != nil {
+		return fmt.Errorf("generate challenge: %w", err)
+	}
+
+	// Signal the stream goroutine.
+	sess.approve <- reEnrollApproval{kek: kek, challenge: challenge, decidedBy: decidedBy}
+
+	// Wait for the agent to respond with a proof and the stream goroutine to
+	// verify it, or time out.
+	select {
+	case err := <-sess.result:
+		return err
+	case <-time.After(reEnrollProofTimeout):
+		return errors.New("timed out waiting for agent proof")
+	}
 }
 

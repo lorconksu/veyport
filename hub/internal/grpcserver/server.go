@@ -28,6 +28,7 @@ type Server struct {
 	logSessions *LogSessions
 	terminals   *TerminalSessions
 	hbCoalescer *HeartbeatCoalescer
+	handler     *Handler
 	addr        string
 }
 
@@ -128,8 +129,15 @@ func New(cfg Config) *Server {
 		storageKey:       cfg.StorageKey,
 		reEnrollSessions: make(map[string]*reEnrollSession),
 	}
+	s.handler = handler
 	pb.RegisterAgentServiceServer(s.grpcServer, handler)
 	return s
+}
+
+// Handler returns the gRPC message handler. The HTTP server uses this to call
+// ReleaseKEK during the re-enrollment approval flow.
+func (s *Server) Handler() *Handler {
+	return s.handler
 }
 
 func (s *Server) Start() error {

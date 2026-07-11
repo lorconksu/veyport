@@ -79,11 +79,12 @@ func testHandler(t *testing.T) (*Handler, *store.Store) {
 		t.Fatalf("generate test CA: %v", err)
 	}
 	h := &Handler{
-		store:    st,
-		connMgr:  cm,
-		notifier: notifier,
-		caCert:   caCert,
-		caKey:    caKey,
+		store:            st,
+		connMgr:          cm,
+		notifier:         notifier,
+		caCert:           caCert,
+		caKey:            caKey,
+		reEnrollSessions: make(map[string]*reEnrollSession),
 	}
 	return h, st
 }
