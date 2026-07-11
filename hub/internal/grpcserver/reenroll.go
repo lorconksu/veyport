@@ -129,7 +129,14 @@ func (h *Handler) computeAnomalyFlags(serverID, fingerprint string) string {
 // then BLOCKS the stream goroutine waiting for an admin approval signal.
 // Blocking here is intentional — this is a long-lived bidi stream and the agent
 // waits for the hub to send ReEnrollApproved (or ReEnrollDenied / timeout).
-func (h *Handler) handleReEnrollRequest(stream pb.AgentService_ConnectServer, req *pb.ReEnrollRequest) error {
+//
+// Returns (approvalSent=true, nil) ONLY when a ReEnrollApproved message was
+// successfully written to the stream — meaning proof is expected next and the
+// caller should keep the stream open for the message loop.
+// Returns (approvalSent=false, ...) on ALL early-exit paths: unknown/non-enrolled
+// server, DB error, approval timeout, context cancellation, or send failure.
+// Callers MUST NOT register the stream in connMgr when approvalSent is false.
+func (h *Handler) handleReEnrollRequest(stream pb.AgentService_ConnectServer, req *pb.ReEnrollRequest) (approvalSent bool, err error) {
 	serverID := req.ServerId
 	peerIP := h.peerAddr(stream)
 
@@ -146,7 +153,7 @@ func (h *Handler) handleReEnrollRequest(stream pb.AgentService_ConnectServer, re
 	if err != nil || pubB64 == "" {
 		log.Printf("reenroll: unknown or non-enrolled server %s: %v", serverID, err)
 		_ = sendDenied("unknown or non-enrolled server")
-		return nil
+		return false, nil
 	}
 
 	// 2. Compute anomaly flags.
@@ -166,7 +173,7 @@ func (h *Handler) handleReEnrollRequest(stream pb.AgentService_ConnectServer, re
 	if err := h.store.CreateReEnrollRequest(dbReq); err != nil {
 		log.Printf("reenroll: failed to create request for %s: %v", serverID, err)
 		_ = sendDenied("internal error")
-		return nil
+		return false, nil
 	}
 
 	// 4. Audit.
@@ -199,25 +206,29 @@ func (h *Handler) handleReEnrollRequest(stream pb.AgentService_ConnectServer, re
 	case appr := <-sess.approve:
 		sess.challenge = appr.challenge
 		sess.decidedBy = appr.decidedBy
-		return stream.Send(&pb.HubMessage{
+		if err := stream.Send(&pb.HubMessage{
 			Payload: &pb.HubMessage_ReenrollApproved{
 				ReenrollApproved: &pb.ReEnrollApproved{
 					Kek:       appr.kek,
 					Challenge: appr.challenge,
 				},
 			},
-		})
-		// Return to the Recv loop; the agent will send ReEnrollProof next.
+		}); err != nil {
+			// Send failed — treat as early exit; caller must not enter the proof loop.
+			return false, err
+		}
+		// ReEnrollApproved was sent; the agent will send ReEnrollProof next.
+		return true, nil
 
 	case <-time.After(reEnrollApprovalTimeout):
 		h.clearReEnroll(serverID)
 		_ = h.store.UpdateReEnrollStatus(reqID, "expired", "")
 		log.Printf("reenroll: approval timeout for %s", serverID)
-		return nil
+		return false, nil
 
 	case <-stream.Context().Done():
 		h.clearReEnroll(serverID)
-		return nil
+		return false, nil
 	}
 }
 

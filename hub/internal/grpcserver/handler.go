@@ -320,18 +320,29 @@ func preferredAgentIP(reportedIP, peerIP string) string {
 }
 
 // performReEnrollHandshake handles a re-enrollment request that arrives as the
-// first message on a bootstrap (no client cert) Connect stream.  It delegates
-// to handleReEnrollRequest which blocks waiting for admin approval, then
-// returns bootstrapOnly=true so Connect() exits after the proof exchange.
+// first message on a bootstrap (no client cert) Connect stream. It delegates to
+// handleReEnrollRequest which blocks waiting for admin approval.
+//
+// If handleReEnrollRequest sent ReEnrollApproved and the proof is now expected,
+// this returns bootstrapOnly=false so Connect() enters the message loop under
+// the victim's serverID — allowing handleReEnrollProof to receive the proof.
+//
+// On ALL early-exit paths (unknown/non-enrolled server, DB error, approval
+// timeout, context cancellation, or send failure), this returns bootstrapOnly=true
+// so Connect() returns immediately WITHOUT calling connMgr.Register or
+// onAgentConnected, preventing an unauthenticated caller from hijacking a
+// legitimate agent's stream slot.
 func (h *Handler) performReEnrollHandshake(stream pb.AgentService_ConnectServer, req *pb.ReEnrollRequest) (*handshakeResult, error) {
-	if err := h.handleReEnrollRequest(stream, req); err != nil {
+	approvalSent, err := h.handleReEnrollRequest(stream, req)
+	if err != nil {
 		return nil, err
 	}
-	// handleReEnrollRequest is responsible for sending all messages over the
-	// stream (ReEnrollApproved, ReEnrollDenied, CertRenewResponse).  The proof
-	// message arrives in the same stream; routeAgentMessage handles it in the
-	// loop below, so we return a sentinel that tells Connect() to enter the
-	// message loop as a re-enroll-only stream.
+	if !approvalSent {
+		// Early exit: stream is already closed or denied; do not register in connMgr.
+		return &handshakeResult{bootstrapOnly: true}, nil
+	}
+	// Approval was sent; enter the message loop so the proof can be received and
+	// handleReEnrollProof can issue the certificate.
 	return &handshakeResult{serverID: req.ServerId, bootstrapOnly: false, requireClientCert: false}, nil
 }
 
@@ -378,7 +389,12 @@ func (h *Handler) routeAgentMessage(serverID string, stream pb.AgentService_Conn
 	case *pb.AgentMessage_CertRenewRequest:
 		h.handleCertRenewal(serverID, stream, p.CertRenewRequest)
 	case *pb.AgentMessage_ReenrollRequest:
-		return h.handleReEnrollRequest(stream, p.ReenrollRequest)
+		// Mid-stream re-enroll requests (from an already-registered agent) are
+		// handled here. The approvalSent bool is ignored because the stream is
+		// already registered in connMgr; the proof will arrive as the next message
+		// in this same loop via AgentMessage_ReenrollProof.
+		_, err := h.handleReEnrollRequest(stream, p.ReenrollRequest)
+		return err
 	case *pb.AgentMessage_ReenrollProof:
 		return h.handleReEnrollProof(stream, serverID, p.ReenrollProof)
 	case *pb.AgentMessage_TerminalOpenAck:

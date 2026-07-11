@@ -488,3 +488,81 @@ func TestReEnrollDenyPath(t *testing.T) {
 
 	t.Log("deny path PASS")
 }
+
+// TestReEnroll_UnknownServer_DoesNotRegister is the regression test for the
+// unauthenticated connMgr hijack defect (HIGH):
+//
+// An attacker opens a bootstrap gRPC Connect stream (no client cert) and sends
+// ReEnrollRequest{ServerId: "does-not-exist"}.  The hub MUST:
+//  1. Reject the request immediately (unknown server).
+//  2. Close / terminate the stream promptly (bootstrapOnly exit — Connect() returns).
+//  3. NOT register the attacker's stream in connMgr under the victim's serverID.
+//
+// We assert (2) + (3): stream.Recv() returns an error or EOF promptly, AND
+// connMgr.GetConn("does-not-exist") returns nil.
+func TestReEnroll_UnknownServer_DoesNotRegister(t *testing.T) {
+	h := StartHarness(t)
+
+	const victimID = "does-not-exist"
+
+	stream, conn := openReEnrollStream(t, h)
+	defer conn.Close()
+	defer stream.CloseSend()
+
+	// Send a ReEnrollRequest for a server that does not exist in the DB.
+	if err := stream.Send(&pb.AgentMessage{
+		Payload: &pb.AgentMessage_ReenrollRequest{
+			ReenrollRequest: &pb.ReEnrollRequest{
+				ServerId:    victimID,
+				Csr:         []byte("fake-csr"),
+				Fingerprint: "fake-fingerprint",
+			},
+		},
+	}); err != nil {
+		t.Fatalf("send ReEnrollRequest: %v", err)
+	}
+	t.Log("ReEnrollRequest sent for non-existent server")
+
+	// The hub should send ReEnrollDenied (or close the stream) promptly —
+	// then Connect() exits (bootstrapOnly=true) without registering connMgr.
+	// We drain messages until we get an error/EOF or a definitive close.
+	deadline := time.Now().Add(5 * time.Second)
+	gotDenied := false
+	for time.Now().Before(deadline) {
+		msgCh, errCh := recvHubMessage(stream)
+		select {
+		case msg := <-msgCh:
+			switch msg.Payload.(type) {
+			case *pb.HubMessage_ReenrollDenied:
+				t.Log("received ReEnrollDenied — correct early-exit response")
+				gotDenied = true
+			case *pb.HubMessage_CertRenewResponse:
+				t.Fatal("SECURITY: received CertRenewResponse for unknown server — connMgr hijack possible")
+			default:
+				t.Logf("received unexpected message type %T — continuing drain", msg.Payload)
+			}
+		case err := <-errCh:
+			t.Logf("stream closed with error: %v — this is the expected bootstrapOnly exit", err)
+			// Stream closed; we're done draining.
+			goto streamClosed
+		case <-time.After(3 * time.Second):
+			t.Fatal("timed out: stream did not close and no message received — possible connMgr registration (stream left open)")
+		}
+		if gotDenied {
+			// After ReEnrollDenied the server should close the stream; give it a moment.
+			break
+		}
+	}
+
+streamClosed:
+	// Give Connect() a moment to return and clean up.
+	time.Sleep(100 * time.Millisecond)
+
+	// Assert: connMgr must NOT have the unknown server registered.
+	if conn := h.ConnMgr.GetConn(victimID); conn != nil {
+		t.Fatalf("SECURITY: connMgr has %q registered — unauthenticated hijack succeeded", victimID)
+	}
+	t.Logf("connMgr.GetConn(%q) == nil — no registration occurred (correct)", victimID)
+
+	t.Log("TestReEnroll_UnknownServer_DoesNotRegister PASS")
+}
