@@ -12,6 +12,31 @@ import (
 	pb "github.com/wyiu/veyport/proto/veyport/v1"
 )
 
+func TestClientCertValidity_DefaultAndConfigured(t *testing.T) {
+	h, st := testHandler(t)
+
+	// Default when unset.
+	if got := h.clientCertValidity(); got != 24*time.Hour {
+		t.Fatalf("default: want 24h, got %v", got)
+	}
+
+	// Honors a valid config value.
+	if err := st.SetConfig("agent_cert_validity_hours", "72"); err != nil {
+		t.Fatalf("set config: %v", err)
+	}
+	if got := h.clientCertValidity(); got != 72*time.Hour {
+		t.Fatalf("configured: want 72h, got %v", got)
+	}
+
+	// Falls back to default on invalid / non-positive values.
+	for _, bad := range []string{"", "0", "-5", "abc"} {
+		_ = st.SetConfig("agent_cert_validity_hours", bad)
+		if got := h.clientCertValidity(); got != 24*time.Hour {
+			t.Fatalf("invalid %q: want 24h default, got %v", bad, got)
+		}
+	}
+}
+
 const (
 	testFutureExpiry        = "2099-12-31 23:59:59"
 	testConnectFmt          = "Connect: %v"

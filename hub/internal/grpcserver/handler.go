@@ -8,6 +8,7 @@ import (
 	"io"
 	"log"
 	"net"
+	"strconv"
 	"strings"
 	"time"
 
@@ -435,7 +436,7 @@ func (h *Handler) issueRegistrationCertificate(serverID string, csr []byte) ([]b
 	if h.caCert == nil || h.caKey == nil {
 		return nil, nil, fmt.Errorf("CA not configured")
 	}
-	clientCert, err := ca.SignCSR(h.caCert, h.caKey, csr, serverID, 12*time.Hour)
+	clientCert, err := ca.SignCSR(h.caCert, h.caKey, csr, serverID, h.clientCertValidity())
 	if err != nil {
 		return nil, nil, fmt.Errorf("sign client certificate: %w", err)
 	}
@@ -483,7 +484,7 @@ func (h *Handler) handleCertRenewal(serverID string, stream pb.AgentService_Conn
 		return
 	}
 
-	clientCert, err := ca.SignCSR(h.caCert, h.caKey, req.Csr, serverID, 12*time.Hour)
+	clientCert, err := ca.SignCSR(h.caCert, h.caKey, req.Csr, serverID, h.clientCertValidity())
 	if err != nil {
 		sendCertResponse(&pb.CertRenewResponse{Error: err.Error()})
 		return
@@ -493,4 +494,19 @@ func (h *Handler) handleCertRenewal(serverID string, stream pb.AgentService_Conn
 		ClientCert: clientCert.Raw,
 		CaCert:     h.caCert.Raw,
 	})
+}
+
+// clientCertValidity is the lifetime of issued agent client certs.
+// Configurable via the "agent_cert_validity_hours" config key; defaults to 24h.
+func (h *Handler) clientCertValidity() time.Duration {
+	const def = 24 * time.Hour
+	v, err := h.store.GetConfig("agent_cert_validity_hours")
+	if err != nil || v == "" {
+		return def
+	}
+	hours, err := strconv.Atoi(v)
+	if err != nil || hours <= 0 {
+		return def
+	}
+	return time.Duration(hours) * time.Hour
 }
