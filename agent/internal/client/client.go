@@ -30,6 +30,7 @@ import (
 	"github.com/wyiu/veyport/agent/internal/filebrowser"
 	"github.com/wyiu/veyport/agent/internal/heartbeat"
 	"github.com/wyiu/veyport/agent/internal/logtailer"
+	"github.com/wyiu/veyport/agent/internal/nodekey"
 	"github.com/wyiu/veyport/agent/internal/terminal"
 	pb "github.com/wyiu/veyport/proto/veyport/v1"
 )
@@ -61,28 +62,30 @@ const (
 var errReconnectWithMTLS = errors.New("reconnect required to authenticate with issued client certificate")
 
 type Client struct {
-	hubAddr         string
-	serverID        string
-	token           string
-	hostname        string
-	ipAddress       string
-	os              string
-	agentVersion    string
-	backoff         time.Duration
-	maxBackoff      time.Duration
-	tailSessionsMu  sync.Mutex
-	tailSessions    map[string]chan struct{}
-	certRenewalMu   sync.Mutex
-	certRenewalSent bool
-	certRenewalAt   time.Time
-	dropzone        *dropzone.Dropzone
-	certStore       *certs.Store
-	unregisterToken string
-	insecure        bool
-	allowedPaths    []string
-	hubCAPin        string
-	onRegistered    func(serverID string)
-	reconnectCh     chan struct{} // signals connectAndStream to reconnect (e.g. to adopt a renewed cert)
+	hubAddr          string
+	serverID         string
+	token            string
+	hostname         string
+	ipAddress        string
+	os               string
+	agentVersion     string
+	backoff          time.Duration
+	maxBackoff       time.Duration
+	tailSessionsMu   sync.Mutex
+	tailSessions     map[string]chan struct{}
+	certRenewalMu    sync.Mutex
+	certRenewalSent  bool
+	certRenewalAt    time.Time
+	dropzone         *dropzone.Dropzone
+	certStore        *certs.Store
+	certDir          string // directory for mTLS cert storage and node key
+	unregisterToken  string
+	insecure         bool
+	allowedPaths     []string
+	hubCAPin         string
+	onRegistered     func(serverID string)
+	reconnectCh      chan struct{} // signals connectAndStream to reconnect (e.g. to adopt a renewed cert)
+	sealedNodeKeyHex string      // AES-GCM sealed Ed25519 private key (hex), empty if not yet enrolled
 }
 
 func New(cfg Config) *Client {
@@ -94,25 +97,34 @@ func New(cfg Config) *Client {
 	if dropzoneDir == "" {
 		dropzoneDir = dropzone.DefaultDir
 	}
+
+	// Load previously sealed node key from disk (empty if not yet enrolled).
+	sealedNodeKeyHex := ""
+	if data, err := os.ReadFile(filepath.Join(certDir, "node_key.enc")); err == nil {
+		sealedNodeKeyHex = strings.TrimSpace(string(data))
+	}
+
 	return &Client{
-		hubAddr:         cfg.HubAddr,
-		serverID:        cfg.ServerID,
-		token:           cfg.Token,
-		hostname:        cfg.Hostname,
-		ipAddress:       cfg.IPAddress,
-		os:              cfg.OS,
-		agentVersion:    cfg.AgentVersion,
-		backoff:         1 * time.Second,
-		maxBackoff:      60 * time.Second,
-		tailSessions:    make(map[string]chan struct{}),
-		dropzone:        dropzone.New(dropzoneDir),
-		certStore:       certs.NewStore(certDir),
-		unregisterToken: cfg.UnregisterToken,
-		insecure:        cfg.Insecure,
-		allowedPaths:    cfg.AllowedPaths,
-		hubCAPin:        cfg.HubCAPin,
-		onRegistered:    cfg.OnRegistered,
-		reconnectCh:     make(chan struct{}, 1),
+		hubAddr:          cfg.HubAddr,
+		serverID:         cfg.ServerID,
+		token:            cfg.Token,
+		hostname:         cfg.Hostname,
+		ipAddress:        cfg.IPAddress,
+		os:               cfg.OS,
+		agentVersion:     cfg.AgentVersion,
+		backoff:          1 * time.Second,
+		maxBackoff:       60 * time.Second,
+		tailSessions:     make(map[string]chan struct{}),
+		dropzone:         dropzone.New(dropzoneDir),
+		certStore:        certs.NewStore(certDir),
+		certDir:          certDir,
+		unregisterToken:  cfg.UnregisterToken,
+		insecure:         cfg.Insecure,
+		allowedPaths:     cfg.AllowedPaths,
+		hubCAPin:         cfg.HubCAPin,
+		onRegistered:     cfg.OnRegistered,
+		reconnectCh:      make(chan struct{}, 1),
+		sealedNodeKeyHex: sealedNodeKeyHex,
 	}
 }
 
@@ -162,6 +174,19 @@ func (c *Client) SelfUnregister(ctx context.Context) error {
 	return fmt.Errorf("unexpected status: %d", resp.StatusCode)
 }
 
+// isCertExpiredError returns true when err indicates our client certificate
+// has expired or was rejected by the hub due to expiry.
+func isCertExpiredError(err error) bool {
+	if err == nil {
+		return false
+	}
+	s := err.Error()
+	return strings.Contains(s, "certificate has expired") ||
+		strings.Contains(s, "tls: expired certificate") ||
+		strings.Contains(s, "certificate expired") ||
+		strings.Contains(s, "x509: certificate has expired")
+}
+
 func (c *Client) Run(ctx context.Context) error {
 	regFailures := 0
 	for {
@@ -172,6 +197,22 @@ func (c *Client) Run(ctx context.Context) error {
 		if errors.Is(err, errReconnectWithMTLS) {
 			regFailures = 0
 			c.resetBackoff()
+			continue
+		}
+
+		// Route cert-expiry failures to the re-enroll path (do not count against
+		// the registration failure budget and do not self-terminate for expiry).
+		if isCertExpiredError(err) {
+			log.Printf("client certificate expired — initiating re-enrollment")
+			if reErr := c.reEnroll(ctx); reErr != nil {
+				log.Printf("re-enrollment failed: %v — will retry after backoff", reErr)
+			}
+			wait := c.nextBackoff()
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			case <-time.After(wait):
+			}
 			continue
 		}
 
@@ -193,6 +234,140 @@ func (c *Client) Run(ctx context.Context) error {
 		case <-ctx.Done():
 			return ctx.Err()
 		case <-time.After(wait):
+		}
+	}
+}
+
+// reEnroll dials the hub using bootstrap (CA-pinned) TLS, sends a ReEnrollRequest,
+// then blocks waiting for ReEnrollApproved or ReEnrollDenied on the stream.
+// On approval: signs the challenge and sends ReEnrollProof; waits for the hub
+// to stream back a new cert (as a RegisterAck or CertRenewResponse), stores it,
+// and signals reconnectCh so Run re-connects with the fresh mTLS cert.
+// On denial: returns an error so Run can back off and retry.
+func (c *Client) reEnroll(ctx context.Context) error {
+	// Build the request before dialing (may fail if no certStore key is available).
+	req, err := c.buildReEnrollRequest()
+	if err != nil {
+		return fmt.Errorf("build re-enroll request: %w", err)
+	}
+
+	// Dial using bootstrap (CA-pinned) TLS — not mTLS, since our cert is expired.
+	tlsCfg, err := c.bootstrapTLSConfig()
+	if err != nil {
+		return fmt.Errorf("bootstrap TLS for re-enroll: %w", err)
+	}
+	conn, err := grpc.NewClient(c.hubAddr,
+		grpc.WithTransportCredentials(credentials.NewTLS(tlsCfg)),
+		grpc.WithKeepaliveParams(keepalive.ClientParameters{
+			Time:                30 * time.Second,
+			Timeout:             10 * time.Second,
+			PermitWithoutStream: true,
+		}),
+	)
+	if err != nil {
+		return fmt.Errorf("dial hub for re-enroll: %w", err)
+	}
+	defer conn.Close()
+
+	client := pb.NewAgentServiceClient(conn)
+	stream, err := client.Connect(ctx)
+	if err != nil {
+		return fmt.Errorf("open re-enroll stream: %w", err)
+	}
+
+	// Send the re-enroll request.
+	if err := stream.Send(&pb.AgentMessage{
+		Payload: &pb.AgentMessage_ReenrollRequest{
+			ReenrollRequest: req,
+		},
+	}); err != nil {
+		return fmt.Errorf("send re-enroll request: %w", err)
+	}
+
+	// Block reading the stream for hub response.
+	for {
+		msg, err := stream.Recv()
+		if err != nil {
+			return fmt.Errorf("recv re-enroll response: %w", err)
+		}
+
+		switch p := msg.Payload.(type) {
+		case *pb.HubMessage_ReenrollApproved:
+			proof, err := c.handleReEnrollApproved(p.ReenrollApproved)
+			if err != nil {
+				return fmt.Errorf("handle re-enroll approved: %w", err)
+			}
+			if err := stream.Send(&pb.AgentMessage{
+				Payload: &pb.AgentMessage_ReenrollProof{
+					ReenrollProof: proof,
+				},
+			}); err != nil {
+				return fmt.Errorf("send re-enroll proof: %w", err)
+			}
+			log.Printf("re-enroll proof sent; waiting for new certificate")
+
+		case *pb.HubMessage_RegisterAck:
+			// Hub sends the new cert as a RegisterAck following proof verification.
+			ack := p.RegisterAck
+			if !ack.Success {
+				return fmt.Errorf("re-enroll cert issuance rejected: %s", ack.Error)
+			}
+			if len(ack.ClientCert) == 0 || len(ack.CaCert) == 0 {
+				return fmt.Errorf("re-enroll RegisterAck missing cert material")
+			}
+			if err := c.certStore.StoreCert(ack.ClientCert, ack.CaCert); err != nil {
+				return fmt.Errorf("store re-enrolled cert: %w", err)
+			}
+			// Seal updated node key if hub sent a new KEK.
+			if len(ack.NodeKek) > 0 {
+				_, pubB64, genErr := nodekey.Generate()
+				// Reuse the existing node key — hub may reseal it.
+				// If hub sent a KEK, open the current key and re-seal with the new KEK.
+				if c.sealedNodeKeyHex != "" {
+					priv, openErr := nodekey.Open(c.sealedNodeKeyHex, ack.NodeKek)
+					if openErr != nil {
+						log.Printf("warning: could not open node key with new KEK: %v", openErr)
+					} else {
+						c.sealAndPersistNodeKey(priv, ack.NodeKek)
+						for i := range priv {
+							priv[i] = 0
+						}
+					}
+				}
+				_ = pubB64
+				_ = genErr
+			}
+			select {
+			case c.reconnectCh <- struct{}{}:
+			default:
+			}
+			log.Printf("re-enrollment complete; reconnecting with new mTLS certificate")
+			return nil
+
+		case *pb.HubMessage_CertRenewResponse:
+			// Alternative: hub may deliver cert via CertRenewResponse format.
+			resp := p.CertRenewResponse
+			if resp.Error != "" {
+				return fmt.Errorf("re-enroll cert response error: %s", resp.Error)
+			}
+			if len(resp.ClientCert) == 0 || len(resp.CaCert) == 0 {
+				return fmt.Errorf("re-enroll CertRenewResponse missing cert material")
+			}
+			if err := c.certStore.StoreCert(resp.ClientCert, resp.CaCert); err != nil {
+				return fmt.Errorf("store re-enrolled cert (renew format): %w", err)
+			}
+			select {
+			case c.reconnectCh <- struct{}{}:
+			default:
+			}
+			log.Printf("re-enrollment complete (via CertRenewResponse); reconnecting")
+			return nil
+
+		case *pb.HubMessage_ReenrollDenied:
+			return fmt.Errorf("re-enrollment denied: %s", p.ReenrollDenied.Reason)
+
+		default:
+			log.Printf("re-enroll: unexpected hub message %T — continuing to wait", p)
 		}
 	}
 }
@@ -712,15 +887,36 @@ func (c *Client) registerOrHandshake(stream pb.AgentService_ConnectClient) (bool
 func (c *Client) sendRegister(stream pb.AgentService_ConnectClient) (bool, error) {
 	csrDER := c.generateCSRForRegistration()
 
+	// Generate a fresh Ed25519 node keypair for this enrollment.
+	priv, pubB64, err := nodekey.Generate()
+	if err != nil {
+		log.Printf("warning: failed to generate node key for registration: %v", err)
+		priv = nil
+	}
+	var pubBytes []byte
+	fingerprint := nodekey.Fingerprint()
+	if priv != nil {
+		// Decode pubB64 back to raw bytes to send as node_pubkey.
+		pub, decErr := nodekey.DecodePub(pubB64)
+		if decErr != nil {
+			log.Printf("warning: failed to decode node pubkey: %v", decErr)
+			priv = nil
+		} else {
+			pubBytes = []byte(pub)
+		}
+	}
+
 	if err := stream.Send(&pb.AgentMessage{
 		Payload: &pb.AgentMessage_Register{
 			Register: &pb.RegisterAgent{
-				Token:        c.token,
-				Hostname:     c.hostname,
-				IpAddress:    c.ipAddress,
-				Os:           c.os,
-				AgentVersion: c.agentVersion,
-				Csr:          csrDER,
+				Token:             c.token,
+				Hostname:          c.hostname,
+				IpAddress:         c.ipAddress,
+				Os:                c.os,
+				AgentVersion:      c.agentVersion,
+				Csr:               csrDER,
+				NodePubkey:        pubBytes,
+				EnrollFingerprint: fingerprint,
 			},
 		},
 	}); err != nil {
@@ -740,6 +936,18 @@ func (c *Client) sendRegister(stream pb.AgentService_ConnectClient) (bool, error
 	}
 	c.serverID = ack.ServerId
 	log.Printf("registered successfully: server_id=%s", c.serverID)
+
+	// Seal and persist the node key if the hub provided a KEK.
+	if priv != nil && len(ack.NodeKek) > 0 {
+		c.sealAndPersistNodeKey(priv, ack.NodeKek)
+	}
+	// Zeroize private key material.
+	if priv != nil {
+		for i := range priv {
+			priv[i] = 0
+		}
+	}
+
 	c.storeMTLSCerts(ack)
 	if c.onRegistered != nil {
 		c.onRegistered(c.serverID)
@@ -771,6 +979,66 @@ func (c *Client) storeMTLSCerts(ack interface {
 	} else {
 		log.Printf("mTLS certificate stored")
 	}
+}
+
+// sealAndPersistNodeKey seals priv under kek and writes the result to
+// <certDir>/node_key.enc (0600). Updates c.sealedNodeKeyHex on success.
+// Zeroizes kek after use. Best-effort: logs on failure.
+func (c *Client) sealAndPersistNodeKey(priv, kek []byte) {
+	defer func() {
+		for i := range kek {
+			kek[i] = 0
+		}
+	}()
+	sealedHex, err := nodekey.Seal(priv, kek)
+	if err != nil {
+		log.Printf("warning: failed to seal node key: %v", err)
+		return
+	}
+	if c.certDir != "" {
+		path := filepath.Join(c.certDir, "node_key.enc")
+		if mkErr := os.MkdirAll(c.certDir, 0700); mkErr != nil {
+			log.Printf("warning: failed to create certDir for node key: %v", mkErr)
+		} else if writeErr := os.WriteFile(path, []byte(sealedHex), 0600); writeErr != nil {
+			log.Printf("warning: failed to write node_key.enc: %v", writeErr)
+		} else {
+			log.Printf("node key sealed and persisted")
+		}
+	}
+	c.sealedNodeKeyHex = sealedHex
+}
+
+// buildReEnrollRequest constructs a ReEnrollRequest with the server ID,
+// a fresh CSR from the cert store, and the node fingerprint.
+func (c *Client) buildReEnrollRequest() (*pb.ReEnrollRequest, error) {
+	csrDER, err := c.certStore.GenerateCSR(c.serverID)
+	if err != nil {
+		return nil, fmt.Errorf("generate CSR for re-enroll: %w", err)
+	}
+	return &pb.ReEnrollRequest{
+		ServerId:    c.serverID,
+		Csr:         csrDER,
+		Fingerprint: nodekey.Fingerprint(),
+	}, nil
+}
+
+// handleReEnrollApproved decrypts the node key using the hub-provided KEK,
+// signs the challenge, and returns a ReEnrollProof.
+func (c *Client) handleReEnrollApproved(approved *pb.ReEnrollApproved) (*pb.ReEnrollProof, error) {
+	if c.sealedNodeKeyHex == "" {
+		return nil, fmt.Errorf("no sealed node key available")
+	}
+	priv, err := nodekey.Open(c.sealedNodeKeyHex, approved.Kek)
+	if err != nil {
+		return nil, fmt.Errorf("open sealed node key: %w", err)
+	}
+	defer func() {
+		for i := range priv {
+			priv[i] = 0
+		}
+	}()
+	sig := nodekey.Sign(priv, approved.Challenge)
+	return &pb.ReEnrollProof{Signature: sig}, nil
 }
 
 // sendHeartbeatHandshake sends a heartbeat as the reconnect handshake and

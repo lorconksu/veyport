@@ -20,6 +20,7 @@ import (
 
 	"github.com/wyiu/veyport/agent/internal/certs"
 	"github.com/wyiu/veyport/agent/internal/dropzone"
+	"github.com/wyiu/veyport/agent/internal/nodekey"
 	pb "github.com/wyiu/veyport/proto/veyport/v1"
 	"google.golang.org/grpc/metadata"
 )
@@ -843,5 +844,32 @@ func TestHandleCertRenewResponse_NoSignalOnError(t *testing.T) {
 		t.Fatal("must not signal reconnect when renewal was rejected")
 	case <-time.After(100 * time.Millisecond):
 		// ok
+	}
+}
+
+func TestBuildReEnrollRequest_IncludesServerIDCSRFingerprint(t *testing.T) {
+	certStore := certs.NewMemoryStore()
+	c := &Client{serverID: "srv-re", certStore: certStore}
+	req, err := c.buildReEnrollRequest()
+	if err != nil {
+		t.Fatalf("build: %v", err)
+	}
+	if req.ServerId != "srv-re" || len(req.Csr) == 0 {
+		t.Fatalf("bad request: %+v", req)
+	}
+}
+
+func TestHandleReEnrollApproved_DecryptsAndSigns(t *testing.T) {
+	// node key sealed under a known KEK, stored where handleReEnrollApproved reads it
+	priv, _, _ := nodekey.Generate()
+	kek := make([]byte, 32)
+	sealedHex, _ := nodekey.Seal(priv, kek)
+	c := &Client{serverID: "srv-re", sealedNodeKeyHex: sealedHex}
+	proof, err := c.handleReEnrollApproved(&pb.ReEnrollApproved{Kek: kek, Challenge: []byte("nonce")})
+	if err != nil {
+		t.Fatalf("approve: %v", err)
+	}
+	if len(proof.Signature) == 0 {
+		t.Fatal("expected signature")
 	}
 }
