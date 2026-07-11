@@ -130,6 +130,7 @@ func runServer() error {
 		CACert:           caCert,
 		CAKey:            caKey,
 		Notifier:         notifier,
+		StorageKey:       storageKey,
 	})
 
 	// Start heartbeat monitor

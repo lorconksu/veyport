@@ -97,6 +97,7 @@ func StartHarness(t *testing.T) *TestHarness {
 		LogSessions:            logSessions,
 		CACert:                 caCert,
 		CAKey:                  caKey,
+		StorageKey:             storageKey,
 	})
 
 	grpcErrCh := make(chan error, 1)

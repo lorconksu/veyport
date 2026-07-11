@@ -43,6 +43,7 @@ type Config struct {
 	CACert                 *x509.Certificate
 	CAKey                  *ecdsa.PrivateKey
 	Notifier               *notify.Notifier
+	StorageKey             string
 }
 
 func New(cfg Config) *Server {
@@ -124,6 +125,7 @@ func New(cfg Config) *Server {
 		caCert:      cfg.CACert,
 		caKey:       cfg.CAKey,
 		notifier:    cfg.Notifier,
+		storageKey:  cfg.StorageKey,
 	}
 	pb.RegisterAgentServiceServer(s.grpcServer, handler)
 	return s
