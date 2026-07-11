@@ -210,6 +210,12 @@ func (h *Handler) performHandshake(stream pb.AgentService_ConnectServer) (*hands
 		return h.performRegisterHandshake(stream, p.Register, peerIP)
 	case *pb.AgentMessage_Heartbeat:
 		return h.performHeartbeatHandshake(stream, p.Heartbeat, peerIP)
+	case *pb.AgentMessage_ReenrollRequest:
+		// The agent opens a fresh bootstrap stream (no client cert) and sends
+		// ReEnrollRequest as the first message.  Handle it directly here;
+		// we do not need a full handshake because the agent identity is verified
+		// via the node proof inside handleReEnrollRequest.
+		return h.performReEnrollHandshake(stream, p.ReenrollRequest)
 	default:
 		return nil, status.Errorf(codes.InvalidArgument, "first message must be Register or Heartbeat")
 	}
@@ -311,6 +317,22 @@ func preferredAgentIP(reportedIP, peerIP string) string {
 		return reportedIP
 	}
 	return peerIP
+}
+
+// performReEnrollHandshake handles a re-enrollment request that arrives as the
+// first message on a bootstrap (no client cert) Connect stream.  It delegates
+// to handleReEnrollRequest which blocks waiting for admin approval, then
+// returns bootstrapOnly=true so Connect() exits after the proof exchange.
+func (h *Handler) performReEnrollHandshake(stream pb.AgentService_ConnectServer, req *pb.ReEnrollRequest) (*handshakeResult, error) {
+	if err := h.handleReEnrollRequest(stream, req); err != nil {
+		return nil, err
+	}
+	// handleReEnrollRequest is responsible for sending all messages over the
+	// stream (ReEnrollApproved, ReEnrollDenied, CertRenewResponse).  The proof
+	// message arrives in the same stream; routeAgentMessage handles it in the
+	// loop below, so we return a sentinel that tells Connect() to enter the
+	// message loop as a re-enroll-only stream.
+	return &handshakeResult{serverID: req.ServerId, bootstrapOnly: false, requireClientCert: false}, nil
 }
 
 func (h *Handler) performHeartbeatHandshake(stream pb.AgentService_ConnectServer, hb *pb.Heartbeat, peerIP string) (*handshakeResult, error) {

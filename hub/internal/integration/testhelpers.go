@@ -37,9 +37,11 @@ type TestHarness struct {
 	Pending     *grpcserver.PendingRequests
 	LogSessions *grpcserver.LogSessions
 	HTTPServer  *server.Server
+	GRPCServer  *grpcserver.Server
 	GRPCAddr    string
 	HTTPAddr    string
 	JWTSecret   string
+	StorageKey  string
 	HubCAPin    string
 }
 
@@ -142,6 +144,10 @@ func StartHarness(t *testing.T) *TestHarness {
 	default:
 	}
 
+	// Wire the gRPC handler into the HTTP server so that the re-enroll approve
+	// endpoint can call ReleaseKEK on the live gRPC handler.
+	hs.SetReEnrollReleaser(gs.Handler())
+
 	// Register cleanup
 	t.Cleanup(func() {
 		gs.Stop()
@@ -157,9 +163,11 @@ func StartHarness(t *testing.T) *TestHarness {
 		Pending:     pending,
 		LogSessions: logSessions,
 		HTTPServer:  hs,
+		GRPCServer:  gs,
 		GRPCAddr:    grpcAddr,
 		HTTPAddr:    httpAddr,
 		JWTSecret:   jwtSecret,
+		StorageKey:  storageKey,
 		HubCAPin:    grpcCAPin,
 	}
 }
@@ -224,6 +232,67 @@ func (h *TestHarness) SetupAdmin(t *testing.T) string {
 
 	t.Fatal("SetupAdmin: got empty access token cookie")
 	return ""
+}
+
+// SetupAdminWithTOTP is like SetupAdmin but also returns the raw (plaintext) TOTP
+// secret so that the caller can generate valid codes for TOTP step-up endpoints
+// (e.g. the re-enroll approve handler).
+func (h *TestHarness) SetupAdminWithTOTP(t *testing.T) (accessToken, totpSecret string) {
+	t.Helper()
+
+	baseURL := fmt.Sprintf("http://%s", h.HTTPAddr)
+
+	// Register first user (admin)
+	regBody := map[string]string{
+		"username": "admin",
+		"email":    "admin@test.com",
+		"password": "TestPassword123!",
+	}
+	resp := h.HTTPPost(t, "/api/auth/register", regBody, "")
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		t.Fatalf("register admin: status=%d body=%s", resp.StatusCode, body)
+	}
+
+	var regResp struct {
+		SetupToken string `json:"setup_token"`
+	}
+	json.NewDecoder(resp.Body).Decode(&regResp)
+
+	// TOTP setup — capture the plaintext secret before it gets encrypted in the store
+	setupResp := h.HTTPPost(t, "/api/auth/totp/setup", nil, regResp.SetupToken)
+	defer setupResp.Body.Close()
+	if setupResp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(setupResp.Body)
+		t.Fatalf("totp setup: status=%d body=%s url=%s", setupResp.StatusCode, body, baseURL+"/api/auth/totp/setup")
+	}
+
+	var totpSetupResp model.TOTPSetupResponse
+	json.NewDecoder(setupResp.Body).Decode(&totpSetupResp)
+	totpSecret = totpSetupResp.Secret
+
+	// Generate valid TOTP code and enable
+	code, err := auth.GenerateValidCode(totpSecret)
+	if err != nil {
+		t.Fatalf("generate TOTP code: %v", err)
+	}
+
+	enableResp := h.HTTPPost(t, "/api/auth/totp/enable", model.TOTPEnableRequest{Code: code}, regResp.SetupToken)
+	defer enableResp.Body.Close()
+	if enableResp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(enableResp.Body)
+		t.Fatalf("totp enable: status=%d body=%s", enableResp.StatusCode, body)
+	}
+
+	for _, cookie := range enableResp.Cookies() {
+		if cookie.Name == cookieAccess && cookie.Value != "" {
+			return cookie.Value, totpSecret
+		}
+	}
+
+	t.Fatal("SetupAdminWithTOTP: got empty access token cookie")
+	return "", ""
 }
 
 // CreateServer calls POST /api/servers and returns the server ID and the plaintext
