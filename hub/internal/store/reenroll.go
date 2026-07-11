@@ -24,6 +24,40 @@ func (s *Store) SetNodeCrypto(serverID, nodePubKeyB64, kekEncHex, enrollFingerpr
 	return nil
 }
 
+// SetNodeTransportPub stores the node's X25519 transport public key (base64)
+// for the given server. The column is additive (migration 020).
+func (s *Store) SetNodeTransportPub(serverID, transportPubB64 string) error {
+	result, err := s.db.Exec(
+		`UPDATE servers SET node_transport_pubkey = ?, updated_at = datetime('now') WHERE id = ?`,
+		transportPubB64, serverID,
+	)
+	if err != nil {
+		return fmt.Errorf("set node transport pubkey: %w", err)
+	}
+	rows, _ := result.RowsAffected()
+	if rows == 0 {
+		return fmt.Errorf(errServerNotFound)
+	}
+	return nil
+}
+
+// GetNodeTransportPub retrieves the node's X25519 transport public key (base64)
+// for the given server. Returns an empty string if the column is NULL (i.e. the
+// node was enrolled before migration 020).
+func (s *Store) GetNodeTransportPub(serverID string) (transportPubB64 string, err error) {
+	var pub sql.NullString
+	err = s.db.QueryRow(
+		`SELECT node_transport_pubkey FROM servers WHERE id = ?`, serverID,
+	).Scan(&pub)
+	if err == sql.ErrNoRows {
+		return "", fmt.Errorf(errServerNotFound)
+	}
+	if err != nil {
+		return "", fmt.Errorf("get node transport pubkey: %w", err)
+	}
+	return pub.String, nil
+}
+
 // GetNodeCrypto retrieves the node public key, encrypted KEK, and enrollment
 // fingerprint for the given server.
 func (s *Store) GetNodeCrypto(serverID string) (nodePubKeyB64, kekEncHex, enrollFingerprint string, err error) {

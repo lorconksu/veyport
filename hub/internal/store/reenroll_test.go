@@ -21,6 +21,48 @@ func seedServer(t *testing.T, s interface {
 	}
 }
 
+// TestNodeTransportPubRoundTrip verifies that SetNodeTransportPub and
+// GetNodeTransportPub persist and retrieve the X25519 transport public key.
+func TestNodeTransportPubRoundTrip(t *testing.T) {
+	s := testStore(t)
+	seedServer(t, s, "srv-tp")
+
+	// Newly seeded server has no transport pubkey — must return empty string.
+	got, err := s.GetNodeTransportPub("srv-tp")
+	if err != nil {
+		t.Fatalf("GetNodeTransportPub (empty): %v", err)
+	}
+	if got != "" {
+		t.Fatalf("expected empty transport pubkey, got %q", got)
+	}
+
+	// Store a transport pubkey.
+	const wantPub = "TRANSPORT_PUBKEY_B64=="
+	if err := s.SetNodeTransportPub("srv-tp", wantPub); err != nil {
+		t.Fatalf("SetNodeTransportPub: %v", err)
+	}
+
+	// Retrieve and verify.
+	got, err = s.GetNodeTransportPub("srv-tp")
+	if err != nil {
+		t.Fatalf("GetNodeTransportPub (set): %v", err)
+	}
+	if got != wantPub {
+		t.Fatalf("transport pubkey round-trip mismatch: got %q, want %q", got, wantPub)
+	}
+
+	// Unknown server must return errServerNotFound.
+	_, err = s.GetNodeTransportPub("no-such-server")
+	if err == nil {
+		t.Fatal("expected error for unknown server, got nil")
+	}
+
+	// SetNodeTransportPub on unknown server must also fail.
+	if err := s.SetNodeTransportPub("no-such-server", wantPub); err == nil {
+		t.Fatal("expected error for SetNodeTransportPub on unknown server, got nil")
+	}
+}
+
 func TestNodeCryptoRoundTrip(t *testing.T) {
 	s := testStore(t)
 	seedServer(t, s, "srv-1")

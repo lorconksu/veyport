@@ -214,8 +214,10 @@ func (h *Handler) handleReEnrollRequest(stream pb.AgentService_ConnectServer, re
 		if err := stream.Send(&pb.HubMessage{
 			Payload: &pb.HubMessage_ReenrollApproved{
 				ReenrollApproved: &pb.ReEnrollApproved{
-					Kek:       appr.kek,
-					Challenge: appr.challenge,
+					// TODO(H3): transport-encrypt — replace raw kek with sealKEKToNode result
+					EncryptedKek: appr.kek,
+					EphemeralPub: nil,
+					Challenge:    appr.challenge,
 				},
 			},
 		}); err != nil {

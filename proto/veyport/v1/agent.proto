@@ -71,6 +71,7 @@ message RegisterAgent {
   bytes csr = 6;
   bytes node_pubkey = 7;
   string enroll_fingerprint = 8;
+  bytes node_transport_pubkey = 9;
 }
 
 message RegisterAck {
@@ -239,8 +240,9 @@ message ReEnrollRequest {
 }
 
 message ReEnrollApproved {
-  bytes kek = 1;
-  bytes challenge = 2;
+  bytes ephemeral_pub = 1;
+  bytes encrypted_kek = 2;
+  bytes challenge = 3;
 }
 
 message ReEnrollProof {

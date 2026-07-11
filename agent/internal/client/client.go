@@ -989,7 +989,8 @@ func (c *Client) handleReEnrollApproved(approved *pb.ReEnrollApproved) (*pb.ReEn
 	if c.sealedNodeKeyHex == "" {
 		return nil, fmt.Errorf("no sealed node key available")
 	}
-	priv, err := nodekey.Open(c.sealedNodeKeyHex, approved.Kek)
+	// TODO(H3): transport-encrypt — replace with nodekey.OpenKEK(tPriv, approved.EphemeralPub, approved.EncryptedKek)
+	priv, err := nodekey.Open(c.sealedNodeKeyHex, approved.EncryptedKek)
 	if err != nil {
 		return nil, fmt.Errorf("open sealed node key: %w", err)
 	}

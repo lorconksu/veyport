@@ -718,17 +718,18 @@ func (x *HeartbeatAck) GetTimestamp() int64 {
 }
 
 type RegisterAgent struct {
-	state             protoimpl.MessageState `protogen:"open.v1"`
-	Token             string                 `protobuf:"bytes,1,opt,name=token,proto3" json:"token,omitempty"`
-	Hostname          string                 `protobuf:"bytes,2,opt,name=hostname,proto3" json:"hostname,omitempty"`
-	IpAddress         string                 `protobuf:"bytes,3,opt,name=ip_address,json=ipAddress,proto3" json:"ip_address,omitempty"`
-	Os                string                 `protobuf:"bytes,4,opt,name=os,proto3" json:"os,omitempty"`
-	AgentVersion      string                 `protobuf:"bytes,5,opt,name=agent_version,json=agentVersion,proto3" json:"agent_version,omitempty"`
-	Csr               []byte                 `protobuf:"bytes,6,opt,name=csr,proto3" json:"csr,omitempty"`
-	NodePubkey        []byte                 `protobuf:"bytes,7,opt,name=node_pubkey,json=nodePubkey,proto3" json:"node_pubkey,omitempty"`
-	EnrollFingerprint string                 `protobuf:"bytes,8,opt,name=enroll_fingerprint,json=enrollFingerprint,proto3" json:"enroll_fingerprint,omitempty"`
-	unknownFields     protoimpl.UnknownFields
-	sizeCache         protoimpl.SizeCache
+	state               protoimpl.MessageState `protogen:"open.v1"`
+	Token               string                 `protobuf:"bytes,1,opt,name=token,proto3" json:"token,omitempty"`
+	Hostname            string                 `protobuf:"bytes,2,opt,name=hostname,proto3" json:"hostname,omitempty"`
+	IpAddress           string                 `protobuf:"bytes,3,opt,name=ip_address,json=ipAddress,proto3" json:"ip_address,omitempty"`
+	Os                  string                 `protobuf:"bytes,4,opt,name=os,proto3" json:"os,omitempty"`
+	AgentVersion        string                 `protobuf:"bytes,5,opt,name=agent_version,json=agentVersion,proto3" json:"agent_version,omitempty"`
+	Csr                 []byte                 `protobuf:"bytes,6,opt,name=csr,proto3" json:"csr,omitempty"`
+	NodePubkey          []byte                 `protobuf:"bytes,7,opt,name=node_pubkey,json=nodePubkey,proto3" json:"node_pubkey,omitempty"`
+	EnrollFingerprint   string                 `protobuf:"bytes,8,opt,name=enroll_fingerprint,json=enrollFingerprint,proto3" json:"enroll_fingerprint,omitempty"`
+	NodeTransportPubkey []byte                 `protobuf:"bytes,9,opt,name=node_transport_pubkey,json=nodeTransportPubkey,proto3" json:"node_transport_pubkey,omitempty"`
+	unknownFields       protoimpl.UnknownFields
+	sizeCache           protoimpl.SizeCache
 }
 
 func (x *RegisterAgent) Reset() {
@@ -815,6 +816,13 @@ func (x *RegisterAgent) GetEnrollFingerprint() string {
 		return x.EnrollFingerprint
 	}
 	return ""
+}
+
+func (x *RegisterAgent) GetNodeTransportPubkey() []byte {
+	if x != nil {
+		return x.NodeTransportPubkey
+	}
+	return nil
 }
 
 type RegisterAck struct {
@@ -2395,8 +2403,9 @@ func (x *ReEnrollRequest) GetFingerprint() string {
 
 type ReEnrollApproved struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
-	Kek           []byte                 `protobuf:"bytes,1,opt,name=kek,proto3" json:"kek,omitempty"`
-	Challenge     []byte                 `protobuf:"bytes,2,opt,name=challenge,proto3" json:"challenge,omitempty"`
+	EphemeralPub  []byte                 `protobuf:"bytes,1,opt,name=ephemeral_pub,json=ephemeralPub,proto3" json:"ephemeral_pub,omitempty"`
+	EncryptedKek  []byte                 `protobuf:"bytes,2,opt,name=encrypted_kek,json=encryptedKek,proto3" json:"encrypted_kek,omitempty"`
+	Challenge     []byte                 `protobuf:"bytes,3,opt,name=challenge,proto3" json:"challenge,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -2431,9 +2440,16 @@ func (*ReEnrollApproved) Descriptor() ([]byte, []int) {
 	return file_proto_veyport_v1_agent_proto_rawDescGZIP(), []int{31}
 }
 
-func (x *ReEnrollApproved) GetKek() []byte {
+func (x *ReEnrollApproved) GetEphemeralPub() []byte {
 	if x != nil {
-		return x.Kek
+		return x.EphemeralPub
+	}
+	return nil
+}
+
+func (x *ReEnrollApproved) GetEncryptedKek() []byte {
+	if x != nil {
+		return x.EncryptedKek
 	}
 	return nil
 }
@@ -2584,7 +2600,7 @@ const file_proto_veyport_v1_agent_proto_rawDesc = "" +
 	"\n" +
 	"ip_address\x18\x04 \x01(\tR\tipAddress\",\n" +
 	"\fHeartbeatAck\x12\x1c\n" +
-	"\ttimestamp\x18\x01 \x01(\x03R\ttimestamp\"\xf7\x01\n" +
+	"\ttimestamp\x18\x01 \x01(\x03R\ttimestamp\"\xab\x02\n" +
 	"\rRegisterAgent\x12\x14\n" +
 	"\x05token\x18\x01 \x01(\tR\x05token\x12\x1a\n" +
 	"\bhostname\x18\x02 \x01(\tR\bhostname\x12\x1d\n" +
@@ -2595,7 +2611,8 @@ const file_proto_veyport_v1_agent_proto_rawDesc = "" +
 	"\x03csr\x18\x06 \x01(\fR\x03csr\x12\x1f\n" +
 	"\vnode_pubkey\x18\a \x01(\fR\n" +
 	"nodePubkey\x12-\n" +
-	"\x12enroll_fingerprint\x18\b \x01(\tR\x11enrollFingerprint\"\xaf\x01\n" +
+	"\x12enroll_fingerprint\x18\b \x01(\tR\x11enrollFingerprint\x122\n" +
+	"\x15node_transport_pubkey\x18\t \x01(\fR\x13nodeTransportPubkey\"\xaf\x01\n" +
 	"\vRegisterAck\x12\x18\n" +
 	"\asuccess\x18\x01 \x01(\bR\asuccess\x12\x1b\n" +
 	"\tserver_id\x18\x02 \x01(\tR\bserverId\x12\x14\n" +
@@ -2725,10 +2742,11 @@ const file_proto_veyport_v1_agent_proto_rawDesc = "" +
 	"\x0fReEnrollRequest\x12\x1b\n" +
 	"\tserver_id\x18\x01 \x01(\tR\bserverId\x12\x10\n" +
 	"\x03csr\x18\x02 \x01(\fR\x03csr\x12 \n" +
-	"\vfingerprint\x18\x03 \x01(\tR\vfingerprint\"B\n" +
-	"\x10ReEnrollApproved\x12\x10\n" +
-	"\x03kek\x18\x01 \x01(\fR\x03kek\x12\x1c\n" +
-	"\tchallenge\x18\x02 \x01(\fR\tchallenge\"-\n" +
+	"\vfingerprint\x18\x03 \x01(\tR\vfingerprint\"z\n" +
+	"\x10ReEnrollApproved\x12#\n" +
+	"\rephemeral_pub\x18\x01 \x01(\fR\fephemeralPub\x12#\n" +
+	"\rencrypted_kek\x18\x02 \x01(\fR\fencryptedKek\x12\x1c\n" +
+	"\tchallenge\x18\x03 \x01(\fR\tchallenge\"-\n" +
 	"\rReEnrollProof\x12\x1c\n" +
 	"\tsignature\x18\x01 \x01(\fR\tsignature\"(\n" +
 	"\x0eReEnrollDenied\x12\x16\n" +
