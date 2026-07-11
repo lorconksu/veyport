@@ -63,3 +63,37 @@ func TestReEnrollRequestLifecycle(t *testing.T) {
 		t.Fatalf("expected 0 pending after approval, got %d", len(pend))
 	}
 }
+
+// TestGetReEnrollRequestNullableColumns verifies that GetReEnrollRequest
+// succeeds when nullable columns (ip_address, fingerprint, anomaly_flags,
+// decided_by) contain NULL — the typical state of a freshly-created pending
+// request before any decision has been recorded.
+func TestGetReEnrollRequestNullableColumns(t *testing.T) {
+	s := testStore(t)
+	seedServer(t, s, "srv-null")
+
+	// Insert a row with explicit NULLs for the four nullable columns so that
+	// we reproduce the exact condition that breaks GetReEnrollRequest when it
+	// scans into plain string fields instead of sql.NullString.
+	_, err := s.DB().Exec(
+		`INSERT INTO reenroll_requests (id, server_id, requested_at, ip_address, fingerprint, status, anomaly_flags, decided_by)
+		 VALUES (?, ?, ?, NULL, NULL, 'pending', NULL, NULL)`,
+		"re-null", "srv-null", "2026-07-11 00:00:00",
+	)
+	if err != nil {
+		t.Fatalf("seed row: %v", err)
+	}
+
+	got, err := s.GetReEnrollRequest("re-null")
+	if err != nil {
+		t.Fatalf("GetReEnrollRequest with NULL columns: %v", err)
+	}
+	if got.ID != "re-null" {
+		t.Fatalf("expected id=re-null, got %q", got.ID)
+	}
+	// NULL columns must map to empty string.
+	if got.IPAddress != "" || got.Fingerprint != "" || got.AnomalyFlags != "" || got.DecidedBy != "" {
+		t.Fatalf("expected empty strings for NULL columns, got ip=%q fp=%q flags=%q decided=%q",
+			got.IPAddress, got.Fingerprint, got.AnomalyFlags, got.DecidedBy)
+	}
+}

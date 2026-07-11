@@ -56,16 +56,21 @@ func (s *Store) CreateReEnrollRequest(r *model.ReEnrollRequest) error {
 // GetReEnrollRequest retrieves a re-enrollment request by ID.
 func (s *Store) GetReEnrollRequest(id string) (*model.ReEnrollRequest, error) {
 	var r model.ReEnrollRequest
+	var ipAddress, fingerprint, anomalyFlags, decidedBy sql.NullString
 	err := s.db.QueryRow(
 		`SELECT id, server_id, requested_at, ip_address, fingerprint, status, anomaly_flags, decided_by
 		 FROM reenroll_requests WHERE id = ?`, id,
-	).Scan(&r.ID, &r.ServerID, &r.RequestedAt, &r.IPAddress, &r.Fingerprint, &r.Status, &r.AnomalyFlags, &r.DecidedBy)
+	).Scan(&r.ID, &r.ServerID, &r.RequestedAt, &ipAddress, &fingerprint, &r.Status, &anomalyFlags, &decidedBy)
 	if err == sql.ErrNoRows {
 		return nil, fmt.Errorf("reenroll request not found")
 	}
 	if err != nil {
 		return nil, fmt.Errorf("get reenroll request: %w", err)
 	}
+	r.IPAddress = ipAddress.String
+	r.Fingerprint = fingerprint.String
+	r.AnomalyFlags = anomalyFlags.String
+	r.DecidedBy = decidedBy.String
 	return &r, nil
 }
 
