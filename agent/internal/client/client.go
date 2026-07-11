@@ -306,44 +306,6 @@ func (c *Client) reEnroll(ctx context.Context) error {
 			}
 			log.Printf("re-enroll proof sent; waiting for new certificate")
 
-		case *pb.HubMessage_RegisterAck:
-			// Hub sends the new cert as a RegisterAck following proof verification.
-			ack := p.RegisterAck
-			if !ack.Success {
-				return fmt.Errorf("re-enroll cert issuance rejected: %s", ack.Error)
-			}
-			if len(ack.ClientCert) == 0 || len(ack.CaCert) == 0 {
-				return fmt.Errorf("re-enroll RegisterAck missing cert material")
-			}
-			if err := c.certStore.StoreCert(ack.ClientCert, ack.CaCert); err != nil {
-				return fmt.Errorf("store re-enrolled cert: %w", err)
-			}
-			// Seal updated node key if hub sent a new KEK.
-			if len(ack.NodeKek) > 0 {
-				_, pubB64, genErr := nodekey.Generate()
-				// Reuse the existing node key — hub may reseal it.
-				// If hub sent a KEK, open the current key and re-seal with the new KEK.
-				if c.sealedNodeKeyHex != "" {
-					priv, openErr := nodekey.Open(c.sealedNodeKeyHex, ack.NodeKek)
-					if openErr != nil {
-						log.Printf("warning: could not open node key with new KEK: %v", openErr)
-					} else {
-						c.sealAndPersistNodeKey(priv, ack.NodeKek)
-						for i := range priv {
-							priv[i] = 0
-						}
-					}
-				}
-				_ = pubB64
-				_ = genErr
-			}
-			select {
-			case c.reconnectCh <- struct{}{}:
-			default:
-			}
-			log.Printf("re-enrollment complete; reconnecting with new mTLS certificate")
-			return nil
-
 		case *pb.HubMessage_CertRenewResponse:
 			// Alternative: hub may deliver cert via CertRenewResponse format.
 			resp := p.CertRenewResponse

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/ecdsa"
+	"crypto/ed25519"
 	"crypto/elliptic"
 	"crypto/rand"
 	"crypto/sha256"
@@ -857,6 +858,9 @@ func TestBuildReEnrollRequest_IncludesServerIDCSRFingerprint(t *testing.T) {
 	if req.ServerId != "srv-re" || len(req.Csr) == 0 {
 		t.Fatalf("bad request: %+v", req)
 	}
+	if req.Fingerprint != nodekey.Fingerprint() {
+		t.Fatalf("fingerprint mismatch: got %q, want %q", req.Fingerprint, nodekey.Fingerprint())
+	}
 }
 
 func TestHandleReEnrollApproved_DecryptsAndSigns(t *testing.T) {
@@ -871,5 +875,9 @@ func TestHandleReEnrollApproved_DecryptsAndSigns(t *testing.T) {
 	}
 	if len(proof.Signature) == 0 {
 		t.Fatal("expected signature")
+	}
+	pub := priv.Public().(ed25519.PublicKey)
+	if !ed25519.Verify(pub, []byte("nonce"), proof.Signature) {
+		t.Fatal("proof signature does not verify against the node public key")
 	}
 }
