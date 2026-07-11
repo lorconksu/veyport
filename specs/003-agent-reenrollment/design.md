@@ -91,6 +91,21 @@ screen ("possible clone — original last seen 2 min ago"). Detection, not
 prevention — prevention against a perfect copy is impossible without a secret
 off the box, which the KEK+TOTP already provides.
 
+### 3.2 Multi-admin approval
+
+TOTP here authenticates the **approver**, not the node — so there is **no single
+shared TOTP**. With multiple admins:
+
+- Re-enrollment approval is an **admin-role action**; any admin may approve.
+- Each approver steps up with **their own** TOTP secret (the same one they log in
+  with) — validated only against the account performing the approval, never a
+  shared or interchangeable code.
+- Every approval is **audited to the specific admin** who granted it.
+
+LDAP terminal-access users are not admins and cannot approve. Whether to further
+restrict *which* admins may approve is an open question (§10). Requiring **two**
+admins (four-eyes / dual approval) is a liked-but-deferred enhancement (§11).
+
 ## 4. Data Flow
 
 ### 4.1 Tier 1 — steady-state renewal (fix the drift)
@@ -99,13 +114,13 @@ off the box, which the KEK+TOTP already provides.
 sequenceDiagram
     participant A as Agent
     participant H as Hub
-    Note over A: cert has < 6h left (still valid)
+    Note over A: cert has under 6h left (still valid)
     A->>H: CertRenewRequest (CSR) over authenticated stream
     H->>H: SignCSR (same serverID)
     H-->>A: CertRenewResponse (new cert)
     A->>A: store new cert
-    A->>A: NEW: reload the live connection's client cert<br/>(hot-swap or graceful reconnect) — no drift
-    Note over A,H: connection now uses the fresh cert; no human involved
+    A->>A: NEW - reload the live connection client cert<br/>(hot-swap or graceful reconnect), no drift
+    Note over A,H: connection now uses the fresh cert, no human involved
 ```
 
 ### 4.2 Tier 2 — human-approved re-enrollment (expired cert)
@@ -115,16 +130,16 @@ sequenceDiagram
     participant A as Agent
     participant H as Hub
     participant D as Dashboard (Admin)
-    Note over A: cert expired; mTLS reconnect rejected
+    Note over A: cert expired, mTLS reconnect rejected
     A->>H: ReEnrollRequest over CA-pinned bootstrap TLS<br/>(serverID, node-key ref, DMI fingerprint, new CSR)
-    H->>H: park PENDING re-enrollment; compute anomaly flags
-    D->>H: admin opens dashboard, sees Pending node<br/>(hostname, IP, fingerprint delta, "original last seen…")
-    D->>H: Approve + TOTP code
-    H->>H: verify TOTP (step-up)
+    H->>H: park PENDING re-enrollment, compute anomaly flags
+    D->>H: admin opens dashboard, sees Pending node<br/>(hostname, IP, fingerprint delta, original last seen)
+    D->>H: Approve with own TOTP code
+    H->>H: verify TOTP (step-up), attribute to that admin
     H-->>A: release KEK (over CA-pinned channel) + challenge
-    A->>A: decrypt durable key with KEK; sign challenge + CSR; wipe secrets
+    A->>A: decrypt durable key with KEK, sign challenge + CSR, wipe secrets
     A->>H: signed proof + CSR
-    H->>H: verify signature vs stored node pubkey; SignCSR (same serverID)
+    H->>H: verify signature vs stored node pubkey, SignCSR (same serverID)
     H-->>A: fresh mTLS cert
     Note over A,H: node reconnects with mTLS, same serverID, history intact
 ```
@@ -148,7 +163,7 @@ sequenceDiagram
 |--------|--------|
 | **KEK issuance & storage** | On enrollment, generate a random 256-bit KEK, store it at rest (encrypted under the existing `storage_key`, like other secrets) keyed by serverID; return it once to the agent. |
 | **Re-enroll intake** | New RPC/message: accept `ReEnrollRequest` over bootstrap TLS; create a **pending** record; compute anomaly flags (fingerprint delta, original-online, geo/IP change). |
-| **Approval endpoint** | `POST /api/servers/{id}/reenroll/approve` (adminOnly + **TOTP step-up**); on success, release KEK + challenge to the waiting agent, verify the signed proof against the stored node pubkey, then `SignCSR` for the **same serverID**. |
+| **Approval endpoint** | `POST /api/servers/{id}/reenroll/approve` (adminOnly + **per-admin TOTP step-up** — validated against the approving admin's *own* secret, audited to them; see §3.2); on success, release KEK + challenge to the waiting agent, verify the signed proof against the stored node pubkey, then `SignCSR` for the **same serverID**. |
 | **Deny / expire** | Deny endpoint (flag as suspicious → audit); pending requests expire after N minutes. |
 | **Cert lifetime knob** | Make `validity` configurable (default reviewed; 12h is aggressive with no safety margin — candidate for a few days, still short-lived, with renewal). |
 | **Audit** | New audit events: `agent.reenroll_requested`, `agent.reenroll_approved`, `agent.reenroll_denied`, `agent.clone_suspected`. |
@@ -157,7 +172,8 @@ sequenceDiagram
 
 - A **Pending re-enrollment** surface (badge on the node / a review queue):
   hostname, IP, last-seen, **fingerprint delta**, anomaly banner, Approve/Deny.
-- Approve action prompts for a **TOTP code** (step-up).
+- Approve action prompts the approving admin for **their own TOTP code**
+  (step-up); the approval is attributed to that admin in the audit log.
 
 ### 5.4 Data model
 
@@ -209,7 +225,18 @@ assumes the hypervisor is trusted.
 ## 10. Open Questions / Deferred
 
 - Cert lifetime target (keep 12h + renewal, or lengthen to a few days for margin?).
-- One admin TOTP for all nodes vs. optional per-node step-up for sensitive nodes.
+- Whether to **scope which admins** may approve re-enrollments — any admin by
+  default (§3.2); a per-node/subset restriction is a possible future refinement.
 - Whether to add the DMI fingerprint to the KDF (weak binding) or use it purely
   as a detection signal (leaning: detection only).
-- vTPM / PAKE as a future hardening tier (explicitly deferred).
+
+_(TOTP-per-admin behaviour is now decided — see §3.2.)_
+
+## 11. Backlog (future features)
+
+- **Dual approval / four-eyes** — optionally require **two different admins** to
+  approve a re-enrollment (per-node or policy flag) for high-value nodes. Liked,
+  but out of scope for the initial build; add as a follow-up feature.
+- **vTPM / PAKE binding** — hardware / zero-knowledge hardening tier so the
+  passphrase/KEK never needs to reach a potentially-live-compromised node
+  (see §2 non-goals). Deferred; revisit if the threat model tightens.
