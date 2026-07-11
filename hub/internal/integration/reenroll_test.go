@@ -7,12 +7,12 @@ package integration
 // without running a real agent subprocess or forcing real cert expiry.
 //
 // Happy path (TestReEnrollHappyPath):
-//  1. Seed node crypto for a server directly via the store.
+//  1. Seed node crypto + transport pubkey for a server directly via the store.
 //  2. Open a bootstrap (CA-pinned, no client cert) gRPC stream; send ReEnrollRequest.
 //  3. Discover the pending request via GET /api/servers/reenroll/pending.
 //  4. In a goroutine, approve via POST /api/servers/{id}/reenroll/approve (valid TOTP).
-//  5. Read ReEnrollApproved{Kek, Challenge} from the stream.
-//  6. Sign the challenge with the node private key; send ReEnrollProof.
+//  5. Read ReEnrollApproved{EphemeralPub, EncryptedKek, Challenge} from the stream.
+//  6. Inline-open the KEK (X25519 ECDH + HKDF + AES-GCM); sign the challenge; send ReEnrollProof.
 //  7. Assert: stream yields CertRenewResponse; parsed cert CN == serverID;
 //     HTTP approve returned 200; DB status is "approved".
 //
@@ -20,10 +20,17 @@ package integration
 //  1–3. Same as above.
 //  4. Deny via POST /api/servers/{id}/reenroll/deny.
 //  5. Assert: DB status is "denied"; no cert arrives on the stream.
+//
+// No-transport-key backward-compat (TestReEnrollNoTransportKey_ApprovalDenied):
+//  Seed a server WITHOUT storing a transport pubkey.
+//  Approve the request — assert ReleaseKEK returns a 4xx (no transport key).
 
 import (
 	"bytes"
 	"context"
+	"crypto/aes"
+	"crypto/cipher"
+	"crypto/ecdh"
 	"crypto/ecdsa"
 	"crypto/ed25519"
 	"crypto/elliptic"
@@ -56,9 +63,10 @@ import (
 
 // enrolledServer holds the node crypto state for a seeded server.
 type enrolledServer struct {
-	serverID    string
-	priv        ed25519.PrivateKey
-	fingerprint string
+	serverID       string
+	priv           ed25519.PrivateKey
+	fingerprint    string
+	transportPriv  []byte // X25519 private key (32 bytes); nil if not seeded
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -77,8 +85,18 @@ func sealKEKForHub(kek []byte, storageKey string) (string, error) {
 }
 
 // seedEnrolledServer creates a server record and populates its node crypto
-// directly via the store, simulating a prior normal enrollment.
+// and transport public key directly via the store, simulating a prior normal
+// enrollment. The transport keypair is included so the simulated agent can
+// open the transport-encrypted KEK during re-enrollment.
 func seedEnrolledServer(t *testing.T, h *TestHarness, adminToken, name string) *enrolledServer {
+	t.Helper()
+	return seedEnrolledServerWithTransport(t, h, adminToken, name, true)
+}
+
+// seedEnrolledServerWithTransport is like seedEnrolledServer but lets the
+// caller control whether a transport pubkey is registered (withTransport=false
+// simulates an old agent that has not yet registered an X25519 key).
+func seedEnrolledServerWithTransport(t *testing.T, h *TestHarness, adminToken, name string, withTransport bool) *enrolledServer {
 	t.Helper()
 
 	// Use the HTTP API to create the server record (gives it a proper UUID).
@@ -108,10 +126,26 @@ func seedEnrolledServer(t *testing.T, h *TestHarness, adminToken, name string) *
 		t.Fatalf("seedEnrolledServer: SetNodeCrypto: %v", err)
 	}
 
+	var transportPriv []byte
+	if withTransport {
+		// Generate an X25519 transport keypair and register the public half.
+		curve := ecdh.X25519()
+		tPrivKey, genErr := curve.GenerateKey(rand.Reader)
+		if genErr != nil {
+			t.Fatalf("seedEnrolledServer: generate X25519 transport key: %v", genErr)
+		}
+		transportPriv = tPrivKey.Bytes()
+		tPubB64 := base64.StdEncoding.EncodeToString(tPrivKey.PublicKey().Bytes())
+		if err := h.Store.SetNodeTransportPub(serverID, tPubB64); err != nil {
+			t.Fatalf("seedEnrolledServer: SetNodeTransportPub: %v", err)
+		}
+	}
+
 	return &enrolledServer{
-		serverID:    serverID,
-		priv:        priv,
-		fingerprint: fp,
+		serverID:      serverID,
+		priv:          priv,
+		fingerprint:   fp,
+		transportPriv: transportPriv,
 	}
 }
 
@@ -257,6 +291,25 @@ func approveReEnroll(t *testing.T, h *TestHarness, adminToken, totpSecret, serve
 	return ch
 }
 
+// approveReEnrollSync fires POST /api/servers/{id}/reenroll/approve synchronously
+// and returns the HTTP status code. Used when the approve call is expected to
+// fail fast (e.g., no transport key), without needing to wait for agent proof.
+func approveReEnrollSync(t *testing.T, h *TestHarness, adminToken, totpSecret, serverID, requestID string) int {
+	t.Helper()
+	h.HTTPServer.ClearTOTPCache()
+	code, err := auth.GenerateValidCode(totpSecret)
+	if err != nil {
+		t.Fatalf("approveReEnrollSync: GenerateValidCode: %v", err)
+	}
+	path := fmt.Sprintf("/api/servers/%s/reenroll/approve", serverID)
+	resp := h.HTTPPost(t, path, map[string]string{
+		"request_id": requestID,
+		"totp_code":  code,
+	}, adminToken)
+	defer resp.Body.Close()
+	return resp.StatusCode
+}
+
 // denyReEnroll calls POST /api/servers/{id}/reenroll/deny synchronously.
 func denyReEnroll(t *testing.T, h *TestHarness, adminToken, serverID, requestID string) {
 	t.Helper()
@@ -367,16 +420,34 @@ func TestReEnrollHappyPath(t *testing.T) {
 			t.Fatalf("expected ReEnrollApproved, got %T", msg.Payload)
 		}
 		approved = p.ReenrollApproved
-		t.Logf("received ReEnrollApproved kek_len=%d challenge_len=%d",
-			len(approved.Kek), len(approved.Challenge))
+		t.Logf("received ReEnrollApproved ephemeral_pub_len=%d encrypted_kek_len=%d challenge_len=%d",
+			len(approved.EphemeralPub), len(approved.EncryptedKek), len(approved.Challenge))
 	case err := <-errCh:
 		t.Fatalf("stream error waiting for ReEnrollApproved: %v", err)
 	case <-time.After(15 * time.Second):
 		t.Fatal("timed out waiting for ReEnrollApproved")
 	}
 
-	// Sign the challenge with our ed25519 private key and send the proof.
-	// Mirrors agent/internal/nodekey.Sign — ed25519.Sign(priv, challenge).
+	// Verify the approved message contains the transport-encrypted KEK fields.
+	if len(approved.EphemeralPub) == 0 {
+		t.Fatal("ReEnrollApproved: EphemeralPub is empty")
+	}
+	if len(approved.EncryptedKek) == 0 {
+		t.Fatal("ReEnrollApproved: EncryptedKek is empty")
+	}
+
+	// Open the transport-encrypted KEK using the inline construction
+	// (mirrors agent/internal/nodekey.OpenKEK exactly).
+	kek, err := openTransportKEK(srv.transportPriv, approved.EphemeralPub, approved.EncryptedKek)
+	if err != nil {
+		t.Fatalf("open transport KEK: %v", err)
+	}
+	t.Logf("transport KEK decrypted successfully (len=%d)", len(kek))
+
+	// Open the sealed identity key using the decrypted KEK.
+	// We don't have the sealed hex here — instead we sign with the raw ed25519
+	// priv we seeded with. (The test seeded priv directly, not via a sealed key.)
+	// So we just sign the challenge with the ed25519 private key.
 	sig := ed25519.Sign(srv.priv, approved.Challenge)
 	if err := stream.Send(&pb.AgentMessage{
 		Payload: &pb.AgentMessage_ReenrollProof{
@@ -565,4 +636,162 @@ streamClosed:
 	t.Logf("connMgr.GetConn(%q) == nil — no registration occurred (correct)", victimID)
 
 	t.Log("TestReEnroll_UnknownServer_DoesNotRegister PASS")
+}
+
+// TestReEnrollNoTransportKey_ApprovalDenied asserts the backward-compat policy:
+// if a node has no stored X25519 transport pubkey (old enrollment), the HTTP
+// approve call MUST return a 4xx (not 200), and no KEK travels in plaintext.
+// The node must re-register to obtain a transport key.
+func TestReEnrollNoTransportKey_ApprovalDenied(t *testing.T) {
+	h := StartHarness(t)
+	adminToken, totpSecret := h.SetupAdminWithTOTP(t)
+
+	// Seed a server WITHOUT a transport pubkey (withTransport=false).
+	srv := seedEnrolledServerWithTransport(t, h, adminToken, "reenroll-no-transport-server", false)
+	t.Logf("seeded server id=%s (no transport pubkey)", srv.serverID)
+
+	csrDER := generateCSR(t, srv.serverID)
+
+	stream, conn := openReEnrollStream(t, h)
+	defer conn.Close()
+	defer stream.CloseSend()
+
+	if err := stream.Send(&pb.AgentMessage{
+		Payload: &pb.AgentMessage_ReenrollRequest{
+			ReenrollRequest: &pb.ReEnrollRequest{
+				ServerId:    srv.serverID,
+				Csr:         csrDER,
+				Fingerprint: srv.fingerprint,
+			},
+		},
+	}); err != nil {
+		t.Fatalf("send ReEnrollRequest: %v", err)
+	}
+
+	requestID := waitForPendingReEnroll(t, h, srv.serverID, adminToken, 5*time.Second)
+	t.Logf("pending request id=%s", requestID)
+
+	// Approve synchronously — ReleaseKEK should fail fast with "no transport key".
+	status := approveReEnrollSync(t, h, adminToken, totpSecret, srv.serverID, requestID)
+	if status == http.StatusOK {
+		t.Fatalf("expected 4xx for no-transport-key node, got 200 — raw KEK may have been released")
+	}
+	t.Logf("approve returned HTTP %d (non-200, as expected for missing transport key)", status)
+
+	// Verify no CertRenewResponse arrives on the stream (the gRPC stream was never signalled).
+	msgCh, _ := recvHubMessage(stream)
+	select {
+	case msg := <-msgCh:
+		if _, ok := msg.Payload.(*pb.HubMessage_CertRenewResponse); ok {
+			t.Fatal("SECURITY: received CertRenewResponse despite missing transport key")
+		}
+		t.Logf("received non-cert message %T (acceptable)", msg.Payload)
+	case <-time.After(2 * time.Second):
+		t.Log("no cert received within 2s — correct")
+	}
+
+	t.Log("TestReEnrollNoTransportKey_ApprovalDenied PASS")
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Transport KEK inline open
+// ─────────────────────────────────────────────────────────────────────────────
+
+// openTransportKEK implements the "veyport-kek-transport-v1" sealed-box open
+// WITHOUT importing agent/internal/nodekey (cross-module import forbidden).
+//
+// This is an exact mirror of nodekey.OpenKEK / kektransport.sealKEKToNodeCore:
+//  1. shared = ECDH(tPriv, ePub)
+//  2. info = "veyport-kek-transport-v1" || ePub (raw) || tPub (raw)
+//  3. key = HKDF-SHA256(ikm=shared, salt=nil, info, len=32)
+//  4. nonce=encryptedKek[:12]; kek = AES-256-GCM(key).Open(nonce, encryptedKek[12:])
+func openTransportKEK(transportPrivBytes, ephemeralPubBytes, encryptedKek []byte) ([]byte, error) {
+	if len(encryptedKek) < 13 {
+		return nil, fmt.Errorf("encryptedKek too short: %d bytes", len(encryptedKek))
+	}
+	curve := ecdh.X25519()
+	tPrivKey, err := curve.NewPrivateKey(transportPrivBytes)
+	if err != nil {
+		return nil, fmt.Errorf("parse transport private key: %w", err)
+	}
+	tPubBytes := tPrivKey.PublicKey().Bytes()
+
+	ePubKey, err := curve.NewPublicKey(ephemeralPubBytes)
+	if err != nil {
+		return nil, fmt.Errorf("parse ephemeral public key: %w", err)
+	}
+	shared, err := tPrivKey.ECDH(ePubKey)
+	if err != nil {
+		return nil, fmt.Errorf("ECDH: %w", err)
+	}
+
+	// HKDF-SHA256 Extract+Expand:
+	// info = "veyport-kek-transport-v1" || ePub || tPub (raw bytes, matching kektransport.go)
+	const label = "veyport-kek-transport-v1"
+	infoStr := label + string(ephemeralPubBytes) + string(tPubBytes)
+
+	key := hkdfSHA256(shared, nil, []byte(infoStr), 32)
+
+	block, err := aes.NewCipher(key)
+	if err != nil {
+		return nil, fmt.Errorf("AES: %w", err)
+	}
+	gcm, err := cipher.NewGCM(block)
+	if err != nil {
+		return nil, fmt.Errorf("GCM: %w", err)
+	}
+	nonce := encryptedKek[:12]
+	ct := encryptedKek[12:]
+	kek, err := gcm.Open(nil, nonce, ct, nil)
+	if err != nil {
+		return nil, fmt.Errorf("GCM open: %w", err)
+	}
+	return kek, nil
+}
+
+// hkdfSHA256 implements HKDF-Extract followed by HKDF-Expand using
+// HMAC-SHA256, producing keyLen bytes. This mirrors crypto/hkdf.Key() from
+// Go 1.24 stdlib without requiring a separate import in the test.
+//
+// Extract: prk = HMAC-SHA256(salt, ikm)   (salt=zeros if nil)
+// Expand:  T(1) = HMAC-SHA256(prk, ""||info||0x01); output = T(1)[:keyLen]
+func hkdfSHA256(ikm, salt, info []byte, keyLen int) []byte {
+	import_hmac_sha256 := func(key, data []byte) []byte {
+		import_hmac := func(key, data []byte) []byte {
+			blockSize := 64
+			if len(key) > blockSize {
+				h := sha256.New()
+				h.Write(key)
+				key = h.Sum(nil)
+			}
+			ipad := make([]byte, blockSize)
+			opad := make([]byte, blockSize)
+			copy(ipad, key)
+			copy(opad, key)
+			for i := range ipad {
+				ipad[i] ^= 0x36
+				opad[i] ^= 0x5c
+			}
+			inner := sha256.New()
+			inner.Write(ipad)
+			inner.Write(data)
+			innerSum := inner.Sum(nil)
+			outer := sha256.New()
+			outer.Write(opad)
+			outer.Write(innerSum)
+			return outer.Sum(nil)
+		}
+		return import_hmac(key, data)
+	}
+
+	// Extract
+	if salt == nil {
+		salt = make([]byte, sha256.Size)
+	}
+	prk := import_hmac_sha256(salt, ikm)
+
+	// Expand: single block (T(1)) — sufficient for 32-byte output
+	t1Input := append(info, 0x01)
+	t1 := import_hmac_sha256(prk, t1Input)
+	return t1[:keyLen]
 }

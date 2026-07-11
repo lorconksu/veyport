@@ -223,7 +223,7 @@ func (h *Handler) performHandshake(stream pb.AgentService_ConnectServer) (*hands
 
 func (h *Handler) performRegisterHandshake(stream pb.AgentService_ConnectServer, reg *pb.RegisterAgent, peerIP string) (*handshakeResult, error) {
 	agentIP := preferredAgentIP(reg.GetIpAddress(), peerIP)
-	serverID, clientCert, caCert, nodeKek, err := h.handleRegister(reg.Token, reg.Hostname, agentIP, reg.Os, reg.AgentVersion, reg.Csr, reg.NodePubkey, reg.EnrollFingerprint)
+	serverID, clientCert, caCert, nodeKek, err := h.handleRegister(reg.Token, reg.Hostname, agentIP, reg.Os, reg.AgentVersion, reg.Csr, reg.NodePubkey, reg.EnrollFingerprint, reg.NodeTransportPubkey)
 	if err != nil {
 		h.logRegistrationAuditFailure(reg, peerIP, err)
 		_ = stream.Send(&pb.HubMessage{
@@ -457,7 +457,7 @@ func (h *Handler) handleStreamHeartbeat(serverID string, stream pb.AgentService_
 	return err
 }
 
-func (h *Handler) handleRegister(rawToken, hostname, ip, os, agentVersion string, csr, nodePubkey []byte, enrollFingerprint string) (string, []byte, []byte, []byte, error) {
+func (h *Handler) handleRegister(rawToken, hostname, ip, os, agentVersion string, csr, nodePubkey []byte, enrollFingerprint string, nodeTransportPubkey []byte) (string, []byte, []byte, []byte, error) {
 	hash := sha256.Sum256([]byte(rawToken))
 	tokenHash := fmt.Sprintf("%x", hash)
 	srv, err := h.store.GetServerByToken(tokenHash)
@@ -495,6 +495,18 @@ func (h *Handler) handleRegister(rawToken, hostname, ip, os, agentVersion string
 			return "", nil, nil, nil, fmt.Errorf("store node crypto: %w", err)
 		}
 		nodeKek = kek
+	}
+
+	// Store the X25519 transport public key if the agent sent one.
+	// This key is used to encrypt the KEK during re-enrollment so that only the
+	// real node (holder of the transport private key) can decrypt it.
+	if len(nodeTransportPubkey) > 0 {
+		transportPubB64 := base64.StdEncoding.EncodeToString(nodeTransportPubkey)
+		if err := h.store.SetNodeTransportPub(srv.ID, transportPubB64); err != nil {
+			// Non-fatal: log and continue; the agent can still operate, but
+			// re-enrollment will be denied until a transport key is registered.
+			log.Printf("warning: failed to store transport pubkey for %s: %v", srv.ID, err)
+		}
 	}
 
 	return srv.ID, clientCert, caCert, nodeKek, nil

@@ -3,6 +3,7 @@ package client
 import (
 	"bytes"
 	"context"
+	"crypto/ecdh"
 	"crypto/sha256"
 	"crypto/tls"
 	"crypto/x509"
@@ -62,30 +63,31 @@ const (
 var errReconnectWithMTLS = errors.New("reconnect required to authenticate with issued client certificate")
 
 type Client struct {
-	hubAddr          string
-	serverID         string
-	token            string
-	hostname         string
-	ipAddress        string
-	os               string
-	agentVersion     string
-	backoff          time.Duration
-	maxBackoff       time.Duration
-	tailSessionsMu   sync.Mutex
-	tailSessions     map[string]chan struct{}
-	certRenewalMu    sync.Mutex
-	certRenewalSent  bool
-	certRenewalAt    time.Time
-	dropzone         *dropzone.Dropzone
-	certStore        *certs.Store
-	certDir          string // directory for mTLS cert storage and node key
-	unregisterToken  string
-	insecure         bool
-	allowedPaths     []string
-	hubCAPin         string
-	onRegistered     func(serverID string)
-	reconnectCh      chan struct{} // signals connectAndStream to reconnect (e.g. to adopt a renewed cert)
-	sealedNodeKeyHex string      // AES-GCM sealed Ed25519 private key (hex), empty if not yet enrolled
+	hubAddr              string
+	serverID             string
+	token                string
+	hostname             string
+	ipAddress            string
+	os                   string
+	agentVersion         string
+	backoff              time.Duration
+	maxBackoff           time.Duration
+	tailSessionsMu       sync.Mutex
+	tailSessions         map[string]chan struct{}
+	certRenewalMu        sync.Mutex
+	certRenewalSent      bool
+	certRenewalAt        time.Time
+	dropzone             *dropzone.Dropzone
+	certStore            *certs.Store
+	certDir              string // directory for mTLS cert storage and node key
+	unregisterToken      string
+	insecure             bool
+	allowedPaths         []string
+	hubCAPin             string
+	onRegistered         func(serverID string)
+	reconnectCh          chan struct{} // signals connectAndStream to reconnect (e.g. to adopt a renewed cert)
+	sealedNodeKeyHex     string       // AES-GCM sealed Ed25519 private key (hex), empty if not yet enrolled
+	transportPrivBytes   []byte       // X25519 transport private key (32 bytes), empty until first enrollment
 }
 
 func New(cfg Config) *Client {
@@ -104,27 +106,38 @@ func New(cfg Config) *Client {
 		sealedNodeKeyHex = strings.TrimSpace(string(data))
 	}
 
+	// Load previously generated transport private key from disk (empty if not yet enrolled).
+	// The transport key is stored unsealed — it must be usable without the KEK.
+	var transportPrivBytes []byte
+	if data, err := os.ReadFile(filepath.Join(certDir, "node_transport.key")); err == nil {
+		decoded, decErr := hex.DecodeString(strings.TrimSpace(string(data)))
+		if decErr == nil && len(decoded) == 32 {
+			transportPrivBytes = decoded
+		}
+	}
+
 	return &Client{
-		hubAddr:          cfg.HubAddr,
-		serverID:         cfg.ServerID,
-		token:            cfg.Token,
-		hostname:         cfg.Hostname,
-		ipAddress:        cfg.IPAddress,
-		os:               cfg.OS,
-		agentVersion:     cfg.AgentVersion,
-		backoff:          1 * time.Second,
-		maxBackoff:       60 * time.Second,
-		tailSessions:     make(map[string]chan struct{}),
-		dropzone:         dropzone.New(dropzoneDir),
-		certStore:        certs.NewStore(certDir),
-		certDir:          certDir,
-		unregisterToken:  cfg.UnregisterToken,
-		insecure:         cfg.Insecure,
-		allowedPaths:     cfg.AllowedPaths,
-		hubCAPin:         cfg.HubCAPin,
-		onRegistered:     cfg.OnRegistered,
-		reconnectCh:      make(chan struct{}, 1),
-		sealedNodeKeyHex: sealedNodeKeyHex,
+		hubAddr:            cfg.HubAddr,
+		serverID:           cfg.ServerID,
+		token:              cfg.Token,
+		hostname:           cfg.Hostname,
+		ipAddress:          cfg.IPAddress,
+		os:                 cfg.OS,
+		agentVersion:       cfg.AgentVersion,
+		backoff:            1 * time.Second,
+		maxBackoff:         60 * time.Second,
+		tailSessions:       make(map[string]chan struct{}),
+		dropzone:           dropzone.New(dropzoneDir),
+		certStore:          certs.NewStore(certDir),
+		certDir:            certDir,
+		unregisterToken:    cfg.UnregisterToken,
+		insecure:           cfg.Insecure,
+		allowedPaths:       cfg.AllowedPaths,
+		hubCAPin:           cfg.HubCAPin,
+		onRegistered:       cfg.OnRegistered,
+		reconnectCh:        make(chan struct{}, 1),
+		sealedNodeKeyHex:   sealedNodeKeyHex,
+		transportPrivBytes: transportPrivBytes,
 	}
 }
 
@@ -867,17 +880,48 @@ func (c *Client) sendRegister(stream pb.AgentService_ConnectClient) (bool, error
 		}
 	}
 
+	// Generate or reuse the X25519 transport keypair for KEK-encrypted re-enrollment.
+	// The transport private key is stored unsealed (it must be usable without the KEK).
+	var transportPubBytes []byte
+	if len(c.transportPrivBytes) != 32 {
+		tPriv, tPub, genErr := nodekey.GenerateTransport()
+		if genErr != nil {
+			log.Printf("warning: failed to generate transport key: %v", genErr)
+		} else {
+			if mkErr := os.MkdirAll(c.certDir, 0700); mkErr != nil {
+				log.Printf("warning: failed to create certDir for transport key: %v", mkErr)
+			} else {
+				keyPath := filepath.Join(c.certDir, "node_transport.key")
+				if writeErr := os.WriteFile(keyPath, []byte(hex.EncodeToString(tPriv)), 0600); writeErr != nil {
+					log.Printf("warning: failed to write node_transport.key: %v", writeErr)
+				} else {
+					c.transportPrivBytes = tPriv
+					transportPubBytes = tPub
+					log.Printf("transport keypair generated and persisted")
+				}
+			}
+		}
+	} else {
+		// Derive public key from existing private key.
+		if tPrivKey, parseErr := ecdh.X25519().NewPrivateKey(c.transportPrivBytes); parseErr == nil {
+			transportPubBytes = tPrivKey.PublicKey().Bytes()
+		} else {
+			log.Printf("warning: failed to derive transport public key: %v", parseErr)
+		}
+	}
+
 	if err := stream.Send(&pb.AgentMessage{
 		Payload: &pb.AgentMessage_Register{
 			Register: &pb.RegisterAgent{
-				Token:             c.token,
-				Hostname:          c.hostname,
-				IpAddress:         c.ipAddress,
-				Os:                c.os,
-				AgentVersion:      c.agentVersion,
-				Csr:               csrDER,
-				NodePubkey:        pubBytes,
-				EnrollFingerprint: fingerprint,
+				Token:               c.token,
+				Hostname:            c.hostname,
+				IpAddress:           c.ipAddress,
+				Os:                  c.os,
+				AgentVersion:        c.agentVersion,
+				Csr:                 csrDER,
+				NodePubkey:          pubBytes,
+				EnrollFingerprint:   fingerprint,
+				NodeTransportPubkey: transportPubBytes,
 			},
 		},
 	}); err != nil {
@@ -983,14 +1027,30 @@ func (c *Client) buildReEnrollRequest() (*pb.ReEnrollRequest, error) {
 	}, nil
 }
 
-// handleReEnrollApproved decrypts the node key using the hub-provided KEK,
+// handleReEnrollApproved decrypts the node key using the hub-provided KEK
+// (which is transport-encrypted to this node's X25519 keypair),
 // signs the challenge, and returns a ReEnrollProof.
 func (c *Client) handleReEnrollApproved(approved *pb.ReEnrollApproved) (*pb.ReEnrollProof, error) {
 	if c.sealedNodeKeyHex == "" {
 		return nil, fmt.Errorf("no sealed node key available")
 	}
-	// TODO(H3): transport-encrypt — replace with nodekey.OpenKEK(tPriv, approved.EphemeralPub, approved.EncryptedKek)
-	priv, err := nodekey.Open(c.sealedNodeKeyHex, approved.EncryptedKek)
+	if len(c.transportPrivBytes) == 0 {
+		return nil, fmt.Errorf("no transport private key available; re-register required")
+	}
+
+	// Open the transport-encrypted KEK.
+	kek, err := nodekey.OpenKEK(c.transportPrivBytes, approved.EphemeralPub, approved.EncryptedKek)
+	if err != nil {
+		return nil, fmt.Errorf("open transport-encrypted KEK: %w", err)
+	}
+	defer func() {
+		for i := range kek {
+			kek[i] = 0
+		}
+	}()
+
+	// Open the sealed identity private key using the decrypted KEK.
+	priv, err := nodekey.Open(c.sealedNodeKeyHex, kek)
 	if err != nil {
 		return nil, fmt.Errorf("open sealed node key: %w", err)
 	}

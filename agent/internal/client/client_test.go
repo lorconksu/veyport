@@ -3,6 +3,9 @@ package client
 import (
 	"bytes"
 	"context"
+	"crypto/aes"
+	"crypto/cipher"
+	"crypto/ecdh"
 	"crypto/ecdsa"
 	"crypto/ed25519"
 	"crypto/elliptic"
@@ -864,12 +867,53 @@ func TestBuildReEnrollRequest_IncludesServerIDCSRFingerprint(t *testing.T) {
 }
 
 func TestHandleReEnrollApproved_DecryptsAndSigns(t *testing.T) {
-	// node key sealed under a known KEK, stored where handleReEnrollApproved reads it
+	// Generate an X25519 transport keypair (simulates node-side).
+	tPrivBytes, tPubBytes, err := nodekey.GenerateTransport()
+	if err != nil {
+		t.Fatalf("GenerateTransport: %v", err)
+	}
+
+	// Generate a node Ed25519 keypair and seal under a known KEK.
 	priv, _, _ := nodekey.Generate()
 	kek := make([]byte, 32)
+	if _, randErr := rand.Read(kek); randErr != nil {
+		t.Fatalf("rand KEK: %v", randErr)
+	}
 	sealedHex, _ := nodekey.Seal(priv, kek)
-	c := &Client{serverID: "srv-re", sealedNodeKeyHex: sealedHex}
-	proof, err := c.handleReEnrollApproved(&pb.ReEnrollApproved{Kek: kek, Challenge: []byte("nonce")})
+
+	// Seal the KEK for transport using the hub-side construction
+	// (X25519 ECDH + HKDF-SHA256 + AES-256-GCM).
+	curve := ecdh.X25519()
+	ePrivKey, _ := curve.GenerateKey(rand.Reader)
+	ePubBytes := ePrivKey.PublicKey().Bytes()
+	tPubKey, _ := curve.NewPublicKey(tPubBytes)
+	shared, _ := ePrivKey.ECDH(tPubKey)
+
+	const kekTransportLabel = "veyport-kek-transport-v1"
+	infoStr := kekTransportLabel + string(ePubBytes) + string(tPubBytes)
+
+	// HKDF-SHA256 inline (same as kektransport.go / nodekey/transport.go).
+	hkdfKey := testHKDFSHA256(t, shared, nil, []byte(infoStr), 32)
+
+	block, _ := aes.NewCipher(hkdfKey)
+	gcm, _ := cipher.NewGCM(block)
+	nonce := make([]byte, 12)
+	if _, randErr := rand.Read(nonce); randErr != nil {
+		t.Fatalf("rand nonce: %v", randErr)
+	}
+	encryptedKek := gcm.Seal(nonce, nonce, kek, nil)
+
+	// Wire up the client with the transport private key + sealed node key.
+	c := &Client{
+		serverID:           "srv-re",
+		sealedNodeKeyHex:   sealedHex,
+		transportPrivBytes: tPrivBytes,
+	}
+	proof, err := c.handleReEnrollApproved(&pb.ReEnrollApproved{
+		EphemeralPub: ePubBytes,
+		EncryptedKek: encryptedKek,
+		Challenge:    []byte("nonce"),
+	})
 	if err != nil {
 		t.Fatalf("approve: %v", err)
 	}
@@ -880,4 +924,44 @@ func TestHandleReEnrollApproved_DecryptsAndSigns(t *testing.T) {
 	if !ed25519.Verify(pub, []byte("nonce"), proof.Signature) {
 		t.Fatal("proof signature does not verify against the node public key")
 	}
+}
+
+// testHKDFSHA256 implements HKDF-Extract + HKDF-Expand for a single-block
+// (len <= 32) output without importing crypto/hkdf in the test.
+func testHKDFSHA256(t *testing.T, ikm, salt, info []byte, keyLen int) []byte {
+	t.Helper()
+	// HKDF-Extract: prk = HMAC-SHA256(salt, ikm)
+	if salt == nil {
+		salt = make([]byte, sha256.Size)
+	}
+	prk := testHMACSHA256(salt, ikm)
+	// HKDF-Expand: T(1) = HMAC-SHA256(prk, info || 0x01)
+	t1Input := append(append([]byte{}, info...), 0x01)
+	t1 := testHMACSHA256(prk, t1Input)
+	return t1[:keyLen]
+}
+
+// testHMACSHA256 computes HMAC-SHA256(key, data) using only crypto/sha256.
+func testHMACSHA256(key, data []byte) []byte {
+	const blockSize = 64
+	if len(key) > blockSize {
+		h := sha256.New()
+		h.Write(key)
+		key = h.Sum(nil)
+	}
+	ipad := make([]byte, blockSize)
+	opad := make([]byte, blockSize)
+	copy(ipad, key)
+	copy(opad, key)
+	for i := range ipad {
+		ipad[i] ^= 0x36
+		opad[i] ^= 0x5c
+	}
+	inner := sha256.New()
+	inner.Write(ipad)
+	inner.Write(data)
+	outer := sha256.New()
+	outer.Write(opad)
+	outer.Write(inner.Sum(nil))
+	return outer.Sum(nil)
 }

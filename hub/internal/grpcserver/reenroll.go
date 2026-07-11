@@ -30,10 +30,13 @@ const reEnrollProofTimeout = 30 * time.Second
 
 // reEnrollApproval carries the admin's decision from the HTTP goroutine to the
 // stream goroutine over the approve channel.
+// ephemeralPub and encryptedKek are produced by sealKEKToNode; the raw KEK
+// never travels over this channel — it is sealed before delivery.
 type reEnrollApproval struct {
-	kek       []byte
-	challenge []byte
-	decidedBy string
+	ephemeralPub  []byte
+	encryptedKek  []byte
+	challenge     []byte
+	decidedBy     string
 }
 
 // reEnrollSession holds all transient state for a single in-flight re-enrollment.
@@ -214,9 +217,8 @@ func (h *Handler) handleReEnrollRequest(stream pb.AgentService_ConnectServer, re
 		if err := stream.Send(&pb.HubMessage{
 			Payload: &pb.HubMessage_ReenrollApproved{
 				ReenrollApproved: &pb.ReEnrollApproved{
-					// TODO(H3): transport-encrypt — replace raw kek with sealKEKToNode result
-					EncryptedKek: appr.kek,
-					EphemeralPub: nil,
+					EphemeralPub: appr.ephemeralPub,
+					EncryptedKek: appr.encryptedKek,
 					Challenge:    appr.challenge,
 				},
 			},
@@ -339,13 +341,17 @@ func (h *Handler) handleReEnrollProof(stream pb.AgentService_ConnectServer, serv
 // stream goroutine. It:
 //  1. Looks up the live re-enrollment session for serverID.
 //  2. Decrypts the stored KEK from the database.
-//  3. Generates a random 32-byte challenge.
-//  4. Delivers the KEK + challenge to the stream goroutine via sess.approve.
-//  5. Waits (up to reEnrollProofTimeout) for the stream goroutine to verify
+//  3. Fetches the node's X25519 transport public key — REQUIRED. If absent,
+//     returns an error (node must re-register to obtain a transport key; no
+//     raw-KEK fallback, which would reopen the encryption hole).
+//  4. Seals the KEK using sealKEKToNode(transportPub, kek).
+//  5. Generates a random 32-byte challenge.
+//  6. Delivers {ephemeralPub, encryptedKek, challenge} to the stream goroutine.
+//  7. Waits (up to reEnrollProofTimeout) for the stream goroutine to verify
 //     the agent proof and post the outcome on sess.result.
 //
-// The KEK never leaves the grpcserver package: it is decrypted here and
-// forwarded directly to the stream goroutine over an in-process channel.
+// The raw KEK never leaves the grpcserver package and never travels over the
+// approve channel — only the sealed ciphertext is forwarded.
 func (h *Handler) ReleaseKEK(serverID, decidedBy string) error {
 	sess, ok := h.lookupReEnroll(serverID)
 	if !ok {
@@ -361,6 +367,31 @@ func (h *Handler) ReleaseKEK(serverID, decidedBy string) error {
 	if err != nil {
 		return fmt.Errorf("decrypt KEK for %s: %w", serverID, err)
 	}
+	// Zeroize the raw KEK when done — it must not persist beyond this scope.
+	defer func() {
+		for i := range kek {
+			kek[i] = 0
+		}
+	}()
+
+	// Fetch the node's X25519 transport public key.
+	transportPubB64, err := h.store.GetNodeTransportPub(serverID)
+	if err != nil {
+		return fmt.Errorf("get transport pubkey for %s: %w", serverID, err)
+	}
+	if transportPubB64 == "" {
+		return errors.New("node has no transport key; re-register required to enable encrypted re-enrollment")
+	}
+	transportPubBytes, err := base64.StdEncoding.DecodeString(transportPubB64)
+	if err != nil {
+		return fmt.Errorf("decode transport pubkey for %s: %w", serverID, err)
+	}
+
+	// Seal the KEK for transport to the node.
+	ephemeralPub, encryptedKek, err := sealKEKToNode(transportPubBytes, kek)
+	if err != nil {
+		return fmt.Errorf("seal KEK for %s: %w", serverID, err)
+	}
 
 	// Generate a fresh random challenge.
 	challenge := make([]byte, 32)
@@ -368,8 +399,13 @@ func (h *Handler) ReleaseKEK(serverID, decidedBy string) error {
 		return fmt.Errorf("generate challenge: %w", err)
 	}
 
-	// Signal the stream goroutine.
-	sess.approve <- reEnrollApproval{kek: kek, challenge: challenge, decidedBy: decidedBy}
+	// Signal the stream goroutine with the sealed KEK (NOT the raw kek).
+	sess.approve <- reEnrollApproval{
+		ephemeralPub: ephemeralPub,
+		encryptedKek: encryptedKek,
+		challenge:    challenge,
+		decidedBy:    decidedBy,
+	}
 
 	// Wait for the agent to respond with a proof and the stream goroutine to
 	// verify it, or time out.
