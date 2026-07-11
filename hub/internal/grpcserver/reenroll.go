@@ -1,0 +1,311 @@
+package grpcserver
+
+import (
+	"crypto/ed25519"
+	"encoding/base64"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"log"
+	"time"
+
+	"github.com/google/uuid"
+
+	"github.com/wyiu/veyport/hub/internal/model"
+	pb "github.com/wyiu/veyport/proto/veyport/v1"
+)
+
+// reEnrollApprovalTimeout is how long the stream goroutine waits for an admin to
+// approve/deny before auto-expiring the request.
+const reEnrollApprovalTimeout = 10 * time.Minute
+
+// ---------------------------------------------------------------------------
+// Session registry
+// ---------------------------------------------------------------------------
+
+// reEnrollApproval carries the admin's decision from the HTTP goroutine to the
+// stream goroutine over the approve channel.
+type reEnrollApproval struct {
+	kek       []byte
+	challenge []byte
+	decidedBy string
+}
+
+// reEnrollSession holds all transient state for a single in-flight re-enrollment.
+// The approve channel is written by the HTTP approve handler (Task 7);
+// the result channel is written by the stream's proof handler and read back by
+// the HTTP handler to learn the outcome.
+type reEnrollSession struct {
+	serverID    string
+	requestID   string // DB row ID — used when updating status
+	csr         []byte // CSR bytes from ReEnrollRequest; signed after proof
+	fingerprint string
+	challenge   []byte // set when approval arrives; echoed in ReEnrollApproved and verified against proof
+
+	// approve: HTTP goroutine -> stream goroutine (buffered 1)
+	approve chan reEnrollApproval
+	// result: stream goroutine -> HTTP goroutine (buffered 1)
+	result chan error
+}
+
+// registerReEnroll creates a fresh session for serverID, stores it in the
+// registry under reEnrollMu, and returns it. Channels are buffered (cap 1) so
+// that the HTTP goroutine never blocks if the stream goroutine has already
+// exited (timeout / disconnect).
+func (h *Handler) registerReEnroll(serverID string, csr []byte, fingerprint string) *reEnrollSession {
+	sess := &reEnrollSession{
+		serverID:    serverID,
+		csr:         csr,
+		fingerprint: fingerprint,
+		approve:     make(chan reEnrollApproval, 1),
+		result:      make(chan error, 1),
+	}
+	h.reEnrollMu.Lock()
+	h.reEnrollSessions[serverID] = sess
+	h.reEnrollMu.Unlock()
+	return sess
+}
+
+// lookupReEnroll returns the live session for serverID (if any).
+func (h *Handler) lookupReEnroll(serverID string) (*reEnrollSession, bool) {
+	h.reEnrollMu.Lock()
+	sess, ok := h.reEnrollSessions[serverID]
+	h.reEnrollMu.Unlock()
+	return sess, ok
+}
+
+// clearReEnroll removes the session for serverID from the registry.
+func (h *Handler) clearReEnroll(serverID string) {
+	h.reEnrollMu.Lock()
+	delete(h.reEnrollSessions, serverID)
+	h.reEnrollMu.Unlock()
+}
+
+// ---------------------------------------------------------------------------
+// computeAnomalyFlags
+// ---------------------------------------------------------------------------
+
+type anomalyFlags struct {
+	FingerprintChanged bool `json:"fingerprint_changed"`
+	OriginalOnline     bool `json:"original_online"`
+}
+
+// computeAnomalyFlags returns a JSON string describing anomaly signals for the
+// given re-enrollment request. It compares the supplied fingerprint against the
+// stored enroll fingerprint and checks whether the server's current status is
+// "online" (which would indicate the original agent might still be running).
+func (h *Handler) computeAnomalyFlags(serverID, fingerprint string) string {
+	flags := anomalyFlags{}
+
+	// Compare fingerprint against the stored enrollment fingerprint.
+	_, _, enrollFP, err := h.store.GetNodeCrypto(serverID)
+	if err == nil {
+		flags.FingerprintChanged = enrollFP != fingerprint
+	}
+	// If the server doesn't exist or has no node material, FingerprintChanged
+	// stays false (we can't determine anything — fail safe).
+
+	// Check whether the server is currently online.
+	if srv, err := h.store.GetServerByID(serverID); err == nil {
+		flags.OriginalOnline = srv.Status == "online"
+	}
+
+	out, _ := json.Marshal(flags)
+	return string(out)
+}
+
+// ---------------------------------------------------------------------------
+// handleReEnrollRequest — called from routeAgentMessage
+// ---------------------------------------------------------------------------
+
+// handleReEnrollRequest processes an agent's ReEnrollRequest message.
+// It validates the server, records the request, computes anomaly flags, and
+// then BLOCKS the stream goroutine waiting for an admin approval signal.
+// Blocking here is intentional — this is a long-lived bidi stream and the agent
+// waits for the hub to send ReEnrollApproved (or ReEnrollDenied / timeout).
+func (h *Handler) handleReEnrollRequest(stream pb.AgentService_ConnectServer, req *pb.ReEnrollRequest) error {
+	serverID := req.ServerId
+	peerIP := h.peerAddr(stream)
+
+	sendDenied := func(reason string) error {
+		return stream.Send(&pb.HubMessage{
+			Payload: &pb.HubMessage_ReenrollDenied{
+				ReenrollDenied: &pb.ReEnrollDenied{Reason: reason},
+			},
+		})
+	}
+
+	// 1. Verify the server exists and has node material (enrolled via Task 1 path).
+	pubB64, _, _, err := h.store.GetNodeCrypto(serverID)
+	if err != nil || pubB64 == "" {
+		log.Printf("reenroll: unknown or non-enrolled server %s: %v", serverID, err)
+		_ = sendDenied("unknown or non-enrolled server")
+		return nil
+	}
+
+	// 2. Compute anomaly flags.
+	flags := h.computeAnomalyFlags(serverID, req.Fingerprint)
+
+	// 3. Persist the request.
+	reqID := uuid.New().String()
+	dbReq := &model.ReEnrollRequest{
+		ID:           reqID,
+		ServerID:     serverID,
+		RequestedAt:  time.Now().UTC().Format("2006-01-02 15:04:05"),
+		IPAddress:    peerIP,
+		Fingerprint:  req.Fingerprint,
+		Status:       "pending",
+		AnomalyFlags: flags,
+	}
+	if err := h.store.CreateReEnrollRequest(dbReq); err != nil {
+		log.Printf("reenroll: failed to create request for %s: %v", serverID, err)
+		_ = sendDenied("internal error")
+		return nil
+	}
+
+	// 4. Audit.
+	h.store.LogAudit(model.AuditEntry{
+		Action:    model.AuditReEnrollRequested,
+		Target:    &serverID,
+		IPAddress: optionalStringPointer(peerIP),
+		ActorType: model.AuditActorTypeDevice,
+	})
+
+	// Emit clone-suspected audit if either anomaly flag is set.
+	var af anomalyFlags
+	_ = json.Unmarshal([]byte(flags), &af)
+	if af.FingerprintChanged || af.OriginalOnline {
+		h.store.LogAudit(model.AuditEntry{
+			Action:    model.AuditCloneSuspected,
+			Target:    &serverID,
+			Detail:    optionalStringPointer(flags),
+			IPAddress: optionalStringPointer(peerIP),
+			ActorType: model.AuditActorTypeSystem,
+		})
+	}
+
+	// 5. Register the live session so the HTTP approve handler (Task 7) can signal us.
+	sess := h.registerReEnroll(serverID, req.Csr, req.Fingerprint)
+	sess.requestID = reqID
+
+	// 6. Block waiting for admin approval, stream disconnect, or timeout.
+	select {
+	case appr := <-sess.approve:
+		sess.challenge = appr.challenge
+		return stream.Send(&pb.HubMessage{
+			Payload: &pb.HubMessage_ReenrollApproved{
+				ReenrollApproved: &pb.ReEnrollApproved{
+					Kek:       appr.kek,
+					Challenge: appr.challenge,
+				},
+			},
+		})
+		// Return to the Recv loop; the agent will send ReEnrollProof next.
+
+	case <-time.After(reEnrollApprovalTimeout):
+		h.clearReEnroll(serverID)
+		_ = h.store.UpdateReEnrollStatus(reqID, "expired", "")
+		log.Printf("reenroll: approval timeout for %s", serverID)
+		return nil
+
+	case <-stream.Context().Done():
+		h.clearReEnroll(serverID)
+		return nil
+	}
+}
+
+// ---------------------------------------------------------------------------
+// handleReEnrollProof — called from routeAgentMessage
+// ---------------------------------------------------------------------------
+
+// handleReEnrollProof processes the agent's ReEnrollProof message.
+// It verifies the ed25519 signature over the challenge, issues a new client
+// cert via SignCSR, and delivers it via the CertRenewResponse message.
+func (h *Handler) handleReEnrollProof(stream pb.AgentService_ConnectServer, serverID string, proof *pb.ReEnrollProof) error {
+	sendDenied := func(reason string) error {
+		return stream.Send(&pb.HubMessage{
+			Payload: &pb.HubMessage_ReenrollDenied{
+				ReenrollDenied: &pb.ReEnrollDenied{Reason: reason},
+			},
+		})
+	}
+
+	// 1. Look up the live session.
+	sess, ok := h.lookupReEnroll(serverID)
+	if !ok {
+		_ = sendDenied("no pending re-enroll")
+		return nil
+	}
+
+	// 2. Load the stored node public key.
+	pubB64, _, _, err := h.store.GetNodeCrypto(serverID)
+	if err != nil || pubB64 == "" {
+		log.Printf("reenroll proof: no node crypto for %s: %v", serverID, err)
+		_ = sendDenied("server not enrolled")
+		sess.result <- errors.New("server not enrolled")
+		h.clearReEnroll(serverID)
+		return nil
+	}
+	pubRaw, err := base64.StdEncoding.DecodeString(pubB64)
+	if err != nil || len(pubRaw) != ed25519.PublicKeySize {
+		log.Printf("reenroll proof: invalid public key for %s", serverID)
+		_ = sendDenied("invalid node public key")
+		sess.result <- errors.New("invalid node public key")
+		h.clearReEnroll(serverID)
+		return nil
+	}
+	pub := ed25519.PublicKey(pubRaw)
+
+	// 3. Verify the signature over the challenge.
+	if !ed25519.Verify(pub, sess.challenge, proof.Signature) {
+		log.Printf("reenroll proof: signature verification failed for %s", serverID)
+		_ = sendDenied("proof verification failed")
+		sess.result <- errors.New("proof verification failed")
+		_ = h.store.UpdateReEnrollStatus(sess.requestID, "denied", "")
+		h.clearReEnroll(serverID)
+		h.store.LogAudit(model.AuditEntry{
+			Action:    model.AuditReEnrollDenied,
+			Target:    &serverID,
+			ActorType: model.AuditActorTypeSystem,
+		})
+		return nil
+	}
+
+	// 4. Issue a new client certificate.
+	clientCert, caCert, err := h.issueRegistrationCertificate(serverID, sess.csr)
+	if err != nil {
+		log.Printf("reenroll proof: failed to sign CSR for %s: %v", serverID, err)
+		_ = sendDenied(fmt.Sprintf("cert issuance failed: %v", err))
+		sess.result <- err
+		h.clearReEnroll(serverID)
+		return nil
+	}
+
+	// Deliver via CertRenewResponse (the T5 contract).
+	if err := stream.Send(&pb.HubMessage{
+		Payload: &pb.HubMessage_CertRenewResponse{
+			CertRenewResponse: &pb.CertRenewResponse{
+				ClientCert: clientCert,
+				CaCert:     caCert,
+			},
+		},
+	}); err != nil {
+		sess.result <- err
+		h.clearReEnroll(serverID)
+		return err
+	}
+
+	// 5. Update DB, signal HTTP goroutine, clean up.
+	_ = h.store.UpdateReEnrollStatus(sess.requestID, "approved", "")
+	sess.result <- nil
+	h.clearReEnroll(serverID)
+
+	h.store.LogAudit(model.AuditEntry{
+		Action:    model.AuditReEnrollApproved,
+		Target:    &serverID,
+		ActorType: model.AuditActorTypeSystem,
+	})
+
+	return nil
+}
+

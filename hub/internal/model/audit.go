@@ -91,6 +91,14 @@ const (
 	AuditStorageKeySeparated = "auth.storage_key_separated"
 )
 
+// Agent re-enrollment and clone-detection events (P2)
+const (
+	AuditReEnrollRequested = "agent.reenroll_requested"
+	AuditReEnrollApproved  = "agent.reenroll_approved"
+	AuditReEnrollDenied    = "agent.reenroll_denied"
+	AuditCloneSuspected    = "agent.clone_suspected"
+)
+
 const (
 	AuditAuditExported          = "audit.exported"
 	AuditAuditReviewCompleted   = "audit.review_completed"

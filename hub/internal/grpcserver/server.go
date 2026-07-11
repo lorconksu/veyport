@@ -116,16 +116,17 @@ func New(cfg Config) *Server {
 
 	s.grpcServer = grpc.NewServer(opts...)
 	handler := &Handler{
-		store:       cfg.Store,
-		connMgr:     cfg.ConnMgr,
-		pending:     s.pending,
-		logSessions: s.logSessions,
-		terminals:   s.terminals,
-		hbCoalescer: hbCoalescer,
-		caCert:      cfg.CACert,
-		caKey:       cfg.CAKey,
-		notifier:    cfg.Notifier,
-		storageKey:  cfg.StorageKey,
+		store:            cfg.Store,
+		connMgr:          cfg.ConnMgr,
+		pending:          s.pending,
+		logSessions:      s.logSessions,
+		terminals:        s.terminals,
+		hbCoalescer:      hbCoalescer,
+		caCert:           cfg.CACert,
+		caKey:            cfg.CAKey,
+		notifier:         cfg.Notifier,
+		storageKey:       cfg.StorageKey,
+		reEnrollSessions: make(map[string]*reEnrollSession),
 	}
 	pb.RegisterAgentServiceServer(s.grpcServer, handler)
 	return s

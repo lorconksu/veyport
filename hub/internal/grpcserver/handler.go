@@ -12,6 +12,7 @@ import (
 	"net"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"google.golang.org/grpc/codes"
@@ -40,6 +41,10 @@ type Handler struct {
 	caKey       *ecdsa.PrivateKey
 	notifier    *notify.Notifier
 	storageKey  string
+
+	// Re-enrollment session registry (P2.T6 / P2.T7).
+	reEnrollMu       sync.Mutex
+	reEnrollSessions map[string]*reEnrollSession // keyed by serverID
 }
 
 type handshakeResult struct {
@@ -350,6 +355,10 @@ func (h *Handler) routeAgentMessage(serverID string, stream pb.AgentService_Conn
 		h.deliverPending(serverID, p.UnregisterAck.RequestId, p.UnregisterAck)
 	case *pb.AgentMessage_CertRenewRequest:
 		h.handleCertRenewal(serverID, stream, p.CertRenewRequest)
+	case *pb.AgentMessage_ReenrollRequest:
+		return h.handleReEnrollRequest(stream, p.ReenrollRequest)
+	case *pb.AgentMessage_ReenrollProof:
+		return h.handleReEnrollProof(stream, serverID, p.ReenrollProof)
 	case *pb.AgentMessage_TerminalOpenAck:
 		h.deliverPending(serverID, p.TerminalOpenAck.SessionId, p.TerminalOpenAck)
 	case *pb.AgentMessage_TerminalData:
