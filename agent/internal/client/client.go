@@ -307,7 +307,10 @@ func (c *Client) reEnroll(ctx context.Context) error {
 			log.Printf("re-enroll proof sent; waiting for new certificate")
 
 		case *pb.HubMessage_CertRenewResponse:
-			// Alternative: hub may deliver cert via CertRenewResponse format.
+			// Hub delivers the re-issued cert via CertRenewResponse format.
+			// Store the cert and return; Run() will loop back to connectAndStream
+			// which dials with the fresh cert via certStore.TLSConfig() — no
+			// explicit reconnectCh signal needed here.
 			resp := p.CertRenewResponse
 			if resp.Error != "" {
 				return fmt.Errorf("re-enroll cert response error: %s", resp.Error)
@@ -317,10 +320,6 @@ func (c *Client) reEnroll(ctx context.Context) error {
 			}
 			if err := c.certStore.StoreCert(resp.ClientCert, resp.CaCert); err != nil {
 				return fmt.Errorf("store re-enrolled cert (renew format): %w", err)
-			}
-			select {
-			case c.reconnectCh <- struct{}{}:
-			default:
 			}
 			log.Printf("re-enrollment complete (via CertRenewResponse); reconnecting")
 			return nil

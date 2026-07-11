@@ -184,6 +184,48 @@ func TestReEnrollDeny_Success(t *testing.T) {
 	}
 }
 
+// TestReEnrollDeny_NoPendingRequest verifies the deny endpoint returns 404 when
+// there is no pending re-enroll request for the server.
+func TestReEnrollDeny_NoPendingRequest(t *testing.T) {
+	s := testServer(t)
+	accessToken := registerAndGetAdminToken(t, s)
+
+	// Do NOT seed a re-enroll request — server has no pending request.
+	if err := s.store.CreateServer(&model.Server{ID: "srv-deny-nopending", Name: "srv-deny-nopending", Status: "offline", Labels: "{}"}); err != nil {
+		t.Fatalf("CreateServer: %v", err)
+	}
+
+	body, _ := json.Marshal(reEnrollDenyRequest{RequestID: "re-deny-nonexistent"})
+	req := httptest.NewRequest("POST", "/api/servers/srv-deny-nopending/reenroll/deny", bytes.NewReader(body))
+	req.Header.Set("Authorization", testBearerPrefix+accessToken)
+	rec := httptest.NewRecorder()
+	s.routes().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("want 404 when no pending request exists, got %d: %s", rec.Code, rec.Body.String())
+	}
+}
+
+// TestReEnrollDeny_MismatchedRequestID verifies the deny endpoint returns 409 when
+// the provided request_id does not match the current pending request for the server.
+func TestReEnrollDeny_MismatchedRequestID(t *testing.T) {
+	s := testServer(t)
+	accessToken := registerAndGetAdminToken(t, s)
+	// Seed a pending request with ID "re-deny-actual".
+	seedReEnrollRequest(t, s, accessToken, "srv-deny-mismatch", "re-deny-actual")
+
+	// Submit a deny with a different request_id.
+	body, _ := json.Marshal(reEnrollDenyRequest{RequestID: "re-deny-stale"})
+	req := httptest.NewRequest("POST", "/api/servers/srv-deny-mismatch/reenroll/deny", bytes.NewReader(body))
+	req.Header.Set("Authorization", testBearerPrefix+accessToken)
+	rec := httptest.NewRecorder()
+	s.routes().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("want 409 when request_id mismatches current pending, got %d: %s", rec.Code, rec.Body.String())
+	}
+}
+
 // TestListPendingReEnroll_Success verifies the GET endpoint returns pending requests.
 func TestListPendingReEnroll_Success(t *testing.T) {
 	s := testServer(t)

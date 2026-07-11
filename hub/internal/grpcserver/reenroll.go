@@ -80,10 +80,15 @@ func (h *Handler) lookupReEnroll(serverID string) (*reEnrollSession, bool) {
 	return sess, ok
 }
 
-// clearReEnroll removes the session for serverID from the registry.
-func (h *Handler) clearReEnroll(serverID string) {
+// clearReEnroll removes the session for serverID from the registry, but ONLY if
+// the currently stored session is the same pointer as sess. This prevents a
+// late-exiting goroutine (timeout / disconnect) from deleting a newer session
+// that was registered for the same serverID after it was superseded.
+func (h *Handler) clearReEnroll(serverID string, sess *reEnrollSession) {
 	h.reEnrollMu.Lock()
-	delete(h.reEnrollSessions, serverID)
+	if cur, ok := h.reEnrollSessions[serverID]; ok && cur == sess {
+		delete(h.reEnrollSessions, serverID)
+	}
 	h.reEnrollMu.Unlock()
 }
 
@@ -221,13 +226,13 @@ func (h *Handler) handleReEnrollRequest(stream pb.AgentService_ConnectServer, re
 		return true, nil
 
 	case <-time.After(reEnrollApprovalTimeout):
-		h.clearReEnroll(serverID)
+		h.clearReEnroll(serverID, sess)
 		_ = h.store.UpdateReEnrollStatus(reqID, "expired", "")
 		log.Printf("reenroll: approval timeout for %s", serverID)
 		return false, nil
 
 	case <-stream.Context().Done():
-		h.clearReEnroll(serverID)
+		h.clearReEnroll(serverID, sess)
 		return false, nil
 	}
 }
@@ -261,7 +266,7 @@ func (h *Handler) handleReEnrollProof(stream pb.AgentService_ConnectServer, serv
 		log.Printf("reenroll proof: no node crypto for %s: %v", serverID, err)
 		_ = sendDenied("server not enrolled")
 		sess.result <- errors.New("server not enrolled")
-		h.clearReEnroll(serverID)
+		h.clearReEnroll(serverID, sess)
 		return nil
 	}
 	pubRaw, err := base64.StdEncoding.DecodeString(pubB64)
@@ -269,7 +274,7 @@ func (h *Handler) handleReEnrollProof(stream pb.AgentService_ConnectServer, serv
 		log.Printf("reenroll proof: invalid public key for %s", serverID)
 		_ = sendDenied("invalid node public key")
 		sess.result <- errors.New("invalid node public key")
-		h.clearReEnroll(serverID)
+		h.clearReEnroll(serverID, sess)
 		return nil
 	}
 	pub := ed25519.PublicKey(pubRaw)
@@ -280,7 +285,7 @@ func (h *Handler) handleReEnrollProof(stream pb.AgentService_ConnectServer, serv
 		_ = sendDenied("proof verification failed")
 		sess.result <- errors.New("proof verification failed")
 		_ = h.store.UpdateReEnrollStatus(sess.requestID, "denied", "")
-		h.clearReEnroll(serverID)
+		h.clearReEnroll(serverID, sess)
 		h.store.LogAudit(model.AuditEntry{
 			Action:    model.AuditReEnrollDenied,
 			Target:    &serverID,
@@ -296,7 +301,7 @@ func (h *Handler) handleReEnrollProof(stream pb.AgentService_ConnectServer, serv
 		_ = sendDenied(fmt.Sprintf("cert issuance failed: %v", err))
 		sess.result <- err
 		_ = h.store.UpdateReEnrollStatus(sess.requestID, "denied", "")
-		h.clearReEnroll(serverID)
+		h.clearReEnroll(serverID, sess)
 		return nil
 	}
 
@@ -310,7 +315,7 @@ func (h *Handler) handleReEnrollProof(stream pb.AgentService_ConnectServer, serv
 		},
 	}); err != nil {
 		sess.result <- err
-		h.clearReEnroll(serverID)
+		h.clearReEnroll(serverID, sess)
 		return err
 	}
 
@@ -319,7 +324,7 @@ func (h *Handler) handleReEnrollProof(stream pb.AgentService_ConnectServer, serv
 	// carries the authoritative human admin UserID + IP). Do NOT duplicate it here.
 	_ = h.store.UpdateReEnrollStatus(sess.requestID, "approved", sess.decidedBy)
 	sess.result <- nil
-	h.clearReEnroll(serverID)
+	h.clearReEnroll(serverID, sess)
 
 	return nil
 }

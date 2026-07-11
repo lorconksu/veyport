@@ -91,7 +91,7 @@ func TestReEnrollRegistry_RegisterLookupClear(t *testing.T) {
 		t.Fatal("expected lookupReEnroll to return registered session")
 	}
 
-	h.clearReEnroll("srv-x")
+	h.clearReEnroll("srv-x", sess)
 	_, ok = h.lookupReEnroll("srv-x")
 	if ok {
 		t.Fatal("expected clearReEnroll to remove session")

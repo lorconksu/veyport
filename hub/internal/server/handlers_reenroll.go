@@ -147,6 +147,30 @@ func (s *Server) handleReEnrollDeny(w http.ResponseWriter, r *http.Request) {
 
 	adminID := UserIDFromContext(r.Context())
 
+	// Validate that request_id corresponds to the current pending re-enroll request
+	// for this server — mirrors the approve handler to prevent denying a stale or
+	// superseded request.
+	pendingList, err := s.store.ListPendingReEnroll()
+	if err != nil {
+		respondError(w, http.StatusInternalServerError, "failed to list pending re-enrollments")
+		return
+	}
+	var currentPendingID string
+	for _, pr := range pendingList {
+		if pr.ServerID == serverID {
+			currentPendingID = pr.ID
+			break
+		}
+	}
+	if currentPendingID == "" {
+		respondError(w, http.StatusNotFound, "no pending re-enrollment for this server")
+		return
+	}
+	if req.RequestID != currentPendingID {
+		respondError(w, http.StatusConflict, "request_id does not match the current pending request; it may have been superseded")
+		return
+	}
+
 	if err := s.store.UpdateReEnrollStatus(req.RequestID, "denied", adminID); err != nil {
 		respondError(w, http.StatusInternalServerError, "failed to update re-enroll status")
 		return
