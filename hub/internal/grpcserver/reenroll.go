@@ -304,15 +304,11 @@ func (h *Handler) handleReEnrollProof(stream pb.AgentService_ConnectServer, serv
 	}
 
 	// 5. Update DB, signal HTTP goroutine, clean up.
+	// NOTE: AuditReEnrollApproved is emitted by the HTTP approve handler (which
+	// carries the authoritative human admin UserID + IP). Do NOT duplicate it here.
 	_ = h.store.UpdateReEnrollStatus(sess.requestID, "approved", sess.decidedBy)
 	sess.result <- nil
 	h.clearReEnroll(serverID)
-
-	h.store.LogAudit(model.AuditEntry{
-		Action:    model.AuditReEnrollApproved,
-		Target:    &serverID,
-		ActorType: model.AuditActorTypeSystem,
-	})
 
 	return nil
 }

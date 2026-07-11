@@ -66,7 +66,34 @@ func (s *Server) handleReEnrollApprove(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// TOTP verified — call the gRPC handler to release the KEK to the agent.
+	// Validate request_id: it must be provided and must match the current pending
+	// request for this server to prevent approving a stale or superseded request.
+	if req.RequestID == "" {
+		respondError(w, http.StatusBadRequest, "request_id is required")
+		return
+	}
+	pendingList, err := s.store.ListPendingReEnroll()
+	if err != nil {
+		respondError(w, http.StatusInternalServerError, "failed to list pending re-enrollments")
+		return
+	}
+	var currentPendingID string
+	for _, pr := range pendingList {
+		if pr.ServerID == serverID {
+			currentPendingID = pr.ID
+			break
+		}
+	}
+	if currentPendingID == "" {
+		respondError(w, http.StatusNotFound, "no pending re-enrollment for this server")
+		return
+	}
+	if req.RequestID != currentPendingID {
+		respondError(w, http.StatusConflict, "request_id does not match the current pending request; it may have been superseded")
+		return
+	}
+
+	// TOTP verified and request_id confirmed — call the gRPC handler to release the KEK to the agent.
 	if s.reEnrollReleaser == nil {
 		respondError(w, http.StatusServiceUnavailable, "re-enroll releaser not configured")
 		return

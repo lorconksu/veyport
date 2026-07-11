@@ -112,6 +112,15 @@ func TestReEnrollApprove_WrongTOTP(t *testing.T) {
 	if mock.called {
 		t.Fatal("ReleaseKEK must NOT be called when TOTP is wrong")
 	}
+
+	// Assert the re-enroll request status is still "pending" in the DB.
+	dbReq, err := s.store.GetReEnrollRequest("re-req-1")
+	if err != nil {
+		t.Fatalf("GetReEnrollRequest: %v", err)
+	}
+	if dbReq.Status != "pending" {
+		t.Fatalf("want status=pending after wrong TOTP, got %q", dbReq.Status)
+	}
 }
 
 // TestReEnrollApprove_CorrectTOTP_ReachesReleaseKEK verifies that a correct
