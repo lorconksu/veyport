@@ -82,6 +82,7 @@ type Client struct {
 	allowedPaths    []string
 	hubCAPin        string
 	onRegistered    func(serverID string)
+	reconnectCh     chan struct{} // signals connectAndStream to reconnect (e.g. to adopt a renewed cert)
 }
 
 func New(cfg Config) *Client {
@@ -111,6 +112,7 @@ func New(cfg Config) *Client {
 		allowedPaths:    cfg.AllowedPaths,
 		hubCAPin:        cfg.HubCAPin,
 		onRegistered:    cfg.OnRegistered,
+		reconnectCh:     make(chan struct{}, 1),
 	}
 }
 
@@ -528,7 +530,14 @@ func (c *Client) handleCertRenewResponse(p *pb.HubMessage_CertRenewResponse) {
 		log.Printf("failed to store renewed certs: %v", err)
 		return
 	}
-	log.Printf("mTLS certificate renewed (will use on next reconnect)")
+	// Proactively reconnect so the live connection re-handshakes with the fresh
+	// cert instead of drifting until the old one expires. Non-blocking: if a
+	// reconnect is already pending, drop this signal.
+	select {
+	case c.reconnectCh <- struct{}{}:
+	default:
+	}
+	log.Printf("mTLS certificate renewed; reconnecting to adopt it")
 }
 
 func (c *Client) clearCertRenewalInFlight() {
@@ -814,6 +823,9 @@ func (c *Client) startRecvLoop(stream pb.AgentService_ConnectClient, sendCh chan
 }
 
 func (c *Client) connectAndStream(ctx context.Context) error {
+	if c.reconnectCh == nil {
+		c.reconnectCh = make(chan struct{}, 1)
+	}
 	conn, err := c.dialHub()
 	if err != nil {
 		return err
@@ -866,6 +878,9 @@ func (c *Client) connectAndStream(ctx context.Context) error {
 			if err := stream.Send(msg); err != nil {
 				return fmt.Errorf("send: %w", err)
 			}
+		case <-c.reconnectCh:
+			log.Printf("adopting renewed certificate via reconnect")
+			return errReconnectWithMTLS
 		}
 	}
 }

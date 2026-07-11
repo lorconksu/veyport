@@ -758,3 +758,90 @@ func TestHandleMessage_Unregister(t *testing.T) {
 		t.Fatal(testExpectedAckOnSendCh)
 	}
 }
+
+// makeRenewedCertPair builds a CA-signed client cert for the given store's
+// current private key (via GenerateCSR) and returns the client + CA cert DER,
+// as the hub would return in a CertRenewResponse. Mirrors the real renewal
+// flow: the agent calls GenerateCSR, the hub signs the CSR, returns the cert.
+func makeRenewedCertPair(t *testing.T, store *certs.Store, serverID string, notAfter time.Time) (clientDER, caDER []byte) {
+	t.Helper()
+	caKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatalf("ca key: %v", err)
+	}
+	caTmpl := &x509.Certificate{
+		SerialNumber:          big.NewInt(200),
+		Subject:               pkix.Name{CommonName: "Test Agent CA"},
+		NotBefore:             time.Now().Add(-time.Hour),
+		NotAfter:              time.Now().Add(24 * time.Hour),
+		IsCA:                  true,
+		KeyUsage:              x509.KeyUsageCertSign | x509.KeyUsageCRLSign,
+		BasicConstraintsValid: true,
+	}
+	caDER, err = x509.CreateCertificate(rand.Reader, caTmpl, caTmpl, &caKey.PublicKey, caKey)
+	if err != nil {
+		t.Fatalf("ca cert: %v", err)
+	}
+	caCert, err := x509.ParseCertificate(caDER)
+	if err != nil {
+		t.Fatalf("parse ca: %v", err)
+	}
+	// Use the store's CSR (sets the store's private key to a fresh key, as
+	// the real renewal flow does: agent calls GenerateCSR, hub signs it).
+	csrDER, err := store.GenerateCSR(serverID)
+	if err != nil {
+		t.Fatalf("generate renewal CSR: %v", err)
+	}
+	csr, err := x509.ParseCertificateRequest(csrDER)
+	if err != nil {
+		t.Fatalf("parse renewal CSR: %v", err)
+	}
+	leafTmpl := &x509.Certificate{
+		SerialNumber: big.NewInt(201),
+		Subject:      pkix.Name{CommonName: serverID},
+		NotBefore:    time.Now().Add(-time.Minute),
+		NotAfter:     notAfter,
+		KeyUsage:     x509.KeyUsageDigitalSignature,
+		ExtKeyUsage:  []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth},
+	}
+	clientDER, err = x509.CreateCertificate(rand.Reader, leafTmpl, caCert, csr.PublicKey, caKey)
+	if err != nil {
+		t.Fatalf("leaf cert: %v", err)
+	}
+	return clientDER, caDER
+}
+
+func TestHandleCertRenewResponse_SignalsReconnectToAdoptCert(t *testing.T) {
+	certStore := certs.NewMemoryStore()
+	storeClientCert(t, certStore, "srv-adopt", time.Now().Add(30*time.Minute)) // old cert
+	c := &Client{
+		serverID:    "srv-adopt",
+		certStore:   certStore,
+		reconnectCh: make(chan struct{}, 1),
+	}
+	clientDER, caDER := makeRenewedCertPair(t, certStore, "srv-adopt", time.Now().Add(12*time.Hour))
+
+	c.handleCertRenewResponse(&pb.HubMessage_CertRenewResponse{
+		CertRenewResponse: &pb.CertRenewResponse{ClientCert: clientDER, CaCert: caDER},
+	})
+
+	select {
+	case <-c.reconnectCh:
+		// success: renewal signalled a reconnect to adopt the new cert
+	case <-time.After(time.Second):
+		t.Fatal("expected reconnect signal after successful renewal")
+	}
+}
+
+func TestHandleCertRenewResponse_NoSignalOnError(t *testing.T) {
+	c := &Client{serverID: "srv-x", certStore: certs.NewMemoryStore(), reconnectCh: make(chan struct{}, 1)}
+	c.handleCertRenewResponse(&pb.HubMessage_CertRenewResponse{
+		CertRenewResponse: &pb.CertRenewResponse{Error: "denied"},
+	})
+	select {
+	case <-c.reconnectCh:
+		t.Fatal("must not signal reconnect when renewal was rejected")
+	case <-time.After(100 * time.Millisecond):
+		// ok
+	}
+}
