@@ -23,6 +23,8 @@ message AgentMessage {
     TerminalOpenAck terminal_open_ack = 18;
     TerminalData terminal_data = 19;
     TerminalExit terminal_exit = 20;
+    ReEnrollRequest reenroll_request = 21;
+    ReEnrollProof reenroll_proof = 22;
   }
 }
 
@@ -44,6 +46,8 @@ message HubMessage {
     TerminalInput terminal_input = 19;
     TerminalResize terminal_resize = 20;
     TerminalClose terminal_close = 21;
+    ReEnrollApproved reenroll_approved = 22;
+    ReEnrollDenied reenroll_denied = 23;
   }
 }
 
@@ -65,6 +69,9 @@ message RegisterAgent {
   string os = 4;
   string agent_version = 5;
   bytes csr = 6;
+  bytes node_pubkey = 7;
+  string enroll_fingerprint = 8;
+  bytes node_transport_pubkey = 9;
 }
 
 message RegisterAck {
@@ -73,6 +80,7 @@ message RegisterAck {
   string error = 3;
   bytes client_cert = 4;
   bytes ca_cert = 5;
+  bytes node_kek = 6;
 }
 
 message SystemInfo {
@@ -222,4 +230,25 @@ message TerminalExit {
 
 message TerminalClose {
   string session_id = 1;
+}
+
+// Re-enrollment (human-approved Tier 2)
+message ReEnrollRequest {
+  string server_id = 1;
+  bytes csr = 2;
+  string fingerprint = 3;
+}
+
+message ReEnrollApproved {
+  bytes ephemeral_pub = 1;
+  bytes encrypted_kek = 2;
+  bytes challenge = 3;
+}
+
+message ReEnrollProof {
+  bytes signature = 1;
+}
+
+message ReEnrollDenied {
+  string reason = 1;
 }

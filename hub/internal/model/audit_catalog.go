@@ -49,4 +49,9 @@ var AuditCatalog = []AuditCatalogEntry{
 	{Action: AuditAPITokenRevoked, Label: "API token revoked", Category: auditCategoryUserManagement, Outcome: AuditOutcomeSuccess, ActorType: AuditActorTypeSystem, ResourceType: "api_token"},
 	{Action: AuditJWTSecretRotated, Label: "JWT signing secret rotated via admin CLI; all sessions invalidated and API tokens revoked", Category: "Authentication", Outcome: AuditOutcomeSuccess, ActorType: AuditActorTypeSystem, ResourceType: "jwt_secret"},
 	{Action: AuditStorageKeySeparated, Label: "One-time startup migration separating the storage encryption key from the JWT signing secret", Category: "Authentication", Outcome: AuditOutcomeSuccess, ActorType: AuditActorTypeSystem, ResourceType: "storage_key"},
+	// Agent re-enrollment events (P2)
+	{Action: AuditReEnrollRequested, Label: "Agent re-enrollment requested", Category: auditCategoryAgentLifecycle, Outcome: AuditOutcomeSuccess, ActorType: AuditActorTypeDevice, ResourceType: "server"},
+	{Action: AuditReEnrollApproved, Label: "Agent re-enrollment approved", Category: auditCategoryAgentLifecycle, Outcome: AuditOutcomeSuccess, ActorType: AuditActorTypeSystem, ResourceType: "server"},
+	{Action: AuditReEnrollDenied, Label: "Agent re-enrollment denied", Category: auditCategoryAgentLifecycle, Outcome: AuditOutcomeFailure, ActorType: AuditActorTypeSystem, ResourceType: "server"},
+	{Action: AuditCloneSuspected, Label: "Possible agent clone or replay detected during re-enrollment", Category: auditCategoryAgentLifecycle, Outcome: AuditOutcomeFailure, ActorType: AuditActorTypeSystem, ResourceType: "server"},
 }

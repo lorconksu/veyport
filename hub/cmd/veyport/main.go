@@ -130,7 +130,12 @@ func runServer() error {
 		CACert:           caCert,
 		CAKey:            caKey,
 		Notifier:         notifier,
+		StorageKey:       storageKey,
 	})
+
+	// Wire the gRPC handler into the HTTP server so the re-enroll approve
+	// endpoint can call ReleaseKEK without a global or import cycle.
+	srv.SetReEnrollReleaser(grpcSrv.Handler())
 
 	// Start heartbeat monitor
 	stopHeartbeat := make(chan struct{})

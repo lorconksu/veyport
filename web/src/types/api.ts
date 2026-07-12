@@ -369,3 +369,14 @@ export interface NotificationLogEntry {
   error: string | null
   created_at: string
 }
+
+export interface ReEnrollRequest {
+  id: string
+  server_id: string
+  requested_at: string
+  ip_address: string | null
+  fingerprint: string | null
+  status: 'pending' | 'approved' | 'denied'
+  anomaly_flags: string // JSON string: e.g. '{"fingerprint_changed":true,"original_online":false}'
+  decided_by: string | null
+}

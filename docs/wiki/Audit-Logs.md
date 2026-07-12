@@ -155,6 +155,15 @@ Actions follow a `resource.action` naming pattern.
 | `api_token.created` | A CLI-created API token was created |
 | `api_token.revoked` | A CLI-created API token was revoked |
 
+### Agent re-enrollment actions
+
+| Action | What it means |
+|--------|--------------|
+| `agent.reenroll_requested` | A node phoned home with an expired certificate and requested re-enrollment |
+| `agent.reenroll_approved` | An admin approved the re-enrollment request (records the admin's user ID and IP) |
+| `agent.reenroll_denied` | An admin denied the re-enrollment request |
+| `agent.clone_suspected` | A re-enrollment request tripped a clone-anomaly flag (DMI UUID changed or original node still online) |
+
 ### Configuration actions
 
 | Action | What it means |

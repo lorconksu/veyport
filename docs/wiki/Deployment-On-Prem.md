@@ -300,6 +300,33 @@ The agent infers connection security from the hub address:
 
 ---
 
+## Agent Certificate Lifecycle
+
+Veyport agents authenticate to the Hub using **Hub-issued short-lived mTLS client certificates**. The certificate lifetime is controlled by the **`agent_cert_validity_hours`** setting (default **24**).
+
+### Files on the Agent Host
+
+| Path | Purpose |
+|------|---------|
+| `/etc/veyport/tls/` | mTLS client certificate and Hub CA certificate |
+| `/etc/veyport/tls/node_key.enc` | Durable ed25519 identity key, sealed under the Hub-held KEK |
+| `/etc/veyport/tls/node_transport.key` | X25519 transport private key (mode 0600, stored unsealed) |
+| `/etc/veyport/agent.conf` | serverID, hub address, CA pin, unregister token |
+
+### Automatic Renewal
+
+While an agent maintains an active connection to the Hub, it automatically renews its certificate approximately 6 hours before expiry. The Hub issues a fresh certificate over the existing gRPC stream and the agent adopts it immediately — no reconnect or operator action required.
+
+### Recovery from Expiry (Re-enrollment)
+
+If a node is offline longer than its certificate lifetime (for example, after a long outage or maintenance window), its certificate expires. The node can no longer reconnect on its own. When it comes back online, it phones home over the CA-pinned bootstrap channel and appears in the Hub dashboard as **Pending re-enrollment**. An admin approves the request (with a TOTP step-up) and the node rejoins automatically, **keeping the same serverID, history, and path assignments** — no fresh registration or ghost server record is created.
+
+### Legacy Nodes
+
+Nodes enrolled before transport-key support was introduced do not have a `node_transport.key` file. These nodes cannot use re-enrollment — the approval API returns **409 "re-register required"**. Re-register such nodes once using the standard install command and they will have transport-key support going forward.
+
+---
+
 ## Backup and Restore
 
 Veyport uses SQLite with WAL mode. The database is a single file that can be safely copied while the Hub is running.

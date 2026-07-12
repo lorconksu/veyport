@@ -239,3 +239,51 @@ describe('apiFetchWithToken', () => {
     expect(headers.get('X-CSRF-Token')).toBe('csrf-for-setup')
   })
 })
+
+describe('re-enrollment API helpers', () => {
+  beforeEach(() => {
+    vi.stubGlobal('fetch', mockFetch)
+    mockFetch.mockReset()
+    document.cookie = 'veyport_csrf=; expires=Thu, 01 Jan 1970 00:00:00 GMT'
+  })
+
+  afterEach(() => {
+    vi.unstubAllGlobals()
+  })
+
+  it('listPendingReEnroll calls GET /servers/reenroll/pending and returns parsed JSON', async () => {
+    const { listPendingReEnroll } = await import('../api')
+    const payload = [{ id: 're-1', server_id: 'srv', status: 'pending' }]
+    mockFetch.mockResolvedValueOnce(makeResponse(payload))
+    const result = await listPendingReEnroll()
+    expect(result).toEqual(payload)
+    const [url, init] = mockFetch.mock.calls[0]
+    expect(url).toBe('/api/servers/reenroll/pending')
+    expect((init as RequestInit).method).toBeUndefined() // default GET
+  })
+
+  it('approveReEnroll calls POST /servers/:id/reenroll/approve with correct body', async () => {
+    const { approveReEnroll } = await import('../api')
+    mockFetch.mockResolvedValueOnce(makeResponse(null, 204, { 'content-length': '0' }))
+    await approveReEnroll('srv-1', 're-2', '123456')
+    const [url, init] = mockFetch.mock.calls[0]
+    expect(url).toBe('/api/servers/srv-1/reenroll/approve')
+    expect((init as RequestInit).method).toBe('POST')
+    expect(JSON.parse((init as RequestInit).body as string)).toEqual({
+      request_id: 're-2',
+      totp_code: '123456',
+    })
+  })
+
+  it('denyReEnroll calls POST /servers/:id/reenroll/deny with correct body', async () => {
+    const { denyReEnroll } = await import('../api')
+    mockFetch.mockResolvedValueOnce(makeResponse(null, 204, { 'content-length': '0' }))
+    await denyReEnroll('srv-1', 're-3')
+    const [url, init] = mockFetch.mock.calls[0]
+    expect(url).toBe('/api/servers/srv-1/reenroll/deny')
+    expect((init as RequestInit).method).toBe('POST')
+    expect(JSON.parse((init as RequestInit).body as string)).toEqual({
+      request_id: 're-3',
+    })
+  })
+})
