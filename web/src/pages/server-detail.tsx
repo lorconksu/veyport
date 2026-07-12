@@ -37,6 +37,8 @@ import { formatFileSize, isMarkdownFile, parseSseChunk, sortFileNodes } from '@/
 import { statusDot } from '@/lib/server-utils'
 import { useAuth } from '@/hooks/use-auth'
 import { OfflineTerminalState, ServerTerminal } from '@/components/server-terminal'
+import { ReEnrollApproval } from '@/components/reenroll-approval'
+import { usePendingReEnroll } from '@/hooks/use-reenroll'
 import type {
   Server,
   FileNode,
@@ -1555,6 +1557,10 @@ export function ServerDetailPage() {
     enabled: !!serverId,
   })
 
+  // Pending re-enrollment requests (admin only — query is cheap, conditional rendering handles display)
+  const { data: pendingReEnrolls } = usePendingReEnroll({ refetchInterval: isAdmin ? 15_000 : false })
+  const pendingRequest = (pendingReEnrolls ?? []).find((r) => r.server_id === serverId)
+
   // User's allowed root paths
   const {
     data: myPathsData,
@@ -1888,6 +1894,9 @@ export function ServerDetailPage() {
 
       {isAdmin && (
         <div className="shrink-0 border-t border-border p-4 bg-surface/30 space-y-3">
+          {pendingRequest && (
+            <ReEnrollApproval request={pendingRequest} />
+          )}
           <PathManagement serverId={serverId ?? ''} />
           <DropzoneUpload serverId={serverId ?? ''} />
         </div>

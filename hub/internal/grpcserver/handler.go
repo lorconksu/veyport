@@ -2,13 +2,17 @@ package grpcserver
 
 import (
 	"crypto/ecdsa"
+	"crypto/rand"
 	"crypto/sha256"
 	"crypto/x509"
+	"encoding/base64"
 	"fmt"
 	"io"
 	"log"
 	"net"
+	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"google.golang.org/grpc/codes"
@@ -36,6 +40,11 @@ type Handler struct {
 	caCert      *x509.Certificate
 	caKey       *ecdsa.PrivateKey
 	notifier    *notify.Notifier
+	storageKey  string
+
+	// Re-enrollment session registry (P2.T6 / P2.T7).
+	reEnrollMu       sync.Mutex
+	reEnrollSessions map[string]*reEnrollSession // keyed by serverID
 }
 
 type handshakeResult struct {
@@ -201,6 +210,12 @@ func (h *Handler) performHandshake(stream pb.AgentService_ConnectServer) (*hands
 		return h.performRegisterHandshake(stream, p.Register, peerIP)
 	case *pb.AgentMessage_Heartbeat:
 		return h.performHeartbeatHandshake(stream, p.Heartbeat, peerIP)
+	case *pb.AgentMessage_ReenrollRequest:
+		// The agent opens a fresh bootstrap stream (no client cert) and sends
+		// ReEnrollRequest as the first message.  Handle it directly here;
+		// we do not need a full handshake because the agent identity is verified
+		// via the node proof inside handleReEnrollRequest.
+		return h.performReEnrollHandshake(stream, p.ReenrollRequest)
 	default:
 		return nil, status.Errorf(codes.InvalidArgument, "first message must be Register or Heartbeat")
 	}
@@ -208,7 +223,7 @@ func (h *Handler) performHandshake(stream pb.AgentService_ConnectServer) (*hands
 
 func (h *Handler) performRegisterHandshake(stream pb.AgentService_ConnectServer, reg *pb.RegisterAgent, peerIP string) (*handshakeResult, error) {
 	agentIP := preferredAgentIP(reg.GetIpAddress(), peerIP)
-	serverID, clientCert, caCert, err := h.handleRegister(reg.Token, reg.Hostname, agentIP, reg.Os, reg.AgentVersion, reg.Csr)
+	serverID, clientCert, caCert, nodeKek, err := h.handleRegister(reg.Token, reg.Hostname, agentIP, reg.Os, reg.AgentVersion, reg.Csr, reg.NodePubkey, reg.EnrollFingerprint, reg.NodeTransportPubkey)
 	if err != nil {
 		h.logRegistrationAuditFailure(reg, peerIP, err)
 		_ = stream.Send(&pb.HubMessage{
@@ -226,6 +241,7 @@ func (h *Handler) performRegisterHandshake(stream pb.AgentService_ConnectServer,
 				ServerId:   serverID,
 				ClientCert: clientCert,
 				CaCert:     caCert,
+				NodeKek:    nodeKek,
 			},
 		},
 	}); err != nil {
@@ -303,6 +319,33 @@ func preferredAgentIP(reportedIP, peerIP string) string {
 	return peerIP
 }
 
+// performReEnrollHandshake handles a re-enrollment request that arrives as the
+// first message on a bootstrap (no client cert) Connect stream. It delegates to
+// handleReEnrollRequest which blocks waiting for admin approval.
+//
+// If handleReEnrollRequest sent ReEnrollApproved and the proof is now expected,
+// this returns bootstrapOnly=false so Connect() enters the message loop under
+// the victim's serverID — allowing handleReEnrollProof to receive the proof.
+//
+// On ALL early-exit paths (unknown/non-enrolled server, DB error, approval
+// timeout, context cancellation, or send failure), this returns bootstrapOnly=true
+// so Connect() returns immediately WITHOUT calling connMgr.Register or
+// onAgentConnected, preventing an unauthenticated caller from hijacking a
+// legitimate agent's stream slot.
+func (h *Handler) performReEnrollHandshake(stream pb.AgentService_ConnectServer, req *pb.ReEnrollRequest) (*handshakeResult, error) {
+	approvalSent, err := h.handleReEnrollRequest(stream, req)
+	if err != nil {
+		return nil, err
+	}
+	if !approvalSent {
+		// Early exit: stream is already closed or denied; do not register in connMgr.
+		return &handshakeResult{bootstrapOnly: true}, nil
+	}
+	// Approval was sent; enter the message loop so the proof can be received and
+	// handleReEnrollProof can issue the certificate.
+	return &handshakeResult{serverID: req.ServerId, bootstrapOnly: false, requireClientCert: false}, nil
+}
+
 func (h *Handler) performHeartbeatHandshake(stream pb.AgentService_ConnectServer, hb *pb.Heartbeat, peerIP string) (*handshakeResult, error) {
 	serverID := hb.ServerId
 	if err := h.verifyCertCN(stream, serverID, true); err != nil {
@@ -345,6 +388,15 @@ func (h *Handler) routeAgentMessage(serverID string, stream pb.AgentService_Conn
 		h.deliverPending(serverID, p.UnregisterAck.RequestId, p.UnregisterAck)
 	case *pb.AgentMessage_CertRenewRequest:
 		h.handleCertRenewal(serverID, stream, p.CertRenewRequest)
+	case *pb.AgentMessage_ReenrollRequest:
+		// Mid-stream re-enroll requests (from an already-registered agent) are
+		// handled here. The approvalSent bool is ignored because the stream is
+		// already registered in connMgr; the proof will arrive as the next message
+		// in this same loop via AgentMessage_ReenrollProof.
+		_, err := h.handleReEnrollRequest(stream, p.ReenrollRequest)
+		return err
+	case *pb.AgentMessage_ReenrollProof:
+		return h.handleReEnrollProof(stream, serverID, p.ReenrollProof)
 	case *pb.AgentMessage_TerminalOpenAck:
 		h.deliverPending(serverID, p.TerminalOpenAck.SessionId, p.TerminalOpenAck)
 	case *pb.AgentMessage_TerminalData:
@@ -405,27 +457,59 @@ func (h *Handler) handleStreamHeartbeat(serverID string, stream pb.AgentService_
 	return err
 }
 
-func (h *Handler) handleRegister(rawToken, hostname, ip, os, agentVersion string, csr []byte) (string, []byte, []byte, error) {
+func (h *Handler) handleRegister(rawToken, hostname, ip, os, agentVersion string, csr, nodePubkey []byte, enrollFingerprint string, nodeTransportPubkey []byte) (string, []byte, []byte, []byte, error) {
 	hash := sha256.Sum256([]byte(rawToken))
 	tokenHash := fmt.Sprintf("%x", hash)
 	srv, err := h.store.GetServerByToken(tokenHash)
 	if err != nil {
-		return "", nil, nil, fmt.Errorf("invalid or expired registration token")
+		return "", nil, nil, nil, fmt.Errorf("invalid or expired registration token")
 	}
 	if srv.TokenExpiresAt != nil {
 		expiresAt, err := time.Parse("2006-01-02 15:04:05", *srv.TokenExpiresAt)
 		if err == nil && time.Now().UTC().After(expiresAt) {
-			return "", nil, nil, fmt.Errorf("registration token expired")
+			return "", nil, nil, nil, fmt.Errorf("registration token expired")
 		}
 	}
 	clientCert, caCert, err := h.issueRegistrationCertificate(srv.ID, csr)
 	if err != nil {
-		return "", nil, nil, err
+		return "", nil, nil, nil, err
 	}
 	if err := h.store.ActivateServer(srv.ID, hostname, ip, os, agentVersion); err != nil {
-		return "", nil, nil, fmt.Errorf("failed to activate server: %w", err)
+		return "", nil, nil, nil, fmt.Errorf("failed to activate server: %w", err)
 	}
-	return srv.ID, clientCert, caCert, nil
+
+	// Issue a per-node KEK if the agent sent a public key (new agents only).
+	// Old agents that omit NodePubkey skip this path for backward compatibility.
+	var nodeKek []byte
+	if len(nodePubkey) > 0 {
+		kek := make([]byte, 32)
+		if _, err := rand.Read(kek); err != nil {
+			return "", nil, nil, nil, fmt.Errorf("generate KEK: %w", err)
+		}
+		kekEnc, err := h.sealKEK(kek)
+		if err != nil {
+			return "", nil, nil, nil, fmt.Errorf("seal KEK: %w", err)
+		}
+		pubKeyB64 := base64.StdEncoding.EncodeToString(nodePubkey)
+		if err := h.store.SetNodeCrypto(srv.ID, pubKeyB64, kekEnc, enrollFingerprint); err != nil {
+			return "", nil, nil, nil, fmt.Errorf("store node crypto: %w", err)
+		}
+		nodeKek = kek
+	}
+
+	// Store the X25519 transport public key if the agent sent one.
+	// This key is used to encrypt the KEK during re-enrollment so that only the
+	// real node (holder of the transport private key) can decrypt it.
+	if len(nodeTransportPubkey) > 0 {
+		transportPubB64 := base64.StdEncoding.EncodeToString(nodeTransportPubkey)
+		if err := h.store.SetNodeTransportPub(srv.ID, transportPubB64); err != nil {
+			// Non-fatal: log and continue; the agent can still operate, but
+			// re-enrollment will be denied until a transport key is registered.
+			log.Printf("warning: failed to store transport pubkey for %s: %v", srv.ID, err)
+		}
+	}
+
+	return srv.ID, clientCert, caCert, nodeKek, nil
 }
 
 func (h *Handler) issueRegistrationCertificate(serverID string, csr []byte) ([]byte, []byte, error) {
@@ -435,7 +519,7 @@ func (h *Handler) issueRegistrationCertificate(serverID string, csr []byte) ([]b
 	if h.caCert == nil || h.caKey == nil {
 		return nil, nil, fmt.Errorf("CA not configured")
 	}
-	clientCert, err := ca.SignCSR(h.caCert, h.caKey, csr, serverID, 12*time.Hour)
+	clientCert, err := ca.SignCSR(h.caCert, h.caKey, csr, serverID, h.clientCertValidity())
 	if err != nil {
 		return nil, nil, fmt.Errorf("sign client certificate: %w", err)
 	}
@@ -483,7 +567,7 @@ func (h *Handler) handleCertRenewal(serverID string, stream pb.AgentService_Conn
 		return
 	}
 
-	clientCert, err := ca.SignCSR(h.caCert, h.caKey, req.Csr, serverID, 12*time.Hour)
+	clientCert, err := ca.SignCSR(h.caCert, h.caKey, req.Csr, serverID, h.clientCertValidity())
 	if err != nil {
 		sendCertResponse(&pb.CertRenewResponse{Error: err.Error()})
 		return
@@ -493,4 +577,19 @@ func (h *Handler) handleCertRenewal(serverID string, stream pb.AgentService_Conn
 		ClientCert: clientCert.Raw,
 		CaCert:     h.caCert.Raw,
 	})
+}
+
+// clientCertValidity is the lifetime of issued agent client certs.
+// Configurable via the "agent_cert_validity_hours" config key; defaults to 24h.
+func (h *Handler) clientCertValidity() time.Duration {
+	const def = 24 * time.Hour
+	v, err := h.store.GetConfig("agent_cert_validity_hours")
+	if err != nil || v == "" {
+		return def
+	}
+	hours, err := strconv.Atoi(v)
+	if err != nil || hours <= 0 {
+		return def
+	}
+	return time.Duration(hours) * time.Hour
 }

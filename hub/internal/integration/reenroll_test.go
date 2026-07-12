@@ -1,0 +1,797 @@
+package integration
+
+// End-to-end integration test for the Human-Approved Re-Enrollment loop (P2.T8).
+//
+// Strategy: simulate the agent over a real gRPC Connect stream.  The test
+// controls the node keypair and KEK directly so it can produce a valid proof
+// without running a real agent subprocess or forcing real cert expiry.
+//
+// Happy path (TestReEnrollHappyPath):
+//  1. Seed node crypto + transport pubkey for a server directly via the store.
+//  2. Open a bootstrap (CA-pinned, no client cert) gRPC stream; send ReEnrollRequest.
+//  3. Discover the pending request via GET /api/servers/reenroll/pending.
+//  4. In a goroutine, approve via POST /api/servers/{id}/reenroll/approve (valid TOTP).
+//  5. Read ReEnrollApproved{EphemeralPub, EncryptedKek, Challenge} from the stream.
+//  6. Inline-open the KEK (X25519 ECDH + HKDF + AES-GCM); sign the challenge; send ReEnrollProof.
+//  7. Assert: stream yields CertRenewResponse; parsed cert CN == serverID;
+//     HTTP approve returned 200; DB status is "approved".
+//
+// Deny path (TestReEnrollDenyPath):
+//  1–3. Same as above.
+//  4. Deny via POST /api/servers/{id}/reenroll/deny.
+//  5. Assert: DB status is "denied"; no cert arrives on the stream.
+//
+// No-transport-key backward-compat (TestReEnrollNoTransportKey_ApprovalDenied):
+//  Seed a server WITHOUT storing a transport pubkey.
+//  Approve the request — assert ReleaseKEK returns a 4xx (no transport key).
+
+import (
+	"bytes"
+	"context"
+	"crypto/aes"
+	"crypto/cipher"
+	"crypto/ecdh"
+	"crypto/ecdsa"
+	"crypto/ed25519"
+	"crypto/elliptic"
+	"crypto/rand"
+	"crypto/sha256"
+	"crypto/tls"
+	"crypto/x509"
+	"crypto/x509/pkix"
+	"encoding/base64"
+	"encoding/hex"
+	"encoding/json"
+	"fmt"
+	"io"
+	"net/http"
+	"testing"
+	"time"
+
+	"google.golang.org/grpc"
+	"google.golang.org/grpc/credentials"
+	"google.golang.org/grpc/keepalive"
+
+	"github.com/wyiu/veyport/hub/internal/auth"
+	"github.com/wyiu/veyport/hub/internal/model"
+	pb "github.com/wyiu/veyport/proto/veyport/v1"
+)
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Types
+// ─────────────────────────────────────────────────────────────────────────────
+
+// enrolledServer holds the node crypto state for a seeded server.
+type enrolledServer struct {
+	serverID       string
+	priv           ed25519.PrivateKey
+	fingerprint    string
+	transportPriv  []byte // X25519 private key (32 bytes); nil if not seeded
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Seeding helpers
+// ─────────────────────────────────────────────────────────────────────────────
+
+// sealKEKForHub mirrors grpcserver.sealKEK:
+//
+//	hex( auth.Encrypt(kek, auth.DeriveKey(storageKey)) )
+func sealKEKForHub(kek []byte, storageKey string) (string, error) {
+	enc, err := auth.Encrypt(kek, auth.DeriveKey(storageKey))
+	if err != nil {
+		return "", fmt.Errorf("encrypt KEK: %w", err)
+	}
+	return hex.EncodeToString(enc), nil
+}
+
+// seedEnrolledServer creates a server record and populates its node crypto
+// and transport public key directly via the store, simulating a prior normal
+// enrollment. The transport keypair is included so the simulated agent can
+// open the transport-encrypted KEK during re-enrollment.
+func seedEnrolledServer(t *testing.T, h *TestHarness, adminToken, name string) *enrolledServer {
+	t.Helper()
+	return seedEnrolledServerWithTransport(t, h, adminToken, name, true)
+}
+
+// seedEnrolledServerWithTransport is like seedEnrolledServer but lets the
+// caller control whether a transport pubkey is registered (withTransport=false
+// simulates an old agent that has not yet registered an X25519 key).
+func seedEnrolledServerWithTransport(t *testing.T, h *TestHarness, adminToken, name string, withTransport bool) *enrolledServer {
+	t.Helper()
+
+	// Use the HTTP API to create the server record (gives it a proper UUID).
+	serverID, _ := h.CreateServer(t, adminToken, name)
+
+	// Generate a node Ed25519 keypair (mirrors agent/internal/nodekey.Generate).
+	pub, priv, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatalf("seedEnrolledServer: generate ed25519 key: %v", err)
+	}
+	pubB64 := base64.StdEncoding.EncodeToString(pub)
+
+	// Generate a random 32-byte KEK.
+	kek := make([]byte, 32)
+	if _, err := rand.Read(kek); err != nil {
+		t.Fatalf("seedEnrolledServer: generate KEK: %v", err)
+	}
+
+	// Seal the KEK at rest using the hub storage key (mirrors grpcserver.sealKEK).
+	kekEncHex, err := sealKEKForHub(kek, h.StorageKey)
+	if err != nil {
+		t.Fatalf("seedEnrolledServer: seal KEK for hub: %v", err)
+	}
+
+	const fp = "test-fingerprint-abc123"
+	if err := h.Store.SetNodeCrypto(serverID, pubB64, kekEncHex, fp); err != nil {
+		t.Fatalf("seedEnrolledServer: SetNodeCrypto: %v", err)
+	}
+
+	var transportPriv []byte
+	if withTransport {
+		// Generate an X25519 transport keypair and register the public half.
+		curve := ecdh.X25519()
+		tPrivKey, genErr := curve.GenerateKey(rand.Reader)
+		if genErr != nil {
+			t.Fatalf("seedEnrolledServer: generate X25519 transport key: %v", genErr)
+		}
+		transportPriv = tPrivKey.Bytes()
+		tPubB64 := base64.StdEncoding.EncodeToString(tPrivKey.PublicKey().Bytes())
+		if err := h.Store.SetNodeTransportPub(serverID, tPubB64); err != nil {
+			t.Fatalf("seedEnrolledServer: SetNodeTransportPub: %v", err)
+		}
+	}
+
+	return &enrolledServer{
+		serverID:      serverID,
+		priv:          priv,
+		fingerprint:   fp,
+		transportPriv: transportPriv,
+	}
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// gRPC bootstrap dial
+// ─────────────────────────────────────────────────────────────────────────────
+
+// buildBootstrapTLS returns a TLS config that pins the hub's CA by SHA-256
+// without presenting a client certificate — the same trust model the real
+// agent uses during re-enrollment.
+//
+// InsecureSkipVerify is intentionally set to true: hostname verification is
+// disabled because the ephemeral test CA cert uses 127.0.0.1 as a SAN.
+// Authenticity is enforced via VerifyPeerCertificate which checks the
+// SHA-256 pin of every cert in the chain, providing equivalent security for
+// the test environment.
+func buildBootstrapTLS(hubCAPin string) (*tls.Config, error) {
+	expectedPin, err := hex.DecodeString(hubCAPin)
+	if err != nil {
+		return nil, fmt.Errorf("decode hub CA pin: %w", err)
+	}
+	return &tls.Config{
+		MinVersion:         tls.VersionTLS13,
+		InsecureSkipVerify: true, //nolint:gosec // hostname check replaced by CA-pin in VerifyPeerCertificate
+		VerifyPeerCertificate: func(rawCerts [][]byte, _ [][]*x509.Certificate) error {
+			if len(rawCerts) == 0 {
+				return fmt.Errorf("hub presented empty TLS chain")
+			}
+			for _, raw := range rawCerts {
+				cert, err := x509.ParseCertificate(raw)
+				if err != nil {
+					continue
+				}
+				pin := sha256.Sum256(cert.Raw)
+				if bytes.Equal(pin[:], expectedPin) {
+					return nil
+				}
+			}
+			return fmt.Errorf("hub TLS chain did not contain the pinned CA")
+		},
+	}, nil
+}
+
+// openReEnrollStream dials the hub gRPC server with bootstrap (CA-pinned) TLS
+// and returns an open Connect stream and the underlying connection.
+// Callers must defer conn.Close().
+func openReEnrollStream(t *testing.T, h *TestHarness) (pb.AgentService_ConnectClient, *grpc.ClientConn) {
+	t.Helper()
+	tlsCfg, err := buildBootstrapTLS(h.HubCAPin)
+	if err != nil {
+		t.Fatalf("build bootstrap TLS: %v", err)
+	}
+	conn, err := grpc.NewClient(h.GRPCAddr,
+		grpc.WithTransportCredentials(credentials.NewTLS(tlsCfg)),
+		grpc.WithKeepaliveParams(keepalive.ClientParameters{
+			Time:                30 * time.Second,
+			Timeout:             10 * time.Second,
+			PermitWithoutStream: true,
+		}),
+	)
+	if err != nil {
+		t.Fatalf("dial hub gRPC: %v", err)
+	}
+	stream, err := pb.NewAgentServiceClient(conn).Connect(context.Background())
+	if err != nil {
+		conn.Close()
+		t.Fatalf("open gRPC Connect stream: %v", err)
+	}
+	return stream, conn
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// HTTP helpers
+// ─────────────────────────────────────────────────────────────────────────────
+
+// listPendingReEnroll calls GET /api/servers/reenroll/pending and decodes the
+// JSON response.
+func listPendingReEnroll(t *testing.T, h *TestHarness, adminToken string) []model.ReEnrollRequest {
+	t.Helper()
+	resp := h.HTTPGet(t, "/api/servers/reenroll/pending", adminToken)
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		t.Fatalf("list pending re-enroll: status=%d body=%s", resp.StatusCode, body)
+	}
+	var reqs []model.ReEnrollRequest
+	if err := json.NewDecoder(resp.Body).Decode(&reqs); err != nil {
+		t.Fatalf("decode pending re-enroll list: %v", err)
+	}
+	return reqs
+}
+
+// waitForPendingReEnroll polls until a pending re-enroll appears for serverID.
+func waitForPendingReEnroll(t *testing.T, h *TestHarness, serverID, adminToken string, timeout time.Duration) string {
+	t.Helper()
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		for _, r := range listPendingReEnroll(t, h, adminToken) {
+			if r.ServerID == serverID {
+				return r.ID
+			}
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	t.Fatalf("no pending re-enroll appeared for server %s within %v", serverID, timeout)
+	return ""
+}
+
+// approveReEnroll fires POST /api/servers/{id}/reenroll/approve in a goroutine
+// and returns a channel that receives the HTTP status code when the call
+// completes.  The call blocks inside ReleaseKEK until the agent proof arrives.
+//
+// The TOTP replay cache is cleared before generating the code: the enable step
+// (in SetupAdminWithTOTP) consumes the code for the current 30s window, so
+// without clearing the cache the approve call would fail with "invalid TOTP code"
+// when called within the same window.
+func approveReEnroll(t *testing.T, h *TestHarness, adminToken, totpSecret, serverID, requestID string) <-chan int {
+	t.Helper()
+	// Clear the replay cache so the approve code is accepted regardless of how
+	// recently the enable code was used.
+	h.HTTPServer.ClearTOTPCache()
+
+	ch := make(chan int, 1)
+	go func() {
+		code, err := auth.GenerateValidCode(totpSecret)
+		if err != nil {
+			t.Errorf("approveReEnroll: GenerateValidCode: %v", err)
+			ch <- 0
+			return
+		}
+		path := fmt.Sprintf("/api/servers/%s/reenroll/approve", serverID)
+		resp := h.HTTPPost(t, path, map[string]string{
+			"request_id": requestID,
+			"totp_code":  code,
+		}, adminToken)
+		defer resp.Body.Close()
+		if resp.StatusCode != http.StatusOK {
+			b, _ := io.ReadAll(resp.Body)
+			t.Logf("approve response: status=%d body=%s", resp.StatusCode, b)
+		}
+		ch <- resp.StatusCode
+	}()
+	return ch
+}
+
+// approveReEnrollSync fires POST /api/servers/{id}/reenroll/approve synchronously
+// and returns the HTTP status code. Used when the approve call is expected to
+// fail fast (e.g., no transport key), without needing to wait for agent proof.
+func approveReEnrollSync(t *testing.T, h *TestHarness, adminToken, totpSecret, serverID, requestID string) int {
+	t.Helper()
+	h.HTTPServer.ClearTOTPCache()
+	code, err := auth.GenerateValidCode(totpSecret)
+	if err != nil {
+		t.Fatalf("approveReEnrollSync: GenerateValidCode: %v", err)
+	}
+	path := fmt.Sprintf("/api/servers/%s/reenroll/approve", serverID)
+	resp := h.HTTPPost(t, path, map[string]string{
+		"request_id": requestID,
+		"totp_code":  code,
+	}, adminToken)
+	defer resp.Body.Close()
+	return resp.StatusCode
+}
+
+// denyReEnroll calls POST /api/servers/{id}/reenroll/deny synchronously.
+func denyReEnroll(t *testing.T, h *TestHarness, adminToken, serverID, requestID string) {
+	t.Helper()
+	path := fmt.Sprintf("/api/servers/%s/reenroll/deny", serverID)
+	resp := h.HTTPPost(t, path, map[string]string{"request_id": requestID}, adminToken)
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		b, _ := io.ReadAll(resp.Body)
+		t.Fatalf("deny re-enroll: status=%d body=%s", resp.StatusCode, b)
+	}
+}
+
+// assertReEnrollStatus checks the DB row for the given requestID.
+func assertReEnrollStatus(t *testing.T, h *TestHarness, requestID, want string) {
+	t.Helper()
+	r, err := h.Store.GetReEnrollRequest(requestID)
+	if err != nil {
+		t.Fatalf("GetReEnrollRequest %s: %v", requestID, err)
+	}
+	if r.Status != want {
+		t.Fatalf("re-enroll status: got %q, want %q", r.Status, want)
+	}
+}
+
+// generateCSR creates a fresh ECDSA P-256 CSR with the given serverID as CN.
+// Mirrors agent/internal/certs.Store.GenerateCSR without importing that package
+// (which is internal to the agent module).
+func generateCSR(t *testing.T, serverID string) []byte {
+	t.Helper()
+	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatalf("generateCSR: generate ECDSA key: %v", err)
+	}
+	template := &x509.CertificateRequest{
+		Subject: pkix.Name{CommonName: serverID},
+	}
+	csrDER, err := x509.CreateCertificateRequest(rand.Reader, template, key)
+	if err != nil {
+		t.Fatalf("generateCSR: create CSR: %v", err)
+	}
+	return csrDER
+}
+
+// recvHubMessage receives one message from the stream in a goroutine.
+// Returns buffered channels for the message and any error.
+func recvHubMessage(stream pb.AgentService_ConnectClient) (<-chan *pb.HubMessage, <-chan error) {
+	msgCh := make(chan *pb.HubMessage, 1)
+	errCh := make(chan error, 1)
+	go func() {
+		msg, err := stream.Recv()
+		if err != nil {
+			errCh <- err
+		} else {
+			msgCh <- msg
+		}
+	}()
+	return msgCh, errCh
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Tests
+// ─────────────────────────────────────────────────────────────────────────────
+
+// TestReEnrollHappyPath drives the complete approve path end-to-end.
+func TestReEnrollHappyPath(t *testing.T) {
+	h := StartHarness(t)
+	adminToken, totpSecret := h.SetupAdminWithTOTP(t)
+
+	srv := seedEnrolledServer(t, h, adminToken, "reenroll-happy-server")
+	t.Logf("seeded server id=%s", srv.serverID)
+
+	csrDER := generateCSR(t, srv.serverID)
+
+	stream, conn := openReEnrollStream(t, h)
+	defer conn.Close()
+	defer stream.CloseSend()
+
+	// Send ReEnrollRequest.
+	if err := stream.Send(&pb.AgentMessage{
+		Payload: &pb.AgentMessage_ReenrollRequest{
+			ReenrollRequest: &pb.ReEnrollRequest{
+				ServerId:    srv.serverID,
+				Csr:         csrDER,
+				Fingerprint: srv.fingerprint,
+			},
+		},
+	}); err != nil {
+		t.Fatalf("send ReEnrollRequest: %v", err)
+	}
+	t.Log("ReEnrollRequest sent")
+
+	// Wait for the pending DB row (created synchronously by the gRPC handler
+	// before it blocks on the approve channel).
+	requestID := waitForPendingReEnroll(t, h, srv.serverID, adminToken, 5*time.Second)
+	t.Logf("pending request id=%s", requestID)
+
+	// Start approve in a goroutine — blocks inside ReleaseKEK until the proof
+	// is received by the stream goroutine.
+	approveCh := approveReEnroll(t, h, adminToken, totpSecret, srv.serverID, requestID)
+
+	// Read ReEnrollApproved from the stream.
+	msgCh, errCh := recvHubMessage(stream)
+	var approved *pb.ReEnrollApproved
+	select {
+	case msg := <-msgCh:
+		p, ok := msg.Payload.(*pb.HubMessage_ReenrollApproved)
+		if !ok {
+			t.Fatalf("expected ReEnrollApproved, got %T", msg.Payload)
+		}
+		approved = p.ReenrollApproved
+		t.Logf("received ReEnrollApproved ephemeral_pub_len=%d encrypted_kek_len=%d challenge_len=%d",
+			len(approved.EphemeralPub), len(approved.EncryptedKek), len(approved.Challenge))
+	case err := <-errCh:
+		t.Fatalf("stream error waiting for ReEnrollApproved: %v", err)
+	case <-time.After(15 * time.Second):
+		t.Fatal("timed out waiting for ReEnrollApproved")
+	}
+
+	// Verify the approved message contains the transport-encrypted KEK fields.
+	if len(approved.EphemeralPub) == 0 {
+		t.Fatal("ReEnrollApproved: EphemeralPub is empty")
+	}
+	if len(approved.EncryptedKek) == 0 {
+		t.Fatal("ReEnrollApproved: EncryptedKek is empty")
+	}
+
+	// Open the transport-encrypted KEK using the inline construction
+	// (mirrors agent/internal/nodekey.OpenKEK exactly).
+	kek, err := openTransportKEK(srv.transportPriv, approved.EphemeralPub, approved.EncryptedKek)
+	if err != nil {
+		t.Fatalf("open transport KEK: %v", err)
+	}
+	t.Logf("transport KEK decrypted successfully (len=%d)", len(kek))
+
+	// Open the sealed identity key using the decrypted KEK.
+	// We don't have the sealed hex here — instead we sign with the raw ed25519
+	// priv we seeded with. (The test seeded priv directly, not via a sealed key.)
+	// So we just sign the challenge with the ed25519 private key.
+	sig := ed25519.Sign(srv.priv, approved.Challenge)
+	if err := stream.Send(&pb.AgentMessage{
+		Payload: &pb.AgentMessage_ReenrollProof{
+			ReenrollProof: &pb.ReEnrollProof{Signature: sig},
+		},
+	}); err != nil {
+		t.Fatalf("send ReEnrollProof: %v", err)
+	}
+	t.Log("ReEnrollProof sent")
+
+	// Read CertRenewResponse.
+	msgCh2, errCh2 := recvHubMessage(stream)
+	var certResp *pb.CertRenewResponse
+	select {
+	case msg := <-msgCh2:
+		p, ok := msg.Payload.(*pb.HubMessage_CertRenewResponse)
+		if !ok {
+			t.Fatalf("expected CertRenewResponse, got %T", msg.Payload)
+		}
+		certResp = p.CertRenewResponse
+		t.Logf("received CertRenewResponse client_cert_len=%d", len(certResp.ClientCert))
+	case err := <-errCh2:
+		t.Fatalf("stream error waiting for CertRenewResponse: %v", err)
+	case <-time.After(15 * time.Second):
+		t.Fatal("timed out waiting for CertRenewResponse")
+	}
+
+	// Assert: cert must parse and have CN == serverID.
+	if len(certResp.ClientCert) == 0 {
+		t.Fatal("CertRenewResponse: empty ClientCert")
+	}
+	cert, err := x509.ParseCertificate(certResp.ClientCert)
+	if err != nil {
+		t.Fatalf("parse client cert: %v", err)
+	}
+	if cert.Subject.CommonName != srv.serverID {
+		t.Fatalf("cert CN: got %q, want %q", cert.Subject.CommonName, srv.serverID)
+	}
+	t.Logf("client cert CN=%s (correct)", cert.Subject.CommonName)
+
+	// Assert: approve HTTP returned 200.
+	select {
+	case status := <-approveCh:
+		if status != http.StatusOK {
+			t.Fatalf("approve HTTP: got %d, want 200", status)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("timed out waiting for approve HTTP response")
+	}
+	t.Log("approve HTTP returned 200 OK")
+
+	// Assert: DB status is "approved".
+	assertReEnrollStatus(t, h, requestID, "approved")
+	t.Log("DB status=approved — happy path PASS")
+}
+
+// TestReEnrollDenyPath validates that denying a request sets DB status to
+// "denied" and no certificate is issued.
+func TestReEnrollDenyPath(t *testing.T) {
+	h := StartHarness(t)
+	adminToken, _ := h.SetupAdminWithTOTP(t)
+
+	srv := seedEnrolledServer(t, h, adminToken, "reenroll-deny-server")
+	t.Logf("seeded server id=%s", srv.serverID)
+
+	csrDER := generateCSR(t, srv.serverID)
+
+	stream, conn := openReEnrollStream(t, h)
+	defer conn.Close()
+	defer stream.CloseSend()
+
+	if err := stream.Send(&pb.AgentMessage{
+		Payload: &pb.AgentMessage_ReenrollRequest{
+			ReenrollRequest: &pb.ReEnrollRequest{
+				ServerId:    srv.serverID,
+				Csr:         csrDER,
+				Fingerprint: srv.fingerprint,
+			},
+		},
+	}); err != nil {
+		t.Fatalf("send ReEnrollRequest: %v", err)
+	}
+
+	requestID := waitForPendingReEnroll(t, h, srv.serverID, adminToken, 5*time.Second)
+	t.Logf("pending request id=%s", requestID)
+
+	// Deny the request.  This only updates the DB; the stream goroutine remains
+	// blocked on the approve channel until its 10-minute timeout.
+	denyReEnroll(t, h, adminToken, srv.serverID, requestID)
+	t.Log("deny HTTP returned 200 OK")
+
+	// Assert DB status is "denied".
+	assertReEnrollStatus(t, h, requestID, "denied")
+	t.Log("DB status=denied")
+
+	// Verify no CertRenewResponse arrives within a short window.
+	msgCh, _ := recvHubMessage(stream)
+	select {
+	case msg := <-msgCh:
+		if _, ok := msg.Payload.(*pb.HubMessage_CertRenewResponse); ok {
+			t.Fatal("deny path: unexpectedly received CertRenewResponse")
+		}
+		// Any other message (e.g. ReEnrollDenied if the server sends one) is fine.
+		t.Logf("deny path: received non-cert message %T (acceptable)", msg.Payload)
+	case <-time.After(2 * time.Second):
+		// No message — correct, the stream is blocked waiting for approval.
+		t.Log("no cert received within 2s — correct, stream blocked")
+	}
+
+	t.Log("deny path PASS")
+}
+
+// TestReEnroll_UnknownServer_DoesNotRegister is the regression test for the
+// unauthenticated connMgr hijack defect (HIGH):
+//
+// An attacker opens a bootstrap gRPC Connect stream (no client cert) and sends
+// ReEnrollRequest{ServerId: "does-not-exist"}.  The hub MUST:
+//  1. Reject the request immediately (unknown server).
+//  2. Close / terminate the stream promptly (bootstrapOnly exit — Connect() returns).
+//  3. NOT register the attacker's stream in connMgr under the victim's serverID.
+//
+// We assert (2) + (3): stream.Recv() returns an error or EOF promptly, AND
+// connMgr.GetConn("does-not-exist") returns nil.
+func TestReEnroll_UnknownServer_DoesNotRegister(t *testing.T) {
+	h := StartHarness(t)
+
+	const victimID = "does-not-exist"
+
+	stream, conn := openReEnrollStream(t, h)
+	defer conn.Close()
+	defer stream.CloseSend()
+
+	// Send a ReEnrollRequest for a server that does not exist in the DB.
+	if err := stream.Send(&pb.AgentMessage{
+		Payload: &pb.AgentMessage_ReenrollRequest{
+			ReenrollRequest: &pb.ReEnrollRequest{
+				ServerId:    victimID,
+				Csr:         []byte("fake-csr"),
+				Fingerprint: "fake-fingerprint",
+			},
+		},
+	}); err != nil {
+		t.Fatalf("send ReEnrollRequest: %v", err)
+	}
+	t.Log("ReEnrollRequest sent for non-existent server")
+
+	// The hub should send ReEnrollDenied (or close the stream) promptly —
+	// then Connect() exits (bootstrapOnly=true) without registering connMgr.
+	// We drain messages until we get an error/EOF or a definitive close.
+	deadline := time.Now().Add(5 * time.Second)
+	gotDenied := false
+	for time.Now().Before(deadline) {
+		msgCh, errCh := recvHubMessage(stream)
+		select {
+		case msg := <-msgCh:
+			switch msg.Payload.(type) {
+			case *pb.HubMessage_ReenrollDenied:
+				t.Log("received ReEnrollDenied — correct early-exit response")
+				gotDenied = true
+			case *pb.HubMessage_CertRenewResponse:
+				t.Fatal("SECURITY: received CertRenewResponse for unknown server — connMgr hijack possible")
+			default:
+				t.Logf("received unexpected message type %T — continuing drain", msg.Payload)
+			}
+		case err := <-errCh:
+			t.Logf("stream closed with error: %v — this is the expected bootstrapOnly exit", err)
+			// Stream closed; we're done draining.
+			goto streamClosed
+		case <-time.After(3 * time.Second):
+			t.Fatal("timed out: stream did not close and no message received — possible connMgr registration (stream left open)")
+		}
+		if gotDenied {
+			// After ReEnrollDenied the server should close the stream; give it a moment.
+			break
+		}
+	}
+
+streamClosed:
+	// Give Connect() a moment to return and clean up.
+	time.Sleep(100 * time.Millisecond)
+
+	// Assert: connMgr must NOT have the unknown server registered.
+	if conn := h.ConnMgr.GetConn(victimID); conn != nil {
+		t.Fatalf("SECURITY: connMgr has %q registered — unauthenticated hijack succeeded", victimID)
+	}
+	t.Logf("connMgr.GetConn(%q) == nil — no registration occurred (correct)", victimID)
+
+	t.Log("TestReEnroll_UnknownServer_DoesNotRegister PASS")
+}
+
+// TestReEnrollNoTransportKey_ApprovalDenied asserts the backward-compat policy:
+// if a node has no stored X25519 transport pubkey (old enrollment), the HTTP
+// approve call MUST return a 4xx (not 200), and no KEK travels in plaintext.
+// The node must re-register to obtain a transport key.
+func TestReEnrollNoTransportKey_ApprovalDenied(t *testing.T) {
+	h := StartHarness(t)
+	adminToken, totpSecret := h.SetupAdminWithTOTP(t)
+
+	// Seed a server WITHOUT a transport pubkey (withTransport=false).
+	srv := seedEnrolledServerWithTransport(t, h, adminToken, "reenroll-no-transport-server", false)
+	t.Logf("seeded server id=%s (no transport pubkey)", srv.serverID)
+
+	csrDER := generateCSR(t, srv.serverID)
+
+	stream, conn := openReEnrollStream(t, h)
+	defer conn.Close()
+	defer stream.CloseSend()
+
+	if err := stream.Send(&pb.AgentMessage{
+		Payload: &pb.AgentMessage_ReenrollRequest{
+			ReenrollRequest: &pb.ReEnrollRequest{
+				ServerId:    srv.serverID,
+				Csr:         csrDER,
+				Fingerprint: srv.fingerprint,
+			},
+		},
+	}); err != nil {
+		t.Fatalf("send ReEnrollRequest: %v", err)
+	}
+
+	requestID := waitForPendingReEnroll(t, h, srv.serverID, adminToken, 5*time.Second)
+	t.Logf("pending request id=%s", requestID)
+
+	// Approve synchronously — ReleaseKEK should fail fast with "no transport key".
+	status := approveReEnrollSync(t, h, adminToken, totpSecret, srv.serverID, requestID)
+	if status == http.StatusOK {
+		t.Fatalf("expected 4xx for no-transport-key node, got 200 — raw KEK may have been released")
+	}
+	t.Logf("approve returned HTTP %d (non-200, as expected for missing transport key)", status)
+
+	// Verify no CertRenewResponse arrives on the stream (the gRPC stream was never signalled).
+	msgCh, _ := recvHubMessage(stream)
+	select {
+	case msg := <-msgCh:
+		if _, ok := msg.Payload.(*pb.HubMessage_CertRenewResponse); ok {
+			t.Fatal("SECURITY: received CertRenewResponse despite missing transport key")
+		}
+		t.Logf("received non-cert message %T (acceptable)", msg.Payload)
+	case <-time.After(2 * time.Second):
+		t.Log("no cert received within 2s — correct")
+	}
+
+	t.Log("TestReEnrollNoTransportKey_ApprovalDenied PASS")
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Transport KEK inline open
+// ─────────────────────────────────────────────────────────────────────────────
+
+// openTransportKEK implements the "veyport-kek-transport-v1" sealed-box open
+// WITHOUT importing agent/internal/nodekey (cross-module import forbidden).
+//
+// This is an exact mirror of nodekey.OpenKEK / kektransport.sealKEKToNodeCore:
+//  1. shared = ECDH(tPriv, ePub)
+//  2. info = "veyport-kek-transport-v1" || ePub (raw) || tPub (raw)
+//  3. key = HKDF-SHA256(ikm=shared, salt=nil, info, len=32)
+//  4. nonce=encryptedKek[:12]; kek = AES-256-GCM(key).Open(nonce, encryptedKek[12:])
+func openTransportKEK(transportPrivBytes, ephemeralPubBytes, encryptedKek []byte) ([]byte, error) {
+	if len(encryptedKek) < 13 {
+		return nil, fmt.Errorf("encryptedKek too short: %d bytes", len(encryptedKek))
+	}
+	curve := ecdh.X25519()
+	tPrivKey, err := curve.NewPrivateKey(transportPrivBytes)
+	if err != nil {
+		return nil, fmt.Errorf("parse transport private key: %w", err)
+	}
+	tPubBytes := tPrivKey.PublicKey().Bytes()
+
+	ePubKey, err := curve.NewPublicKey(ephemeralPubBytes)
+	if err != nil {
+		return nil, fmt.Errorf("parse ephemeral public key: %w", err)
+	}
+	shared, err := tPrivKey.ECDH(ePubKey)
+	if err != nil {
+		return nil, fmt.Errorf("ECDH: %w", err)
+	}
+
+	// HKDF-SHA256 Extract+Expand:
+	// info = "veyport-kek-transport-v1" || ePub || tPub (raw bytes, matching kektransport.go)
+	const label = "veyport-kek-transport-v1"
+	infoStr := label + string(ephemeralPubBytes) + string(tPubBytes)
+
+	key := hkdfSHA256(shared, nil, []byte(infoStr), 32)
+
+	block, err := aes.NewCipher(key)
+	if err != nil {
+		return nil, fmt.Errorf("AES: %w", err)
+	}
+	gcm, err := cipher.NewGCM(block)
+	if err != nil {
+		return nil, fmt.Errorf("GCM: %w", err)
+	}
+	nonce := encryptedKek[:12]
+	ct := encryptedKek[12:]
+	kek, err := gcm.Open(nil, nonce, ct, nil)
+	if err != nil {
+		return nil, fmt.Errorf("GCM open: %w", err)
+	}
+	return kek, nil
+}
+
+// hkdfSHA256 implements HKDF-Extract followed by HKDF-Expand using
+// HMAC-SHA256, producing keyLen bytes. This mirrors crypto/hkdf.Key() from
+// Go 1.24 stdlib without requiring a separate import in the test.
+//
+// Extract: prk = HMAC-SHA256(salt, ikm)   (salt=zeros if nil)
+// Expand:  T(1) = HMAC-SHA256(prk, ""||info||0x01); output = T(1)[:keyLen]
+func hkdfSHA256(ikm, salt, info []byte, keyLen int) []byte {
+	import_hmac_sha256 := func(key, data []byte) []byte {
+		import_hmac := func(key, data []byte) []byte {
+			blockSize := 64
+			if len(key) > blockSize {
+				h := sha256.New()
+				h.Write(key)
+				key = h.Sum(nil)
+			}
+			ipad := make([]byte, blockSize)
+			opad := make([]byte, blockSize)
+			copy(ipad, key)
+			copy(opad, key)
+			for i := range ipad {
+				ipad[i] ^= 0x36
+				opad[i] ^= 0x5c
+			}
+			inner := sha256.New()
+			inner.Write(ipad)
+			inner.Write(data)
+			innerSum := inner.Sum(nil)
+			outer := sha256.New()
+			outer.Write(opad)
+			outer.Write(innerSum)
+			return outer.Sum(nil)
+		}
+		return import_hmac(key, data)
+	}
+
+	// Extract
+	if salt == nil {
+		salt = make([]byte, sha256.Size)
+	}
+	prk := import_hmac_sha256(salt, ikm)
+
+	// Expand: single block (T(1)) — sufficient for 32-byte output
+	t1Input := append(info, 0x01)
+	t1 := import_hmac_sha256(prk, t1Input)
+	return t1[:keyLen]
+}

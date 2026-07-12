@@ -28,6 +28,7 @@ type Server struct {
 	logSessions *LogSessions
 	terminals   *TerminalSessions
 	hbCoalescer *HeartbeatCoalescer
+	handler     *Handler
 	addr        string
 }
 
@@ -43,6 +44,7 @@ type Config struct {
 	CACert                 *x509.Certificate
 	CAKey                  *ecdsa.PrivateKey
 	Notifier               *notify.Notifier
+	StorageKey             string
 }
 
 func New(cfg Config) *Server {
@@ -115,18 +117,27 @@ func New(cfg Config) *Server {
 
 	s.grpcServer = grpc.NewServer(opts...)
 	handler := &Handler{
-		store:       cfg.Store,
-		connMgr:     cfg.ConnMgr,
-		pending:     s.pending,
-		logSessions: s.logSessions,
-		terminals:   s.terminals,
-		hbCoalescer: hbCoalescer,
-		caCert:      cfg.CACert,
-		caKey:       cfg.CAKey,
-		notifier:    cfg.Notifier,
+		store:            cfg.Store,
+		connMgr:          cfg.ConnMgr,
+		pending:          s.pending,
+		logSessions:      s.logSessions,
+		terminals:        s.terminals,
+		hbCoalescer:      hbCoalescer,
+		caCert:           cfg.CACert,
+		caKey:            cfg.CAKey,
+		notifier:         cfg.Notifier,
+		storageKey:       cfg.StorageKey,
+		reEnrollSessions: make(map[string]*reEnrollSession),
 	}
+	s.handler = handler
 	pb.RegisterAgentServiceServer(s.grpcServer, handler)
 	return s
+}
+
+// Handler returns the gRPC message handler. The HTTP server uses this to call
+// ReleaseKEK during the re-enrollment approval flow.
+func (s *Server) Handler() *Handler {
+	return s.handler
 }
 
 func (s *Server) Start() error {

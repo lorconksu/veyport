@@ -38,6 +38,8 @@ type AgentMessage struct {
 	//	*AgentMessage_TerminalOpenAck
 	//	*AgentMessage_TerminalData
 	//	*AgentMessage_TerminalExit
+	//	*AgentMessage_ReenrollRequest
+	//	*AgentMessage_ReenrollProof
 	Payload       isAgentMessage_Payload `protobuf_oneof:"payload"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -188,6 +190,24 @@ func (x *AgentMessage) GetTerminalExit() *TerminalExit {
 	return nil
 }
 
+func (x *AgentMessage) GetReenrollRequest() *ReEnrollRequest {
+	if x != nil {
+		if x, ok := x.Payload.(*AgentMessage_ReenrollRequest); ok {
+			return x.ReenrollRequest
+		}
+	}
+	return nil
+}
+
+func (x *AgentMessage) GetReenrollProof() *ReEnrollProof {
+	if x != nil {
+		if x, ok := x.Payload.(*AgentMessage_ReenrollProof); ok {
+			return x.ReenrollProof
+		}
+	}
+	return nil
+}
+
 type isAgentMessage_Payload interface {
 	isAgentMessage_Payload()
 }
@@ -241,6 +261,14 @@ type AgentMessage_TerminalExit struct {
 	TerminalExit *TerminalExit `protobuf:"bytes,20,opt,name=terminal_exit,json=terminalExit,proto3,oneof"`
 }
 
+type AgentMessage_ReenrollRequest struct {
+	ReenrollRequest *ReEnrollRequest `protobuf:"bytes,21,opt,name=reenroll_request,json=reenrollRequest,proto3,oneof"`
+}
+
+type AgentMessage_ReenrollProof struct {
+	ReenrollProof *ReEnrollProof `protobuf:"bytes,22,opt,name=reenroll_proof,json=reenrollProof,proto3,oneof"`
+}
+
 func (*AgentMessage_Heartbeat) isAgentMessage_Payload() {}
 
 func (*AgentMessage_Register) isAgentMessage_Payload() {}
@@ -265,6 +293,10 @@ func (*AgentMessage_TerminalData) isAgentMessage_Payload() {}
 
 func (*AgentMessage_TerminalExit) isAgentMessage_Payload() {}
 
+func (*AgentMessage_ReenrollRequest) isAgentMessage_Payload() {}
+
+func (*AgentMessage_ReenrollProof) isAgentMessage_Payload() {}
+
 // Messages from Hub → Agent
 type HubMessage struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
@@ -284,6 +316,8 @@ type HubMessage struct {
 	//	*HubMessage_TerminalInput
 	//	*HubMessage_TerminalResize
 	//	*HubMessage_TerminalClose
+	//	*HubMessage_ReenrollApproved
+	//	*HubMessage_ReenrollDenied
 	Payload       isHubMessage_Payload `protobuf_oneof:"payload"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -452,6 +486,24 @@ func (x *HubMessage) GetTerminalClose() *TerminalClose {
 	return nil
 }
 
+func (x *HubMessage) GetReenrollApproved() *ReEnrollApproved {
+	if x != nil {
+		if x, ok := x.Payload.(*HubMessage_ReenrollApproved); ok {
+			return x.ReenrollApproved
+		}
+	}
+	return nil
+}
+
+func (x *HubMessage) GetReenrollDenied() *ReEnrollDenied {
+	if x != nil {
+		if x, ok := x.Payload.(*HubMessage_ReenrollDenied); ok {
+			return x.ReenrollDenied
+		}
+	}
+	return nil
+}
+
 type isHubMessage_Payload interface {
 	isHubMessage_Payload()
 }
@@ -513,6 +565,14 @@ type HubMessage_TerminalClose struct {
 	TerminalClose *TerminalClose `protobuf:"bytes,21,opt,name=terminal_close,json=terminalClose,proto3,oneof"`
 }
 
+type HubMessage_ReenrollApproved struct {
+	ReenrollApproved *ReEnrollApproved `protobuf:"bytes,22,opt,name=reenroll_approved,json=reenrollApproved,proto3,oneof"`
+}
+
+type HubMessage_ReenrollDenied struct {
+	ReenrollDenied *ReEnrollDenied `protobuf:"bytes,23,opt,name=reenroll_denied,json=reenrollDenied,proto3,oneof"`
+}
+
 func (*HubMessage_HeartbeatAck) isHubMessage_Payload() {}
 
 func (*HubMessage_RegisterAck) isHubMessage_Payload() {}
@@ -540,6 +600,10 @@ func (*HubMessage_TerminalInput) isHubMessage_Payload() {}
 func (*HubMessage_TerminalResize) isHubMessage_Payload() {}
 
 func (*HubMessage_TerminalClose) isHubMessage_Payload() {}
+
+func (*HubMessage_ReenrollApproved) isHubMessage_Payload() {}
+
+func (*HubMessage_ReenrollDenied) isHubMessage_Payload() {}
 
 type Heartbeat struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
@@ -654,15 +718,18 @@ func (x *HeartbeatAck) GetTimestamp() int64 {
 }
 
 type RegisterAgent struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Token         string                 `protobuf:"bytes,1,opt,name=token,proto3" json:"token,omitempty"`
-	Hostname      string                 `protobuf:"bytes,2,opt,name=hostname,proto3" json:"hostname,omitempty"`
-	IpAddress     string                 `protobuf:"bytes,3,opt,name=ip_address,json=ipAddress,proto3" json:"ip_address,omitempty"`
-	Os            string                 `protobuf:"bytes,4,opt,name=os,proto3" json:"os,omitempty"`
-	AgentVersion  string                 `protobuf:"bytes,5,opt,name=agent_version,json=agentVersion,proto3" json:"agent_version,omitempty"`
-	Csr           []byte                 `protobuf:"bytes,6,opt,name=csr,proto3" json:"csr,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	state               protoimpl.MessageState `protogen:"open.v1"`
+	Token               string                 `protobuf:"bytes,1,opt,name=token,proto3" json:"token,omitempty"`
+	Hostname            string                 `protobuf:"bytes,2,opt,name=hostname,proto3" json:"hostname,omitempty"`
+	IpAddress           string                 `protobuf:"bytes,3,opt,name=ip_address,json=ipAddress,proto3" json:"ip_address,omitempty"`
+	Os                  string                 `protobuf:"bytes,4,opt,name=os,proto3" json:"os,omitempty"`
+	AgentVersion        string                 `protobuf:"bytes,5,opt,name=agent_version,json=agentVersion,proto3" json:"agent_version,omitempty"`
+	Csr                 []byte                 `protobuf:"bytes,6,opt,name=csr,proto3" json:"csr,omitempty"`
+	NodePubkey          []byte                 `protobuf:"bytes,7,opt,name=node_pubkey,json=nodePubkey,proto3" json:"node_pubkey,omitempty"`
+	EnrollFingerprint   string                 `protobuf:"bytes,8,opt,name=enroll_fingerprint,json=enrollFingerprint,proto3" json:"enroll_fingerprint,omitempty"`
+	NodeTransportPubkey []byte                 `protobuf:"bytes,9,opt,name=node_transport_pubkey,json=nodeTransportPubkey,proto3" json:"node_transport_pubkey,omitempty"`
+	unknownFields       protoimpl.UnknownFields
+	sizeCache           protoimpl.SizeCache
 }
 
 func (x *RegisterAgent) Reset() {
@@ -737,6 +804,27 @@ func (x *RegisterAgent) GetCsr() []byte {
 	return nil
 }
 
+func (x *RegisterAgent) GetNodePubkey() []byte {
+	if x != nil {
+		return x.NodePubkey
+	}
+	return nil
+}
+
+func (x *RegisterAgent) GetEnrollFingerprint() string {
+	if x != nil {
+		return x.EnrollFingerprint
+	}
+	return ""
+}
+
+func (x *RegisterAgent) GetNodeTransportPubkey() []byte {
+	if x != nil {
+		return x.NodeTransportPubkey
+	}
+	return nil
+}
+
 type RegisterAck struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Success       bool                   `protobuf:"varint,1,opt,name=success,proto3" json:"success,omitempty"`
@@ -744,6 +832,7 @@ type RegisterAck struct {
 	Error         string                 `protobuf:"bytes,3,opt,name=error,proto3" json:"error,omitempty"`
 	ClientCert    []byte                 `protobuf:"bytes,4,opt,name=client_cert,json=clientCert,proto3" json:"client_cert,omitempty"`
 	CaCert        []byte                 `protobuf:"bytes,5,opt,name=ca_cert,json=caCert,proto3" json:"ca_cert,omitempty"`
+	NodeKek       []byte                 `protobuf:"bytes,6,opt,name=node_kek,json=nodeKek,proto3" json:"node_kek,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -809,6 +898,13 @@ func (x *RegisterAck) GetClientCert() []byte {
 func (x *RegisterAck) GetCaCert() []byte {
 	if x != nil {
 		return x.CaCert
+	}
+	return nil
+}
+
+func (x *RegisterAck) GetNodeKek() []byte {
+	if x != nil {
+		return x.NodeKek
 	}
 	return nil
 }
@@ -2244,12 +2340,221 @@ func (x *TerminalClose) GetSessionId() string {
 	return ""
 }
 
+// Re-enrollment (human-approved Tier 2)
+type ReEnrollRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	ServerId      string                 `protobuf:"bytes,1,opt,name=server_id,json=serverId,proto3" json:"server_id,omitempty"`
+	Csr           []byte                 `protobuf:"bytes,2,opt,name=csr,proto3" json:"csr,omitempty"`
+	Fingerprint   string                 `protobuf:"bytes,3,opt,name=fingerprint,proto3" json:"fingerprint,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ReEnrollRequest) Reset() {
+	*x = ReEnrollRequest{}
+	mi := &file_proto_veyport_v1_agent_proto_msgTypes[30]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ReEnrollRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ReEnrollRequest) ProtoMessage() {}
+
+func (x *ReEnrollRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_proto_veyport_v1_agent_proto_msgTypes[30]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ReEnrollRequest.ProtoReflect.Descriptor instead.
+func (*ReEnrollRequest) Descriptor() ([]byte, []int) {
+	return file_proto_veyport_v1_agent_proto_rawDescGZIP(), []int{30}
+}
+
+func (x *ReEnrollRequest) GetServerId() string {
+	if x != nil {
+		return x.ServerId
+	}
+	return ""
+}
+
+func (x *ReEnrollRequest) GetCsr() []byte {
+	if x != nil {
+		return x.Csr
+	}
+	return nil
+}
+
+func (x *ReEnrollRequest) GetFingerprint() string {
+	if x != nil {
+		return x.Fingerprint
+	}
+	return ""
+}
+
+type ReEnrollApproved struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	EphemeralPub  []byte                 `protobuf:"bytes,1,opt,name=ephemeral_pub,json=ephemeralPub,proto3" json:"ephemeral_pub,omitempty"`
+	EncryptedKek  []byte                 `protobuf:"bytes,2,opt,name=encrypted_kek,json=encryptedKek,proto3" json:"encrypted_kek,omitempty"`
+	Challenge     []byte                 `protobuf:"bytes,3,opt,name=challenge,proto3" json:"challenge,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ReEnrollApproved) Reset() {
+	*x = ReEnrollApproved{}
+	mi := &file_proto_veyport_v1_agent_proto_msgTypes[31]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ReEnrollApproved) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ReEnrollApproved) ProtoMessage() {}
+
+func (x *ReEnrollApproved) ProtoReflect() protoreflect.Message {
+	mi := &file_proto_veyport_v1_agent_proto_msgTypes[31]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ReEnrollApproved.ProtoReflect.Descriptor instead.
+func (*ReEnrollApproved) Descriptor() ([]byte, []int) {
+	return file_proto_veyport_v1_agent_proto_rawDescGZIP(), []int{31}
+}
+
+func (x *ReEnrollApproved) GetEphemeralPub() []byte {
+	if x != nil {
+		return x.EphemeralPub
+	}
+	return nil
+}
+
+func (x *ReEnrollApproved) GetEncryptedKek() []byte {
+	if x != nil {
+		return x.EncryptedKek
+	}
+	return nil
+}
+
+func (x *ReEnrollApproved) GetChallenge() []byte {
+	if x != nil {
+		return x.Challenge
+	}
+	return nil
+}
+
+type ReEnrollProof struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Signature     []byte                 `protobuf:"bytes,1,opt,name=signature,proto3" json:"signature,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ReEnrollProof) Reset() {
+	*x = ReEnrollProof{}
+	mi := &file_proto_veyport_v1_agent_proto_msgTypes[32]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ReEnrollProof) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ReEnrollProof) ProtoMessage() {}
+
+func (x *ReEnrollProof) ProtoReflect() protoreflect.Message {
+	mi := &file_proto_veyport_v1_agent_proto_msgTypes[32]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ReEnrollProof.ProtoReflect.Descriptor instead.
+func (*ReEnrollProof) Descriptor() ([]byte, []int) {
+	return file_proto_veyport_v1_agent_proto_rawDescGZIP(), []int{32}
+}
+
+func (x *ReEnrollProof) GetSignature() []byte {
+	if x != nil {
+		return x.Signature
+	}
+	return nil
+}
+
+type ReEnrollDenied struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Reason        string                 `protobuf:"bytes,1,opt,name=reason,proto3" json:"reason,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ReEnrollDenied) Reset() {
+	*x = ReEnrollDenied{}
+	mi := &file_proto_veyport_v1_agent_proto_msgTypes[33]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ReEnrollDenied) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ReEnrollDenied) ProtoMessage() {}
+
+func (x *ReEnrollDenied) ProtoReflect() protoreflect.Message {
+	mi := &file_proto_veyport_v1_agent_proto_msgTypes[33]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ReEnrollDenied.ProtoReflect.Descriptor instead.
+func (*ReEnrollDenied) Descriptor() ([]byte, []int) {
+	return file_proto_veyport_v1_agent_proto_rawDescGZIP(), []int{33}
+}
+
+func (x *ReEnrollDenied) GetReason() string {
+	if x != nil {
+		return x.Reason
+	}
+	return ""
+}
+
 var File_proto_veyport_v1_agent_proto protoreflect.FileDescriptor
 
 const file_proto_veyport_v1_agent_proto_rawDesc = "" +
 	"\n" +
 	"\x1cproto/veyport/v1/agent.proto\x12\n" +
-	"veyport.v1\"\xe5\x06\n" +
+	"veyport.v1\"\xf3\a\n" +
 	"\fAgentMessage\x125\n" +
 	"\theartbeat\x18\x01 \x01(\v2\x15.veyport.v1.HeartbeatH\x00R\theartbeat\x127\n" +
 	"\bregister\x18\x02 \x01(\v2\x19.veyport.v1.RegisterAgentH\x00R\bregister\x12L\n" +
@@ -2263,8 +2568,10 @@ const file_proto_veyport_v1_agent_proto_rawDesc = "" +
 	"\x12cert_renew_request\x18\x11 \x01(\v2\x1c.veyport.v1.CertRenewRequestH\x00R\x10certRenewRequest\x12I\n" +
 	"\x11terminal_open_ack\x18\x12 \x01(\v2\x1b.veyport.v1.TerminalOpenAckH\x00R\x0fterminalOpenAck\x12?\n" +
 	"\rterminal_data\x18\x13 \x01(\v2\x18.veyport.v1.TerminalDataH\x00R\fterminalData\x12?\n" +
-	"\rterminal_exit\x18\x14 \x01(\v2\x18.veyport.v1.TerminalExitH\x00R\fterminalExitB\t\n" +
-	"\apayload\"\xa8\b\n" +
+	"\rterminal_exit\x18\x14 \x01(\v2\x18.veyport.v1.TerminalExitH\x00R\fterminalExit\x12H\n" +
+	"\x10reenroll_request\x18\x15 \x01(\v2\x1b.veyport.v1.ReEnrollRequestH\x00R\x0freenrollRequest\x12B\n" +
+	"\x0ereenroll_proof\x18\x16 \x01(\v2\x19.veyport.v1.ReEnrollProofH\x00R\rreenrollProofB\t\n" +
+	"\apayload\"\xbc\t\n" +
 	"\n" +
 	"HubMessage\x12?\n" +
 	"\rheartbeat_ack\x18\x01 \x01(\v2\x18.veyport.v1.HeartbeatAckH\x00R\fheartbeatAck\x12<\n" +
@@ -2281,7 +2588,9 @@ const file_proto_veyport_v1_agent_proto_rawDesc = "" +
 	"\x15terminal_open_request\x18\x12 \x01(\v2\x1f.veyport.v1.TerminalOpenRequestH\x00R\x13terminalOpenRequest\x12B\n" +
 	"\x0eterminal_input\x18\x13 \x01(\v2\x19.veyport.v1.TerminalInputH\x00R\rterminalInput\x12E\n" +
 	"\x0fterminal_resize\x18\x14 \x01(\v2\x1a.veyport.v1.TerminalResizeH\x00R\x0eterminalResize\x12B\n" +
-	"\x0eterminal_close\x18\x15 \x01(\v2\x19.veyport.v1.TerminalCloseH\x00R\rterminalCloseB\t\n" +
+	"\x0eterminal_close\x18\x15 \x01(\v2\x19.veyport.v1.TerminalCloseH\x00R\rterminalClose\x12K\n" +
+	"\x11reenroll_approved\x18\x16 \x01(\v2\x1c.veyport.v1.ReEnrollApprovedH\x00R\x10reenrollApproved\x12E\n" +
+	"\x0freenroll_denied\x18\x17 \x01(\v2\x1a.veyport.v1.ReEnrollDeniedH\x00R\x0ereenrollDeniedB\t\n" +
 	"\apayload\"\x9e\x01\n" +
 	"\tHeartbeat\x12\x1b\n" +
 	"\tserver_id\x18\x01 \x01(\tR\bserverId\x12\x1c\n" +
@@ -2291,7 +2600,7 @@ const file_proto_veyport_v1_agent_proto_rawDesc = "" +
 	"\n" +
 	"ip_address\x18\x04 \x01(\tR\tipAddress\",\n" +
 	"\fHeartbeatAck\x12\x1c\n" +
-	"\ttimestamp\x18\x01 \x01(\x03R\ttimestamp\"\xa7\x01\n" +
+	"\ttimestamp\x18\x01 \x01(\x03R\ttimestamp\"\xab\x02\n" +
 	"\rRegisterAgent\x12\x14\n" +
 	"\x05token\x18\x01 \x01(\tR\x05token\x12\x1a\n" +
 	"\bhostname\x18\x02 \x01(\tR\bhostname\x12\x1d\n" +
@@ -2299,14 +2608,19 @@ const file_proto_veyport_v1_agent_proto_rawDesc = "" +
 	"ip_address\x18\x03 \x01(\tR\tipAddress\x12\x0e\n" +
 	"\x02os\x18\x04 \x01(\tR\x02os\x12#\n" +
 	"\ragent_version\x18\x05 \x01(\tR\fagentVersion\x12\x10\n" +
-	"\x03csr\x18\x06 \x01(\fR\x03csr\"\x94\x01\n" +
+	"\x03csr\x18\x06 \x01(\fR\x03csr\x12\x1f\n" +
+	"\vnode_pubkey\x18\a \x01(\fR\n" +
+	"nodePubkey\x12-\n" +
+	"\x12enroll_fingerprint\x18\b \x01(\tR\x11enrollFingerprint\x122\n" +
+	"\x15node_transport_pubkey\x18\t \x01(\fR\x13nodeTransportPubkey\"\xaf\x01\n" +
 	"\vRegisterAck\x12\x18\n" +
 	"\asuccess\x18\x01 \x01(\bR\asuccess\x12\x1b\n" +
 	"\tserver_id\x18\x02 \x01(\tR\bserverId\x12\x14\n" +
 	"\x05error\x18\x03 \x01(\tR\x05error\x12\x1f\n" +
 	"\vclient_cert\x18\x04 \x01(\fR\n" +
 	"clientCert\x12\x17\n" +
-	"\aca_cert\x18\x05 \x01(\fR\x06caCert\"\x9e\x01\n" +
+	"\aca_cert\x18\x05 \x01(\fR\x06caCert\x12\x19\n" +
+	"\bnode_kek\x18\x06 \x01(\fR\anodeKek\"\x9e\x01\n" +
 	"\n" +
 	"SystemInfo\x12\x1f\n" +
 	"\vcpu_percent\x18\x01 \x01(\x01R\n" +
@@ -2424,7 +2738,19 @@ const file_proto_veyport_v1_agent_proto_rawDesc = "" +
 	"\x05error\x18\x03 \x01(\tR\x05error\".\n" +
 	"\rTerminalClose\x12\x1d\n" +
 	"\n" +
-	"session_id\x18\x01 \x01(\tR\tsessionId2O\n" +
+	"session_id\x18\x01 \x01(\tR\tsessionId\"b\n" +
+	"\x0fReEnrollRequest\x12\x1b\n" +
+	"\tserver_id\x18\x01 \x01(\tR\bserverId\x12\x10\n" +
+	"\x03csr\x18\x02 \x01(\fR\x03csr\x12 \n" +
+	"\vfingerprint\x18\x03 \x01(\tR\vfingerprint\"z\n" +
+	"\x10ReEnrollApproved\x12#\n" +
+	"\rephemeral_pub\x18\x01 \x01(\fR\fephemeralPub\x12#\n" +
+	"\rencrypted_kek\x18\x02 \x01(\fR\fencryptedKek\x12\x1c\n" +
+	"\tchallenge\x18\x03 \x01(\fR\tchallenge\"-\n" +
+	"\rReEnrollProof\x12\x1c\n" +
+	"\tsignature\x18\x01 \x01(\fR\tsignature\"(\n" +
+	"\x0eReEnrollDenied\x12\x16\n" +
+	"\x06reason\x18\x01 \x01(\tR\x06reason2O\n" +
 	"\fAgentService\x12?\n" +
 	"\aConnect\x12\x18.veyport.v1.AgentMessage\x1a\x16.veyport.v1.HubMessage(\x010\x01B*Z(github.com/wyiu/veyport/proto/veyport/v1b\x06proto3"
 
@@ -2440,7 +2766,7 @@ func file_proto_veyport_v1_agent_proto_rawDescGZIP() []byte {
 	return file_proto_veyport_v1_agent_proto_rawDescData
 }
 
-var file_proto_veyport_v1_agent_proto_msgTypes = make([]protoimpl.MessageInfo, 30)
+var file_proto_veyport_v1_agent_proto_msgTypes = make([]protoimpl.MessageInfo, 34)
 var file_proto_veyport_v1_agent_proto_goTypes = []any{
 	(*AgentMessage)(nil),        // 0: veyport.v1.AgentMessage
 	(*HubMessage)(nil),          // 1: veyport.v1.HubMessage
@@ -2472,6 +2798,10 @@ var file_proto_veyport_v1_agent_proto_goTypes = []any{
 	(*TerminalData)(nil),        // 27: veyport.v1.TerminalData
 	(*TerminalExit)(nil),        // 28: veyport.v1.TerminalExit
 	(*TerminalClose)(nil),       // 29: veyport.v1.TerminalClose
+	(*ReEnrollRequest)(nil),     // 30: veyport.v1.ReEnrollRequest
+	(*ReEnrollApproved)(nil),    // 31: veyport.v1.ReEnrollApproved
+	(*ReEnrollProof)(nil),       // 32: veyport.v1.ReEnrollProof
+	(*ReEnrollDenied)(nil),      // 33: veyport.v1.ReEnrollDenied
 }
 var file_proto_veyport_v1_agent_proto_depIdxs = []int32{
 	2,  // 0: veyport.v1.AgentMessage.heartbeat:type_name -> veyport.v1.Heartbeat
@@ -2486,29 +2816,33 @@ var file_proto_veyport_v1_agent_proto_depIdxs = []int32{
 	24, // 9: veyport.v1.AgentMessage.terminal_open_ack:type_name -> veyport.v1.TerminalOpenAck
 	27, // 10: veyport.v1.AgentMessage.terminal_data:type_name -> veyport.v1.TerminalData
 	28, // 11: veyport.v1.AgentMessage.terminal_exit:type_name -> veyport.v1.TerminalExit
-	3,  // 12: veyport.v1.HubMessage.heartbeat_ack:type_name -> veyport.v1.HeartbeatAck
-	5,  // 13: veyport.v1.HubMessage.register_ack:type_name -> veyport.v1.RegisterAck
-	7,  // 14: veyport.v1.HubMessage.file_list_request:type_name -> veyport.v1.FileListRequest
-	12, // 15: veyport.v1.HubMessage.log_stream_request:type_name -> veyport.v1.LogStreamRequest
-	15, // 16: veyport.v1.HubMessage.file_upload_request:type_name -> veyport.v1.FileUploadRequest
-	10, // 17: veyport.v1.HubMessage.file_read_request:type_name -> veyport.v1.FileReadRequest
-	14, // 18: veyport.v1.HubMessage.log_stream_stop:type_name -> veyport.v1.LogStreamStop
-	17, // 19: veyport.v1.HubMessage.file_delete_request:type_name -> veyport.v1.FileDeleteRequest
-	19, // 20: veyport.v1.HubMessage.unregister_request:type_name -> veyport.v1.UnregisterRequest
-	22, // 21: veyport.v1.HubMessage.cert_renew_response:type_name -> veyport.v1.CertRenewResponse
-	23, // 22: veyport.v1.HubMessage.terminal_open_request:type_name -> veyport.v1.TerminalOpenRequest
-	25, // 23: veyport.v1.HubMessage.terminal_input:type_name -> veyport.v1.TerminalInput
-	26, // 24: veyport.v1.HubMessage.terminal_resize:type_name -> veyport.v1.TerminalResize
-	29, // 25: veyport.v1.HubMessage.terminal_close:type_name -> veyport.v1.TerminalClose
-	6,  // 26: veyport.v1.Heartbeat.system_info:type_name -> veyport.v1.SystemInfo
-	9,  // 27: veyport.v1.FileListResponse.files:type_name -> veyport.v1.FileNode
-	0,  // 28: veyport.v1.AgentService.Connect:input_type -> veyport.v1.AgentMessage
-	1,  // 29: veyport.v1.AgentService.Connect:output_type -> veyport.v1.HubMessage
-	29, // [29:30] is the sub-list for method output_type
-	28, // [28:29] is the sub-list for method input_type
-	28, // [28:28] is the sub-list for extension type_name
-	28, // [28:28] is the sub-list for extension extendee
-	0,  // [0:28] is the sub-list for field type_name
+	30, // 12: veyport.v1.AgentMessage.reenroll_request:type_name -> veyport.v1.ReEnrollRequest
+	32, // 13: veyport.v1.AgentMessage.reenroll_proof:type_name -> veyport.v1.ReEnrollProof
+	3,  // 14: veyport.v1.HubMessage.heartbeat_ack:type_name -> veyport.v1.HeartbeatAck
+	5,  // 15: veyport.v1.HubMessage.register_ack:type_name -> veyport.v1.RegisterAck
+	7,  // 16: veyport.v1.HubMessage.file_list_request:type_name -> veyport.v1.FileListRequest
+	12, // 17: veyport.v1.HubMessage.log_stream_request:type_name -> veyport.v1.LogStreamRequest
+	15, // 18: veyport.v1.HubMessage.file_upload_request:type_name -> veyport.v1.FileUploadRequest
+	10, // 19: veyport.v1.HubMessage.file_read_request:type_name -> veyport.v1.FileReadRequest
+	14, // 20: veyport.v1.HubMessage.log_stream_stop:type_name -> veyport.v1.LogStreamStop
+	17, // 21: veyport.v1.HubMessage.file_delete_request:type_name -> veyport.v1.FileDeleteRequest
+	19, // 22: veyport.v1.HubMessage.unregister_request:type_name -> veyport.v1.UnregisterRequest
+	22, // 23: veyport.v1.HubMessage.cert_renew_response:type_name -> veyport.v1.CertRenewResponse
+	23, // 24: veyport.v1.HubMessage.terminal_open_request:type_name -> veyport.v1.TerminalOpenRequest
+	25, // 25: veyport.v1.HubMessage.terminal_input:type_name -> veyport.v1.TerminalInput
+	26, // 26: veyport.v1.HubMessage.terminal_resize:type_name -> veyport.v1.TerminalResize
+	29, // 27: veyport.v1.HubMessage.terminal_close:type_name -> veyport.v1.TerminalClose
+	31, // 28: veyport.v1.HubMessage.reenroll_approved:type_name -> veyport.v1.ReEnrollApproved
+	33, // 29: veyport.v1.HubMessage.reenroll_denied:type_name -> veyport.v1.ReEnrollDenied
+	6,  // 30: veyport.v1.Heartbeat.system_info:type_name -> veyport.v1.SystemInfo
+	9,  // 31: veyport.v1.FileListResponse.files:type_name -> veyport.v1.FileNode
+	0,  // 32: veyport.v1.AgentService.Connect:input_type -> veyport.v1.AgentMessage
+	1,  // 33: veyport.v1.AgentService.Connect:output_type -> veyport.v1.HubMessage
+	33, // [33:34] is the sub-list for method output_type
+	32, // [32:33] is the sub-list for method input_type
+	32, // [32:32] is the sub-list for extension type_name
+	32, // [32:32] is the sub-list for extension extendee
+	0,  // [0:32] is the sub-list for field type_name
 }
 
 func init() { file_proto_veyport_v1_agent_proto_init() }
@@ -2529,6 +2863,8 @@ func file_proto_veyport_v1_agent_proto_init() {
 		(*AgentMessage_TerminalOpenAck)(nil),
 		(*AgentMessage_TerminalData)(nil),
 		(*AgentMessage_TerminalExit)(nil),
+		(*AgentMessage_ReenrollRequest)(nil),
+		(*AgentMessage_ReenrollProof)(nil),
 	}
 	file_proto_veyport_v1_agent_proto_msgTypes[1].OneofWrappers = []any{
 		(*HubMessage_HeartbeatAck)(nil),
@@ -2545,6 +2881,8 @@ func file_proto_veyport_v1_agent_proto_init() {
 		(*HubMessage_TerminalInput)(nil),
 		(*HubMessage_TerminalResize)(nil),
 		(*HubMessage_TerminalClose)(nil),
+		(*HubMessage_ReenrollApproved)(nil),
+		(*HubMessage_ReenrollDenied)(nil),
 	}
 	type x struct{}
 	out := protoimpl.TypeBuilder{
@@ -2552,7 +2890,7 @@ func file_proto_veyport_v1_agent_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_proto_veyport_v1_agent_proto_rawDesc), len(file_proto_veyport_v1_agent_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   30,
+			NumMessages:   34,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

@@ -53,7 +53,8 @@ for issue and pull-request expectations.
 - **2FA (TOTP)** — Mandatory TOTP-based two-factor authentication for all users, no exceptions
 - **Role-Based Access** — Admin, Auditor, and Viewer roles with per-server, per-path permissions enforced at both Hub and Agent layers
 - **LDAP Directory Integration** — Sign in against your existing directory (FreeIPA, OpenLDAP, AD) with group-to-role mapping, configured entirely from the admin UI with a built-in connection tester
-- **mTLS Agent Communication** — Hub-issued 12-hour ECDSA P-256 client certificates with automatic in-stream renewal
+- **mTLS Agent Communication** — Hub-issued short-lived ECDSA P-256 client certificates with automatic in-stream renewal; cert lifetime is configurable via `agent_cert_validity_hours` (default 24 h)
+- **Self-Healing Re-enrollment** — Nodes whose certs expire while offline recover automatically via human-approved re-enrollment, preserving the same server identity, history, and path assignments without a fresh registration
 
 ## Architecture
 

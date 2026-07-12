@@ -3,7 +3,11 @@ package client
 import (
 	"bytes"
 	"context"
+	"crypto/aes"
+	"crypto/cipher"
+	"crypto/ecdh"
 	"crypto/ecdsa"
+	"crypto/ed25519"
 	"crypto/elliptic"
 	"crypto/rand"
 	"crypto/sha256"
@@ -20,6 +24,7 @@ import (
 
 	"github.com/wyiu/veyport/agent/internal/certs"
 	"github.com/wyiu/veyport/agent/internal/dropzone"
+	"github.com/wyiu/veyport/agent/internal/nodekey"
 	pb "github.com/wyiu/veyport/proto/veyport/v1"
 	"google.golang.org/grpc/metadata"
 )
@@ -757,4 +762,206 @@ func TestHandleMessage_Unregister(t *testing.T) {
 	default:
 		t.Fatal(testExpectedAckOnSendCh)
 	}
+}
+
+// makeRenewedCertPair builds a CA-signed client cert for the given store's
+// current private key (via GenerateCSR) and returns the client + CA cert DER,
+// as the hub would return in a CertRenewResponse. Mirrors the real renewal
+// flow: the agent calls GenerateCSR, the hub signs the CSR, returns the cert.
+func makeRenewedCertPair(t *testing.T, store *certs.Store, serverID string, notAfter time.Time) (clientDER, caDER []byte) {
+	t.Helper()
+	caKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatalf("ca key: %v", err)
+	}
+	caTmpl := &x509.Certificate{
+		SerialNumber:          big.NewInt(200),
+		Subject:               pkix.Name{CommonName: "Test Agent CA"},
+		NotBefore:             time.Now().Add(-time.Hour),
+		NotAfter:              time.Now().Add(24 * time.Hour),
+		IsCA:                  true,
+		KeyUsage:              x509.KeyUsageCertSign | x509.KeyUsageCRLSign,
+		BasicConstraintsValid: true,
+	}
+	caDER, err = x509.CreateCertificate(rand.Reader, caTmpl, caTmpl, &caKey.PublicKey, caKey)
+	if err != nil {
+		t.Fatalf("ca cert: %v", err)
+	}
+	caCert, err := x509.ParseCertificate(caDER)
+	if err != nil {
+		t.Fatalf("parse ca: %v", err)
+	}
+	// Use the store's CSR (sets the store's private key to a fresh key, as
+	// the real renewal flow does: agent calls GenerateCSR, hub signs it).
+	csrDER, err := store.GenerateCSR(serverID)
+	if err != nil {
+		t.Fatalf("generate renewal CSR: %v", err)
+	}
+	csr, err := x509.ParseCertificateRequest(csrDER)
+	if err != nil {
+		t.Fatalf("parse renewal CSR: %v", err)
+	}
+	leafTmpl := &x509.Certificate{
+		SerialNumber: big.NewInt(201),
+		Subject:      pkix.Name{CommonName: serverID},
+		NotBefore:    time.Now().Add(-time.Minute),
+		NotAfter:     notAfter,
+		KeyUsage:     x509.KeyUsageDigitalSignature,
+		ExtKeyUsage:  []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth},
+	}
+	clientDER, err = x509.CreateCertificate(rand.Reader, leafTmpl, caCert, csr.PublicKey, caKey)
+	if err != nil {
+		t.Fatalf("leaf cert: %v", err)
+	}
+	return clientDER, caDER
+}
+
+func TestHandleCertRenewResponse_SignalsReconnectToAdoptCert(t *testing.T) {
+	certStore := certs.NewMemoryStore()
+	storeClientCert(t, certStore, "srv-adopt", time.Now().Add(30*time.Minute)) // old cert
+	c := &Client{
+		serverID:    "srv-adopt",
+		certStore:   certStore,
+		reconnectCh: make(chan struct{}, 1),
+	}
+	clientDER, caDER := makeRenewedCertPair(t, certStore, "srv-adopt", time.Now().Add(12*time.Hour))
+
+	c.handleCertRenewResponse(&pb.HubMessage_CertRenewResponse{
+		CertRenewResponse: &pb.CertRenewResponse{ClientCert: clientDER, CaCert: caDER},
+	})
+
+	select {
+	case <-c.reconnectCh:
+		// success: renewal signalled a reconnect to adopt the new cert
+	case <-time.After(time.Second):
+		t.Fatal("expected reconnect signal after successful renewal")
+	}
+}
+
+func TestHandleCertRenewResponse_NoSignalOnError(t *testing.T) {
+	c := &Client{serverID: "srv-x", certStore: certs.NewMemoryStore(), reconnectCh: make(chan struct{}, 1)}
+	c.handleCertRenewResponse(&pb.HubMessage_CertRenewResponse{
+		CertRenewResponse: &pb.CertRenewResponse{Error: "denied"},
+	})
+	select {
+	case <-c.reconnectCh:
+		t.Fatal("must not signal reconnect when renewal was rejected")
+	case <-time.After(100 * time.Millisecond):
+		// ok
+	}
+}
+
+func TestBuildReEnrollRequest_IncludesServerIDCSRFingerprint(t *testing.T) {
+	certStore := certs.NewMemoryStore()
+	c := &Client{serverID: "srv-re", certStore: certStore}
+	req, err := c.buildReEnrollRequest()
+	if err != nil {
+		t.Fatalf("build: %v", err)
+	}
+	if req.ServerId != "srv-re" || len(req.Csr) == 0 {
+		t.Fatalf("bad request: %+v", req)
+	}
+	if req.Fingerprint != nodekey.Fingerprint() {
+		t.Fatalf("fingerprint mismatch: got %q, want %q", req.Fingerprint, nodekey.Fingerprint())
+	}
+}
+
+func TestHandleReEnrollApproved_DecryptsAndSigns(t *testing.T) {
+	// Generate an X25519 transport keypair (simulates node-side).
+	tPrivBytes, tPubBytes, err := nodekey.GenerateTransport()
+	if err != nil {
+		t.Fatalf("GenerateTransport: %v", err)
+	}
+
+	// Generate a node Ed25519 keypair and seal under a known KEK.
+	priv, _, _ := nodekey.Generate()
+	kek := make([]byte, 32)
+	if _, randErr := rand.Read(kek); randErr != nil {
+		t.Fatalf("rand KEK: %v", randErr)
+	}
+	sealedHex, _ := nodekey.Seal(priv, kek)
+
+	// Seal the KEK for transport using the hub-side construction
+	// (X25519 ECDH + HKDF-SHA256 + AES-256-GCM).
+	curve := ecdh.X25519()
+	ePrivKey, _ := curve.GenerateKey(rand.Reader)
+	ePubBytes := ePrivKey.PublicKey().Bytes()
+	tPubKey, _ := curve.NewPublicKey(tPubBytes)
+	shared, _ := ePrivKey.ECDH(tPubKey)
+
+	const kekTransportLabel = "veyport-kek-transport-v1"
+	infoStr := kekTransportLabel + string(ePubBytes) + string(tPubBytes)
+
+	// HKDF-SHA256 inline (same as kektransport.go / nodekey/transport.go).
+	hkdfKey := testHKDFSHA256(t, shared, nil, []byte(infoStr), 32)
+
+	block, _ := aes.NewCipher(hkdfKey)
+	gcm, _ := cipher.NewGCM(block)
+	nonce := make([]byte, 12)
+	if _, randErr := rand.Read(nonce); randErr != nil {
+		t.Fatalf("rand nonce: %v", randErr)
+	}
+	encryptedKek := gcm.Seal(nonce, nonce, kek, nil)
+
+	// Wire up the client with the transport private key + sealed node key.
+	c := &Client{
+		serverID:           "srv-re",
+		sealedNodeKeyHex:   sealedHex,
+		transportPrivBytes: tPrivBytes,
+	}
+	proof, err := c.handleReEnrollApproved(&pb.ReEnrollApproved{
+		EphemeralPub: ePubBytes,
+		EncryptedKek: encryptedKek,
+		Challenge:    []byte("nonce"),
+	})
+	if err != nil {
+		t.Fatalf("approve: %v", err)
+	}
+	if len(proof.Signature) == 0 {
+		t.Fatal("expected signature")
+	}
+	pub := priv.Public().(ed25519.PublicKey)
+	if !ed25519.Verify(pub, []byte("nonce"), proof.Signature) {
+		t.Fatal("proof signature does not verify against the node public key")
+	}
+}
+
+// testHKDFSHA256 implements HKDF-Extract + HKDF-Expand for a single-block
+// (len <= 32) output without importing crypto/hkdf in the test.
+func testHKDFSHA256(t *testing.T, ikm, salt, info []byte, keyLen int) []byte {
+	t.Helper()
+	// HKDF-Extract: prk = HMAC-SHA256(salt, ikm)
+	if salt == nil {
+		salt = make([]byte, sha256.Size)
+	}
+	prk := testHMACSHA256(salt, ikm)
+	// HKDF-Expand: T(1) = HMAC-SHA256(prk, info || 0x01)
+	t1Input := append(append([]byte{}, info...), 0x01)
+	t1 := testHMACSHA256(prk, t1Input)
+	return t1[:keyLen]
+}
+
+// testHMACSHA256 computes HMAC-SHA256(key, data) using only crypto/sha256.
+func testHMACSHA256(key, data []byte) []byte {
+	const blockSize = 64
+	if len(key) > blockSize {
+		h := sha256.New()
+		h.Write(key)
+		key = h.Sum(nil)
+	}
+	ipad := make([]byte, blockSize)
+	opad := make([]byte, blockSize)
+	copy(ipad, key)
+	copy(opad, key)
+	for i := range ipad {
+		ipad[i] ^= 0x36
+		opad[i] ^= 0x5c
+	}
+	inner := sha256.New()
+	inner.Write(ipad)
+	inner.Write(data)
+	outer := sha256.New()
+	outer.Write(opad)
+	outer.Write(inner.Sum(nil))
+	return outer.Sum(nil)
 }
