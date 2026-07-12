@@ -40,15 +40,15 @@ sequenceDiagram
     participant Admin
 
     Agent->>Hub: ReEnrollRequest (serverID, CSR, DMI fingerprint)
-    Hub->>Hub: Record pending request; check clone signals
+    Hub->>Hub: Record pending request, check clone signals
     Hub-->>Admin: Dashboard shows Pending re-enrollment (+ clone warning if anomaly)
     Admin->>Hub: POST /api/servers/{id}/reenroll/approve (TOTP step-up)
-    Hub->>Hub: Validate TOTP; encrypt KEK to node X25519 transport key
+    Hub->>Hub: Validate TOTP, encrypt KEK to node X25519 transport key
     Hub-->>Agent: ReEnrollApproved (ephemeral_pub, encrypted_kek, challenge)
     Agent->>Agent: ECDH + HKDF-SHA256 + AES-256-GCM → decrypt KEK
-    Agent->>Agent: Unseal ed25519 identity key; sign challenge
+    Agent->>Agent: Unseal ed25519 identity key, sign challenge
     Agent->>Hub: ReEnrollProof (ed25519 signature)
-    Hub->>Hub: Verify signature against stored pubkey; re-issue cert for same serverID
+    Hub->>Hub: Verify signature against stored pubkey, re-issue cert for same serverID
     Hub-->>Agent: New client certificate
     Agent->>Hub: Reconnects with renewed cert (same serverID, history preserved)
 ```
