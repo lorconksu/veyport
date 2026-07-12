@@ -18,11 +18,13 @@ import (
 
 // reEnrollApprovalTimeout is how long the stream goroutine waits for an admin to
 // approve/deny before auto-expiring the request.
-const reEnrollApprovalTimeout = 10 * time.Minute
+// Declared as var (not const) so tests can override it without waiting 10 minutes.
+var reEnrollApprovalTimeout = 10 * time.Minute
 
 // reEnrollProofTimeout is how long ReleaseKEK waits for the agent to send its
 // proof after the KEK+challenge have been delivered via the stream.
-const reEnrollProofTimeout = 30 * time.Second
+// Declared as var (not const) so tests can override it without waiting 30 seconds.
+var reEnrollProofTimeout = 30 * time.Second
 
 // ---------------------------------------------------------------------------
 // Session registry
