@@ -2,6 +2,7 @@ package grpcserver
 
 import (
 	"context"
+	"encoding/base64"
 	"io"
 	"net"
 	"strings"
@@ -750,5 +751,167 @@ func TestHeartbeatHandshake_FallsBackToPeerIP(t *testing.T) {
 			got = *srv.IPAddress
 		}
 		t.Fatalf("expected empty heartbeat IP to fall back to peer IP %s, got %s", testHBFallbackPeerIP, got)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Additional coverage tests for handler.go
+// ---------------------------------------------------------------------------
+
+// TestPerformReEnrollHandshake_UnknownServer: unknown server → bootstrapOnly=true
+// (Connect returns immediately without entering the proof loop)
+func TestPerformReEnrollHandshake_UnknownServer(t *testing.T) {
+	h, _ := testHandler(t)
+
+	stream := &mockStream{ctx: context.Background()}
+	req := &pb.ReEnrollRequest{
+		ServerId:    "srv-unknown-handshake",
+		Fingerprint: "fp-x",
+		Csr:         testRegistrationCSR(t),
+	}
+
+	result, err := h.performReEnrollHandshake(stream, req)
+	if err != nil {
+		t.Fatalf("expected nil error, got: %v", err)
+	}
+	if result == nil {
+		t.Fatal("expected non-nil handshake result")
+	}
+	if !result.bootstrapOnly {
+		t.Fatal("expected bootstrapOnly=true for unknown server re-enroll attempt")
+	}
+
+	// The stream should have received a ReenrollDenied message.
+	var foundDenied bool
+	for _, msg := range stream.sent {
+		if msg.GetReenrollDenied() != nil {
+			foundDenied = true
+			break
+		}
+	}
+	if !foundDenied {
+		t.Fatalf("expected ReenrollDenied message for unknown server, got %v", stream.sent)
+	}
+}
+
+// TestHandleRegister_StoresTransportPub: registration with NodeTransportPubkey → stores it;
+// GetNodeTransportPub returns the stored key.
+func TestHandleRegister_StoresTransportPub(t *testing.T) {
+	h, st := testHandler(t)
+	h.storageKey = "test-storage-key-0123456789"
+
+	// Build a valid registration token.
+	tokenHash := "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855" // NOSONAR — SHA256("")
+	expiresAt := "2099-12-31 23:59:59"
+	if err := st.CreateServer(&model.Server{
+		ID: "srv-transport", Name: "srv-transport", Status: "pending", Labels: "{}",
+		RegistrationToken: &tokenHash, TokenExpiresAt: &expiresAt,
+	}); err != nil {
+		t.Fatalf("CreateServer: %v", err)
+	}
+
+	// Use a real 32-byte X25519 public key (the KAT constant from kektransport_test.go).
+	transportPubHex := "07a37cbc142093c8b755dc1b10e86cb426374ad16aa853ed0bdfc0b2b86d1c7c"
+	transportPubBytes := decodeHexForTest(transportPubHex)
+
+	// nodePub needs to be non-nil to trigger sealKEK path.
+	nodePub := make([]byte, 32)
+	serverID, _, _, _, err := h.handleRegister(
+		"", "transport-host", "10.0.0.1", "linux", "0.1.0",
+		testRegistrationCSR(t), nodePub, "fp-original", transportPubBytes,
+	)
+	if err != nil {
+		t.Fatalf("handleRegister: %v", err)
+	}
+	if serverID != "srv-transport" {
+		t.Fatalf("expected server ID 'srv-transport', got %q", serverID)
+	}
+
+	// Verify the transport pub was stored.
+	got, err := st.GetNodeTransportPub("srv-transport")
+	if err != nil {
+		t.Fatalf("GetNodeTransportPub: %v", err)
+	}
+	wantB64 := base64.StdEncoding.EncodeToString(transportPubBytes)
+	if got != wantB64 {
+		t.Fatalf("transport pubkey mismatch: got %q, want %q", got, wantB64)
+	}
+}
+
+// TestIssueRegistrationCertificate_EmptyCSR: issueRegistrationCertificate with empty CSR → error
+func TestIssueRegistrationCertificate_EmptyCSR(t *testing.T) {
+	h, _ := testHandler(t)
+
+	_, _, err := h.issueRegistrationCertificate("srv-1", nil)
+	if err == nil {
+		t.Fatal("expected error for nil CSR")
+	}
+	if !strings.Contains(err.Error(), "registration CSR required") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	// Also test with explicitly empty slice.
+	_, _, err = h.issueRegistrationCertificate("srv-1", []byte{})
+	if err == nil {
+		t.Fatal("expected error for empty CSR slice")
+	}
+	if !strings.Contains(err.Error(), "registration CSR required") {
+		t.Fatalf("unexpected error for empty slice: %v", err)
+	}
+}
+
+// TestIssueRegistrationCertificate_NilCA: handler with no CA → error "CA not configured"
+func TestIssueRegistrationCertificate_NilCA(t *testing.T) {
+	h, _ := testHandler(t)
+	h.caCert = nil
+	h.caKey = nil
+
+	csr := testRegistrationCSR(t)
+	_, _, err := h.issueRegistrationCertificate("srv-1", csr)
+	if err == nil {
+		t.Fatal("expected error when CA is nil")
+	}
+	if !strings.Contains(err.Error(), "CA not configured") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+// TestResolveServerName_UnknownFallsBack: resolveServerName for unknown ID → returns serverID itself
+func TestResolveServerName_UnknownFallsBack(t *testing.T) {
+	h, _ := testHandler(t)
+
+	// "srv-ghost" does not exist in the store — must fall back to the ID.
+	got := h.resolveServerName("srv-ghost")
+	if got != "srv-ghost" {
+		t.Fatalf("expected fallback to serverID 'srv-ghost', got %q", got)
+	}
+}
+
+// decodeHexForTest is a test-local hex decoder that panics on invalid input.
+func decodeHexForTest(s string) []byte {
+	if len(s)%2 != 0 {
+		panic("odd-length hex string")
+	}
+	out := make([]byte, len(s)/2)
+	for i := 0; i < len(out); i++ {
+		hi := s[i*2]
+		lo := s[i*2+1]
+		hv := hexNibble(hi)
+		lv := hexNibble(lo)
+		out[i] = (hv << 4) | lv
+	}
+	return out
+}
+
+func hexNibble(c byte) byte {
+	switch {
+	case c >= '0' && c <= '9':
+		return c - '0'
+	case c >= 'a' && c <= 'f':
+		return c - 'a' + 10
+	case c >= 'A' && c <= 'F':
+		return c - 'A' + 10
+	default:
+		panic("invalid hex character")
 	}
 }

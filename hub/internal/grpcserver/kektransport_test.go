@@ -9,6 +9,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
+	"strings"
 	"testing"
 )
 
@@ -148,5 +149,70 @@ func TestSealKEKToNode_WrongKeyFails(t *testing.T) {
 	_, err = openKEKInline(wrongPriv, ephPub, encKEK)
 	if err == nil {
 		t.Fatal("expected decryption to fail with wrong transport key (GCM auth failure)")
+	}
+}
+
+// TestSealKEKToNodeCore_WrongNonceLength: nonce != 12 bytes → error
+func TestSealKEKToNodeCore_WrongNonceLength(t *testing.T) {
+	transportPub := mustDecodeHex(t, katTransportPubHex)
+	ephemeralPriv := mustDecodeHex(t, katEphemeralPrivHex)
+	kek := mustDecodeHex(t, katKEKHex)
+
+	// Use a nonce that is too short (8 bytes instead of 12).
+	shortNonce := make([]byte, 8)
+
+	_, _, err := sealKEKToNodeCore(transportPub, kek, ephemeralPriv, shortNonce)
+	if err == nil {
+		t.Fatal("expected error for wrong-length nonce")
+	}
+	if !strings.Contains(err.Error(), "nonce must be 12 bytes") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	// Also try a nonce that is too long (16 bytes).
+	longNonce := make([]byte, 16)
+	_, _, err = sealKEKToNodeCore(transportPub, kek, ephemeralPriv, longNonce)
+	if err == nil {
+		t.Fatal("expected error for long nonce")
+	}
+	if !strings.Contains(err.Error(), "nonce must be 12 bytes") {
+		t.Fatalf("unexpected error for long nonce: %v", err)
+	}
+}
+
+// TestSealKEKToNodeCore_InvalidTransportPub: invalid (wrong-length) transport pub bytes → error parsing X25519 key
+func TestSealKEKToNodeCore_InvalidTransportPub(t *testing.T) {
+	ephemeralPriv := mustDecodeHex(t, katEphemeralPrivHex)
+	kek := mustDecodeHex(t, katKEKHex)
+	nonce := mustDecodeHex(t, katNonceHex)
+
+	// Use a transport pub that is too short (16 bytes) — X25519 requires exactly 32.
+	invalidTransportPub := make([]byte, 16)
+
+	_, _, err := sealKEKToNodeCore(invalidTransportPub, kek, ephemeralPriv, nonce)
+	if err == nil {
+		t.Fatal("expected error for invalid transport public key length")
+	}
+	if !strings.Contains(err.Error(), "parse transport public key") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+// TestSealKEKToNodeCore_InvalidEphemeralPriv: a wrong-length ephemeral private
+// scalar → error parsing the X25519 private key (covers the NewPrivateKey path).
+func TestSealKEKToNodeCore_InvalidEphemeralPriv(t *testing.T) {
+	transportPub := mustDecodeHex(t, katTransportPubHex)
+	kek := mustDecodeHex(t, katKEKHex)
+	nonce := mustDecodeHex(t, katNonceHex)
+
+	// X25519 requires a 32-byte scalar; supply 16 bytes.
+	invalidEphemeralPriv := make([]byte, 16)
+
+	_, _, err := sealKEKToNodeCore(transportPub, kek, invalidEphemeralPriv, nonce)
+	if err == nil {
+		t.Fatal("expected error for invalid ephemeral private key length")
+	}
+	if !strings.Contains(err.Error(), "parse ephemeral private key") {
+		t.Fatalf("unexpected error: %v", err)
 	}
 }

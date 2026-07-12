@@ -1,6 +1,7 @@
 package store_test
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/wyiu/veyport/hub/internal/model"
@@ -137,5 +138,92 @@ func TestGetReEnrollRequestNullableColumns(t *testing.T) {
 	if got.IPAddress != "" || got.Fingerprint != "" || got.AnomalyFlags != "" || got.DecidedBy != "" {
 		t.Fatalf("expected empty strings for NULL columns, got ip=%q fp=%q flags=%q decided=%q",
 			got.IPAddress, got.Fingerprint, got.AnomalyFlags, got.DecidedBy)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Additional coverage tests for store/reenroll.go
+// ---------------------------------------------------------------------------
+
+// TestSetNodeCrypto_NotFound: SetNodeCrypto on non-existent server → error (rows=0)
+func TestSetNodeCrypto_NotFound(t *testing.T) {
+	s := testStore(t)
+
+	err := s.SetNodeCrypto("no-such-server", "pub", "kek", "fp")
+	if err == nil {
+		t.Fatal("expected error for SetNodeCrypto on non-existent server")
+	}
+	if !strings.Contains(err.Error(), "not found") && !strings.Contains(err.Error(), "server not found") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+// TestGetNodeCrypto_NotFound: GetNodeCrypto on non-existent server → error
+func TestGetNodeCrypto_NotFound(t *testing.T) {
+	s := testStore(t)
+
+	_, _, _, err := s.GetNodeCrypto("no-such-server")
+	if err == nil {
+		t.Fatal("expected error for GetNodeCrypto on non-existent server")
+	}
+	if !strings.Contains(err.Error(), "not found") && !strings.Contains(err.Error(), "server not found") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+// TestUpdateReEnrollStatus_NotFound: UpdateReEnrollStatus on non-existent ID → error (rows=0)
+func TestUpdateReEnrollStatus_NotFound(t *testing.T) {
+	s := testStore(t)
+
+	err := s.UpdateReEnrollStatus("re-nonexistent", "approved", "admin-1")
+	if err == nil {
+		t.Fatal("expected error for UpdateReEnrollStatus on non-existent ID")
+	}
+	if !strings.Contains(err.Error(), "not found") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+// TestGetReEnrollRequest_NotFound: GetReEnrollRequest for missing ID → error "reenroll request not found"
+func TestGetReEnrollRequest_NotFound(t *testing.T) {
+	s := testStore(t)
+
+	_, err := s.GetReEnrollRequest("re-nonexistent-id")
+	if err == nil {
+		t.Fatal("expected error for missing reenroll request")
+	}
+	if !strings.Contains(err.Error(), "reenroll request not found") {
+		t.Fatalf("expected 'reenroll request not found', got: %v", err)
+	}
+}
+
+// TestCreateReEnrollRequest_DuplicateID: CreateReEnrollRequest with a duplicate primary key → error
+// (exercises the DB error path in CreateReEnrollRequest)
+func TestCreateReEnrollRequest_DuplicateID(t *testing.T) {
+	s := testStore(t)
+	seedServer(t, s, "srv-dup")
+
+	req := &model.ReEnrollRequest{
+		ID:           "re-dup-1",
+		ServerID:     "srv-dup",
+		RequestedAt:  "2026-07-12 00:00:00",
+		IPAddress:    "10.0.0.1",
+		Fingerprint:  "fp-test",
+		Status:       "pending",
+		AnomalyFlags: "{}",
+	}
+
+	// First insert must succeed.
+	if err := s.CreateReEnrollRequest(req); err != nil {
+		t.Fatalf("first insert: %v", err)
+	}
+
+	// Second insert with the same ID must fail with a primary key conflict.
+	err := s.CreateReEnrollRequest(req)
+	if err == nil {
+		t.Fatal("expected error for duplicate primary key in CreateReEnrollRequest")
+	}
+	if !strings.Contains(err.Error(), "create reenroll request") {
+		t.Fatalf("unexpected error format: %v", err)
 	}
 }
