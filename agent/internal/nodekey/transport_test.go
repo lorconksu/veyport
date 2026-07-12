@@ -6,7 +6,7 @@ import (
 	"crypto/cipher"
 	"crypto/ecdh"
 	"crypto/hkdf"
-	"crypto/rand"
+	crand "crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
 	"testing"
@@ -92,13 +92,88 @@ func TestGenerateTransport_RoundTrip(t *testing.T) {
 	}
 }
 
+// TestOpenKEK_TooShort exercises the encryptedKek length guard.
+func TestOpenKEK_TooShort(t *testing.T) {
+	priv := mustDecodeHex(t, katTransportPrivHex)
+	ePub := mustDecodeHex(t, katEphemeralPubHex)
+
+	// Only 12 bytes — the guard requires > 12 bytes (nonce + at least 1 byte payload).
+	short := make([]byte, 12)
+	_, err := OpenKEK(priv, ePub, short)
+	if err == nil {
+		t.Fatal("expected error for encryptedKek that is too short")
+	}
+}
+
+// TestOpenKEK_BadPrivateKey exercises the NewPrivateKey error branch.
+// X25519 private keys must be exactly 32 bytes.
+func TestOpenKEK_BadPrivateKey(t *testing.T) {
+	ePub := mustDecodeHex(t, katEphemeralPubHex)
+	encKEK := mustDecodeHex(t, katEncryptedKEKHex)
+
+	badPriv := []byte("tooshort") // not 32 bytes
+	_, err := OpenKEK(badPriv, ePub, encKEK)
+	if err == nil {
+		t.Fatal("expected error for bad transport private key (wrong length)")
+	}
+}
+
+// TestOpenKEK_BadEphemeralPub exercises the NewPublicKey error branch.
+// X25519 public keys must be exactly 32 bytes.
+func TestOpenKEK_BadEphemeralPub(t *testing.T) {
+	priv := mustDecodeHex(t, katTransportPrivHex)
+	encKEK := mustDecodeHex(t, katEncryptedKEKHex)
+
+	badPub := []byte("tooshort") // not 32 bytes
+	_, err := OpenKEK(priv, badPub, encKEK)
+	if err == nil {
+		t.Fatal("expected error for bad ephemeral public key (wrong length)")
+	}
+}
+
+// TestOpenKEK_LowOrderEphemeralPub exercises the ECDH error branch.
+// The all-zeros public key is a low-order point that X25519 ECDH explicitly rejects.
+func TestOpenKEK_LowOrderEphemeralPub(t *testing.T) {
+	priv := mustDecodeHex(t, katTransportPrivHex)
+	encKEK := mustDecodeHex(t, katEncryptedKEKHex)
+
+	// All-zero public key is a low-order point; X25519 ECDH rejects it.
+	zeroPub := make([]byte, 32)
+
+	_, err := OpenKEK(priv, zeroPub, encKEK)
+	if err == nil {
+		t.Fatal("expected ECDH error for low-order (zero) ephemeral public key")
+	}
+}
+
+// TestOpenKEK_TamperedCiphertext exercises the GCM open failure branch.
+func TestOpenKEK_TamperedCiphertext(t *testing.T) {
+	privBytes, pubBytes, err := GenerateTransport()
+	if err != nil {
+		t.Fatalf("GenerateTransport: %v", err)
+	}
+
+	kek := []byte("test-kek-32-bytes-padddddddddddd")
+	ephemeralPub, encryptedKEK := inlineSeal(t, pubBytes, kek)
+
+	// Tamper with the ciphertext (flip last byte to break GCM auth tag).
+	tampered := make([]byte, len(encryptedKEK))
+	copy(tampered, encryptedKEK)
+	tampered[len(tampered)-1] ^= 0xff
+
+	_, err = OpenKEK(privBytes, ephemeralPub, tampered)
+	if err == nil {
+		t.Fatal("expected GCM decryption error for tampered ciphertext")
+	}
+}
+
 // inlineSeal is a minimal copy of the hub's seal logic for round-trip testing.
 // It must remain byte-for-byte identical to sealKEKToNodeCore.
 func inlineSeal(t *testing.T, transportPubBytes, kek []byte) (ephemeralPub, encryptedKek []byte) {
 	t.Helper()
 
 	curve := ecdh.X25519()
-	ePriv, err := curve.GenerateKey(rand.Reader)
+	ePriv, err := curve.GenerateKey(crand.Reader)
 	if err != nil {
 		t.Fatalf("generate ephemeral key: %v", err)
 	}
