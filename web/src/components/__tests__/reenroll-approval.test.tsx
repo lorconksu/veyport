@@ -95,4 +95,85 @@ describe('ReEnrollApproval', () => {
       expect(mockDeny).toHaveBeenCalledWith('srv', 're-1')
     })
   })
+
+  it('approve happy path: entering 6-digit TOTP calls approveReEnroll with correct args', async () => {
+    mockApprove.mockResolvedValue(undefined)
+    renderApproval(makeRequest())
+    await userEvent.click(screen.getByRole('button', { name: /approve/i }))
+    // Fill each digit input one by one to trigger the auto-submit on the 6th
+    const inputs = screen.getAllByRole('textbox')
+    expect(inputs).toHaveLength(6)
+    await userEvent.type(inputs[0], '1')
+    await userEvent.type(inputs[1], '2')
+    await userEvent.type(inputs[2], '3')
+    await userEvent.type(inputs[3], '4')
+    await userEvent.type(inputs[4], '5')
+    await userEvent.type(inputs[5], '6')
+    await waitFor(() => {
+      expect(mockApprove).toHaveBeenCalledWith('srv', 're-1', '123456')
+    })
+  })
+
+  it('shows approved success banner after approve succeeds', async () => {
+    mockApprove.mockResolvedValue(undefined)
+    renderApproval(makeRequest())
+    await userEvent.click(screen.getByRole('button', { name: /approve/i }))
+    const inputs = screen.getAllByRole('textbox')
+    for (const [i, digit] of ['1','2','3','4','5','6'].entries()) {
+      await userEvent.type(inputs[i], digit)
+    }
+    await waitFor(() => {
+      expect(screen.getByText(/re-enrollment approved/i)).toBeInTheDocument()
+    })
+  })
+
+  it('shows denied success banner after deny succeeds', async () => {
+    mockDeny.mockResolvedValue(undefined)
+    renderApproval(makeRequest())
+    await userEvent.click(screen.getByRole('button', { name: /deny/i }))
+    await waitFor(() => {
+      expect(screen.getByText(/re-enrollment denied/i)).toBeInTheDocument()
+    })
+  })
+
+  it('shows error message when approveReEnroll fails', async () => {
+    mockApprove.mockRejectedValue(new Error('Invalid TOTP'))
+    renderApproval(makeRequest())
+    await userEvent.click(screen.getByRole('button', { name: /approve/i }))
+    const inputs = screen.getAllByRole('textbox')
+    for (const [i, digit] of ['1','2','3','4','5','6'].entries()) {
+      await userEvent.type(inputs[i], digit)
+    }
+    await waitFor(() => {
+      expect(screen.getByText(/invalid totp/i)).toBeInTheDocument()
+    })
+  })
+
+  it('shows error message when denyReEnroll fails', async () => {
+    mockDeny.mockRejectedValue(new Error('Deny failed'))
+    renderApproval(makeRequest())
+    await userEvent.click(screen.getByRole('button', { name: /deny/i }))
+    await waitFor(() => {
+      expect(screen.getByText(/deny failed/i)).toBeInTheDocument()
+    })
+  })
+
+  it('Cancel button in TOTP step hides the TOTP prompt', async () => {
+    renderApproval(makeRequest())
+    await userEvent.click(screen.getByRole('button', { name: /approve/i }))
+    expect(screen.getAllByRole('textbox')).toHaveLength(6)
+    await userEvent.click(screen.getByRole('button', { name: /cancel/i }))
+    expect(screen.queryAllByRole('textbox')).toHaveLength(0)
+    expect(screen.getByRole('button', { name: /approve/i })).toBeInTheDocument()
+  })
+
+  it('renders without clone warning when anomaly_flags is null/missing', () => {
+    renderApproval(makeRequest({ anomaly_flags: undefined as unknown as string }))
+    expect(screen.queryByText(/possible clone/i)).not.toBeInTheDocument()
+  })
+
+  it('renders without clone warning when anomaly_flags is malformed JSON', () => {
+    renderApproval(makeRequest({ anomaly_flags: 'not-json' }))
+    expect(screen.queryByText(/possible clone/i)).not.toBeInTheDocument()
+  })
 })
