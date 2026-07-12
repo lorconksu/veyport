@@ -26,7 +26,8 @@
 12. [Hub Settings Endpoints](#hub-settings-endpoints)
 13. [LDAP Directory Endpoints](#ldap-directory-endpoints)
 14. [SMTP and Notification Endpoints](#smtp-and-notification-endpoints)
-15. [Terminal Endpoints](#terminal-endpoints)
+15. [Re-Enrollment Endpoints](#re-enrollment-endpoints)
+16. [Terminal Endpoints](#terminal-endpoints)
 
 ---
 
@@ -2093,6 +2094,134 @@ List notification delivery log entries. Supports pagination.
 ```bash
 curl 'https://hub.example.com/api/notifications/log?limit=20' \
   - H 'Authorization: Bearer <access_token>'
+```
+
+---
+
+## Re-Enrollment Endpoints
+
+Re-enrollment endpoints are **admin-only** and require an access token. They manage the workflow for nodes whose mTLS client certificates have expired while offline.
+
+### GET /api/servers/reenroll/pending
+
+List all servers with a pending re-enrollment request.
+
+| Property | Value |
+|---|---|
+| Auth | Access token (Bearer), admin only |
+
+**Response (200):**
+
+```json
+{
+  "requests": [
+    {
+      "request_id": "uuid",
+      "server_id": "uuid",
+      "server_name": "web-prod-1",
+      "hostname": "web-prod-1.example.com",
+      "ip_address": "10.0.1.5",
+      "requested_at": "2026-07-01T03:00:00Z",
+      "clone_suspected": false
+    }
+  ]
+}
+```
+
+**cURL:**
+
+```bash
+curl https://hub.example.com/api/servers/reenroll/pending \
+  -H 'Authorization: Bearer <access_token>'
+```
+
+---
+
+### POST /api/servers/{id}/reenroll/approve
+
+Approve a pending re-enrollment request. Requires the approving admin's current TOTP code (step-up authentication). On success, the hub encrypts the KEK to the node's X25519 transport public key, issues a new client certificate for the same serverID, and the node reconnects automatically.
+
+| Property | Value |
+|---|---|
+| Auth | Access token (Bearer), admin only |
+
+**Path Parameters:**
+- `id` - Server UUID
+
+**Request Body:**
+
+```json
+{
+  "request_id": "<uuid>",
+  "totp_code": "123456"
+}
+```
+
+**Response (200):**
+
+```json
+{
+  "status": "approved"
+}
+```
+
+**Error Cases:**
+
+| Status | Meaning |
+|--------|---------|
+| `401` | Missing or invalid access token |
+| `403` | Bad or missing TOTP code (step-up failed) |
+| `404` | Server or request_id not found |
+| `409` | `re-register required` — node has no transport key; it was enrolled before transport-key support and must be re-registered once |
+
+**cURL:**
+
+```bash
+curl -X POST https://hub.example.com/api/servers/SERVER_UUID/reenroll/approve \
+  -H 'Authorization: Bearer <access_token>' \
+  -H 'Content-Type: application/json' \
+  -d '{"request_id":"REQUEST_UUID","totp_code":"123456"}'
+```
+
+---
+
+### POST /api/servers/{id}/reenroll/deny
+
+Deny a pending re-enrollment request. The node will not receive a new certificate.
+
+| Property | Value |
+|---|---|
+| Auth | Access token (Bearer), admin only |
+
+**Path Parameters:**
+- `id` - Server UUID
+
+**Request Body:**
+
+```json
+{
+  "request_id": "<uuid>"
+}
+```
+
+**Response (200):**
+
+```json
+{
+  "status": "denied"
+}
+```
+
+**Error Cases:**
+- `404` - Server or request_id not found
+
+**cURL:**
+
+```bash
+curl -X POST https://hub.example.com/api/servers/SERVER_UUID/reenroll/deny \
+  -H 'Authorization: Bearer <access_token>' \
+  -H 'Content-Type: application/json' \
+  -d '{"request_id":"REQUEST_UUID"}'
 ```
 
 ---

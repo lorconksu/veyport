@@ -206,6 +206,20 @@ The IP shown for an agent comes from the gRPC registration and heartbeat data, n
 - Ensure the CA certificate on the Hub matches the one that signed the agent's certificate.
 - Check that the system clock on both the agent and Hub is correct (certificate validation is time-sensitive).
 
+### A node went offline after an outage and won't reconnect
+
+Its mTLS client certificate probably expired while the node was down. When the node comes back online it phones home and the Hub shows the server as **Pending re-enrollment** on the Fleet Dashboard and the Server Detail page.
+
+To recover:
+
+1. Open the server's detail page and locate the **Pending re-enrollment** banner.
+2. Review any **"possible clone"** warning (if present, verify you recognise this hardware before approving).
+3. Click **Approve** and enter your TOTP code when prompted.
+
+The node reconnects automatically within seconds, keeping the same serverID, history, and path assignments.
+
+If the approval returns **"re-register required,"** the node predates transport-key support. Re-register it once using the standard install command; the node will have transport-key support after that and can use re-enrollment in future.
+
 ---
 
 ## Admin Issues

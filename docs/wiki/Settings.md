@@ -153,6 +153,20 @@ Below the SMTP configuration, a log shows recent notification delivery attempts:
 
 ---
 
+## Agent Tab (Admin Only)
+
+The Agent tab contains settings that control agent certificate behaviour.
+
+### Agent Certificate Validity
+
+| Setting | Default | Description |
+|---------|---------|-------------|
+| `agent_cert_validity_hours` | `24` | Lifetime (in hours) of issued agent client certificates. Lower values tighten rotation; the value must stay comfortably above the 6-hour renewal margin used by the agent. Applies to newly issued and renewed certificates. |
+
+Agents request renewal approximately 6 hours before their certificate expires. If an agent is offline longer than its certificate lifetime, its cert expires and it can no longer reconnect on its own. It will appear on the dashboard as **Pending re-enrollment** and requires admin approval before it can rejoin. See [[Troubleshooting]] for the recovery steps.
+
+---
+
 ## Alerts Tab (All Users)
 
 The Alerts tab lets each user configure their personal notification preferences. Each user controls which events trigger email notifications to their address.

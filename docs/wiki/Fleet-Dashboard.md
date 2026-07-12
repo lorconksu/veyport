@@ -29,8 +29,15 @@ Each server is displayed as a card showing:
 | Green | Online - the agent is connected and responding |
 | Red | Offline - the agent was previously connected but is no longer reachable |
 | Amber / Yellow | Pending - the server record has been created but the agent has not registered yet |
+| Amber / Yellow | Pending re-enrollment - the agent's certificate expired while offline; the node is awaiting admin approval to rejoin |
 
-A server stays in "pending" state until you run the install command on that machine. Once the agent runs and calls home, the status moves to "online."
+A server stays in initial "pending" state until you run the install command on that machine. Once the agent runs and calls home, the status moves to "online."
+
+### Pending Re-Enrollment
+
+When a server shows **Pending re-enrollment**, its agent certificate has expired and the agent has phoned home to request a new one. The server card shows the node's hostname, IP address, the time the request arrived, and — if anything looks anomalous — a **"possible clone"** warning.
+
+Only admins can approve or deny re-enrollment. Click the server card to open the [[Server Detail]] page, where the approve/deny controls are located. Approval requires a TOTP step-up. Once approved, the node reconnects automatically with the same server identity — no ghost records, no path reassignment needed.
 
 ---
 

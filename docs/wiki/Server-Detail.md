@@ -197,6 +197,29 @@ Both grant and revoke actions are recorded in the [[Audit Logs]] (`path.granted`
 
 ---
 
+## Re-Enrollment
+
+When a node's mTLS client certificate has expired while the node was offline, the agent phones home over the bootstrap channel and requests re-enrollment. The server page will show a **Pending re-enrollment** banner at the top with the request time and node details.
+
+> **Admin only:** Only admins can approve or deny re-enrollment requests.
+
+### Approve
+
+1. Open the server page. The **Pending re-enrollment** banner appears at the top with hostname, IP, and the time of the request.
+2. If a **"possible clone"** warning is shown, review it before proceeding. This warning appears when the node's hardware fingerprint has changed since enrollment, or when the original IP is still reported online — it may indicate the request comes from a cloned or unauthorised machine.
+3. Click **Approve**. You will be prompted for your TOTP code (step-up authentication).
+4. Enter your current TOTP code and confirm.
+
+On successful approval, the hub re-issues a certificate for the same serverID. The node reconnects automatically within seconds — no manual action required on the server. The event is recorded in [[Audit Logs]] as `agent.reenroll_approved`, attributed to your account.
+
+> **If approval returns "re-register required":** The node was enrolled before transport-key support was added. Re-register it once using the standard install command and it will have transport-key support going forward.
+
+### Deny
+
+Click **Deny** on the pending banner to reject the request. The node's request is cancelled and it will not be able to reconnect until a new request is approved. The event is recorded as `agent.reenroll_denied`.
+
+---
+
 ## Collapsible Sidebars
 
 Both the File Explorer (left) and Admin Tools (right) sidebars can be independently collapsed to maximise the working area:
