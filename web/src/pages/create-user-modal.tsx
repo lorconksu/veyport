@@ -55,6 +55,7 @@ export function CreateUserModal({ onClose }: Readonly<CreateUserModalProps>) {
                 {showPassword ? tempPassword : '••••••••••••••••'}
               </code>
               <button
+                type="button"
                 onClick={() => setShowPassword(!showPassword)}
                 className="px-2 py-2 text-text-muted hover:text-text-primary transition-colors"
                 title={showPassword ? 'Hide password' : 'Show password'}
@@ -62,6 +63,7 @@ export function CreateUserModal({ onClose }: Readonly<CreateUserModalProps>) {
                 {showPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
               </button>
               <button
+                type="button"
                 onClick={copyPassword}
                 className="px-3 py-2 bg-accent hover:bg-accent-hover text-white text-sm rounded transition-colors"
               >
@@ -69,6 +71,7 @@ export function CreateUserModal({ onClose }: Readonly<CreateUserModalProps>) {
               </button>
             </div>
             <button
+              type="button"
               onClick={onClose}
               className="w-full border border-border rounded py-2 text-sm text-text-secondary hover:bg-elevated transition-colors"
             >

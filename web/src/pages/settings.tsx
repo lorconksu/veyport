@@ -142,6 +142,7 @@ function ProfileTab() {
               </div>
               <div className="flex items-center gap-2 mt-2">
                 <button
+                  type="button"
                   onClick={() => fileInputRef.current?.click()}
                   disabled={avatarMutation.isPending}
                   className="flex items-center gap-1.5 bg-elevated border border-border rounded px-3 py-1 text-xs text-text-secondary hover:text-text-primary transition-colors"
@@ -151,6 +152,7 @@ function ProfileTab() {
                 </button>
                 {user?.avatar && (
                   <button
+                    type="button"
                     onClick={handleRemoveAvatar}
                     disabled={avatarMutation.isPending}
                     className="flex items-center gap-1 text-xs text-text-muted hover:text-status-error transition-colors"
@@ -184,6 +186,7 @@ function ProfileTab() {
               {AVATAR_COLORS.map(color => (
                 <button
                   key={color}
+                  type="button"
                   onClick={() => { persistAvatarColor(color); setAvatarColor(color) }}
                   className={`w-6 h-6 rounded-full transition-all ${
                     avatarColor === color ? 'ring-2 ring-offset-2 ring-offset-surface ring-white scale-110' : 'hover:scale-110'
@@ -361,6 +364,7 @@ function UsersTab() {
       <div className="flex items-center justify-between mb-4">
         <h3 className="text-sm font-semibold text-text-primary">User Management</h3>
         <button
+          type="button"
           onClick={() => setShowCreateModal(true)}
           className="bg-accent hover:bg-accent-hover text-white text-sm font-semibold rounded px-4 py-1.5 transition-colors"
         >
@@ -428,6 +432,7 @@ function UsersTab() {
                   <div className="flex items-center gap-3">
                     {u.id !== currentUser?.id && u.totp_enabled && (
                       <button
+                        type="button"
                         onClick={() => setDisableTotpUserId(u.id)}
                         className="text-xs text-status-warning hover:text-status-error transition-colors"
                       >
@@ -436,6 +441,7 @@ function UsersTab() {
                     )}
                     {u.id !== currentUser?.id && (
                       <button
+                        type="button"
                         onClick={() => { setDeleteUserId(u.id); setDeleteUsername(u.username) }}
                         className="text-xs text-text-muted hover:text-status-error transition-colors"
                       >
@@ -527,6 +533,7 @@ function UsersTab() {
                 Cancel
               </button>
               <button
+                type="button"
                 onClick={() => deleteUserMutation.mutate(deleteUserId)}
                 disabled={deleteUserMutation.isPending}
                 className="flex-1 bg-status-error hover:bg-status-error/80 text-white text-sm font-semibold rounded py-2 transition-colors disabled:opacity-50"
@@ -569,6 +576,7 @@ export function SettingsPage() {
       {/* Tab bar */}
       <div className="flex border-b border-border mb-6">
         <button
+          type="button"
           onClick={() => setActiveTab('profile')}
           className={`px-4 py-2 text-sm font-medium border-b-2 transition-colors ${
             activeTab === 'profile'
@@ -580,6 +588,7 @@ export function SettingsPage() {
         </button>
         {isAdmin && (
           <button
+            type="button"
             onClick={() => setActiveTab('users')}
             className={`px-4 py-2 text-sm font-medium border-b-2 transition-colors ${
               activeTab === 'users'
@@ -592,6 +601,7 @@ export function SettingsPage() {
         )}
         {isAdmin && (
           <button
+            type="button"
             onClick={() => setActiveTab('directory')}
             className={`px-4 py-2 text-sm font-medium border-b-2 transition-colors ${
               activeTab === 'directory'
@@ -604,6 +614,7 @@ export function SettingsPage() {
         )}
         {isAdmin && (
           <button
+            type="button"
             onClick={() => setActiveTab('notifications')}
             className={`px-4 py-2 text-sm font-medium border-b-2 transition-colors ${
               activeTab === 'notifications'
@@ -615,6 +626,7 @@ export function SettingsPage() {
           </button>
         )}
         <button
+          type="button"
           onClick={() => setActiveTab('alerts')}
           className={`px-4 py-2 text-sm font-medium border-b-2 transition-colors ${
             activeTab === 'alerts'

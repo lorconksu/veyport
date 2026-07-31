@@ -102,7 +102,7 @@ describe('CreateUserModal', () => {
     fireEvent.change(screen.getByPlaceholderText('Email'), { target: { value: 'new@b.com' } })
     fireEvent.submit(screen.getByRole('button', { name: /create user/i }).closest('form')!)
 
-    await waitFor(() => expect(screen.getByText('User Created')).toBeInTheDocument())
+    expect(await screen.findByText('User Created')).toBeInTheDocument()
     // Password is masked by default — click reveal toggle
     fireEvent.click(screen.getByTitle('Show password'))
 
@@ -120,11 +120,11 @@ describe('CreateUserModal', () => {
     fireEvent.change(screen.getByPlaceholderText('Email'), { target: { value: 'new@b.com' } })
     fireEvent.submit(screen.getByRole('button', { name: /create user/i }).closest('form')!)
 
-    await waitFor(() => expect(screen.getByText('User Created')).toBeInTheDocument())
+    expect(await screen.findByText('User Created')).toBeInTheDocument()
     fireEvent.click(screen.getByTitle('Show password'))
 
     fireEvent.click(screen.getByRole('button', { name: 'Copy' }))
-    await waitFor(() => expect(screen.getByText('Copied!')).toBeInTheDocument())
+    expect(await screen.findByText('Copied!')).toBeInTheDocument()
   })
 
   it('Done button calls onClose', async () => {
@@ -136,7 +136,7 @@ describe('CreateUserModal', () => {
     fireEvent.change(screen.getByPlaceholderText('Email'), { target: { value: 'new@b.com' } })
     fireEvent.submit(screen.getByRole('button', { name: /create user/i }).closest('form')!)
 
-    await waitFor(() => expect(screen.getByText('Done')).toBeInTheDocument())
+    expect(await screen.findByText('Done')).toBeInTheDocument()
     fireEvent.click(screen.getByText('Done'))
     expect(onClose).toHaveBeenCalled()
   })

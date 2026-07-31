@@ -269,6 +269,7 @@ export function AuditLogsPage() {
         </div>
         <div className="flex items-center gap-2">
           <button
+            type="button"
             onClick={() => exportMutation.mutate()}
             disabled={exportMutation.isPending}
             className="inline-flex items-center gap-2 bg-accent hover:bg-accent-hover text-white text-sm font-semibold rounded px-3 py-2 transition-colors disabled:opacity-50"
@@ -457,6 +458,7 @@ export function AuditLogsPage() {
           </div>
           <div className="flex gap-2">
             <button
+              type="button"
               onClick={() => settingsForm && settingsMutation.mutate(settingsForm)}
               disabled={!canManageControls || settingsMutation.isPending || !settingsForm}
               className="flex-1 bg-elevated hover:bg-base border border-border rounded px-3 py-2 text-sm text-text-primary transition-colors disabled:opacity-50"
@@ -464,6 +466,7 @@ export function AuditLogsPage() {
               {settingsMutation.isPending ? 'Saving…' : 'Save Controls'}
             </button>
             <button
+              type="button"
               onClick={() => retentionMutation.mutate()}
               disabled={!canManageControls || retentionMutation.isPending}
               className="flex-1 bg-elevated hover:bg-base border border-border rounded px-3 py-2 text-sm text-text-primary transition-colors disabled:opacity-50"
@@ -490,6 +493,7 @@ export function AuditLogsPage() {
             className="w-full min-h-[100px] bg-elevated border border-border rounded px-3 py-2 text-sm text-text-primary placeholder:text-text-faint focus:outline-none focus:border-accent"
           />
           <button
+            type="button"
             onClick={() => reviewMutation.mutate()}
             disabled={reviewMutation.isPending}
             className="w-full bg-elevated hover:bg-base border border-border rounded px-3 py-2 text-sm text-text-primary transition-colors disabled:opacity-50"
@@ -519,6 +523,7 @@ export function AuditLogsPage() {
             className="w-full bg-elevated border border-border rounded px-3 py-2 text-sm text-text-primary placeholder:text-text-faint focus:outline-none focus:border-accent"
           />
           <button
+            type="button"
             onClick={() => saveFilterMutation.mutate()}
             disabled={saveFilterMutation.isPending || !savedFilterName.trim()}
             className="w-full inline-flex items-center justify-center gap-2 bg-elevated hover:bg-base border border-border rounded px-3 py-2 text-sm text-text-primary transition-colors disabled:opacity-50"
@@ -530,6 +535,7 @@ export function AuditLogsPage() {
             {(savedFilters?.filters ?? []).map(filter => (
               <div key={filter.id} className="flex items-center justify-between gap-2 text-xs">
                 <button
+                  type="button"
                   onClick={() => {
                     const parsed = JSON.parse(filter.filters_json) as typeof filters
                     setFilters({
@@ -546,6 +552,7 @@ export function AuditLogsPage() {
                   {filter.name}
                 </button>
                 <button
+                  type="button"
                   onClick={() => deleteFilterMutation.mutate(filter.id)}
                   className="text-text-muted hover:text-status-error transition-colors"
                 >
@@ -653,6 +660,7 @@ export function AuditLogsPage() {
           </select>
           {hasActiveFilters && (
             <button
+              type="button"
               onClick={clearFilters}
               className="text-accent hover:text-accent-hover text-sm transition-colors"
             >
@@ -698,6 +706,7 @@ export function AuditLogsPage() {
                   <td className="px-4 py-2 text-text-muted font-mono text-xs">{entry.ip_address ?? '—'}</td>
                   <td className="px-4 py-2">
                     <button
+                      type="button"
                       onClick={() => {
                         const note = globalThis.prompt?.('Flag note')
                         const trimmedNote = note?.trim()
@@ -721,6 +730,7 @@ export function AuditLogsPage() {
             <span>Showing {showingFrom}-{showingTo} of {total}</span>
             <div className="flex gap-2">
               <button
+                type="button"
                 onClick={() => setOffset(Math.max(0, offset - PAGE_SIZE))}
                 disabled={offset === 0}
                 className="px-3 py-1 border border-border rounded text-text-secondary hover:bg-surface disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
@@ -728,6 +738,7 @@ export function AuditLogsPage() {
                 Previous
               </button>
               <button
+                type="button"
                 onClick={() => setOffset(offset + PAGE_SIZE)}
                 disabled={offset + PAGE_SIZE >= total}
                 className="px-3 py-1 border border-border rounded text-text-secondary hover:bg-surface disabled:opacity-50 disabled:cursor-not-allowed transition-colors"

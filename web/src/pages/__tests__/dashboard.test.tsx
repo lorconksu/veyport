@@ -157,10 +157,10 @@ describe('DashboardPage', () => {
   it('closes Add Server modal', async () => {
     mockApiFetch.mockResolvedValue({ servers: mockServers, total: 3 })
     renderPage()
-    await waitFor(() => expect(screen.getByRole('button', { name: /add server/i })).toBeInTheDocument())
+    expect(await screen.findByRole('button', { name: /add server/i })).toBeInTheDocument()
 
     fireEvent.click(screen.getByRole('button', { name: /add server/i }))
-    await waitFor(() => expect(screen.getByTestId('add-server-modal')).toBeInTheDocument())
+    expect(await screen.findByTestId('add-server-modal')).toBeInTheDocument()
 
     fireEvent.click(screen.getByText('Close Modal'))
     await waitFor(() => {
@@ -182,7 +182,7 @@ describe('DashboardPage', () => {
   it('clicking a status filter triggers a refetch', async () => {
     mockApiFetch.mockResolvedValue({ servers: mockServers, total: 3 })
     renderPage()
-    await waitFor(() => expect(screen.getByRole('button', { name: 'Online' })).toBeInTheDocument())
+    expect(await screen.findByRole('button', { name: 'Online' })).toBeInTheDocument()
 
     fireEvent.click(screen.getByRole('button', { name: 'Online' }))
     // Query with status=online is triggered
@@ -202,7 +202,7 @@ describe('DashboardPage', () => {
   it('typing in search input triggers query update', async () => {
     mockApiFetch.mockResolvedValue({ servers: mockServers, total: 3 })
     renderPage()
-    await waitFor(() => expect(screen.getByPlaceholderText('Search servers...')).toBeInTheDocument())
+    expect(await screen.findByPlaceholderText('Search servers...')).toBeInTheDocument()
 
     mockApiFetch.mockResolvedValue({ servers: [mockServers[0]], total: 1 })
     fireEvent.change(screen.getByPlaceholderText('Search servers...'), { target: { value: 'web' } })
@@ -257,7 +257,7 @@ describe('DashboardPage', () => {
 
     const [headerCheckbox] = screen.getAllByRole('checkbox')
     fireEvent.click(headerCheckbox) // select all
-    await waitFor(() => expect(screen.getByText('3 selected')).toBeInTheDocument())
+    expect(await screen.findByText('3 selected')).toBeInTheDocument()
 
     fireEvent.click(headerCheckbox) // deselect all
     await waitFor(() => expect(screen.queryByText('3 selected')).not.toBeInTheDocument())
@@ -283,7 +283,7 @@ describe('DashboardPage', () => {
 
     const checkboxes = screen.getAllByRole('checkbox')
     fireEvent.click(checkboxes[1])
-    await waitFor(() => expect(screen.getByText('1 selected')).toBeInTheDocument())
+    expect(await screen.findByText('1 selected')).toBeInTheDocument()
 
     fireEvent.click(screen.getByText('Clear'))
     await waitFor(() => expect(screen.queryByText('1 selected')).not.toBeInTheDocument())
@@ -314,7 +314,7 @@ describe('DashboardPage', () => {
       .mockResolvedValueOnce({ status: 'ok' }) // delete
       .mockResolvedValue({ servers: [], total: 0 }) // refetch
     renderPage()
-    await waitFor(() => expect(screen.getByRole('button', { name: 'Unregister' })).toBeInTheDocument())
+    expect(await screen.findByRole('button', { name: 'Unregister' })).toBeInTheDocument()
 
     fireEvent.click(screen.getByRole('button', { name: 'Unregister' }))
     await waitFor(() => {
@@ -333,7 +333,7 @@ describe('DashboardPage', () => {
     // Select a server via checkbox
     const checkboxes = screen.getAllByRole('checkbox')
     fireEvent.click(checkboxes[1])
-    await waitFor(() => expect(screen.getByText('1 selected')).toBeInTheDocument())
+    expect(await screen.findByText('1 selected')).toBeInTheDocument()
 
     fireEvent.click(screen.getByText(/unregister selected/i))
     await waitFor(() => {
@@ -344,7 +344,7 @@ describe('DashboardPage', () => {
   it('clicking Add your first server link opens AddServerModal', async () => {
     mockApiFetch.mockResolvedValue({ servers: [], total: 0 })
     renderPage()
-    await waitFor(() => expect(screen.getByText('Add your first server')).toBeInTheDocument())
+    expect(await screen.findByText('Add your first server')).toBeInTheDocument()
 
     fireEvent.click(screen.getByText('Add your first server'))
     await waitFor(() => {
@@ -413,7 +413,7 @@ describe('DashboardPage', () => {
     const checkboxes = screen.getAllByRole('checkbox')
     // Select the first row
     fireEvent.click(checkboxes[1])
-    await waitFor(() => expect(screen.getByText('1 selected')).toBeInTheDocument())
+    expect(await screen.findByText('1 selected')).toBeInTheDocument()
 
     // Deselect it (triggers the next.has(id) -> next.delete(id) branch on line 81)
     fireEvent.click(checkboxes[1])
@@ -452,7 +452,7 @@ describe('DashboardPage', () => {
     // Select all via header checkbox
     const [headerCheckbox] = screen.getAllByRole('checkbox')
     fireEvent.click(headerCheckbox)
-    await waitFor(() => expect(screen.getByText('1 selected')).toBeInTheDocument())
+    expect(await screen.findByText('1 selected')).toBeInTheDocument()
 
     // Click unregister selected — all deletes will fail → throws → onError fires
     fireEvent.click(screen.getByText(/unregister selected/i))

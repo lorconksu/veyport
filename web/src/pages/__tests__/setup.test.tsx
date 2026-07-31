@@ -75,7 +75,7 @@ describe('SetupPage', () => {
     renderPage()
     const passwordInput = screen.getByPlaceholderText(/password/i)
     fireEvent.change(passwordInput, { target: { value: 'weak' } })
-    await waitFor(() => expect(screen.getByText(/At least 12 characters/)).toBeInTheDocument())
+    expect(await screen.findByText(/At least 12 characters/)).toBeInTheDocument()
 
     fireEvent.change(passwordInput, { target: { value: 'ValidPass1@#$' } })
     await waitFor(() => {

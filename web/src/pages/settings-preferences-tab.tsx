@@ -107,6 +107,7 @@ export function PreferencesTab() {
             </div>
           )}
           <button
+            type="button"
             onClick={handleSave}
             disabled={saveMutation.isPending}
             className="bg-accent hover:bg-accent-hover text-white text-sm font-semibold rounded px-4 py-2 transition-colors disabled:opacity-50"

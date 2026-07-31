@@ -156,6 +156,7 @@ export function SetupTOTPPage() {
           )}
 
           <button
+            type="button"
             onClick={handleVerifyClick}
             disabled={loading || digits.includes('')}
             className="w-full bg-accent hover:bg-accent-hover text-white text-sm font-semibold rounded py-2 transition-colors disabled:opacity-50"

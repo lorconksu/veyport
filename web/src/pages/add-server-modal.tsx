@@ -97,6 +97,7 @@ export function AddServerModal({ onClose }: Readonly<AddServerModalProps>) {
         <div className="flex items-center justify-between mb-4">
           <h3 className="text-text-primary font-semibold">Add Server</h3>
           <button
+            type="button"
             onClick={onClose}
             disabled={!canClose}
             className="text-text-muted hover:text-text-primary disabled:opacity-30 disabled:cursor-not-allowed"
@@ -116,6 +117,7 @@ export function AddServerModal({ onClose }: Readonly<AddServerModalProps>) {
                 {result.install_command}
               </pre>
               <button
+                type="button"
                 onClick={handleCopy}
                 className="absolute top-2 right-2 p-1 bg-elevated border border-border rounded text-text-muted hover:text-text-primary transition-colors"
                 title="Copy to clipboard"
@@ -134,6 +136,7 @@ export function AddServerModal({ onClose }: Readonly<AddServerModalProps>) {
 
             <div className="flex justify-end mt-4">
               <button
+                type="button"
                 onClick={onClose}
                 disabled={!canClose}
                 className="px-4 py-2 bg-elevated hover:bg-border disabled:opacity-30 disabled:cursor-not-allowed text-text-primary text-sm rounded transition-colors"
@@ -163,6 +166,7 @@ export function AddServerModal({ onClose }: Readonly<AddServerModalProps>) {
             )}
             <div className="flex justify-end mt-4">
               <button
+                type="button"
                 onClick={handleGenerate}
                 disabled={!name.trim() || createMutation.isPending}
                 className="px-4 py-2 bg-accent hover:bg-accent-hover disabled:opacity-50 text-white text-sm rounded transition-colors"

@@ -138,6 +138,7 @@ export function DashboardPage() {
         </div>
         {isAdmin && (
           <button
+            type="button"
             onClick={() => setShowAddModal(true)}
             className="flex items-center gap-2 px-3 py-1.5 bg-accent hover:bg-accent-hover text-white text-sm rounded transition-colors"
           >
@@ -153,6 +154,7 @@ export function DashboardPage() {
           {statusFilters.map(({ label, value }) => (
             <button
               key={label}
+              type="button"
               onClick={() => setStatusFilter(value)}
               className={`px-3 py-1 text-xs rounded transition-colors ${
                 statusFilter === value
@@ -181,6 +183,7 @@ export function DashboardPage() {
         <div className="flex items-center gap-3 mb-4 px-3 py-2 bg-elevated border border-border rounded text-sm">
           <span className="text-text-secondary">{selectedIds.size} selected</span>
           <button
+            type="button"
             onClick={() => batchDeleteMutation.mutate([...selectedIds])}
             disabled={batchDeleteMutation.isPending}
             className="flex items-center gap-1 px-2 py-1 text-status-offline hover:bg-surface rounded transition-colors text-xs"
@@ -189,6 +192,7 @@ export function DashboardPage() {
             Unregister Selected
           </button>
           <button
+            type="button"
             onClick={() => setSelectedIds(new Set())}
             className="flex items-center gap-1 px-2 py-1 text-text-muted hover:text-text-secondary text-xs"
           >
@@ -206,7 +210,7 @@ export function DashboardPage() {
         <div className="text-text-muted text-sm py-8 text-center">
           No servers found.{' '}
           {isAdmin && (
-            <button onClick={() => setShowAddModal(true)} className="text-accent hover:underline">
+            <button type="button" onClick={() => setShowAddModal(true)} className="text-accent hover:underline">
               Add your first server
             </button>
           )}
@@ -273,6 +277,7 @@ export function DashboardPage() {
                   <td className="px-3 py-2 text-right">
                     {isAdmin && (
                       <button
+                        type="button"
                         onClick={() => deleteMutation.mutate(srv.id)}
                         disabled={deleteMutation.isPending}
                         className="text-text-muted hover:text-status-offline transition-colors text-xs"
