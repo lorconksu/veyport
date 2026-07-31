@@ -27,6 +27,10 @@ hub/web/dist/
 claude.md
 CLAUDE.md
 
+# Agent workflow tooling — local-only, never in the public repo
+.specify/
+specs/
+
 # Database
 *.db
 
