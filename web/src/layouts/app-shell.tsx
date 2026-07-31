@@ -75,6 +75,7 @@ export function AppShell() {
             <span className="text-text-secondary text-xs">{user?.username}</span>
           </Link>
           <button
+            type="button"
             onClick={handleLogout}
             className="text-text-muted hover:text-text-primary transition-colors"
             title="Sign out"
@@ -107,6 +108,7 @@ export function AppShell() {
           ))}
           <div className="flex-1" />
           <button
+            type="button"
             onClick={() => setNavCollapsed(!navCollapsed)}
             className={`flex items-center ${navCollapsed ? 'justify-center px-2' : 'gap-3 px-4'} py-2 text-text-muted hover:text-text-secondary transition-colors`}
             title={navCollapsed ? 'Expand menu' : 'Collapse menu'}

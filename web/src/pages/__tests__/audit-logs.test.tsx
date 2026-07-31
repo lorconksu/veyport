@@ -168,11 +168,11 @@ describe('AuditLogsPage', () => {
 
   it('Clear Filters resets filters', async () => {
     renderPage()
-    await waitFor(() => expect(screen.getByText('All Actions')).toBeInTheDocument())
+    expect(await screen.findByText('All Actions')).toBeInTheDocument()
 
     const fromInput = document.querySelector('input[type="date"]') as HTMLInputElement
     fireEvent.change(fromInput, { target: { value: '2024-01-01' } })
-    await waitFor(() => expect(screen.getByText('Clear Filters')).toBeInTheDocument())
+    expect(await screen.findByText('Clear Filters')).toBeInTheDocument()
 
     fireEvent.click(screen.getByText('Clear Filters'))
     await waitFor(() => {
@@ -202,7 +202,7 @@ describe('AuditLogsPage', () => {
     mockApiFetch.mockReset()
     installAuditMocks({ entries: mockEntries, total: 100 })
     renderPage()
-    await waitFor(() => expect(screen.getByRole('button', { name: 'Next' })).toBeInTheDocument())
+    expect(await screen.findByRole('button', { name: 'Next' })).toBeInTheDocument()
 
     fireEvent.click(screen.getByRole('button', { name: 'Next' }))
     await waitFor(() => {
@@ -281,11 +281,11 @@ describe('AuditLogsPage', () => {
     mockApiFetch.mockReset()
     installAuditMocks({ entries: mockEntries, total: 100 })
     renderPage()
-    await waitFor(() => expect(screen.getByRole('button', { name: 'Next' })).toBeInTheDocument())
+    expect(await screen.findByRole('button', { name: 'Next' })).toBeInTheDocument()
 
     // Go to page 2
     fireEvent.click(screen.getByRole('button', { name: 'Next' }))
-    await waitFor(() => expect(screen.getByText(/Showing 51/)).toBeInTheDocument())
+    expect(await screen.findByText(/Showing 51/)).toBeInTheDocument()
 
     // Now Previous button should be enabled — click it
     const prevBtn = screen.getByRole('button', { name: 'Previous' })

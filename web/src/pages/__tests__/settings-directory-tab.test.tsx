@@ -78,7 +78,7 @@ describe('DirectoryTab', () => {
 
   it('saves LDAP config with group mappings as arrays', async () => {
     renderTab()
-    await waitFor(() => expect(screen.getByLabelText('LDAP URL')).toBeInTheDocument())
+    expect(await screen.findByLabelText('LDAP URL')).toBeInTheDocument()
 
     fireEvent.change(screen.getByLabelText('Admin Groups'), {
       target: { value: 'ipa-veyport-admins, security-admins' },
@@ -103,7 +103,7 @@ describe('DirectoryTab', () => {
 
   it('tests the current LDAP form values', async () => {
     renderTab()
-    await waitFor(() => expect(screen.getByLabelText('LDAP URL')).toBeInTheDocument())
+    expect(await screen.findByLabelText('LDAP URL')).toBeInTheDocument()
 
     fireEvent.click(screen.getByRole('button', { name: /Test Connection/ }))
 
@@ -123,7 +123,7 @@ describe('DirectoryTab', () => {
     })
 
     renderTab()
-    await waitFor(() => expect(screen.getByLabelText('LDAP URL')).toBeInTheDocument())
+    expect(await screen.findByLabelText('LDAP URL')).toBeInTheDocument()
     fireEvent.click(screen.getByRole('button', { name: /Save LDAP Settings/ }))
 
     await waitFor(() => {
@@ -139,7 +139,7 @@ describe('DirectoryTab', () => {
     })
 
     renderTab()
-    await waitFor(() => expect(screen.getByLabelText('LDAP URL')).toBeInTheDocument())
+    expect(await screen.findByLabelText('LDAP URL')).toBeInTheDocument()
     fireEvent.click(screen.getByRole('button', { name: /Test Connection/ }))
 
     await waitFor(() => {
@@ -155,7 +155,7 @@ describe('DirectoryTab', () => {
     })
 
     renderTab()
-    await waitFor(() => expect(screen.getByLabelText('LDAP URL')).toBeInTheDocument())
+    expect(await screen.findByLabelText('LDAP URL')).toBeInTheDocument()
     fireEvent.click(screen.getByRole('button', { name: /Test Connection/ }))
 
     await waitFor(() => {
@@ -167,13 +167,13 @@ describe('DirectoryTab', () => {
     vi.useFakeTimers({ shouldAdvanceTime: true })
     try {
       renderTab()
-      await waitFor(() => expect(screen.getByLabelText('LDAP URL')).toBeInTheDocument())
+      expect(await screen.findByLabelText('LDAP URL')).toBeInTheDocument()
 
       fireEvent.click(screen.getByRole('button', { name: /Save LDAP Settings/ }))
-      await waitFor(() => expect(screen.getByText('LDAP configuration saved.')).toBeInTheDocument())
+      expect(await screen.findByText('LDAP configuration saved.')).toBeInTheDocument()
 
       fireEvent.click(screen.getByRole('button', { name: /Test Connection/ }))
-      await waitFor(() => expect(screen.getByText('LDAP connection test passed.')).toBeInTheDocument())
+      expect(await screen.findByText('LDAP connection test passed.')).toBeInTheDocument()
 
       vi.advanceTimersByTime(3100)
       await waitFor(() => {
@@ -187,7 +187,7 @@ describe('DirectoryTab', () => {
 
   it('edits every field and submits the full form', async () => {
     renderTab()
-    await waitFor(() => expect(screen.getByLabelText('LDAP URL')).toBeInTheDocument())
+    expect(await screen.findByLabelText('LDAP URL')).toBeInTheDocument()
 
     fireEvent.click(screen.getByLabelText('Enable LDAP'))
     fireEvent.click(screen.getByLabelText('Enable LDAP'))

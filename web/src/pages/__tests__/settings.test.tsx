@@ -213,7 +213,7 @@ describe('SettingsPage', () => {
     renderPage()
 
     fireEvent.click(screen.getByRole('button', { name: 'Users' }))
-    await waitFor(() => expect(screen.getByRole('button', { name: 'Create User' })).toBeInTheDocument())
+    expect(await screen.findByRole('button', { name: 'Create User' })).toBeInTheDocument()
 
     fireEvent.click(screen.getByRole('button', { name: 'Create User' }))
     await waitFor(() => {
@@ -250,7 +250,7 @@ describe('SettingsPage', () => {
     renderPage()
 
     fireEvent.click(screen.getByRole('button', { name: 'Users' }))
-    await waitFor(() => expect(screen.getByRole('button', { name: 'Delete' })).toBeInTheDocument())
+    expect(await screen.findByRole('button', { name: 'Delete' })).toBeInTheDocument()
 
     fireEvent.click(screen.getByRole('button', { name: 'Delete' }))
     await waitFor(() => {
@@ -265,7 +265,7 @@ describe('SettingsPage', () => {
     renderPage()
 
     fireEvent.click(screen.getByRole('button', { name: 'Users' }))
-    await waitFor(() => expect(screen.getByRole('button', { name: 'Delete' })).toBeInTheDocument())
+    expect(await screen.findByRole('button', { name: 'Delete' })).toBeInTheDocument()
 
     fireEvent.click(screen.getByRole('button', { name: 'Delete' }))
     await waitFor(() => {
@@ -279,9 +279,9 @@ describe('SettingsPage', () => {
     renderPage()
 
     fireEvent.click(screen.getByRole('button', { name: 'Users' }))
-    await waitFor(() => expect(screen.getByRole('button', { name: 'Delete' })).toBeInTheDocument())
+    expect(await screen.findByRole('button', { name: 'Delete' })).toBeInTheDocument()
     fireEvent.click(screen.getByRole('button', { name: 'Delete' }))
-    await waitFor(() => expect(screen.getByRole('button', { name: 'Cancel' })).toBeInTheDocument())
+    expect(await screen.findByRole('button', { name: 'Cancel' })).toBeInTheDocument()
 
     fireEvent.click(screen.getByRole('button', { name: 'Cancel' }))
     await waitFor(() => expect(screen.queryByText('Delete User')).not.toBeInTheDocument())
@@ -293,7 +293,7 @@ describe('SettingsPage', () => {
     renderPage()
 
     fireEvent.click(screen.getByRole('button', { name: 'Users' }))
-    await waitFor(() => expect(screen.getByRole('button', { name: 'Disable 2FA' })).toBeInTheDocument())
+    expect(await screen.findByRole('button', { name: 'Disable 2FA' })).toBeInTheDocument()
 
     fireEvent.click(screen.getByRole('button', { name: 'Disable 2FA' }))
     await waitFor(() => {
@@ -352,9 +352,9 @@ describe('SettingsPage', () => {
     renderPage()
 
     fireEvent.click(screen.getByRole('button', { name: 'Users' }))
-    await waitFor(() => expect(screen.getByRole('button', { name: 'Disable 2FA' })).toBeInTheDocument())
+    expect(await screen.findByRole('button', { name: 'Disable 2FA' })).toBeInTheDocument()
     fireEvent.click(screen.getByRole('button', { name: 'Disable 2FA' }))
-    await waitFor(() => expect(screen.getByPlaceholderText('Your 6-digit TOTP code')).toBeInTheDocument())
+    expect(await screen.findByPlaceholderText('Your 6-digit TOTP code')).toBeInTheDocument()
 
     // Cancel
     const cancelButtons = screen.getAllByRole('button', { name: 'Cancel' })
@@ -400,10 +400,10 @@ describe('SettingsPage', () => {
     renderPage()
 
     fireEvent.click(screen.getByRole('button', { name: 'Users' }))
-    await waitFor(() => expect(screen.getByRole('button', { name: 'Delete' })).toBeInTheDocument())
+    expect(await screen.findByRole('button', { name: 'Delete' })).toBeInTheDocument()
 
     fireEvent.click(screen.getByRole('button', { name: 'Delete' }))
-    await waitFor(() => expect(screen.getByRole('button', { name: 'Delete User' })).toBeInTheDocument())
+    expect(await screen.findByRole('button', { name: 'Delete User' })).toBeInTheDocument()
 
     fireEvent.click(screen.getByRole('button', { name: 'Delete User' }))
     await waitFor(() => {
@@ -420,10 +420,10 @@ describe('SettingsPage', () => {
     renderPage()
 
     fireEvent.click(screen.getByRole('button', { name: 'Users' }))
-    await waitFor(() => expect(screen.getByRole('button', { name: 'Disable 2FA' })).toBeInTheDocument())
+    expect(await screen.findByRole('button', { name: 'Disable 2FA' })).toBeInTheDocument()
 
     fireEvent.click(screen.getByRole('button', { name: 'Disable 2FA' }))
-    await waitFor(() => expect(screen.getByPlaceholderText('Your 6-digit TOTP code')).toBeInTheDocument())
+    expect(await screen.findByPlaceholderText('Your 6-digit TOTP code')).toBeInTheDocument()
 
     fireEvent.change(screen.getByPlaceholderText('Your 6-digit TOTP code'), { target: { value: '123456' } })
     fireEvent.submit(screen.getByPlaceholderText('Your 6-digit TOTP code').closest('form')!)
@@ -441,7 +441,7 @@ describe('SettingsPage', () => {
     renderPage()
 
     fireEvent.click(screen.getByRole('button', { name: 'Users' }))
-    await waitFor(() => expect(screen.getByDisplayValue('Viewer')).toBeInTheDocument())
+    expect(await screen.findByDisplayValue('Viewer')).toBeInTheDocument()
 
     fireEvent.change(screen.getByDisplayValue('Viewer'), { target: { value: 'admin' } })
     await waitFor(() => {
@@ -456,7 +456,7 @@ describe('SettingsPage', () => {
     renderPage()
 
     fireEvent.click(screen.getByRole('button', { name: 'Users' }))
-    await waitFor(() => expect(screen.getByDisplayValue('Viewer')).toBeInTheDocument())
+    expect(await screen.findByDisplayValue('Viewer')).toBeInTheDocument()
 
     fireEvent.change(screen.getByDisplayValue('Viewer'), { target: { value: 'admin' } })
     await waitFor(() => {
@@ -503,10 +503,10 @@ describe('SettingsPage', () => {
     renderPage()
 
     fireEvent.click(screen.getByRole('button', { name: 'Users' }))
-    await waitFor(() => expect(screen.getByRole('button', { name: 'Delete' })).toBeInTheDocument())
+    expect(await screen.findByRole('button', { name: 'Delete' })).toBeInTheDocument()
 
     fireEvent.click(screen.getByRole('button', { name: 'Delete' }))
-    await waitFor(() => expect(screen.getByRole('button', { name: 'Delete User' })).toBeInTheDocument())
+    expect(await screen.findByRole('button', { name: 'Delete User' })).toBeInTheDocument()
 
     fireEvent.click(screen.getByRole('button', { name: 'Delete User' }))
     await waitFor(() => {
@@ -522,10 +522,10 @@ describe('SettingsPage', () => {
     renderPage()
 
     fireEvent.click(screen.getByRole('button', { name: 'Users' }))
-    await waitFor(() => expect(screen.getByRole('button', { name: 'Disable 2FA' })).toBeInTheDocument())
+    expect(await screen.findByRole('button', { name: 'Disable 2FA' })).toBeInTheDocument()
 
     fireEvent.click(screen.getByRole('button', { name: 'Disable 2FA' }))
-    await waitFor(() => expect(screen.getByPlaceholderText('Your 6-digit TOTP code')).toBeInTheDocument())
+    expect(await screen.findByPlaceholderText('Your 6-digit TOTP code')).toBeInTheDocument()
 
     fireEvent.change(screen.getByPlaceholderText('Your 6-digit TOTP code'), { target: { value: '999999' } })
     fireEvent.submit(screen.getByPlaceholderText('Your 6-digit TOTP code').closest('form')!)
@@ -614,7 +614,7 @@ describe('SettingsPage', () => {
   it('clicking Profile tab when Users is active switches back to profile', async () => {
     mockApiFetch.mockResolvedValueOnce({ users: mockUsers })
     renderPage('/settings?tab=users')
-    await waitFor(() => expect(screen.getByText('User Management')).toBeInTheDocument())
+    expect(await screen.findByText('User Management')).toBeInTheDocument()
 
     fireEvent.click(screen.getByRole('button', { name: 'Profile' }))
     await waitFor(() => {
@@ -627,10 +627,10 @@ describe('SettingsPage', () => {
     renderPage()
 
     fireEvent.click(screen.getByRole('button', { name: 'Users' }))
-    await waitFor(() => expect(screen.getByRole('button', { name: 'Create User' })).toBeInTheDocument())
+    expect(await screen.findByRole('button', { name: 'Create User' })).toBeInTheDocument()
 
     fireEvent.click(screen.getByRole('button', { name: 'Create User' }))
-    await waitFor(() => expect(screen.getByTestId('create-user-modal')).toBeInTheDocument())
+    expect(await screen.findByTestId('create-user-modal')).toBeInTheDocument()
 
     fireEvent.click(screen.getByRole('button', { name: 'Close Modal' }))
     await waitFor(() => {
@@ -771,9 +771,9 @@ describe('SettingsPage', () => {
     renderPage()
 
     fireEvent.click(screen.getByRole('button', { name: 'Users' }))
-    await waitFor(() => expect(screen.getByRole('button', { name: 'Disable 2FA' })).toBeInTheDocument())
+    expect(await screen.findByRole('button', { name: 'Disable 2FA' })).toBeInTheDocument()
     fireEvent.click(screen.getByRole('button', { name: 'Disable 2FA' }))
-    await waitFor(() => expect(screen.getByPlaceholderText('Your 6-digit TOTP code')).toBeInTheDocument())
+    expect(await screen.findByPlaceholderText('Your 6-digit TOTP code')).toBeInTheDocument()
 
     fireEvent.change(screen.getByPlaceholderText('Your 6-digit TOTP code'), { target: { value: '999999' } })
     fireEvent.submit(screen.getByPlaceholderText('Your 6-digit TOTP code').closest('form')!)
@@ -790,9 +790,9 @@ describe('SettingsPage', () => {
     renderPage()
 
     fireEvent.click(screen.getByRole('button', { name: 'Users' }))
-    await waitFor(() => expect(screen.getByRole('button', { name: 'Delete' })).toBeInTheDocument())
+    expect(await screen.findByRole('button', { name: 'Delete' })).toBeInTheDocument()
     fireEvent.click(screen.getByRole('button', { name: 'Delete' }))
-    await waitFor(() => expect(screen.getByRole('button', { name: 'Delete User' })).toBeInTheDocument())
+    expect(await screen.findByRole('button', { name: 'Delete User' })).toBeInTheDocument()
 
     fireEvent.click(screen.getByRole('button', { name: 'Delete User' }))
     await waitFor(() => {

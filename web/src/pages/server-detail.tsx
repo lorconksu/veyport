@@ -106,6 +106,7 @@ function FileTreeNode({
     return (
       <div>
         <button
+          type="button"
           onClick={() => onToggleDir(node.path)}
           className={`w-full flex items-center gap-1 px-2 py-1 text-sm hover:bg-elevated/80 transition-colors text-left ${
             isSelected ? 'bg-elevated text-accent' : 'text-text-secondary'
@@ -173,6 +174,7 @@ function FileTreeNode({
 
   return (
     <button
+      type="button"
       onClick={() => node.readable && onSelectFile(node)}
       className={`w-full flex items-center gap-1 px-2 py-1 text-sm transition-colors text-left ${fileNodeClass()}`}
       style={{ paddingLeft: `${depth * 16 + 8}px` }}
@@ -239,6 +241,7 @@ function PathManagement({ serverId }: Readonly<{ serverId: string }>) {
   return (
     <div className="border border-border rounded">
       <button
+        type="button"
         onClick={() => setExpanded(!expanded)}
         className="w-full flex items-center justify-between px-4 py-3 text-sm font-medium text-text-primary hover:bg-elevated/50 transition-colors"
       >
@@ -323,6 +326,7 @@ function PathManagement({ serverId }: Readonly<{ serverId: string }>) {
                       <td className="px-3 py-2 font-mono text-text-secondary text-xs">{p.path}</td>
                       <td className="px-3 py-2 text-right">
                         <button
+                          type="button"
                           onClick={() => deleteMutation.mutate(p.id)}
                           disabled={deleteMutation.isPending}
                           className="text-text-muted hover:text-status-offline transition-colors"
@@ -441,6 +445,7 @@ function DropzoneUpload({ serverId }: Readonly<{ serverId: string }>) {
   return (
     <div className="border border-border rounded">
       <button
+        type="button"
         onClick={() => setExpanded(!expanded)}
         className="w-full flex items-center justify-between px-4 py-3 text-sm font-medium text-text-primary hover:bg-elevated/50 transition-colors"
       >
@@ -535,6 +540,7 @@ function DropzoneUpload({ serverId }: Readonly<{ serverId: string }>) {
                         </td>
                         <td className="px-3 py-2 text-right">
                           <button
+                            type="button"
                             onClick={() => { setConfirmDelete(f.name); setDeleteState('idle'); }}
                             className="text-text-muted hover:text-status-error transition-colors"
                             title="Delete file"
@@ -566,6 +572,7 @@ function DropzoneUpload({ serverId }: Readonly<{ serverId: string }>) {
                 </p>
                 <div className="flex justify-end">
                   <button
+                    type="button"
                     onClick={closeDeleteModal}
                     className="px-4 py-2 bg-accent hover:bg-accent-hover text-white text-sm rounded transition-colors"
                   >
@@ -583,12 +590,14 @@ function DropzoneUpload({ serverId }: Readonly<{ serverId: string }>) {
                 <p className="text-sm text-status-error mb-4">{deleteError}</p>
                 <div className="flex justify-end gap-2">
                   <button
+                    type="button"
                     onClick={closeDeleteModal}
                     className="px-4 py-2 bg-elevated hover:bg-border text-text-primary text-sm rounded transition-colors"
                   >
                     Close
                   </button>
                   <button
+                    type="button"
                     onClick={handleConfirmDelete}
                     className="px-4 py-2 bg-status-error/20 hover:bg-status-error/30 text-status-error text-sm rounded transition-colors"
                   >
@@ -607,7 +616,7 @@ function DropzoneUpload({ serverId }: Readonly<{ serverId: string }>) {
                   Removing <span className="font-mono text-text-primary">{confirmDelete}</span> from the dropzone...
                 </p>
                 <div className="flex justify-end">
-                  <button disabled className="px-4 py-2 bg-elevated text-text-faint text-sm rounded opacity-50 cursor-not-allowed">
+                  <button type="button" disabled className="px-4 py-2 bg-elevated text-text-faint text-sm rounded opacity-50 cursor-not-allowed">
                     Close
                   </button>
                 </div>
@@ -621,12 +630,14 @@ function DropzoneUpload({ serverId }: Readonly<{ serverId: string }>) {
                 </p>
                 <div className="flex justify-end gap-2">
                   <button
+                    type="button"
                     onClick={closeDeleteModal}
                     className="px-4 py-2 bg-elevated hover:bg-border text-text-primary text-sm rounded transition-colors"
                   >
                     Cancel
                   </button>
                   <button
+                    type="button"
                     onClick={handleConfirmDelete}
                     className="px-4 py-2 bg-status-error/20 hover:bg-status-error/30 text-status-error text-sm rounded transition-colors"
                   >
@@ -841,6 +852,7 @@ function LiveTail({
 
         {/* Pause/Resume toggle */}
         <button
+          type="button"
           onClick={() => setPaused((p) => !p)}
           className={`px-2 py-0.5 text-xs rounded border transition-colors ${
             paused
@@ -854,6 +866,7 @@ function LiveTail({
 
         {/* Stop button */}
         <button
+          type="button"
           onClick={handleStop}
           className="flex items-center gap-1 px-2 py-0.5 text-xs bg-status-error/15 border border-status-error/30 text-status-error rounded hover:bg-status-error/25 transition-colors"
         >
@@ -950,6 +963,7 @@ function FileViewerContent({
           {fileError instanceof Error ? fileError.message : 'Unknown error'}
         </p>
         <button
+          type="button"
           onClick={onRefetch}
           className="flex items-center gap-1.5 px-3 py-1.5 bg-elevated border border-border rounded text-sm text-text-secondary hover:text-text-primary transition-colors"
         >
@@ -1050,6 +1064,7 @@ function FileViewerToolbar({
         )}
         {isMarkdownFile(selectedFile.path) && (
           <button
+            type="button"
             onClick={onToggleMarkdownView}
             className="flex items-center gap-1 px-2 py-0.5 text-xs bg-elevated border border-border rounded text-text-secondary hover:text-text-primary transition-colors"
             title={markdownView === 'raw' ? 'Show rendered' : 'Show raw'}
@@ -1069,6 +1084,7 @@ function FileViewerToolbar({
           </button>
         )}
         <button
+          type="button"
           onClick={onRefetch}
           disabled={fileLoading || liveTailing}
           className="p-1 text-text-muted hover:text-text-primary transition-colors disabled:opacity-50"
@@ -1077,6 +1093,7 @@ function FileViewerToolbar({
           <RefreshCw className={`w-3.5 h-3.5 ${fileLoading ? 'animate-spin' : ''}`} />
         </button>
         <button
+          type="button"
           onClick={onToggleSearch}
           disabled={liveTailing}
           className={`p-1 transition-colors disabled:opacity-50 ${searchOpen ? 'text-accent' : 'text-text-muted hover:text-text-primary'}`}
@@ -1086,6 +1103,7 @@ function FileViewerToolbar({
         </button>
         {!selectedFile.is_dir && (
           <button
+            type="button"
             onClick={onToggleLiveTail}
             className={`flex items-center gap-1 px-2 py-0.5 text-xs rounded border transition-colors ${
               liveTailing
@@ -1148,13 +1166,13 @@ function FileSearchBar({
           {matchCount > 0 ? `${currentMatch + 1} of ${matchCount}` : 'No matches'}
         </span>
       )}
-      <button onClick={onNavigatePrev} disabled={matchCount === 0} className="p-0.5 text-text-muted hover:text-text-primary disabled:opacity-30">
+      <button type="button" onClick={onNavigatePrev} disabled={matchCount === 0} className="p-0.5 text-text-muted hover:text-text-primary disabled:opacity-30">
         <ChevronUp className="w-3.5 h-3.5" />
       </button>
-      <button onClick={onNavigateNext} disabled={matchCount === 0} className="p-0.5 text-text-muted hover:text-text-primary disabled:opacity-30">
+      <button type="button" onClick={onNavigateNext} disabled={matchCount === 0} className="p-0.5 text-text-muted hover:text-text-primary disabled:opacity-30">
         <ChevronDown className="w-3.5 h-3.5" />
       </button>
-      <button onClick={onClose} className="p-0.5 text-text-muted hover:text-text-primary">
+      <button type="button" onClick={onClose} className="p-0.5 text-text-muted hover:text-text-primary">
         <X className="w-3.5 h-3.5" />
       </button>
     </div>
@@ -1204,6 +1222,7 @@ function FileExplorerSidebar({
         <div className="flex items-center gap-0.5">
           {!sidebarCollapsed && (
             <button
+              type="button"
               onClick={onRefreshTree}
               disabled={treeRefreshing || pathsLoading}
               className="p-1 text-text-muted hover:text-text-primary transition-colors disabled:opacity-50"
@@ -1213,6 +1232,7 @@ function FileExplorerSidebar({
             </button>
           )}
           <button
+            type="button"
             onClick={onToggleCollapse}
             className="p-1 text-text-muted hover:text-text-primary transition-colors"
             title={sidebarCollapsed ? 'Expand sidebar' : 'Collapse sidebar'}

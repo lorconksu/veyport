@@ -258,7 +258,7 @@ describe('ServerDetailPage', () => {
     mockApiFetch.mockResolvedValue({ paths: ['/etc'] })
     renderPage()
 
-    await waitFor(() => expect(screen.getByText('File Explorer')).toBeInTheDocument())
+    expect(await screen.findByText('File Explorer')).toBeInTheDocument()
 
     fireEvent.click(screen.getByRole('button', { name: 'Terminal' }))
 
@@ -280,7 +280,7 @@ describe('ServerDetailPage', () => {
     mockApiFetch.mockResolvedValueOnce(mockPendingServer)
     renderPage()
 
-    await waitFor(() => expect(screen.getByText(/file browsing is waiting on the agent/i)).toBeInTheDocument())
+    expect(await screen.findByText(/file browsing is waiting on the agent/i)).toBeInTheDocument()
 
     fireEvent.click(screen.getByRole('button', { name: 'Terminal' }))
 
@@ -359,9 +359,9 @@ describe('ServerDetailPage', () => {
     mockApiFetch.mockResolvedValueOnce(fileContent)
     renderPage()
 
-    await waitFor(() => expect(screen.getByText('/etc')).toBeInTheDocument())
+    expect(await screen.findByText('/etc')).toBeInTheDocument()
     fireEvent.click(screen.getByText('/etc'))
-    await waitFor(() => expect(screen.getByText('nginx.conf')).toBeInTheDocument())
+    expect(await screen.findByText('nginx.conf')).toBeInTheDocument()
     fireEvent.click(screen.getByText('nginx.conf'))
 
     await waitFor(() => {
@@ -433,9 +433,9 @@ describe('ServerDetailPage', () => {
     mockApiFetch.mockResolvedValueOnce(fileContent)
     renderPage()
 
-    await waitFor(() => expect(screen.getByText('/etc')).toBeInTheDocument())
+    expect(await screen.findByText('/etc')).toBeInTheDocument()
     fireEvent.click(screen.getByText('/etc'))
-    await waitFor(() => expect(screen.getByText('nginx.conf')).toBeInTheDocument())
+    expect(await screen.findByText('nginx.conf')).toBeInTheDocument()
     fireEvent.click(screen.getByText('nginx.conf'))
 
     await waitFor(() => {
@@ -447,7 +447,7 @@ describe('ServerDetailPage', () => {
     mockApiFetch.mockResolvedValueOnce(mockServer)
     mockApiFetch.mockResolvedValue({ paths: ['/etc'] })
     renderPage()
-    await waitFor(() => expect(screen.getByText('web-prod-1')).toBeInTheDocument())
+    expect(await screen.findByText('web-prod-1')).toBeInTheDocument()
 
     // The search bar only appears after a file is selected AND Ctrl+F is pressed
     // Just verify the event listener is registered (component doesn't crash on Ctrl+F)
@@ -462,7 +462,7 @@ describe('ServerDetailPage', () => {
     mockApiFetch.mockResolvedValue({ paths: [], users: [] })
     renderPage()
 
-    await waitFor(() => expect(screen.getByText('Manage File Access')).toBeInTheDocument())
+    expect(await screen.findByText('Manage File Access')).toBeInTheDocument()
     fireEvent.click(screen.getByText('Manage File Access'))
 
     await waitFor(() => {
@@ -476,7 +476,7 @@ describe('ServerDetailPage', () => {
     mockApiFetch.mockResolvedValue({ files: [] })
     renderPage()
 
-    await waitFor(() => expect(screen.getByText('Dropzone')).toBeInTheDocument())
+    expect(await screen.findByText('Dropzone')).toBeInTheDocument()
     fireEvent.click(screen.getByText('Dropzone'))
 
     await waitFor(() => {
@@ -533,7 +533,7 @@ describe('DropzoneUpload', () => {
       </QueryClientProvider>,
     )
 
-    await waitFor(() => expect(screen.getByText('Dropzone')).toBeInTheDocument())
+    expect(await screen.findByText('Dropzone')).toBeInTheDocument()
     fireEvent.click(screen.getByText('Dropzone'))
 
     await waitFor(() => {
@@ -555,9 +555,9 @@ describe('DropzoneUpload', () => {
       </QueryClientProvider>,
     )
 
-    await waitFor(() => expect(screen.getByText('Dropzone')).toBeInTheDocument())
+    expect(await screen.findByText('Dropzone')).toBeInTheDocument()
     fireEvent.click(screen.getByText('Dropzone'))
-    await waitFor(() => expect(screen.getByText('file.tar.gz')).toBeInTheDocument())
+    expect(await screen.findByText('file.tar.gz')).toBeInTheDocument()
 
     fireEvent.click(screen.getByTitle('Delete file'))
     await waitFor(() => {
@@ -579,12 +579,12 @@ describe('DropzoneUpload', () => {
       </QueryClientProvider>,
     )
 
-    await waitFor(() => expect(screen.getByText('Dropzone')).toBeInTheDocument())
+    expect(await screen.findByText('Dropzone')).toBeInTheDocument()
     fireEvent.click(screen.getByText('Dropzone'))
-    await waitFor(() => expect(screen.getByText('file.tar.gz')).toBeInTheDocument())
+    expect(await screen.findByText('file.tar.gz')).toBeInTheDocument()
 
     fireEvent.click(screen.getByTitle('Delete file'))
-    await waitFor(() => expect(screen.getByText('Delete File?')).toBeInTheDocument())
+    expect(await screen.findByText('Delete File?')).toBeInTheDocument()
 
     fireEvent.click(screen.getByRole('button', { name: 'Cancel' }))
     await waitFor(() => expect(screen.queryByText('Delete File?')).not.toBeInTheDocument())
@@ -607,12 +607,12 @@ describe('DropzoneUpload', () => {
       </QueryClientProvider>,
     )
 
-    await waitFor(() => expect(screen.getByText('Dropzone')).toBeInTheDocument())
+    expect(await screen.findByText('Dropzone')).toBeInTheDocument()
     fireEvent.click(screen.getByText('Dropzone'))
-    await waitFor(() => expect(screen.getByText('file.tar.gz')).toBeInTheDocument())
+    expect(await screen.findByText('file.tar.gz')).toBeInTheDocument()
 
     fireEvent.click(screen.getByTitle('Delete file'))
-    await waitFor(() => expect(screen.getByText('Delete File?')).toBeInTheDocument())
+    expect(await screen.findByText('Delete File?')).toBeInTheDocument()
 
     // In the delete modal, click "Delete" button to confirm
     const deleteButtons = screen.getAllByRole('button', { name: 'Delete' })
@@ -656,9 +656,9 @@ describe('FileViewerContent rendering', () => {
       </QueryClientProvider>,
     )
 
-    await waitFor(() => expect(screen.getByText('/etc')).toBeInTheDocument())
+    expect(await screen.findByText('/etc')).toBeInTheDocument()
     fireEvent.click(screen.getByText('/etc'))
-    await waitFor(() => expect(screen.getByText(filename)).toBeInTheDocument())
+    expect(await screen.findByText(filename)).toBeInTheDocument()
     fireEvent.click(screen.getByText(filename))
   }
 
@@ -683,7 +683,7 @@ describe('FileViewerContent rendering', () => {
     const fileContent = { data: btoa(mdContent), total_size: mdContent.length, mime_type: 'text/markdown' }
     await renderWithFile(fileContent, 'README.md')
     // Wait for toolbar first, then markdown
-    await waitFor(() => expect(screen.getByTitle('Refresh file')).toBeInTheDocument(), { timeout: 3000 })
+    expect(await screen.findByTitle('Refresh file', undefined, { timeout: 3000 })).toBeInTheDocument()
     // Markdown is rendered via mocked ReactMarkdown
     await waitFor(() => {
       expect(screen.getByTestId('markdown')).toBeInTheDocument()
@@ -705,9 +705,9 @@ describe('FileViewerContent rendering', () => {
       </QueryClientProvider>,
     )
 
-    await waitFor(() => expect(screen.getByText('/etc')).toBeInTheDocument())
+    expect(await screen.findByText('/etc')).toBeInTheDocument()
     fireEvent.click(screen.getByText('/etc'))
-    await waitFor(() => expect(screen.getByText('nginx.conf')).toBeInTheDocument())
+    expect(await screen.findByText('nginx.conf')).toBeInTheDocument()
     fireEvent.click(screen.getByText('nginx.conf'))
 
     await waitFor(() => {
@@ -732,13 +732,13 @@ describe('FileViewerContent rendering', () => {
       </QueryClientProvider>,
     )
 
-    await waitFor(() => expect(screen.getByText('/etc')).toBeInTheDocument())
+    expect(await screen.findByText('/etc')).toBeInTheDocument()
     fireEvent.click(screen.getByText('/etc'))
-    await waitFor(() => expect(screen.getByText('nginx.conf')).toBeInTheDocument())
+    expect(await screen.findByText('nginx.conf')).toBeInTheDocument()
     fireEvent.click(screen.getByText('nginx.conf'))
 
     // Wait for error state
-    await waitFor(() => expect(screen.getByText('Failed to load file')).toBeInTheDocument())
+    expect(await screen.findByText('Failed to load file')).toBeInTheDocument()
 
     // Click Retry (covers line 1840: onRefetch={() => refetchFile()})
     fireEvent.click(screen.getByRole('button', { name: 'Retry' }))
@@ -751,7 +751,7 @@ describe('FileViewerContent rendering', () => {
     const fileContent = { data: btoa('Hello World content'), total_size: 18, mime_type: 'text/plain' }
     await renderWithFile(fileContent)
 
-    await waitFor(() => expect(screen.getByTitle('Refresh file')).toBeInTheDocument())
+    expect(await screen.findByTitle('Refresh file')).toBeInTheDocument()
 
     // Open search via toolbar button
     const searchBtn = screen.getByTitle('Search in file (Ctrl+F)')
@@ -766,12 +766,12 @@ describe('FileViewerContent rendering', () => {
     const fileContent = { data: btoa('Hello World content'), total_size: 18, mime_type: 'text/plain' }
     await renderWithFile(fileContent)
 
-    await waitFor(() => expect(screen.getByTitle('Refresh file')).toBeInTheDocument())
+    expect(await screen.findByTitle('Refresh file')).toBeInTheDocument()
 
     const searchBtn = screen.getByTitle('Search in file (Ctrl+F)')
     fireEvent.click(searchBtn)
 
-    await waitFor(() => expect(screen.getByPlaceholderText('Search in file...')).toBeInTheDocument())
+    expect(await screen.findByPlaceholderText('Search in file...')).toBeInTheDocument()
 
     fireEvent.keyDown(screen.getByPlaceholderText('Search in file...'), { key: 'Escape' })
 
@@ -785,18 +785,18 @@ describe('FileViewerContent rendering', () => {
     const fileContent = { data: btoa(content), total_size: content.length, mime_type: 'text/plain' }
     await renderWithFile(fileContent)
 
-    await waitFor(() => expect(screen.getByTitle('Refresh file')).toBeInTheDocument())
+    expect(await screen.findByTitle('Refresh file')).toBeInTheDocument()
 
     const searchBtn = screen.getByTitle('Search in file (Ctrl+F)')
     fireEvent.click(searchBtn)
 
-    await waitFor(() => expect(screen.getByPlaceholderText('Search in file...')).toBeInTheDocument())
+    expect(await screen.findByPlaceholderText('Search in file...')).toBeInTheDocument()
 
     // Type a search term
     fireEvent.change(screen.getByPlaceholderText('Search in file...'), { target: { value: 'hello' } })
 
     // Wait for debounce — navigation prev/next buttons should appear
-    await waitFor(() => expect(screen.getByTitle('Search in file (Ctrl+F)')).toBeInTheDocument())
+    expect(await screen.findByTitle('Search in file (Ctrl+F)')).toBeInTheDocument()
 
     // Navigate search matches from the input.
     fireEvent.keyDown(screen.getByPlaceholderText('Search in file...'), { key: 'Enter' })
@@ -814,7 +814,7 @@ describe('FileViewerContent rendering', () => {
     const fileContent = { data: btoa('log content'), total_size: 11, mime_type: 'text/plain' }
     await renderWithFile(fileContent)
 
-    await waitFor(() => expect(screen.getByTitle('Refresh file')).toBeInTheDocument())
+    expect(await screen.findByTitle('Refresh file')).toBeInTheDocument()
 
     // Click the Live Tail button (FileViewerToolbar toggle)
     const liveTailBtn = screen.getByTitle('Start live tail')
@@ -963,7 +963,7 @@ describe('PathManagement', () => {
       </QueryClientProvider>,
     )
 
-    await waitFor(() => expect(screen.getByText('Manage File Access')).toBeInTheDocument())
+    expect(await screen.findByText('Manage File Access')).toBeInTheDocument()
     fireEvent.click(screen.getByText('Manage File Access'))
 
     await waitFor(() => {
@@ -988,7 +988,7 @@ describe('PathManagement', () => {
       </QueryClientProvider>,
     )
 
-    await waitFor(() => expect(screen.getByText('Manage File Access')).toBeInTheDocument())
+    expect(await screen.findByText('Manage File Access')).toBeInTheDocument()
     fireEvent.click(screen.getByText('Manage File Access'))
 
     await waitFor(() => {
@@ -1017,10 +1017,10 @@ describe('PathManagement', () => {
       </QueryClientProvider>,
     )
 
-    await waitFor(() => expect(screen.getByText('Manage File Access')).toBeInTheDocument())
+    expect(await screen.findByText('Manage File Access')).toBeInTheDocument()
     fireEvent.click(screen.getByText('Manage File Access'))
 
-    await waitFor(() => expect(screen.getByLabelText('Path')).toBeInTheDocument())
+    expect(await screen.findByLabelText('Path')).toBeInTheDocument()
 
     // Select user and enter path
     const userSelect = screen.getByLabelText('User')
@@ -1058,10 +1058,10 @@ describe('PathManagement', () => {
       </QueryClientProvider>,
     )
 
-    await waitFor(() => expect(screen.getByText('Manage File Access')).toBeInTheDocument())
+    expect(await screen.findByText('Manage File Access')).toBeInTheDocument()
     fireEvent.click(screen.getByText('Manage File Access'))
 
-    await waitFor(() => expect(screen.getByText('/etc/nginx')).toBeInTheDocument())
+    expect(await screen.findByText('/etc/nginx')).toBeInTheDocument()
 
     const removeBtn = screen.getByTitle('Remove permission')
     fireEvent.click(removeBtn)
@@ -1105,10 +1105,10 @@ describe('DropzoneUpload drag and file input handlers', () => {
   it('handleDragOver sets drag-over visual state', async () => {
     renderDropzone()
 
-    await waitFor(() => expect(screen.getByText('Dropzone')).toBeInTheDocument())
+    expect(await screen.findByText('Dropzone')).toBeInTheDocument()
     fireEvent.click(screen.getByText('Dropzone'))
 
-    await waitFor(() => expect(screen.getByLabelText('Upload files by clicking or dragging')).toBeInTheDocument())
+    expect(await screen.findByLabelText('Upload files by clicking or dragging')).toBeInTheDocument()
 
     const dropzone = screen.getByLabelText('Upload files by clicking or dragging')
     fireEvent.dragOver(dropzone, { dataTransfer: { files: [] } })
@@ -1120,10 +1120,10 @@ describe('DropzoneUpload drag and file input handlers', () => {
   it('handleDragLeave clears drag-over state', async () => {
     renderDropzone()
 
-    await waitFor(() => expect(screen.getByText('Dropzone')).toBeInTheDocument())
+    expect(await screen.findByText('Dropzone')).toBeInTheDocument()
     fireEvent.click(screen.getByText('Dropzone'))
 
-    await waitFor(() => expect(screen.getByLabelText('Upload files by clicking or dragging')).toBeInTheDocument())
+    expect(await screen.findByLabelText('Upload files by clicking or dragging')).toBeInTheDocument()
 
     const dropzone = screen.getByLabelText('Upload files by clicking or dragging')
     fireEvent.dragOver(dropzone, { dataTransfer: { files: [] } })
@@ -1139,10 +1139,10 @@ describe('DropzoneUpload drag and file input handlers', () => {
 
     renderDropzone()
 
-    await waitFor(() => expect(screen.getByText('Dropzone')).toBeInTheDocument())
+    expect(await screen.findByText('Dropzone')).toBeInTheDocument()
     fireEvent.click(screen.getByText('Dropzone'))
 
-    await waitFor(() => expect(screen.getByLabelText('Upload files by clicking or dragging')).toBeInTheDocument())
+    expect(await screen.findByLabelText('Upload files by clicking or dragging')).toBeInTheDocument()
 
     const dropzone = screen.getByLabelText('Upload files by clicking or dragging')
     const file = new File(['content'], 'test.txt', { type: 'text/plain' })
@@ -1155,10 +1155,10 @@ describe('DropzoneUpload drag and file input handlers', () => {
   it('handleDrop with no file does nothing', async () => {
     renderDropzone()
 
-    await waitFor(() => expect(screen.getByText('Dropzone')).toBeInTheDocument())
+    expect(await screen.findByText('Dropzone')).toBeInTheDocument()
     fireEvent.click(screen.getByText('Dropzone'))
 
-    await waitFor(() => expect(screen.getByLabelText('Upload files by clicking or dragging')).toBeInTheDocument())
+    expect(await screen.findByLabelText('Upload files by clicking or dragging')).toBeInTheDocument()
 
     const dropzone = screen.getByLabelText('Upload files by clicking or dragging')
     fireEvent.drop(dropzone, { dataTransfer: { files: [] } })
@@ -1173,10 +1173,10 @@ describe('DropzoneUpload drag and file input handlers', () => {
 
     renderDropzone()
 
-    await waitFor(() => expect(screen.getByText('Dropzone')).toBeInTheDocument())
+    expect(await screen.findByText('Dropzone')).toBeInTheDocument()
     fireEvent.click(screen.getByText('Dropzone'))
 
-    await waitFor(() => expect(screen.getByLabelText('Upload files by clicking or dragging')).toBeInTheDocument())
+    expect(await screen.findByLabelText('Upload files by clicking or dragging')).toBeInTheDocument()
 
     // The hidden file input is inside the dropzone
     const fileInput = document.querySelector('input[type="file"]') as HTMLInputElement
@@ -1192,10 +1192,10 @@ describe('DropzoneUpload drag and file input handlers', () => {
   it('dropzone onKeyDown Enter triggers file input click', async () => {
     renderDropzone()
 
-    await waitFor(() => expect(screen.getByText('Dropzone')).toBeInTheDocument())
+    expect(await screen.findByText('Dropzone')).toBeInTheDocument()
     fireEvent.click(screen.getByText('Dropzone'))
 
-    await waitFor(() => expect(screen.getByLabelText('Upload files by clicking or dragging')).toBeInTheDocument())
+    expect(await screen.findByLabelText('Upload files by clicking or dragging')).toBeInTheDocument()
 
     const dropzone = screen.getByLabelText('Upload files by clicking or dragging')
     // Press Enter key on the dropzone
@@ -1208,10 +1208,10 @@ describe('DropzoneUpload drag and file input handlers', () => {
   it('dropzone onKeyDown Space triggers file input click', async () => {
     renderDropzone()
 
-    await waitFor(() => expect(screen.getByText('Dropzone')).toBeInTheDocument())
+    expect(await screen.findByText('Dropzone')).toBeInTheDocument()
     fireEvent.click(screen.getByText('Dropzone'))
 
-    await waitFor(() => expect(screen.getByLabelText('Upload files by clicking or dragging')).toBeInTheDocument())
+    expect(await screen.findByLabelText('Upload files by clicking or dragging')).toBeInTheDocument()
 
     const dropzone = screen.getByLabelText('Upload files by clicking or dragging')
     fireEvent.keyDown(dropzone, { key: ' ' })
@@ -1222,10 +1222,10 @@ describe('DropzoneUpload drag and file input handlers', () => {
   it('dropzone onClick triggers file input click', async () => {
     renderDropzone()
 
-    await waitFor(() => expect(screen.getByText('Dropzone')).toBeInTheDocument())
+    expect(await screen.findByText('Dropzone')).toBeInTheDocument()
     fireEvent.click(screen.getByText('Dropzone'))
 
-    await waitFor(() => expect(screen.getByLabelText('Upload files by clicking or dragging')).toBeInTheDocument())
+    expect(await screen.findByLabelText('Upload files by clicking or dragging')).toBeInTheDocument()
 
     const dropzone = screen.getByLabelText('Upload files by clicking or dragging')
     fireEvent.click(dropzone)
@@ -1264,9 +1264,9 @@ describe('extensionToLanguage Dockerfile mapping (line 231)', () => {
       </QueryClientProvider>,
     )
 
-    await waitFor(() => expect(screen.getByText('/etc')).toBeInTheDocument())
+    expect(await screen.findByText('/etc')).toBeInTheDocument()
     fireEvent.click(screen.getByText('/etc'))
-    await waitFor(() => expect(screen.getByText('Dockerfile')).toBeInTheDocument())
+    expect(await screen.findByText('Dockerfile')).toBeInTheDocument()
     fireEvent.click(screen.getByText('Dockerfile'))
 
     // Wait for the file content to render (code block appears after decodedContent is computed)
@@ -1305,9 +1305,9 @@ describe('handleToggleDir branches', () => {
     )
 
     // Expand the directory
-    await waitFor(() => expect(screen.getByText('/etc')).toBeInTheDocument())
+    expect(await screen.findByText('/etc')).toBeInTheDocument()
     fireEvent.click(screen.getByText('/etc'))
-    await waitFor(() => expect(screen.getByText('nginx.conf')).toBeInTheDocument())
+    expect(await screen.findByText('nginx.conf')).toBeInTheDocument()
 
     // Collapse it by clicking again
     fireEvent.click(screen.getByText('/etc'))
@@ -1332,9 +1332,9 @@ describe('handleToggleDir branches', () => {
     )
 
     // Expand the directory (fetches children)
-    await waitFor(() => expect(screen.getByText('/etc')).toBeInTheDocument())
+    expect(await screen.findByText('/etc')).toBeInTheDocument()
     fireEvent.click(screen.getByText('/etc'))
-    await waitFor(() => expect(screen.getByText('nginx.conf')).toBeInTheDocument())
+    expect(await screen.findByText('nginx.conf')).toBeInTheDocument()
 
     const fetchCallCount = mockApiFetch.mock.calls.length
 
@@ -1345,7 +1345,7 @@ describe('handleToggleDir branches', () => {
     // Re-expand — should use cached children, no new fetch
     mockApiFetch.mockResolvedValueOnce({ files: subFiles }) // prepare in case it fetches (it shouldn't)
     fireEvent.click(screen.getByText('/etc'))
-    await waitFor(() => expect(screen.getByText('nginx.conf')).toBeInTheDocument())
+    expect(await screen.findByText('nginx.conf')).toBeInTheDocument()
 
     // The fetch count should not have increased by more than 1 (the re-expand uses cache)
     expect(mockApiFetch.mock.calls.length).toBeLessThanOrEqual(fetchCallCount + 1)
@@ -1365,7 +1365,7 @@ describe('handleToggleDir branches', () => {
       </QueryClientProvider>,
     )
 
-    await waitFor(() => expect(screen.getByText('/etc')).toBeInTheDocument())
+    expect(await screen.findByText('/etc')).toBeInTheDocument()
     fireEvent.click(screen.getByText('/etc'))
 
     await waitFor(() => {
@@ -1404,13 +1404,13 @@ describe('onToggleMarkdownView (line 1806)', () => {
       </QueryClientProvider>,
     )
 
-    await waitFor(() => expect(screen.getByText('/etc')).toBeInTheDocument())
+    expect(await screen.findByText('/etc')).toBeInTheDocument()
     fireEvent.click(screen.getByText('/etc'))
-    await waitFor(() => expect(screen.getByText('README.md')).toBeInTheDocument())
+    expect(await screen.findByText('README.md')).toBeInTheDocument()
     fireEvent.click(screen.getByText('README.md'))
 
     // Wait for toolbar to appear with markdown toggle
-    await waitFor(() => expect(screen.getByTitle('Show raw')).toBeInTheDocument(), { timeout: 3000 })
+    expect(await screen.findByTitle('Show raw', undefined, { timeout: 3000 })).toBeInTheDocument()
 
     // Click the toggle to switch to raw mode
     fireEvent.click(screen.getByTitle('Show raw'))
@@ -1430,7 +1430,7 @@ describe('onToggleMarkdownView (line 1806)', () => {
         return Promise.resolve({ files: [] })
       })
       renderPage()
-      await waitFor(() => expect(screen.getByTitle('Refresh file tree')).toBeInTheDocument())
+      expect(await screen.findByTitle('Refresh file tree')).toBeInTheDocument()
     })
 
     it('refresh button is enabled after paths load', async () => {
@@ -1438,7 +1438,7 @@ describe('onToggleMarkdownView (line 1806)', () => {
       mockApiFetch.mockResolvedValue({ paths: ['/etc'] })
       renderPage()
       // Wait for paths to load (indicated by /etc appearing in tree)
-      await waitFor(() => expect(screen.getByText('/etc')).toBeInTheDocument())
+      expect(await screen.findByText('/etc')).toBeInTheDocument()
 
       const refreshBtn = screen.getByTitle('Refresh file tree')
       expect(refreshBtn).not.toBeDisabled()
@@ -1458,17 +1458,17 @@ describe('onToggleMarkdownView (line 1806)', () => {
       ]})
       mockApiFetch.mockResolvedValue(mockServer)
       renderPage()
-      await waitFor(() => expect(screen.getByText('/etc')).toBeInTheDocument())
+      expect(await screen.findByText('/etc')).toBeInTheDocument()
 
       // Expand directory
       fireEvent.click(screen.getByText('/etc'))
-      await waitFor(() => expect(screen.getByText('nginx.conf')).toBeInTheDocument())
+      expect(await screen.findByText('nginx.conf')).toBeInTheDocument()
 
       // Click refresh
       fireEvent.click(screen.getByTitle('Refresh file tree'))
 
       // Should show the new file from the refresh response
-      await waitFor(() => expect(screen.getByText('hosts')).toBeInTheDocument())
+      expect(await screen.findByText('hosts')).toBeInTheDocument()
     })
 
     it('hides refresh button when sidebar is collapsed', async () => {
@@ -1478,7 +1478,7 @@ describe('onToggleMarkdownView (line 1806)', () => {
         return Promise.resolve({ files: [] })
       })
       renderPage()
-      await waitFor(() => expect(screen.getByTitle('Refresh file tree')).toBeInTheDocument())
+      expect(await screen.findByTitle('Refresh file tree')).toBeInTheDocument()
 
       // Collapse sidebar
       fireEvent.click(screen.getByTitle('Collapse sidebar'))
@@ -1495,7 +1495,7 @@ describe('onToggleMarkdownView (line 1806)', () => {
         return Promise.resolve({ files: [] })
       })
       renderPage()
-      await waitFor(() => expect(screen.getByLabelText('Resize sidebar')).toBeInTheDocument())
+      expect(await screen.findByLabelText('Resize sidebar')).toBeInTheDocument()
     })
 
     it('hides divider when sidebar is collapsed', async () => {
@@ -1505,7 +1505,7 @@ describe('onToggleMarkdownView (line 1806)', () => {
         return Promise.resolve({ files: [] })
       })
       renderPage()
-      await waitFor(() => expect(screen.getByLabelText('Resize sidebar')).toBeInTheDocument())
+      expect(await screen.findByLabelText('Resize sidebar')).toBeInTheDocument()
 
       // Collapse sidebar
       fireEvent.click(screen.getByTitle('Collapse sidebar'))
@@ -1519,7 +1519,7 @@ describe('onToggleMarkdownView (line 1806)', () => {
         return Promise.resolve({ files: [] })
       })
       renderPage()
-      await waitFor(() => expect(screen.getByLabelText('Resize sidebar')).toBeInTheDocument())
+      expect(await screen.findByLabelText('Resize sidebar')).toBeInTheDocument()
 
       const divider = screen.getByLabelText('Resize sidebar')
 
@@ -1542,7 +1542,7 @@ describe('onToggleMarkdownView (line 1806)', () => {
         return Promise.resolve({ files: [] })
       })
       renderPage()
-      await waitFor(() => expect(screen.getByLabelText('Resize sidebar')).toBeInTheDocument())
+      expect(await screen.findByLabelText('Resize sidebar')).toBeInTheDocument()
 
       const divider = screen.getByLabelText('Resize sidebar')
       fireEvent.doubleClick(divider)
@@ -1557,7 +1557,7 @@ describe('onToggleMarkdownView (line 1806)', () => {
         return Promise.resolve({ files: [] })
       })
       renderPage()
-      await waitFor(() => expect(screen.getByLabelText('Resize sidebar')).toBeInTheDocument())
+      expect(await screen.findByLabelText('Resize sidebar')).toBeInTheDocument()
 
       const divider = screen.getByLabelText('Resize sidebar')
 
