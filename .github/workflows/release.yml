@@ -86,6 +86,18 @@ jobs:
           password: ${{ secrets.DOCKERHUB_TOKEN }}
 
       - name: Docker Scout CVE scan
+        id: scout
+        continue-on-error: true
+        uses: docker/scout-action@v1.20.3
+        with:
+          command: cves
+          image: yiucloud/veyport:${{ env.IMAGE_TAG }}
+          summary: true
+          write-comment: false
+
+      # Scout's API occasionally returns transient 403s; one retry clears them.
+      - name: Docker Scout CVE scan (retry)
+        if: steps.scout.outcome == 'failure'
         uses: docker/scout-action@v1.20.3
         with:
           command: cves

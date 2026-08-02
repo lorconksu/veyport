@@ -95,6 +95,16 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
+
+      # Authenticated pulls avoid Docker Hub throttling; skipped gracefully
+      # when secrets are unavailable (Dependabot/fork runs).
+      - name: Log in to Docker Hub
+        uses: docker/login-action@v4
+        continue-on-error: true
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
       - name: Run smoke tests
         run: bash tests/smoke/smoke_test.sh
         env:
@@ -112,6 +122,15 @@ jobs:
 
       - name: Install Playwright
         run: cd tests/e2e && npm ci && npx playwright install --with-deps chromium
+
+      # Authenticated pulls avoid Docker Hub throttling; skipped gracefully
+      # when secrets are unavailable (Dependabot/fork runs).
+      - name: Log in to Docker Hub
+        uses: docker/login-action@v4
+        continue-on-error: true
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
 
       - name: Build Docker image
         run: docker build --build-arg NODE_IMAGE=node:25-slim --build-arg GO_IMAGE=golang:1.26.5-bookworm -t veyport-e2e:test .
