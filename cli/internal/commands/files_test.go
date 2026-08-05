@@ -330,3 +330,160 @@ func TestFilesCat_RateLimited429(t *testing.T) {
 		t.Fatalf("exit code = %d, want %d (ExitRateLimited); stdout=%q stderr=%q", code, cmdutil.ExitRateLimited, stdout.String(), stderr.String())
 	}
 }
+
+// --- RunFiles dispatch ------------------------------------------------------
+
+// TestRunFiles_NoArgs covers the bare `vey files` invocation.
+func TestRunFiles_NoArgs(t *testing.T) {
+	_, srv, configDir := seedForServers(t, "tok-1")
+	ctx, stdout, stderr := newCmdContext(srv.URL, configDir, false, nil)
+	code := RunFiles(ctx)
+	if code != cmdutil.ExitUsage {
+		t.Fatalf("exit code = %d, want %d (ExitUsage); stdout=%q stderr=%q", code, cmdutil.ExitUsage, stdout.String(), stderr.String())
+	}
+}
+
+// TestRunFiles_UnknownSubcommand covers `vey files bogus`.
+func TestRunFiles_UnknownSubcommand(t *testing.T) {
+	_, srv, configDir := seedForServers(t, "tok-1")
+	ctx, stdout, stderr := newCmdContext(srv.URL, configDir, false, []string{"bogus", "s1", "/tmp"})
+	code := RunFiles(ctx)
+	if code != cmdutil.ExitUsage {
+		t.Fatalf("exit code = %d, want %d (ExitUsage); stdout=%q stderr=%q", code, cmdutil.ExitUsage, stdout.String(), stderr.String())
+	}
+	if !strings.Contains(stderr.String(), "bogus") {
+		t.Errorf("stderr = %q, want it to name the unknown subcommand", stderr.String())
+	}
+}
+
+// --- resolveHubAuth failures (shared by ls and cat) -------------------------
+
+// TestFilesLs_NoHubExitUsage covers runFilesLs's resolveHubAuth error branch
+// via a RequireHub failure (no hub configured).
+func TestFilesLs_NoHubExitUsage(t *testing.T) {
+	t.Setenv("VEYPORT_TOKEN", "")
+	ctx, stdout, stderr := newCmdContext("", t.TempDir(), false, []string{"ls", "s1", "/tmp"})
+	code := RunFiles(ctx)
+	if code != cmdutil.ExitUsage {
+		t.Fatalf("exit code = %d, want %d (ExitUsage); stdout=%q stderr=%q", code, cmdutil.ExitUsage, stdout.String(), stderr.String())
+	}
+}
+
+// TestFilesCat_AuthContextFailure covers runFilesCat's resolveHubAuth error
+// branch via a newAuthContext failure (malformed VEYPORT_TOKEN).
+func TestFilesCat_AuthContextFailure(t *testing.T) {
+	t.Setenv("VEYPORT_TOKEN", "malformed-token")
+	srv := httptest.NewServer(http.NewServeMux())
+	defer srv.Close()
+
+	ctx, stdout, stderr := newCmdContext(srv.URL, t.TempDir(), false, []string{"cat", "s1", "/tmp/x"})
+	code := RunFiles(ctx)
+	if code != cmdutil.ExitUsage {
+		t.Fatalf("exit code = %d, want %d (ExitUsage); stdout=%q stderr=%q", code, cmdutil.ExitUsage, stdout.String(), stderr.String())
+	}
+}
+
+// TestFilesCat_UnknownServerExit5 covers runFilesCat's resolveServerID error
+// branch: neither the direct lookup nor the fallback search finds the
+// server.
+func TestFilesCat_UnknownServerExit5(t *testing.T) {
+	mux, srv, configDir := seedForServers(t, "tok-1")
+	mux.HandleFunc("GET /api/servers/{id}", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNotFound)
+	})
+	mux.HandleFunc("GET /api/servers", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(api.ServersPage{Servers: nil, Total: 0})
+	})
+
+	ctx, stdout, stderr := newCmdContext(srv.URL, configDir, false, []string{"cat", "ghost", "/tmp/x"})
+	code := RunFiles(ctx)
+	if code != cmdutil.ExitNotFound {
+		t.Fatalf("exit code = %d, want %d (ExitNotFound); stdout=%q stderr=%q", code, cmdutil.ExitNotFound, stdout.String(), stderr.String())
+	}
+}
+
+// TestFilesLs_AmbiguousServerName covers resolveServerID's ambiguous-match
+// branch (shared code path with `vey servers get`, but exercised here
+// through `vey files ls` since resolveServerID is duplicated in this file).
+func TestFilesLs_AmbiguousServerName(t *testing.T) {
+	mux, srv, configDir := seedForServers(t, "tok-1")
+	mux.HandleFunc("GET /api/servers/{id}", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNotFound)
+	})
+	mux.HandleFunc("GET /api/servers", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(api.ServersPage{
+			Servers: []api.Server{
+				{ID: "s1", Name: "web"},
+				{ID: "s2", Name: "web"},
+			},
+			Total: 2,
+		})
+	})
+
+	ctx, stdout, stderr := newCmdContext(srv.URL, configDir, false, []string{"ls", "web", "/tmp"})
+	code := RunFiles(ctx)
+	if code != cmdutil.ExitUsage {
+		t.Fatalf("exit code = %d, want %d (ExitUsage); stdout=%q stderr=%q", code, cmdutil.ExitUsage, stdout.String(), stderr.String())
+	}
+	for _, want := range []string{"s1", "s2"} {
+		if !strings.Contains(stderr.String(), want) {
+			t.Errorf("stderr = %q, want it to list candidate %q", stderr.String(), want)
+		}
+	}
+}
+
+// TestFilesLs_SearchFallbackCallError covers resolveServerID's fallback
+// search actx.Do error branch: the direct lookup 404s, then the search call
+// itself fails.
+func TestFilesLs_SearchFallbackCallError(t *testing.T) {
+	mux, srv, configDir := seedForServers(t, "tok-1")
+	mux.HandleFunc("GET /api/servers/{id}", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNotFound)
+	})
+	mux.HandleFunc("GET /api/servers", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+	})
+
+	ctx, stdout, stderr := newCmdContext(srv.URL, configDir, false, []string{"ls", "web-1", "/tmp"})
+	code := RunFiles(ctx)
+	if code != cmdutil.ExitError {
+		t.Fatalf("exit code = %d, want %d (ExitError); stdout=%q stderr=%q", code, cmdutil.ExitError, stdout.String(), stderr.String())
+	}
+}
+
+// TestFilesCat_InterruptedStream_ExitConn covers runFilesCat's PayloadRaw
+// error branch: the stream starts (200, headers sent) but is cut off
+// mid-body, same hijack technique as audit_test.go's interrupted-stream
+// test.
+func TestFilesCat_InterruptedStream_ExitConn(t *testing.T) {
+	mux, srv, configDir := seedForServers(t, "tok-1")
+	mountServerLookup(mux, "s1")
+	const partial = "partial file conten"
+	mux.HandleFunc("GET /api/servers/{id}/files/read", func(w http.ResponseWriter, r *http.Request) {
+		hj, ok := w.(http.Hijacker)
+		if !ok {
+			t.Fatal("response writer does not support hijacking")
+		}
+		conn, bufrw, err := hj.Hijack()
+		if err != nil {
+			t.Fatalf("hijack: %v", err)
+		}
+		defer conn.Close()
+
+		_, _ = bufrw.WriteString("HTTP/1.1 200 OK\r\n")
+		_, _ = bufrw.WriteString("Content-Length: 4096\r\n\r\n")
+		_, _ = bufrw.WriteString(partial)
+		_ = bufrw.Flush()
+	})
+
+	ctx, stdout, stderr := newCmdContext(srv.URL, configDir, false, []string{"cat", "s1", "/bin/data"})
+	code := RunFiles(ctx)
+	if code != cmdutil.ExitConn {
+		t.Fatalf("exit code = %d, want %d (ExitConn); stdout=%q stderr=%q", code, cmdutil.ExitConn, stdout.String(), stderr.String())
+	}
+	if stdout.String() != partial {
+		t.Errorf("stdout = %q, want the partial body %q preserved", stdout.String(), partial)
+	}
+}

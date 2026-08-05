@@ -2,8 +2,10 @@ package commands
 
 import (
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -138,5 +140,69 @@ func TestLogout_APITokenMode_NothingLocal(t *testing.T) {
 	}
 	if !strings.Contains(stderr.String(), "env") && !strings.Contains(stderr.String(), "config") {
 		t.Errorf("stderr = %q, want a note that the token comes from env/config", stderr.String())
+	}
+}
+
+// TestLogout_NoHubExitUsage covers RunLogout's RequireHub failure branch.
+func TestLogout_NoHubExitUsage(t *testing.T) {
+	t.Setenv("VEYPORT_TOKEN", "")
+	ctx, stdout, stderr := newCmdContext("", t.TempDir(), false, nil)
+	code := RunLogout(ctx)
+	if code != cmdutil.ExitUsage {
+		t.Fatalf("exit code = %d, want %d (ExitUsage); stdout=%q stderr=%q", code, cmdutil.ExitUsage, stdout.String(), stderr.String())
+	}
+}
+
+// TestLogout_AuthContextFailure covers RunLogout's newAuthContext error
+// branch via a malformed VEYPORT_TOKEN.
+func TestLogout_AuthContextFailure(t *testing.T) {
+	t.Setenv("VEYPORT_TOKEN", "malformed-token")
+	srv := httptest.NewServer(http.NewServeMux())
+	defer srv.Close()
+
+	ctx, stdout, stderr := newCmdContext(srv.URL, t.TempDir(), false, nil)
+	code := RunLogout(ctx)
+	if code != cmdutil.ExitUsage {
+		t.Fatalf("exit code = %d, want %d (ExitUsage); stdout=%q stderr=%q", code, cmdutil.ExitUsage, stdout.String(), stderr.String())
+	}
+}
+
+// TestLogout_StoreDeleteFails covers RunLogout's store.Delete error branch:
+// the credential store is file-backed in this environment (no OS keyring),
+// so making its directory read-only makes the atomic rewrite Delete
+// performs fail with a permission error, without touching any source file.
+func TestLogout_StoreDeleteFails(t *testing.T) {
+	t.Setenv("VEYPORT_TOKEN", "")
+
+	mux := http.NewServeMux()
+	mountRefresh(mux, "access-1", "refresh-2")
+	mux.HandleFunc("POST /api/auth/logout", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNoContent)
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	configDir := t.TempDir()
+	seedSession(t, configDir, srv.URL, auth.StoredSession{
+		RefreshToken: "refresh-1", Username: "alice", Role: "admin", ObtainedAt: time.Now(),
+	})
+
+	store, err := auth.NewStore(configDir, io.Discard)
+	if err != nil {
+		t.Fatalf("auth.NewStore: %v", err)
+	}
+	if store.Backend() != auth.BackendFile {
+		t.Skipf("credential store backend = %q, want %q for this permission-based test", store.Backend(), auth.BackendFile)
+	}
+
+	if err := os.Chmod(configDir, 0o500); err != nil {
+		t.Fatalf("chmod configDir read-only: %v", err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(configDir, 0o700) })
+
+	ctx, stdout, stderr := newCmdContext(srv.URL, configDir, false, nil)
+	code := RunLogout(ctx)
+	if code != cmdutil.ExitError {
+		t.Fatalf("exit code = %d, want %d (ExitError); stdout=%q stderr=%q", code, cmdutil.ExitError, stdout.String(), stderr.String())
 	}
 }

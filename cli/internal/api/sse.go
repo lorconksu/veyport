@@ -119,11 +119,7 @@ func scanSSE(ctx context.Context, r io.Reader, fn func(SSEEvent) error) error {
 	scanner := bufio.NewScanner(r)
 	scanner.Buffer(make([]byte, 0, sseInitialBufBytes), MaxSSEEventBytes)
 
-	var (
-		eventName string
-		data      strings.Builder
-		hasData   bool
-	)
+	var buf sseEventBuf
 
 	for scanner.Scan() {
 		// bufio.ScanLines already strips a trailing "\r", so CRLF and LF
@@ -131,17 +127,11 @@ func scanSSE(ctx context.Context, r io.Reader, fn func(SSEEvent) error) error {
 		line := scanner.Text()
 
 		if line == "" {
-			// Blank line: dispatch. Per the SSE spec an event with no
-			// `data:` field at all is not dispatched, and the event-type
-			// buffer resets either way.
-			if !hasData {
-				eventName = ""
+			// Blank line: dispatch, if there is anything to dispatch.
+			ev, dispatch := buf.take()
+			if !dispatch {
 				continue
 			}
-			ev := SSEEvent{Event: eventName, Data: data.String()}
-			eventName = ""
-			data.Reset()
-			hasData = false
 			if err := fn(ev); err != nil {
 				return err
 			}
@@ -152,40 +142,88 @@ func scanSSE(ctx context.Context, r io.Reader, fn func(SSEEvent) error) error {
 			continue // comment / keep-alive
 		}
 
-		field, value, found := strings.Cut(line, ":")
-		if !found {
-			// A bare field name with no colon: an empty value.
-			field, value = line, ""
-		}
-		// Exactly one leading space is stripped, per the spec.
-		value = strings.TrimPrefix(value, " ")
-
-		switch field {
-		case "data":
-			// Account for the "\n" join before deciding, so the cap bounds
-			// what is actually retained.
-			want := len(value)
-			if hasData {
-				want++
-			}
-			if data.Len()+want > MaxSSEEventBytes {
-				return cmdutil.NewCodedError(cmdutil.ExitError, fmt.Errorf(
-					"%w: accumulated data exceeds %d bytes", ErrEventTooLarge, MaxSSEEventBytes))
-			}
-			if hasData {
-				data.WriteByte('\n')
-			}
-			data.WriteString(value)
-			hasData = true
-		case "event":
-			eventName = value
-		default:
-			// "id", "retry", and any unknown field are ignored — the CLI
-			// never reconnects, so there is no last-event-id to track, and
-			// forward compatibility requires ignoring what it doesn't know.
+		if err := buf.apply(parseSSEField(line)); err != nil {
+			return err
 		}
 	}
 
+	return scanEndErr(ctx, scanner)
+}
+
+// sseEventBuf accumulates the fields of the event currently being parsed.
+// The zero value is the "between events" state.
+type sseEventBuf struct {
+	eventName string
+	data      strings.Builder
+	hasData   bool
+}
+
+// take reports the event a blank line just terminated, resetting the buffer
+// for the next one. Per the SSE spec an event with no `data:` field at all is
+// not dispatched (ok is false), and the event-type buffer resets either way.
+func (b *sseEventBuf) take() (ev SSEEvent, ok bool) {
+	if !b.hasData {
+		b.eventName = ""
+		return SSEEvent{}, false
+	}
+	ev = SSEEvent{Event: b.eventName, Data: b.data.String()}
+	b.eventName = ""
+	b.data.Reset()
+	b.hasData = false
+	return ev, true
+}
+
+// apply folds one parsed field into the buffer.
+func (b *sseEventBuf) apply(field, value string) error {
+	switch field {
+	case "data":
+		return b.appendData(value)
+	case "event":
+		b.eventName = value
+	default:
+		// "id", "retry", and any unknown field are ignored — the CLI
+		// never reconnects, so there is no last-event-id to track, and
+		// forward compatibility requires ignoring what it doesn't know.
+	}
+	return nil
+}
+
+// appendData accumulates one `data:` field, joining consecutive ones with the
+// single "\n" the spec mandates. The join byte is charged against the cap
+// before the decision is made, so MaxSSEEventBytes bounds what is actually
+// retained rather than trailing it by a byte per line.
+func (b *sseEventBuf) appendData(value string) error {
+	want := len(value)
+	if b.hasData {
+		want++
+	}
+	if b.data.Len()+want > MaxSSEEventBytes {
+		return cmdutil.NewCodedError(cmdutil.ExitError, fmt.Errorf(
+			"%w: accumulated data exceeds %d bytes", ErrEventTooLarge, MaxSSEEventBytes))
+	}
+	if b.hasData {
+		b.data.WriteByte('\n')
+	}
+	b.data.WriteString(value)
+	b.hasData = true
+	return nil
+}
+
+// parseSSEField splits one non-blank, non-comment line into its field name
+// and value.
+func parseSSEField(line string) (field, value string) {
+	name, rest, found := strings.Cut(line, ":")
+	if !found {
+		// A bare field name with no colon: an empty value.
+		return line, ""
+	}
+	// Exactly one leading space is stripped, per the spec.
+	return name, strings.TrimPrefix(rest, " ")
+}
+
+// scanEndErr classifies why the scan loop stopped, keeping the four
+// termination modes StreamSSE documents distinguishable.
+func scanEndErr(ctx context.Context, scanner *bufio.Scanner) error {
 	// Cancellation wins over whatever error the aborted read produced: a
 	// cancelled transport surfaces as "context canceled", "use of closed
 	// network connection", or a bare EOF depending on timing, and the

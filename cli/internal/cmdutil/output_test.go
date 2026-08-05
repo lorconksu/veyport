@@ -115,14 +115,17 @@ func TestPayloadRaw(t *testing.T) {
 	}
 }
 
+// errorJSONShapeCase is a single TestError_JSONMode_ExactShape table entry.
+type errorJSONShapeCase struct {
+	name string
+	err  error
+	code int
+}
+
 // TestError_JSONMode_ExactShape locks the JSON error shape on stderr to
 // exactly {"error": "...", "code": <n>} (contracts/cli-commands.md, R8).
 func TestError_JSONMode_ExactShape(t *testing.T) {
-	cases := []struct {
-		name string
-		err  error
-		code int
-	}{
+	cases := []errorJSONShapeCase{
 		{"generic", errors.New("boom"), ExitError},
 		{"usage", NewUsageError(errors.New("missing argument")), ExitUsage},
 		{"auth", NewAuthError(errors.New("session expired")), ExitAuth},
@@ -134,40 +137,49 @@ func TestError_JSONMode_ExactShape(t *testing.T) {
 
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			var out, errBuf bytes.Buffer
-			p := NewPrinter(&out, &errBuf, true)
-
-			p.Error(c.err)
-
-			if out.Len() != 0 {
-				t.Errorf("stdout not empty on error path: %q", out.String())
-			}
-
-			// Exact-match the field set and values by decoding into a map,
-			// so unexpected extra fields (e.g. leaked stack traces) fail.
-			var raw map[string]any
-			if err := json.Unmarshal(errBuf.Bytes(), &raw); err != nil {
-				t.Fatalf("stderr is not valid JSON: %v (raw: %q)", err, errBuf.String())
-			}
-			if len(raw) != 2 {
-				t.Errorf("json error object has %d fields, want exactly 2 (error, code): %v", len(raw), raw)
-			}
-			gotMsg, ok := raw["error"].(string)
-			if !ok || gotMsg != c.err.Error() {
-				t.Errorf("error field = %v, want %q", raw["error"], c.err.Error())
-			}
-			gotCode, ok := raw["code"].(float64)
-			if !ok || int(gotCode) != c.code {
-				t.Errorf("code field = %v, want %d", raw["code"], c.code)
-			}
-
-			// Exact string shape too (field order is stable from the
-			// struct definition), single line, newline-terminated.
-			want := `{"error":"` + c.err.Error() + `","code":` + strconv.Itoa(c.code) + "}\n"
-			if errBuf.String() != want {
-				t.Errorf("stderr = %q, want %q", errBuf.String(), want)
-			}
+			checkErrorJSONShape(t, c)
 		})
+	}
+}
+
+// checkErrorJSONShape runs a single errorJSONShapeCase through Printer.Error
+// and asserts the resulting stderr JSON shape, split out so its assertions
+// are counted for cognitive complexity independently of the table loop.
+func checkErrorJSONShape(t *testing.T, c errorJSONShapeCase) {
+	t.Helper()
+
+	var out, errBuf bytes.Buffer
+	p := NewPrinter(&out, &errBuf, true)
+
+	p.Error(c.err)
+
+	if out.Len() != 0 {
+		t.Errorf("stdout not empty on error path: %q", out.String())
+	}
+
+	// Exact-match the field set and values by decoding into a map, so
+	// unexpected extra fields (e.g. leaked stack traces) fail.
+	var raw map[string]any
+	if err := json.Unmarshal(errBuf.Bytes(), &raw); err != nil {
+		t.Fatalf("stderr is not valid JSON: %v (raw: %q)", err, errBuf.String())
+	}
+	if len(raw) != 2 {
+		t.Errorf("json error object has %d fields, want exactly 2 (error, code): %v", len(raw), raw)
+	}
+	gotMsg, ok := raw["error"].(string)
+	if !ok || gotMsg != c.err.Error() {
+		t.Errorf("error field = %v, want %q", raw["error"], c.err.Error())
+	}
+	gotCode, ok := raw["code"].(float64)
+	if !ok || int(gotCode) != c.code {
+		t.Errorf("code field = %v, want %d", raw["code"], c.code)
+	}
+
+	// Exact string shape too (field order is stable from the struct
+	// definition), single line, newline-terminated.
+	want := `{"error":"` + c.err.Error() + `","code":` + strconv.Itoa(c.code) + "}\n"
+	if errBuf.String() != want {
+		t.Errorf("stderr = %q, want %q", errBuf.String(), want)
 	}
 }
 

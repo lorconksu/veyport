@@ -99,89 +99,113 @@ func TestCLIInstallRoute_FullStack(t *testing.T) {
 	baseURL := startCLIInstallHarness(t, binDir)
 
 	t.Run("serves the binary", func(t *testing.T) {
-		resp, err := http.Get(baseURL + "/install/cli/linux/amd64")
-		if err != nil {
-			t.Fatalf("GET /install/cli/linux/amd64: %v", err)
-		}
-		defer resp.Body.Close()
-
-		if resp.StatusCode != http.StatusOK {
-			body, _ := io.ReadAll(resp.Body)
-			t.Fatalf("expected 200, got %d: %s", resp.StatusCode, body)
-		}
-		body, err := io.ReadAll(resp.Body)
-		if err != nil {
-			t.Fatalf("read body: %v", err)
-		}
-		if string(body) != content {
-			t.Fatalf("expected body %q, got %q", content, body)
-		}
-		wantDisposition := `attachment; filename="vey-linux-amd64"`
-		if cd := resp.Header.Get("Content-Disposition"); cd != wantDisposition {
-			t.Fatalf("expected Content-Disposition %q, got %q", wantDisposition, cd)
-		}
+		assertCLIBinaryServed(t, baseURL, content)
 	})
 
 	t.Run("serves the checksum", func(t *testing.T) {
-		resp, err := http.Get(baseURL + "/install/cli/linux/amd64/sha256")
-		if err != nil {
-			t.Fatalf("GET /install/cli/linux/amd64/sha256: %v", err)
-		}
-		defer resp.Body.Close()
-
-		if resp.StatusCode != http.StatusOK {
-			body, _ := io.ReadAll(resp.Body)
-			t.Fatalf("expected 200, got %d: %s", resp.StatusCode, body)
-		}
-		body, err := io.ReadAll(resp.Body)
-		if err != nil {
-			t.Fatalf("read body: %v", err)
-		}
-		if string(body) != checksum {
-			t.Fatalf("expected checksum %q, got %q", checksum, body)
-		}
+		assertCLIChecksumServed(t, baseURL, checksum)
 	})
 
 	t.Run("rejects an out-of-allowlist platform", func(t *testing.T) {
-		resp, err := http.Get(baseURL + "/install/cli/windows/amd64")
-		if err != nil {
-			t.Fatalf("GET /install/cli/windows/amd64: %v", err)
-		}
-		defer resp.Body.Close()
-
-		if resp.StatusCode != http.StatusNotFound {
-			t.Fatalf("expected 404 for unsupported platform, got %d", resp.StatusCode)
-		}
+		assertCLIInstallStatus(t, baseURL+"/install/cli/windows/amd64", http.StatusNotFound, "unsupported platform")
 	})
 
 	t.Run("404s for an allowlisted but unbuilt platform", func(t *testing.T) {
 		// darwin/arm64 is allowlisted but no fixture was written for it.
-		resp, err := http.Get(baseURL + "/install/cli/darwin/arm64")
-		if err != nil {
-			t.Fatalf("GET /install/cli/darwin/arm64: %v", err)
-		}
-		defer resp.Body.Close()
-
-		if resp.StatusCode != http.StatusNotFound {
-			t.Fatalf("expected 404 for unbuilt platform, got %d", resp.StatusCode)
-		}
+		assertCLIInstallStatus(t, baseURL+"/install/cli/darwin/arm64", http.StatusNotFound, "unbuilt platform")
 	})
 
 	t.Run("existing agent binary route is unaffected", func(t *testing.T) {
 		// Regression guard at the full-stack level: the agent route must
 		// still work standalone even though it now shares the 4-segment
 		// dispatcher with the CLI checksum route for /sha256 paths.
-		if err := os.WriteFile(filepath.Join(binDir, "veyport-agent-linux-amd64"), []byte("agent-binary"), 0755); err != nil {
-			t.Fatalf("write fake agent binary: %v", err)
-		}
-		resp, err := http.Get(baseURL + "/install/linux/amd64")
-		if err != nil {
-			t.Fatalf("GET /install/linux/amd64: %v", err)
-		}
-		defer resp.Body.Close()
-		if resp.StatusCode != http.StatusOK {
-			body, _ := io.ReadAll(resp.Body)
-			t.Fatalf("expected 200, got %d: %s", resp.StatusCode, body)
-		}
+		assertAgentBinaryRouteUnaffected(t, binDir, baseURL)
 	})
+}
+
+// assertCLIBinaryServed asserts that GET /install/cli/linux/amd64 returns
+// the fixture binary content with a 200 and the expected download headers.
+func assertCLIBinaryServed(t *testing.T, baseURL, wantContent string) {
+	t.Helper()
+
+	resp, err := http.Get(baseURL + "/install/cli/linux/amd64")
+	if err != nil {
+		t.Fatalf("GET /install/cli/linux/amd64: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		t.Fatalf("expected 200, got %d: %s", resp.StatusCode, body)
+	}
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatalf("read body: %v", err)
+	}
+	if string(body) != wantContent {
+		t.Fatalf("expected body %q, got %q", wantContent, body)
+	}
+	wantDisposition := `attachment; filename="vey-linux-amd64"`
+	if cd := resp.Header.Get("Content-Disposition"); cd != wantDisposition {
+		t.Fatalf("expected Content-Disposition %q, got %q", wantDisposition, cd)
+	}
+}
+
+// assertCLIChecksumServed asserts that GET /install/cli/linux/amd64/sha256
+// returns the fixture checksum content with a 200.
+func assertCLIChecksumServed(t *testing.T, baseURL, wantChecksum string) {
+	t.Helper()
+
+	resp, err := http.Get(baseURL + "/install/cli/linux/amd64/sha256")
+	if err != nil {
+		t.Fatalf("GET /install/cli/linux/amd64/sha256: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		t.Fatalf("expected 200, got %d: %s", resp.StatusCode, body)
+	}
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatalf("read body: %v", err)
+	}
+	if string(body) != wantChecksum {
+		t.Fatalf("expected checksum %q, got %q", wantChecksum, body)
+	}
+}
+
+// assertCLIInstallStatus asserts that GET url returns wantStatus, using
+// wantDesc only to make the failure message identify which case failed.
+func assertCLIInstallStatus(t *testing.T, url string, wantStatus int, wantDesc string) {
+	t.Helper()
+
+	resp, err := http.Get(url)
+	if err != nil {
+		t.Fatalf("GET %s: %v", url, err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != wantStatus {
+		t.Fatalf("expected %d for %s, got %d", wantStatus, wantDesc, resp.StatusCode)
+	}
+}
+
+// assertAgentBinaryRouteUnaffected writes a fake agent binary into binDir
+// and asserts that GET /install/linux/amd64 still serves it with a 200.
+func assertAgentBinaryRouteUnaffected(t *testing.T, binDir, baseURL string) {
+	t.Helper()
+
+	if err := os.WriteFile(filepath.Join(binDir, "veyport-agent-linux-amd64"), []byte("agent-binary"), 0755); err != nil {
+		t.Fatalf("write fake agent binary: %v", err)
+	}
+	resp, err := http.Get(baseURL + "/install/linux/amd64")
+	if err != nil {
+		t.Fatalf("GET /install/linux/amd64: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		t.Fatalf("expected 200, got %d: %s", resp.StatusCode, body)
+	}
 }

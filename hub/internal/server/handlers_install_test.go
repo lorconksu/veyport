@@ -1,11 +1,14 @@
 package server
 
 import (
+	"bytes"
 	"fmt"
+	"log"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -279,5 +282,65 @@ func TestExistingAgentBinaryRoutes_StillLinuxOnly(t *testing.T) {
 
 	if rec.Code != http.StatusNotFound {
 		t.Fatalf("expected agent binary route to still reject darwin, got %d: %s", rec.Code, rec.Body.String())
+	}
+}
+
+// TestHandleInstall3rdSegmentDispatch_NeitherRouteMatches covers the final
+// fallthrough in handleInstall3rdSegmentDispatch: a 3-segment "/install/a/b/c"
+// path where c != "sha256" (so it isn't the agent-checksum route) and
+// a != "cli" (so it isn't the CLI-binary route) matches neither
+// interpretation and must 404.
+func TestHandleInstall3rdSegmentDispatch_NeitherRouteMatches(t *testing.T) {
+	s := testServer(t)
+	s.agentBinDir = t.TempDir()
+
+	req := httptest.NewRequest("GET", "/install/foo/bar/baz", nil)
+	rec := httptest.NewRecorder()
+	s.routes().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("expected 404 for unmatched 3-segment install path, got %d: %s", rec.Code, rec.Body.String())
+	}
+}
+
+// failingResponseWriter is an http.ResponseWriter whose Write always fails,
+// used to exercise handleCLIBinaryChecksum's write-error logging path.
+type failingResponseWriter struct {
+	header http.Header
+}
+
+func (w *failingResponseWriter) Header() http.Header { return w.header }
+
+func (w *failingResponseWriter) Write([]byte) (int, error) {
+	return 0, fmt.Errorf("simulated write failure")
+}
+
+func (w *failingResponseWriter) WriteHeader(int) {}
+
+// TestHandleCLIBinaryChecksum_WriteFailureIsLogged covers the error branch
+// in handleCLIBinaryChecksum where writing the checksum response body fails:
+// the handler must log the failure rather than panic or return an error to
+// the caller (the response has already started, so there is nothing else it
+// can do).
+func TestHandleCLIBinaryChecksum_WriteFailureIsLogged(t *testing.T) {
+	s := testServer(t)
+	tmpDir := t.TempDir()
+	s.agentBinDir = tmpDir
+	writeCLIFixture(t, tmpDir, "linux", "amd64")
+
+	var logBuf bytes.Buffer
+	origOutput := log.Writer()
+	log.SetOutput(&logBuf)
+	t.Cleanup(func() { log.SetOutput(origOutput) })
+
+	req := httptest.NewRequest("GET", "/install/cli/linux/amd64/sha256", nil)
+	req.SetPathValue("os", "linux")
+	req.SetPathValue("arch", "amd64")
+
+	w := &failingResponseWriter{header: make(http.Header)}
+	s.handleCLIBinaryChecksum(w, req)
+
+	if !strings.Contains(logBuf.String(), "cli checksum write failed") {
+		t.Fatalf("expected write-failure log message, got %q", logBuf.String())
 	}
 }

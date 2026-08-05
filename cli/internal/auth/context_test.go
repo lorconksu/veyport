@@ -141,39 +141,61 @@ func TestResolveAPITokenPrecedenceMatrix(t *testing.T) {
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			f := newRefreshFixture(t)
-			if tc.seedSession {
-				f.seedSession(t)
-			}
-
-			hubs := map[string]config.HubProfile{}
-			if tc.cfgToken != "" {
-				hubs[f.hub.url()] = config.HubProfile{APIToken: tc.cfgToken}
-			}
-			if tc.otherHubToken != "" {
-				hubs["https://other.example.com"] = config.HubProfile{APIToken: tc.otherHubToken}
-			}
-
-			ac := f.resolve(t, tc.env, config.Config{Hubs: hubs}, nil)
-			if got := ac.Mode(); got != tc.wantMode {
-				t.Fatalf("Mode() = %q, want %q", got, tc.wantMode)
-			}
-
-			if tc.wantMode == ModeAPIToken {
-				if got := bearerOf(t, ac); got != tc.wantBearer {
-					t.Error("client bearer is not the expected API token source")
-				}
-				// An API token carries no locally known identity; the hub is
-				// authoritative (GET /api/auth/me).
-				if ac.Username() != "" || ac.Role() != "" {
-					t.Errorf("api_token mode exposed identity: username %q role %q", ac.Username(), ac.Role())
-				}
-			}
-
-			// Resolution — and client construction in api_token mode — must
-			// never touch the hub.
-			assertCounts(t, f.hub, 0, 0)
+			runAPITokenPrecedenceCase(t, tc.env, tc.cfgToken, tc.otherHubToken, tc.seedSession, tc.wantMode, tc.wantBearer)
 		})
+	}
+}
+
+// runAPITokenPrecedenceCase is TestResolveAPITokenPrecedenceMatrix's per-case
+// body, extracted so its assertions run outside the table loop's subtest
+// closure nesting.
+func runAPITokenPrecedenceCase(t *testing.T, env, cfgToken, otherHubToken string, seedSession bool, wantMode Mode, wantBearer string) {
+	t.Helper()
+	f := newRefreshFixture(t)
+	if seedSession {
+		f.seedSession(t)
+	}
+
+	ac := f.resolve(t, env, config.Config{Hubs: apiTokenPrecedenceHubs(f.hub.url(), cfgToken, otherHubToken)}, nil)
+	if got := ac.Mode(); got != wantMode {
+		t.Fatalf("Mode() = %q, want %q", got, wantMode)
+	}
+
+	if wantMode == ModeAPIToken {
+		assertAPITokenBearerAndIdentity(t, ac, wantBearer)
+	}
+
+	// Resolution — and client construction in api_token mode — must
+	// never touch the hub.
+	assertCounts(t, f.hub, 0, 0)
+}
+
+// apiTokenPrecedenceHubs builds the config.Hubs map for one
+// TestResolveAPITokenPrecedenceMatrix case: the fixture's own hub gets
+// cfgToken (when set) and a second, unrelated hub gets otherHubToken (when
+// set), so the "another hub's token never applies" cases can be expressed.
+func apiTokenPrecedenceHubs(hubURL, cfgToken, otherHubToken string) map[string]config.HubProfile {
+	hubs := map[string]config.HubProfile{}
+	if cfgToken != "" {
+		hubs[hubURL] = config.HubProfile{APIToken: cfgToken}
+	}
+	if otherHubToken != "" {
+		hubs["https://other.example.com"] = config.HubProfile{APIToken: otherHubToken}
+	}
+	return hubs
+}
+
+// assertAPITokenBearerAndIdentity checks the invariants that hold whenever
+// Resolve lands in api_token mode: the client carries the expected bearer,
+// and no locally known identity leaks through (an API token carries none;
+// the hub is authoritative via GET /api/auth/me).
+func assertAPITokenBearerAndIdentity(t *testing.T, ac *AuthContext, wantBearer string) {
+	t.Helper()
+	if bearerOf(t, ac) != wantBearer {
+		t.Error("client bearer is not the expected API token source")
+	}
+	if ac.Username() != "" || ac.Role() != "" {
+		t.Errorf("api_token mode exposed identity: username %q role %q", ac.Username(), ac.Role())
 	}
 }
 
@@ -248,7 +270,7 @@ func TestResolveAcceptsWellFormedAPIToken(t *testing.T) {
 		if got := ac.Mode(); got != ModeAPIToken {
 			t.Errorf("Mode() = %q, want %q", got, ModeAPIToken)
 		}
-		if got := bearerOf(t, ac); got != token {
+		if bearerOf(t, ac) != token {
 			t.Error("client bearer is not the supplied API token")
 		}
 		assertCounts(t, f.hub, 0, 0)
@@ -303,51 +325,10 @@ func TestAPITokenModeRevokedConfigTokenExitsAuthWithoutRefresh(t *testing.T) {
 // either — refreshing a credential the hub already accepted cannot change the
 // answer, and retrying a denial is pure noise.
 func TestAuthFailureAndPermissionDenialMapDistinctly(t *testing.T) {
-	run := func(t *testing.T, mode Mode, status int) (int, error) {
-		t.Helper()
-		f := newRefreshFixture(t)
-		f.seedSession(t)
-		f.hub.protectedPolicy = func(*stubHub, string, int) int { return status }
-
-		env := ""
-		if mode == ModeAPIToken {
-			env = apiToken("live")
-		}
-		ac := f.resolve(t, env, config.Config{}, nil)
-		if got := ac.Mode(); got != mode {
-			t.Fatalf("Mode() = %q, want %q", got, mode)
-		}
-
-		ctx := context.Background()
-		err := ac.Do(ctx, listServers(ctx))
-		if err == nil {
-			t.Fatalf("Do succeeded against a %d route", status)
-		}
-		assertNoAPITokenLeak(t, err)
-		assertNoTokenLeak(t, err)
-
-		refresh, protected := f.hub.counts()
-		switch {
-		case mode == ModeAPIToken:
-			// Nothing is refreshable, so neither status may produce one.
-			assertCounts(t, f.hub, 0, 1)
-		case status == http.StatusForbidden:
-			// One refresh to mint the initial access token (access tokens are
-			// never persisted), then a single protected call: no retry.
-			assertCounts(t, f.hub, 1, 1)
-		default:
-			// 401 in session mode is the one case that earns a retry.
-			if refresh != 2 || protected != 2 {
-				t.Errorf("401 in session mode: refresh=%d protected=%d, want 2 and 2", refresh, protected)
-			}
-		}
-		return cmdutil.Code(err), err
-	}
-
 	var apiAuthCode, apiForbiddenCode int
 
 	t.Run("api token 401 is an authentication failure", func(t *testing.T) {
-		code, _ := run(t, ModeAPIToken, http.StatusUnauthorized)
+		code, _ := authFailurePermissionDenialCase(t, ModeAPIToken, http.StatusUnauthorized)
 		apiAuthCode = code
 		if code != cmdutil.ExitAuth {
 			t.Errorf("exit code = %d, want %d", code, cmdutil.ExitAuth)
@@ -355,7 +336,7 @@ func TestAuthFailureAndPermissionDenialMapDistinctly(t *testing.T) {
 	})
 
 	t.Run("api token 403 is a permission denial", func(t *testing.T) {
-		code, _ := run(t, ModeAPIToken, http.StatusForbidden)
+		code, _ := authFailurePermissionDenialCase(t, ModeAPIToken, http.StatusForbidden)
 		apiForbiddenCode = code
 		if code != cmdutil.ExitForbidden {
 			t.Errorf("exit code = %d, want %d", code, cmdutil.ExitForbidden)
@@ -369,16 +350,64 @@ func TestAuthFailureAndPermissionDenialMapDistinctly(t *testing.T) {
 	})
 
 	t.Run("session 403 is a permission denial with no refresh retry", func(t *testing.T) {
-		code, _ := run(t, ModeSession, http.StatusForbidden)
+		code, _ := authFailurePermissionDenialCase(t, ModeSession, http.StatusForbidden)
 		if code != cmdutil.ExitForbidden {
 			t.Errorf("exit code = %d, want %d", code, cmdutil.ExitForbidden)
 		}
 	})
 
 	t.Run("session 401 remains an authentication failure", func(t *testing.T) {
-		code, _ := run(t, ModeSession, http.StatusUnauthorized)
+		code, _ := authFailurePermissionDenialCase(t, ModeSession, http.StatusUnauthorized)
 		if code != cmdutil.ExitAuth {
 			t.Errorf("exit code = %d, want %d", code, cmdutil.ExitAuth)
 		}
 	})
+}
+
+// authFailurePermissionDenialCase is TestAuthFailureAndPermissionDenialMapDistinctly's
+// per-case body: it drives one protected call under the given credential mode
+// and hub status, asserts the refresh/protected call counts the status
+// implies, and returns the resulting exit code and error for the caller's own
+// assertions. Extracted to a top-level function (rather than a closure) so
+// its branching does not nest inside — and inflate the cognitive complexity
+// of — the enclosing table of t.Run subtests.
+func authFailurePermissionDenialCase(t *testing.T, mode Mode, status int) (int, error) {
+	t.Helper()
+	f := newRefreshFixture(t)
+	f.seedSession(t)
+	f.hub.protectedPolicy = func(*stubHub, string, int) int { return status }
+
+	env := ""
+	if mode == ModeAPIToken {
+		env = apiToken("live")
+	}
+	ac := f.resolve(t, env, config.Config{}, nil)
+	if got := ac.Mode(); got != mode {
+		t.Fatalf("Mode() = %q, want %q", got, mode)
+	}
+
+	ctx := context.Background()
+	err := ac.Do(ctx, listServers(ctx))
+	if err == nil {
+		t.Fatalf("Do succeeded against a %d route", status)
+	}
+	assertNoAPITokenLeak(t, err)
+	assertNoTokenLeak(t, err)
+
+	refresh, protected := f.hub.counts()
+	switch {
+	case mode == ModeAPIToken:
+		// Nothing is refreshable, so neither status may produce one.
+		assertCounts(t, f.hub, 0, 1)
+	case status == http.StatusForbidden:
+		// One refresh to mint the initial access token (access tokens are
+		// never persisted), then a single protected call: no retry.
+		assertCounts(t, f.hub, 1, 1)
+	default:
+		// 401 in session mode is the one case that earns a retry.
+		if refresh != 2 || protected != 2 {
+			t.Errorf("401 in session mode: refresh=%d protected=%d, want 2 and 2", refresh, protected)
+		}
+	}
+	return cmdutil.Code(err), err
 }

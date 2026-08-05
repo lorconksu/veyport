@@ -32,6 +32,8 @@ func TestNormalizeHubURL(t *testing.T) {
 		{name: "no scheme rejected", raw: "hub.example.com", wantErr: true},
 		{name: "unsupported scheme rejected", raw: "ftp://hub.example.com", wantErr: true},
 		{name: "localhost https also ok", raw: "https://localhost:3000", want: "https://localhost:3000"},
+		{name: "unparseable URL rejected", raw: "https://hub.example.com/%zz", wantErr: true},
+		{name: "empty host rejected", raw: "https://:8443", wantErr: true},
 	}
 
 	for _, tt := range tests {
@@ -53,84 +55,104 @@ func TestNormalizeHubURL(t *testing.T) {
 	}
 }
 
+// TestLoad dispatches each scenario to its own named test function rather
+// than an inline closure, so each scenario's assertions are counted for
+// cognitive complexity independently of the others instead of accumulating
+// into one large function body.
 func TestLoad(t *testing.T) {
-	t.Run("missing file returns zero-value config, no error", func(t *testing.T) {
-		dir := t.TempDir()
-		path := filepath.Join(dir, "does-not-exist.json")
+	t.Run("missing file returns zero-value config, no error", testLoadMissingFile)
+	t.Run("malformed file returns error", testLoadMalformedFile)
+	t.Run("unreadable path (a directory) returns non-not-exist read error", testLoadUnreadablePath)
+	t.Run("valid file parses hubs and default_hub", testLoadValidFile)
+	t.Run("unknown fields tolerated", testLoadUnknownFieldsTolerated)
+}
 
-		cfg, err := Load(path)
-		if err != nil {
-			t.Fatalf("Load() unexpected error: %v", err)
-		}
-		if cfg.DefaultHub != "" || cfg.Hubs != nil {
-			t.Fatalf("Load() = %+v, want zero-value Config", cfg)
-		}
-	})
+func testLoadMissingFile(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "does-not-exist.json")
 
-	t.Run("malformed file returns error", func(t *testing.T) {
-		dir := t.TempDir()
-		path := filepath.Join(dir, "config.json")
-		if err := os.WriteFile(path, []byte("{not valid json"), 0o600); err != nil {
-			t.Fatalf("failed to write fixture: %v", err)
-		}
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load() unexpected error: %v", err)
+	}
+	if cfg.DefaultHub != "" || cfg.Hubs != nil {
+		t.Fatalf("Load() = %+v, want zero-value Config", cfg)
+	}
+}
 
-		_, err := Load(path)
-		if err == nil {
-			t.Fatal("Load() = nil error, want error for malformed JSON")
-		}
-	})
+func testLoadMalformedFile(t *testing.T) {
+	path := writeConfigFixture(t, "{not valid json")
 
-	t.Run("valid file parses hubs and default_hub", func(t *testing.T) {
-		dir := t.TempDir()
-		path := filepath.Join(dir, "config.json")
-		content := `{
-			"default_hub": "https://hub.example.com",
-			"hubs": {
-				"https://hub.example.com": {"api_token": "adt_abc123"}
-			}
-		}`
-		if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
-			t.Fatalf("failed to write fixture: %v", err)
-		}
+	_, err := Load(path)
+	if err == nil {
+		t.Fatal("Load() = nil error, want error for malformed JSON")
+	}
+}
 
-		cfg, err := Load(path)
-		if err != nil {
-			t.Fatalf("Load() unexpected error: %v", err)
-		}
-		if cfg.DefaultHub != "https://hub.example.com" {
-			t.Fatalf("DefaultHub = %q, want %q", cfg.DefaultHub, "https://hub.example.com")
-		}
-		profile, ok := cfg.Hubs["https://hub.example.com"]
-		if !ok {
-			t.Fatalf("Hubs missing entry for hub.example.com: %+v", cfg.Hubs)
-		}
-		if profile.APIToken != "adt_abc123" {
-			t.Fatalf("APIToken = %q, want %q", profile.APIToken, "adt_abc123")
-		}
-	})
+func testLoadUnreadablePath(t *testing.T) {
+	dir := t.TempDir()
 
-	t.Run("unknown fields tolerated", func(t *testing.T) {
-		dir := t.TempDir()
-		path := filepath.Join(dir, "config.json")
-		content := `{
-			"default_hub": "https://hub.example.com",
-			"some_future_field": "value",
-			"hubs": {
-				"https://hub.example.com": {"api_token": "adt_abc123", "future_hub_field": 42}
-			}
-		}`
-		if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
-			t.Fatalf("failed to write fixture: %v", err)
-		}
+	_, err := Load(dir)
+	if err == nil {
+		t.Fatal("Load() = nil error, want error reading a directory as a file")
+	}
+	if errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("Load() = %v, want an error other than ErrNotExist", err)
+	}
+}
 
-		cfg, err := Load(path)
-		if err != nil {
-			t.Fatalf("Load() unexpected error with unknown fields: %v", err)
+func testLoadValidFile(t *testing.T) {
+	path := writeConfigFixture(t, `{
+		"default_hub": "https://hub.example.com",
+		"hubs": {
+			"https://hub.example.com": {"api_token": "adt_abc123"}
 		}
-		if cfg.DefaultHub != "https://hub.example.com" {
-			t.Fatalf("DefaultHub = %q, want %q", cfg.DefaultHub, "https://hub.example.com")
+	}`)
+
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load() unexpected error: %v", err)
+	}
+	if cfg.DefaultHub != "https://hub.example.com" {
+		t.Fatalf("DefaultHub = %q, want %q", cfg.DefaultHub, "https://hub.example.com")
+	}
+	profile, ok := cfg.Hubs["https://hub.example.com"]
+	if !ok {
+		t.Fatalf("Hubs missing entry for hub.example.com: %+v", cfg.Hubs)
+	}
+	if profile.APIToken != "adt_abc123" {
+		t.Fatalf("APIToken = %q, want %q", profile.APIToken, "adt_abc123")
+	}
+}
+
+func testLoadUnknownFieldsTolerated(t *testing.T) {
+	path := writeConfigFixture(t, `{
+		"default_hub": "https://hub.example.com",
+		"some_future_field": "value",
+		"hubs": {
+			"https://hub.example.com": {"api_token": "adt_abc123", "future_hub_field": 42}
 		}
-	})
+	}`)
+
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load() unexpected error with unknown fields: %v", err)
+	}
+	if cfg.DefaultHub != "https://hub.example.com" {
+		t.Fatalf("DefaultHub = %q, want %q", cfg.DefaultHub, "https://hub.example.com")
+	}
+}
+
+// writeConfigFixture writes content to a fresh config.json under a new
+// t.TempDir() and returns its path, failing the test on write error.
+func writeConfigFixture(t *testing.T, content string) string {
+	t.Helper()
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.json")
+	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+		t.Fatalf("failed to write fixture: %v", err)
+	}
+	return path
 }
 
 func TestDefaultPath(t *testing.T) {
@@ -161,20 +183,33 @@ func TestDefaultPath(t *testing.T) {
 			t.Fatalf("DefaultPath() = %q, want %q", got, want)
 		}
 	})
+
+	t.Run("returns error when home directory cannot be resolved", func(t *testing.T) {
+		t.Setenv("XDG_CONFIG_HOME", "")
+		t.Setenv("HOME", "")
+
+		_, err := DefaultPath()
+		if err == nil {
+			t.Fatal("DefaultPath() = nil error, want error when $HOME is unset")
+		}
+	})
+}
+
+// effectiveHubCase is a single TestEffectiveHub table entry.
+type effectiveHubCase struct {
+	name       string
+	flagVal    string
+	envVal     string
+	cfg        Config
+	wantURL    string
+	wantSource string
+	wantErr    error
 }
 
 func TestEffectiveHub(t *testing.T) {
 	cfg := Config{DefaultHub: "https://config-hub.example.com"}
 
-	tests := []struct {
-		name       string
-		flagVal    string
-		envVal     string
-		cfg        Config
-		wantURL    string
-		wantSource string
-		wantErr    error
-	}{
+	tests := []effectiveHubCase{
 		{
 			name:       "flag wins over env and config",
 			flagVal:    "https://flag-hub.example.com",
@@ -226,31 +261,47 @@ func TestEffectiveHub(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			gotURL, gotSource, err := EffectiveHub(tt.flagVal, tt.envVal, tt.cfg)
-
-			if tt.wantErr != nil {
-				if tt.wantErr == ErrNoHub {
-					if !errors.Is(err, ErrNoHub) {
-						t.Fatalf("EffectiveHub() err = %v, want ErrNoHub", err)
-					}
-					return
-				}
-				// errSentinelInvalid is a marker meaning "any non-nil error".
-				if err == nil {
-					t.Fatalf("EffectiveHub() = nil error, want error for invalid URL")
-				}
-				return
-			}
-
-			if err != nil {
-				t.Fatalf("EffectiveHub() unexpected error: %v", err)
-			}
-			if gotURL != tt.wantURL {
-				t.Fatalf("EffectiveHub() url = %q, want %q", gotURL, tt.wantURL)
-			}
-			if gotSource != tt.wantSource {
-				t.Fatalf("EffectiveHub() source = %q, want %q", gotSource, tt.wantSource)
-			}
+			checkEffectiveHubResult(t, tt, gotURL, gotSource, err)
 		})
+	}
+}
+
+// checkEffectiveHubResult asserts a single TestEffectiveHub case's outcome,
+// split out so its branching is counted independently of the table loop.
+func checkEffectiveHubResult(t *testing.T, tt effectiveHubCase, gotURL, gotSource string, err error) {
+	t.Helper()
+
+	if tt.wantErr != nil {
+		checkEffectiveHubWantErr(t, tt.wantErr, err)
+		return
+	}
+
+	if err != nil {
+		t.Fatalf("EffectiveHub() unexpected error: %v", err)
+	}
+	if gotURL != tt.wantURL {
+		t.Fatalf("EffectiveHub() url = %q, want %q", gotURL, tt.wantURL)
+	}
+	if gotSource != tt.wantSource {
+		t.Fatalf("EffectiveHub() source = %q, want %q", gotSource, tt.wantSource)
+	}
+}
+
+// checkEffectiveHubWantErr asserts the error-case half of
+// checkEffectiveHubResult: either exactly ErrNoHub, or (via the
+// errSentinelInvalid marker) any non-nil error.
+func checkEffectiveHubWantErr(t *testing.T, wantErr, err error) {
+	t.Helper()
+
+	if wantErr == ErrNoHub {
+		if !errors.Is(err, ErrNoHub) {
+			t.Fatalf("EffectiveHub() err = %v, want ErrNoHub", err)
+		}
+		return
+	}
+	// errSentinelInvalid is a marker meaning "any non-nil error".
+	if err == nil {
+		t.Fatalf("EffectiveHub() = nil error, want error for invalid URL")
 	}
 }
 

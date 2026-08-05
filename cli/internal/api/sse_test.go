@@ -119,6 +119,69 @@ func TestStreamSSE_CRLFAndTrailingPartialEvent(t *testing.T) {
 	}
 }
 
+// TestStreamSSE_FrameWithoutDataIsNotDispatched covers the SSE-spec rule that
+// a blank line terminating a frame carrying no `data:` field at all dispatches
+// nothing — while the event-type buffer still resets, so a named-but-dataless
+// frame cannot bleed its name into the next event.
+func TestStreamSSE_FrameWithoutDataIsNotDispatched(t *testing.T) {
+	srv := httptest.NewServer(sseHandler(func(w http.ResponseWriter, r *http.Request, flush func()) {
+		fmt.Fprint(w, "event: ping\n\n") // named, but no data: not an event
+		fmt.Fprint(w, "\n")              // a wholly empty frame: also nothing
+		fmt.Fprint(w, ": comment\n\n")   // a comment-only frame: also nothing
+		fmt.Fprint(w, "data: after\n\n") // must arrive unnamed
+		flush()
+	}))
+	defer srv.Close()
+
+	got, err := collectSSE(t, srv, nil)
+	if !errors.Is(err, ErrStreamEnded) {
+		t.Fatalf("terminal error = %v, want ErrStreamEnded", err)
+	}
+	if len(got) != 1 {
+		t.Fatalf("got %d events, want 1 (only the data-bearing frame dispatches): %#v", len(got), got)
+	}
+	if got[0] != (SSEEvent{Data: "after"}) {
+		t.Errorf("event = %#v, want %#v (the earlier `event: ping` must not carry over)",
+			got[0], SSEEvent{Data: "after"})
+	}
+}
+
+// TestStreamSSE_BareFieldNameWithoutColon covers the spec rule that a line
+// with no colon at all is a field name whose value is empty: a bare `data`
+// line contributes an empty line to the payload, and a bare unknown field is
+// ignored exactly like its `name: value` form.
+func TestStreamSSE_BareFieldNameWithoutColon(t *testing.T) {
+	srv := httptest.NewServer(sseHandler(func(w http.ResponseWriter, r *http.Request, flush func()) {
+		// A bare `data` between two populated ones: an empty joined line.
+		fmt.Fprint(w, "data: first\ndata\ndata: third\n\n")
+		// A bare unknown field name must be ignored, not treated as data.
+		fmt.Fprint(w, "bogus\ndata: only\n\n")
+		// A lone bare `data`: an empty payload, but still a dispatched event.
+		fmt.Fprint(w, "data\n\n")
+		flush()
+	}))
+	defer srv.Close()
+
+	got, err := collectSSE(t, srv, nil)
+	if !errors.Is(err, ErrStreamEnded) {
+		t.Fatalf("terminal error = %v, want ErrStreamEnded", err)
+	}
+
+	want := []SSEEvent{
+		{Data: "first\n\nthird"},
+		{Data: "only"},
+		{Data: ""},
+	}
+	if len(got) != len(want) {
+		t.Fatalf("got %d events, want %d: %#v", len(got), len(want), got)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Errorf("event[%d] = %#v, want %#v", i, got[i], want[i])
+		}
+	}
+}
+
 // --- request shape (R4) -------------------------------------------------
 
 // TestStreamSSE_RequestHeadersAndQuery pins R4's wire contract: the stream
@@ -473,6 +536,65 @@ func TestStreamSSE_UnreachableHubIsConnectivityError(t *testing.T) {
 	err := c.StreamSSE(context.Background(), "/api/stream", nil, func(SSEEvent) error { return nil })
 	if got := cmdutil.Code(err); got != cmdutil.ExitConn {
 		t.Errorf("Code(err) = %d, want %d (ExitConn); err = %v", got, cmdutil.ExitConn, err)
+	}
+}
+
+// TestStreamSSE_AlreadyCancelledContextIsContextError covers a Ctrl-C that
+// lands before the request goes out: the transport failure that produces must
+// be reported as cancellation, not as a connectivity error, so the clean-stop
+// path is identical whenever the cancel arrives.
+func TestStreamSSE_AlreadyCancelledContextIsContextError(t *testing.T) {
+	srv := httptest.NewServer(sseHandler(func(w http.ResponseWriter, r *http.Request, flush func()) {
+		fmt.Fprint(w, "data: never-read\n\n")
+		flush()
+	}))
+	defer srv.Close()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	called := false
+	c := newTestClient(srv, "tok")
+	err := c.StreamSSE(ctx, "/api/stream", nil, func(SSEEvent) error {
+		called = true
+		return nil
+	})
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("error = %v, want one wrapping context.Canceled", err)
+	}
+	if errors.Is(err, ErrStreamEnded) {
+		t.Error("cancellation must not be reported as a clean server-side end")
+	}
+	if code := cmdutil.Code(err); code == cmdutil.ExitConn {
+		t.Error("cancellation must not be pre-classified as a connectivity failure")
+	}
+	if called {
+		t.Error("callback must never fire when the context is already cancelled")
+	}
+}
+
+// TestStreamSSE_UnbuildableRequestIsArgumentError covers the pre-flight
+// failure: a path the URL parser rejects must come back as a local argument
+// error (exit 1) before any connection is attempted, not as a clean end.
+func TestStreamSSE_UnbuildableRequestIsArgumentError(t *testing.T) {
+	called := false
+	c := NewClient("http://127.0.0.1:1", "tok")
+	// 0x7f is a control byte; net/url refuses to parse a URL containing one.
+	err := c.StreamSSE(context.Background(), "/api/stream\x7f", nil, func(SSEEvent) error {
+		called = true
+		return nil
+	})
+	if err == nil {
+		t.Fatal("expected an error for an unbuildable request, got nil")
+	}
+	if errors.Is(err, ErrStreamEnded) {
+		t.Errorf("a malformed request must not be a clean end; got %v", err)
+	}
+	if code := cmdutil.Code(err); code != cmdutil.ExitError {
+		t.Errorf("Code(err) = %d, want %d (ExitError); err = %v", code, cmdutil.ExitError, err)
+	}
+	if called {
+		t.Error("callback must never fire when the request could not be built")
 	}
 }
 

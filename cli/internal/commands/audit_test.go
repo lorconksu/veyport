@@ -277,3 +277,28 @@ func TestAuditExport_ExtraArgs_ExitUsage(t *testing.T) {
 		t.Errorf("stdout not empty on usage error: %q", stdout.String())
 	}
 }
+
+// TestAuditExport_NoHubExitUsage covers RunAudit's RequireHub failure
+// branch.
+func TestAuditExport_NoHubExitUsage(t *testing.T) {
+	t.Setenv("VEYPORT_TOKEN", "")
+	ctx, stdout, stderr := newCmdContext("", t.TempDir(), false, []string{"export"})
+	code := RunAudit(ctx)
+	if code != cmdutil.ExitUsage {
+		t.Fatalf("exit code = %d, want %d (ExitUsage); stdout=%q stderr=%q", code, cmdutil.ExitUsage, stdout.String(), stderr.String())
+	}
+}
+
+// TestAuditExport_AuthContextFailure covers RunAudit's newAuthContext error
+// branch via a malformed VEYPORT_TOKEN.
+func TestAuditExport_AuthContextFailure(t *testing.T) {
+	t.Setenv("VEYPORT_TOKEN", "malformed-token")
+	srv := httptest.NewServer(http.NewServeMux())
+	defer srv.Close()
+
+	ctx, stdout, stderr := newCmdContext(srv.URL, t.TempDir(), false, []string{"export"})
+	code := RunAudit(ctx)
+	if code != cmdutil.ExitUsage {
+		t.Fatalf("exit code = %d, want %d (ExitUsage); stdout=%q stderr=%q", code, cmdutil.ExitUsage, stdout.String(), stderr.String())
+	}
+}

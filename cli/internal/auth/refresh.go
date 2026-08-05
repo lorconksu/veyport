@@ -243,40 +243,85 @@ func (a *AuthContext) refresh(ctx context.Context) error {
 	}
 	defer unlock()
 
+	// Re-read inside the lock, so a racer's write is seen.
+	sess, err := a.loadSession()
+	if err != nil {
+		return err
+	}
+
+	// The entry that comes back is the one whose token was actually spent,
+	// which may be a newer one picked up by the race retry.
+	spent, pair, err := a.rotate(ctx, sess)
+	if err != nil {
+		return err
+	}
+
+	return a.persistAndAdopt(spent, pair)
+}
+
+// loadSession reads the stored session for this hub. Callers hold the refresh
+// lock, so what it returns is the freshest entry on disk. An absent or blank
+// refresh token is "never logged in here", not "expired".
+func (a *AuthContext) loadSession() (StoredSession, error) {
 	sess, ok, err := a.store.Load(a.hubURL)
 	if err != nil {
-		return cmdutil.NewCodedError(cmdutil.ExitError, err)
+		return StoredSession{}, cmdutil.NewCodedError(cmdutil.ExitError, err)
 	}
 	if !ok || strings.TrimSpace(sess.RefreshToken) == "" {
-		return a.errNotAuthenticated()
+		return StoredSession{}, a.errNotAuthenticated()
 	}
+	return sess, nil
+}
 
+// rotate spends sess's refresh token, retrying exactly once against a newer
+// stored token if the hub rejects it because another process won the race.
+//
+// It returns the session entry whose token produced pair, so the caller
+// carries identity over from the entry that was actually spent.
+func (a *AuthContext) rotate(ctx context.Context, sess StoredSession) (StoredSession, api.TokenPair, error) {
 	pair, err := a.postRefresh(ctx, sess.RefreshToken)
-	if err != nil {
-		if cmdutil.Code(err) != cmdutil.ExitAuth {
-			// Connectivity, rate limiting, hub error: not a race, and not
-			// something re-login would fix.
-			return err
-		}
-
-		newer, ok, loadErr := a.store.Load(a.hubURL)
-		if loadErr != nil {
-			return cmdutil.NewCodedError(cmdutil.ExitError, loadErr)
-		}
-		if !ok || strings.TrimSpace(newer.RefreshToken) == "" || newer.RefreshToken == sess.RefreshToken {
-			return a.errSessionExpired()
-		}
-
-		sess = newer
-		pair, err = a.postRefresh(ctx, sess.RefreshToken)
-		if err != nil {
-			if cmdutil.Code(err) == cmdutil.ExitAuth {
-				return a.errSessionExpired()
-			}
-			return err
-		}
+	if err == nil {
+		return sess, pair, nil
+	}
+	if cmdutil.Code(err) != cmdutil.ExitAuth {
+		// Connectivity, rate limiting, hub error: not a race, and not
+		// something re-login would fix.
+		return StoredSession{}, api.TokenPair{}, err
 	}
 
+	newer, err := a.newerSession(sess.RefreshToken)
+	if err != nil {
+		return StoredSession{}, api.TokenPair{}, err
+	}
+
+	pair, err = a.postRefresh(ctx, newer.RefreshToken)
+	if err != nil {
+		if cmdutil.Code(err) == cmdutil.ExitAuth {
+			return StoredSession{}, api.TokenPair{}, a.errSessionExpired()
+		}
+		return StoredSession{}, api.TokenPair{}, err
+	}
+	return newer, pair, nil
+}
+
+// newerSession re-reads the store after a 401 and reports the token another
+// process rotated in while this one was blocked on the lock (RaceLost →
+// Active). A token identical to the one just rejected — or none at all —
+// means the session is genuinely dead (RaceLost → NoSession, exit 3).
+func (a *AuthContext) newerSession(spentToken string) (StoredSession, error) {
+	newer, ok, err := a.store.Load(a.hubURL)
+	if err != nil {
+		return StoredSession{}, cmdutil.NewCodedError(cmdutil.ExitError, err)
+	}
+	if !ok || strings.TrimSpace(newer.RefreshToken) == "" || newer.RefreshToken == spentToken {
+		return StoredSession{}, a.errSessionExpired()
+	}
+	return newer, nil
+}
+
+// persistAndAdopt writes the rotated pair to the store and only then adopts
+// the access token in memory. Still inside the refresh lock.
+func (a *AuthContext) persistAndAdopt(spent StoredSession, pair api.TokenPair) error {
 	if strings.TrimSpace(pair.AccessToken) == "" || strings.TrimSpace(pair.RefreshToken) == "" {
 		// Never adopt a half-populated pair: persisting an empty refresh
 		// token would silently destroy the session.
@@ -288,8 +333,8 @@ func (a *AuthContext) refresh(ctx context.Context) error {
 		RefreshToken: pair.RefreshToken,
 		// The refresh endpoint returns no user object, so identity carries
 		// over from the entry that was just spent.
-		Username:   sess.Username,
-		Role:       sess.Role,
+		Username:   spent.Username,
+		Role:       spent.Role,
 		ObtainedAt: time.Now().UTC(),
 	}
 	if pair.User.Username != "" {

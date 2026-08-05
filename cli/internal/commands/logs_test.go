@@ -14,6 +14,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/wyiu/veyport/cli/internal/api"
 	"github.com/wyiu/veyport/cli/internal/auth"
 	"github.com/wyiu/veyport/cli/internal/cmdutil"
 	"github.com/wyiu/veyport/cli/internal/config"
@@ -661,5 +662,262 @@ func TestLogsTail_NoHubExit2(t *testing.T) {
 	ctx, _, stderr := newCmdContext("", t.TempDir(), false, []string{"tail", "srv-1", "/var/log/syslog"})
 	if code := RunLogs(ctx); code != cmdutil.ExitUsage {
 		t.Fatalf("exit code = %d, want %d (ExitUsage); stderr=%q", code, cmdutil.ExitUsage, stderr.String())
+	}
+}
+
+// TestLogsTail_BlankPositionalExitUsage covers the whitespace-only
+// server-ref/path check: exactly two positionals are present, but one is
+// blank.
+func TestLogsTail_BlankPositionalExitUsage(t *testing.T) {
+	cases := []struct {
+		name string
+		args []string
+	}{
+		{"blank server", []string{"tail", "   ", "/var/log/syslog"}},
+		{"blank path", []string{"tail", "srv-1", "   "}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Setenv("VEYPORT_TOKEN", "")
+			ctx, stdout, stderr := newCmdContext("https://hub.example.com", t.TempDir(), false, tc.args)
+			if code := RunLogs(ctx); code != cmdutil.ExitUsage {
+				t.Fatalf("exit code = %d, want %d (ExitUsage); stderr=%q", code, cmdutil.ExitUsage, stderr.String())
+			}
+			if stdout.Len() != 0 {
+				t.Errorf("stdout = %q, want empty", stdout.String())
+			}
+		})
+	}
+}
+
+// TestLogsTail_AuthContextFailure covers runLogsTail's newAuthContext error
+// branch via a malformed VEYPORT_TOKEN, which fails local validation before
+// any hub round trip.
+func TestLogsTail_AuthContextFailure(t *testing.T) {
+	t.Setenv("VEYPORT_TOKEN", "malformed-token")
+	srv := httptest.NewServer(http.NewServeMux())
+	defer srv.Close()
+
+	ctx, stdout, stderr := newCmdContext(srv.URL, t.TempDir(), false, []string{"tail", "srv-1", "/var/log/syslog"})
+	if code := RunLogs(ctx); code != cmdutil.ExitUsage {
+		t.Fatalf("exit code = %d, want %d (ExitUsage); stdout=%q stderr=%q", code, cmdutil.ExitUsage, stdout.String(), stderr.String())
+	}
+}
+
+// TestLogsTail_ServerNameAmbiguous covers resolveLogServerID's
+// ambiguous-match branch: the fallback search returns more than one server
+// with the requested name.
+func TestLogsTail_ServerNameAmbiguous(t *testing.T) {
+	mux := http.NewServeMux()
+	mountRefresh(mux, "access-1", "refresh-2")
+	mux.HandleFunc("GET /api/servers/{id}", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNotFound)
+	})
+	mux.HandleFunc("GET /api/servers", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(api.ServersPage{
+			Servers: []api.Server{{ID: "s1", Name: "web"}, {ID: "s2", Name: "web"}},
+			Total:   2,
+		})
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	ctx, stdout, stderr := newLogsContext(t, srv, false, []string{"tail", "web", "/var/log/syslog"})
+	if code := RunLogs(ctx); code != cmdutil.ExitUsage {
+		t.Fatalf("exit code = %d, want %d (ExitUsage); stdout=%q stderr=%q", code, cmdutil.ExitUsage, stdout.String(), stderr.String())
+	}
+	for _, want := range []string{"s1", "s2"} {
+		if !strings.Contains(stderr.String(), want) {
+			t.Errorf("stderr = %q, want it to list candidate %q", stderr.String(), want)
+		}
+	}
+}
+
+// TestLogsTail_ServerLookupOtherError covers resolveLogServerID's direct
+// lookup failing with something other than 404: no fallback search is
+// attempted.
+func TestLogsTail_ServerLookupOtherError(t *testing.T) {
+	mux := http.NewServeMux()
+	mountRefresh(mux, "access-1", "refresh-2")
+	var searchCalls int
+	mux.HandleFunc("GET /api/servers/{id}", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+	})
+	mux.HandleFunc("GET /api/servers", func(w http.ResponseWriter, r *http.Request) {
+		searchCalls++
+		w.WriteHeader(http.StatusOK)
+		_ = json.NewEncoder(w).Encode(api.ServersPage{})
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	ctx, stdout, stderr := newLogsContext(t, srv, false, []string{"tail", "srv-1", "/var/log/syslog"})
+	if code := RunLogs(ctx); code != cmdutil.ExitError {
+		t.Fatalf("exit code = %d, want %d (ExitError); stdout=%q stderr=%q", code, cmdutil.ExitError, stdout.String(), stderr.String())
+	}
+	if searchCalls != 0 {
+		t.Errorf("search calls = %d, want 0 (no fallback on a non-404 error)", searchCalls)
+	}
+}
+
+// TestLogsTail_ServerSearchCallError covers resolveLogServerID's fallback
+// search actx.Do error branch.
+func TestLogsTail_ServerSearchCallError(t *testing.T) {
+	mux := http.NewServeMux()
+	mountRefresh(mux, "access-1", "refresh-2")
+	mux.HandleFunc("GET /api/servers/{id}", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNotFound)
+	})
+	mux.HandleFunc("GET /api/servers", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	ctx, stdout, stderr := newLogsContext(t, srv, false, []string{"tail", "web-1", "/var/log/syslog"})
+	if code := RunLogs(ctx); code != cmdutil.ExitError {
+		t.Fatalf("exit code = %d, want %d (ExitError); stdout=%q stderr=%q", code, cmdutil.ExitError, stdout.String(), stderr.String())
+	}
+}
+
+// TestLogsTail_ServerLookupEmptyIDFallsBackToRef covers resolveLogServerID's
+// "direct lookup succeeded but the response carried no id" branch: the ref
+// itself is used as the server id.
+func TestLogsTail_ServerLookupEmptyIDFallsBackToRef(t *testing.T) {
+	var tailedID string
+	mux := http.NewServeMux()
+	mountRefresh(mux, "access-1", "refresh-2")
+	mux.HandleFunc("GET /api/servers/{id}", func(w http.ResponseWriter, r *http.Request) {
+		// 200, but the body carries no "id" field.
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]string{"name": "web-01", "status": "online"})
+	})
+	mux.HandleFunc("GET /api/servers/{id}/logs/tail", tailHandler(func(w http.ResponseWriter, r *http.Request, flush func()) {
+		tailedID = r.PathValue("id")
+		fmt.Fprint(w, logFrame("resolved\n"))
+		flush()
+	}))
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	ctx, stdout, _ := newLogsContext(t, srv, false, []string{"tail", "srv-ref", "/var/log/syslog"})
+	RunLogs(ctx)
+
+	if tailedID != "srv-ref" {
+		t.Errorf("tail was issued against %q, want the ref used as-is %q", tailedID, "srv-ref")
+	}
+	if stdout.String() != "resolved\n" {
+		t.Errorf("stdout = %q, want %q", stdout.String(), "resolved\n")
+	}
+}
+
+// --- classifyLogsExit unit coverage --------------------------------------
+
+// TestClassifyLogsExit_NilError covers the err == nil branch directly: a
+// clean stream end (no error at all) maps to ExitOK. In practice the hub's
+// tail never ends without an error reaching runLogsTail, so this branch is
+// exercised at the unit level rather than through a full stream.
+func TestClassifyLogsExit_NilError(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	printer := cmdutil.NewPrinter(&stdout, &stderr, false)
+	cmd := &Context{Printer: printer}
+	if code := classifyLogsExit(cmd, nil); code != cmdutil.ExitOK {
+		t.Errorf("classifyLogsExit(nil) = %d, want %d (ExitOK)", code, cmdutil.ExitOK)
+	}
+	if stdout.Len() != 0 || stderr.Len() != 0 {
+		t.Errorf("classifyLogsExit(nil) wrote output: stdout=%q stderr=%q", stdout.String(), stderr.String())
+	}
+}
+
+// --- logLineWriter unit coverage ------------------------------------------
+//
+// These exercise logLineWriter directly rather than through a full SSE
+// round trip, for the framing edge cases that are impractical to provoke
+// reliably over a real HTTP stream (an empty data frame, malformed base64,
+// an unrecognized SSE event type, a malformed overflow payload, and an
+// unbroken partial line past the byte cap).
+
+// TestLogLineWriter_EmptyDataFrame covers data()'s "encoded == \"\"" early
+// return.
+func TestLogLineWriter_EmptyDataFrame(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	w := &logLineWriter{printer: cmdutil.NewPrinter(&stdout, &stderr, false)}
+	w.data("")
+	if stdout.Len() != 0 || stderr.Len() != 0 {
+		t.Errorf("data(\"\") wrote output: stdout=%q stderr=%q", stdout.String(), stderr.String())
+	}
+}
+
+// TestLogLineWriter_MalformedBase64 covers data()'s decode-error branch: a
+// non-base64 frame is skipped with a one-time stderr notice, not fatal.
+func TestLogLineWriter_MalformedBase64(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	w := &logLineWriter{printer: cmdutil.NewPrinter(&stdout, &stderr, false)}
+	w.data("!!!not-base64!!!")
+	w.data("!!!still-not-base64!!!")
+	if stdout.Len() != 0 {
+		t.Errorf("stdout = %q, want empty (malformed frames produce no log lines)", stdout.String())
+	}
+	if got := strings.Count(stderr.String(), "malformed"); got != 1 {
+		t.Errorf("stderr contained %d malformed-frame warnings, want exactly 1 (warned-once)", got)
+	}
+}
+
+// TestLogLineWriter_UnknownSSEEvent covers handle()'s default case: an
+// event type neither "", "message", nor "overflow" is ignored per the
+// forward-compatibility rule, producing no output.
+func TestLogLineWriter_UnknownSSEEvent(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	w := &logLineWriter{printer: cmdutil.NewPrinter(&stdout, &stderr, false)}
+	if err := w.handle(api.SSEEvent{Event: "ping", Data: "whatever"}); err != nil {
+		t.Fatalf("handle: %v", err)
+	}
+	if stdout.Len() != 0 || stderr.Len() != 0 {
+		t.Errorf("unknown event produced output: stdout=%q stderr=%q", stdout.String(), stderr.String())
+	}
+}
+
+// TestLogLineWriter_OverflowFallbackMessage covers overflow()'s fallback
+// branch: a payload that doesn't decode as {"dropped": n>0} still reports a
+// generic notice rather than staying silent.
+func TestLogLineWriter_OverflowFallbackMessage(t *testing.T) {
+	cases := []struct {
+		name string
+		data string
+	}{
+		{"not json", "not-json-at-all"},
+		{"zero dropped", `{"dropped":0}`},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			var stdout, stderr bytes.Buffer
+			w := &logLineWriter{printer: cmdutil.NewPrinter(&stdout, &stderr, false)}
+			w.overflow(tc.data)
+			if !strings.Contains(stderr.String(), "hub dropped log output") {
+				t.Errorf("stderr = %q, want the generic fallback notice", stderr.String())
+			}
+		})
+	}
+}
+
+// TestLogLineWriter_PartialLineExceedsCap covers data()'s
+// maxPartialLineBytes overflow branch: a line with no newline in sight is
+// emitted in fragments rather than growing the buffer without bound.
+func TestLogLineWriter_PartialLineExceedsCap(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	w := &logLineWriter{printer: cmdutil.NewPrinter(&stdout, &stderr, false)}
+
+	oversized := bytes.Repeat([]byte("x"), maxPartialLineBytes+1)
+	w.data(base64.StdEncoding.EncodeToString(oversized))
+
+	if !strings.Contains(stderr.String(), "exceeded") {
+		t.Errorf("stderr = %q, want a notice that the line exceeded the cap", stderr.String())
+	}
+	if !bytes.Equal(stdout.Bytes(), append(oversized, '\n')) {
+		t.Errorf("stdout length = %d, want the oversized fragment (len %d) flushed immediately", stdout.Len(), len(oversized)+1)
+	}
+	if w.buf.Len() != 0 {
+		t.Errorf("internal buffer len = %d, want 0 after the forced flush", w.buf.Len())
 	}
 }

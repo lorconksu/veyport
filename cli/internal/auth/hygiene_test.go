@@ -603,427 +603,406 @@ func mountServer(e *env, id, name string) {
 	})
 }
 
+// hygieneScenarios lists every command path the sweep exercises. Each run
+// func is a top-level function (scenarioXxx below), not an inline closure:
+// with ~30 scenarios in one literal, inline closures pushed this function's
+// cognitive complexity far past the threshold, since every branch inside a
+// nested closure counts against the enclosing function. Naming them keeps
+// each scenario's own branching scoped to its own (small) function and
+// leaves this one a flat table.
 func hygieneScenarios() []scenario {
 	return []scenario{
 		// --- vey login -------------------------------------------------
-		{
-			name: "login/happy-path",
-			run: func(t *testing.T, e *env) {
-				pair, err := e.login(t)
-				if err != nil {
-					t.Fatalf("auth.Login: %v", err)
-				}
-				// RunLogin renders exactly {hub, username, role} on success
-				// (commands/login.go loginPayload); assert those three values
-				// carry no credential material of their own.
-				rendered := fmt.Sprintf("hub=%s username=%s role=%s",
-					e.hub.URL(), pair.User.Username, pair.User.Role)
-				scan(t, "login/happy-path", "the values vey login prints on success",
-					rendered, e.vault.snapshot(), false)
-			},
-		},
-		{
-			name: "login/bad-totp-code",
-			run: func(t *testing.T, e *env) {
-				e.hub.mu.Lock()
-				e.hub.wantCode = "000000" // anything but the code the user types
-				e.hub.mu.Unlock()
-
-				_, err := e.login(t)
-				if err == nil {
-					t.Fatal("auth.Login succeeded with a rejected one-time code, want an error")
-				}
-				if cmdutil.Code(err) != cmdutil.ExitAuth {
-					t.Errorf("exit code = %d, want %d (ExitAuth)", cmdutil.Code(err), cmdutil.ExitAuth)
-				}
-				scan(t, "login/bad-totp-code", "the error returned up the stack",
-					err.Error(), e.vault.snapshot(), false)
-			},
-		},
-		{
-			name: "login/bad-password",
-			run: func(t *testing.T, e *env) {
-				e.hub.mu.Lock()
-				e.hub.wantPassword = "a-different-password"
-				e.hub.mu.Unlock()
-
-				_, err := e.login(t)
-				if err == nil {
-					t.Fatal("auth.Login succeeded with a rejected password, want an error")
-				}
-				if cmdutil.Code(err) != cmdutil.ExitAuth {
-					t.Errorf("exit code = %d, want %d (ExitAuth)", cmdutil.Code(err), cmdutil.ExitAuth)
-				}
-				scan(t, "login/bad-password", "the error returned up the stack",
-					err.Error(), e.vault.snapshot(), false)
-			},
-		},
-		{
-			name: "login/totp-setup-redirect",
-			run: func(t *testing.T, e *env) {
-				e.hub.mu.Lock()
-				e.hub.setupRedirect = true
-				e.hub.mu.Unlock()
-
-				_, err := e.login(t)
-				if err == nil {
-					t.Fatal("auth.Login succeeded against an enrollment redirect, want an error")
-				}
-				if !strings.Contains(err.Error(), "web interface") {
-					t.Errorf("error = %q, want the web-UI enrollment guidance", err.Error())
-				}
-				scan(t, "login/totp-setup-redirect", "the error returned up the stack",
-					err.Error(), e.vault.snapshot(), false)
-			},
-		},
-		{
-			name: "login/non-tty-fast-fail",
-			run: func(t *testing.T, e *env) {
-				f := withNonTTYStdin(t)
-				// Whatever a script might pipe in must not reappear anywhere.
-				if _, err := f.WriteString(sentinelPassword + "\n" + sentinelTOTPCode + "\n"); err != nil {
-					t.Fatalf("seeding piped stdin: %v", err)
-				}
-				if _, err := f.Seek(0, io.SeekStart); err != nil {
-					t.Fatalf("rewinding piped stdin: %v", err)
-				}
-				e.run(t, "login non-tty", commands.RunLogin, cmdutil.ExitAuth)
-			},
-		},
-		{
-			name: "login/terminal-prompter-no-echo-failure",
-			run: func(t *testing.T, e *env) {
-				// The production prompter over a non-terminal file: the
-				// username/code prompts still write their text, and the
-				// no-echo password read fails. Neither the prompt text nor
-				// the failure may carry the bytes that were read.
-				f := withNonTTYStdin(t)
-				if _, err := f.WriteString(sentinelPassword + "\n" + sentinelTOTPCode + "\n"); err != nil {
-					t.Fatalf("seeding prompter input: %v", err)
-				}
-				if _, err := f.Seek(0, io.SeekStart); err != nil {
-					t.Fatalf("rewinding prompter input: %v", err)
-				}
-
-				p := auth.NewTerminalPrompter(f, e.stderr)
-				if _, err := p.Username(""); err != nil {
-					t.Fatalf("Username: %v", err)
-				}
-				if _, err := p.Password(); err == nil {
-					t.Fatal("no-echo password read succeeded on a non-terminal, want an error")
-				} else {
-					scan(t, "login/terminal-prompter-no-echo-failure", "the password-read error",
-						err.Error(), e.vault.snapshot(), false)
-				}
-				if _, err := p.TOTPCode(); err != nil {
-					t.Fatalf("TOTPCode: %v", err)
-				}
-			},
-		},
+		{name: "login/happy-path", run: scenarioLoginHappyPath},
+		{name: "login/bad-totp-code", run: scenarioLoginBadTOTPCode},
+		{name: "login/bad-password", run: scenarioLoginBadPassword},
+		{name: "login/totp-setup-redirect", run: scenarioLoginTOTPSetupRedirect},
+		{name: "login/non-tty-fast-fail", run: scenarioLoginNonTTYFastFail},
+		{name: "login/terminal-prompter-no-echo-failure", run: scenarioLoginTerminalPrompterNoEchoFailure},
 
 		// --- vey status ------------------------------------------------
-		{
-			name: "status/session-mode",
-			run: func(t *testing.T, e *env) {
-				e.seedSession(t)
-				e.run(t, "status session", commands.RunStatus, cmdutil.ExitOK)
-			},
-		},
-		{
-			name: "status/api-token-mode-env",
-			run: func(t *testing.T, e *env) {
-				e.useEnvAPIToken(t)
-				e.run(t, "status api-token env", commands.RunStatus, cmdutil.ExitOK)
-				assertTokenPrefixOnly(t, e, sentinelEnvAPIToken)
-			},
-		},
-		{
-			name: "status/api-token-mode-config",
-			run: func(t *testing.T, e *env) {
-				e.useConfigAPIToken()
-				e.run(t, "status api-token config", commands.RunStatus, cmdutil.ExitOK)
-				assertTokenPrefixOnly(t, e, sentinelConfigAPIToken)
-			},
-		},
-		{
-			name: "status/not-signed-in",
-			run: func(t *testing.T, e *env) {
-				e.run(t, "status none", commands.RunStatus, cmdutil.ExitAuth)
-			},
-		},
+		{name: "status/session-mode", run: scenarioStatusSessionMode},
+		{name: "status/api-token-mode-env", run: scenarioStatusAPITokenModeEnv},
+		{name: "status/api-token-mode-config", run: scenarioStatusAPITokenModeConfig},
+		{name: "status/not-signed-in", run: scenarioStatusNotSignedIn},
 
 		// --- vey servers -----------------------------------------------
-		{
-			name: "servers/list-ok",
-			run: func(t *testing.T, e *env) {
-				e.seedSession(t)
-				e.hub.handle("GET /api/servers", func(w http.ResponseWriter, r *http.Request) {
-					if !e.hub.authorized(r) {
-						writeHubError(w, http.StatusUnauthorized, "access token is expired")
-						return
-					}
-					writeJSON(w, http.StatusOK, api.ServersPage{
-						Servers: []api.Server{{ID: "srv-1", Name: "web-01", Status: "online"}},
-						Total:   1, Limit: 20,
-					})
-				})
-				e.run(t, "servers list", commands.RunServers, cmdutil.ExitOK, "list")
-			},
-		},
-		{
-			name: "servers/list-forbidden",
-			run: func(t *testing.T, e *env) {
-				e.seedSession(t)
-				e.hub.handle("GET /api/servers", func(w http.ResponseWriter, r *http.Request) {
-					writeHubError(w, http.StatusForbidden, "your role may not list servers")
-				})
-				e.run(t, "servers list 403", commands.RunServers, cmdutil.ExitForbidden, "list")
-			},
-		},
-		{
-			name: "servers/get-ok",
-			run: func(t *testing.T, e *env) {
-				e.seedSession(t)
-				mountServer(e, "srv-1", "web-01")
-				e.run(t, "servers get", commands.RunServers, cmdutil.ExitOK, "get", "srv-1")
-			},
-		},
-		{
-			name: "servers/get-not-found",
-			run: func(t *testing.T, e *env) {
-				e.seedSession(t)
-				mountServer(e, "srv-1", "web-01")
-				e.hub.handle("GET /api/servers", func(w http.ResponseWriter, r *http.Request) {
-					writeJSON(w, http.StatusOK, api.ServersPage{})
-				})
-				e.run(t, "servers get 404", commands.RunServers, cmdutil.ExitNotFound, "get", "ghost")
-			},
-		},
-		{
-			name: "servers/get-ambiguous",
-			run: func(t *testing.T, e *env) {
-				e.seedSession(t)
-				mountServer(e, "srv-1", "web-01")
-				e.hub.handle("GET /api/servers", func(w http.ResponseWriter, r *http.Request) {
-					writeJSON(w, http.StatusOK, api.ServersPage{
-						Servers: []api.Server{{ID: "srv-2", Name: "web"}, {ID: "srv-3", Name: "web"}},
-						Total:   2,
-					})
-				})
-				e.run(t, "servers get ambiguous", commands.RunServers, cmdutil.ExitUsage, "get", "web")
-			},
-		},
+		{name: "servers/list-ok", run: scenarioServersListOK},
+		{name: "servers/list-forbidden", run: scenarioServersListForbidden},
+		{name: "servers/get-ok", run: scenarioServersGetOK},
+		{name: "servers/get-not-found", run: scenarioServersGetNotFound},
+		{name: "servers/get-ambiguous", run: scenarioServersGetAmbiguous},
 
 		// --- vey files -------------------------------------------------
-		{
-			name: "files/ls-ok",
-			run: func(t *testing.T, e *env) {
-				e.seedSession(t)
-				mountServer(e, "srv-1", "web-01")
-				e.hub.handle("GET /api/servers/{id}/files", func(w http.ResponseWriter, r *http.Request) {
-					if !e.hub.authorized(r) {
-						writeHubError(w, http.StatusUnauthorized, "access token is expired")
-						return
-					}
-					writeJSON(w, http.StatusOK, api.FileListing{Files: []api.FileEntry{
-						{Name: "app.log", Size: 2048, Readable: true},
-						{Name: "archive", IsDir: true},
-					}})
-				})
-				e.run(t, "files ls", commands.RunFiles, cmdutil.ExitOK, "ls", "srv-1", "/var/log")
-			},
-		},
-		{
-			name: "files/ls-forbidden",
-			run: func(t *testing.T, e *env) {
-				e.seedSession(t)
-				mountServer(e, "srv-1", "web-01")
-				e.hub.handle("GET /api/servers/{id}/files", func(w http.ResponseWriter, r *http.Request) {
-					writeHubError(w, http.StatusForbidden, "path /root is outside your allowed roots")
-				})
-				e.run(t, "files ls 403", commands.RunFiles, cmdutil.ExitForbidden, "ls", "srv-1", "/root")
-			},
-		},
-		{
-			name: "files/cat-ok",
-			run: func(t *testing.T, e *env) {
-				e.seedSession(t)
-				mountServer(e, "srv-1", "web-01")
-				e.hub.handle("GET /api/servers/{id}/files/read", func(w http.ResponseWriter, r *http.Request) {
-					if !e.hub.authorized(r) {
-						writeHubError(w, http.StatusUnauthorized, "access token is expired")
-						return
-					}
-					w.WriteHeader(http.StatusOK)
-					_, _ = io.WriteString(w, "listen_addr = 0.0.0.0:8443\nworkers = 4\n")
-				})
-				e.run(t, "files cat", commands.RunFiles, cmdutil.ExitOK, "cat", "srv-1", "/etc/app.conf")
-			},
-		},
-		{
-			name: "files/cat-not-found",
-			run: func(t *testing.T, e *env) {
-				e.seedSession(t)
-				mountServer(e, "srv-1", "web-01")
-				e.hub.handle("GET /api/servers/{id}/files/read", func(w http.ResponseWriter, r *http.Request) {
-					writeHubError(w, http.StatusNotFound, "no such file: /etc/nope.conf")
-				})
-				e.run(t, "files cat 404", commands.RunFiles, cmdutil.ExitNotFound, "cat", "srv-1", "/etc/nope.conf")
-			},
-		},
+		{name: "files/ls-ok", run: scenarioFilesLsOK},
+		{name: "files/ls-forbidden", run: scenarioFilesLsForbidden},
+		{name: "files/cat-ok", run: scenarioFilesCatOK},
+		{name: "files/cat-not-found", run: scenarioFilesCatNotFound},
 
 		// --- vey logs --------------------------------------------------
-		{
-			name: "logs/tail-brief-stream",
-			run: func(t *testing.T, e *env) {
-				e.seedSession(t)
-				mountServer(e, "srv-1", "web-01")
-				e.hub.handle("GET /api/servers/{id}/logs/tail", func(w http.ResponseWriter, r *http.Request) {
-					if !e.hub.authorized(r) {
-						writeHubError(w, http.StatusUnauthorized, "access token is expired")
-						return
-					}
-					flusher, ok := w.(http.Flusher)
-					if !ok {
-						http.Error(w, "no flusher", http.StatusInternalServerError)
-						return
-					}
-					w.Header().Set("Content-Type", "text/event-stream")
-					w.WriteHeader(http.StatusOK)
-					flusher.Flush()
-					// The hub base64-encodes each frame and frames are not
-					// line-aligned (handlers_logs.go / logtailer).
-					for _, chunk := range []string{"boot: ok\npoll ", "cycle 1 complete\n"} {
-						fmt.Fprintf(w, "data: %s\n\n", base64.StdEncoding.EncodeToString([]byte(chunk)))
-						flusher.Flush()
-					}
-					// Returning closes the stream: `vey logs tail` reports
-					// that as an unexpected close (exit 6).
-				})
-				e.run(t, "logs tail", commands.RunLogs, cmdutil.ExitConn, "tail", "srv-1", "/var/log/app.log")
-			},
-		},
+		{name: "logs/tail-brief-stream", run: scenarioLogsTailBriefStream},
 
 		// --- vey audit -------------------------------------------------
-		{
-			name: "audit/export-forbidden",
-			run: func(t *testing.T, e *env) {
-				e.seedSession(t)
-				e.hub.handle("GET /api/audit-logs/export", func(w http.ResponseWriter, r *http.Request) {
-					writeHubError(w, http.StatusForbidden, "audit export requires the admin or auditor role")
-				})
-				e.run(t, "audit export 403", commands.RunAudit, cmdutil.ExitForbidden, "export")
-			},
-		},
-		{
-			name: "audit/export-ok",
-			run: func(t *testing.T, e *env) {
-				e.seedSession(t)
-				e.hub.handle("GET /api/audit-logs/export", func(w http.ResponseWriter, r *http.Request) {
-					if !e.hub.authorized(r) {
-						writeHubError(w, http.StatusUnauthorized, "access token is expired")
-						return
-					}
-					writeJSON(w, http.StatusOK, map[string]any{
-						"manifest": map[string]any{"count": 1},
-						"entries":  []map[string]any{{"action": "login", "actor": sentinelUsername}},
-					})
-				})
-				e.run(t, "audit export", commands.RunAudit, cmdutil.ExitOK, "export")
-			},
-		},
+		{name: "audit/export-forbidden", run: scenarioAuditExportForbidden},
+		{name: "audit/export-ok", run: scenarioAuditExportOK},
 
 		// --- vey logout ------------------------------------------------
-		{
-			name: "logout/session-mode",
-			run: func(t *testing.T, e *env) {
-				e.seedSession(t)
-				e.run(t, "logout session", commands.RunLogout, cmdutil.ExitOK)
-			},
-		},
-		{
-			name: "logout/api-token-mode",
-			run: func(t *testing.T, e *env) {
-				e.useEnvAPIToken(t)
-				e.run(t, "logout api-token", commands.RunLogout, cmdutil.ExitAuth)
-			},
-		},
+		{name: "logout/session-mode", run: scenarioLogoutSessionMode},
+		{name: "logout/api-token-mode", run: scenarioLogoutAPITokenMode},
 
 		// --- transparent refresh ---------------------------------------
-		{
-			name: "refresh/retry-after-401-then-success",
-			run: func(t *testing.T, e *env) {
-				e.seedSession(t)
-				var mu sync.Mutex
-				calls := 0
-				e.hub.handle("GET /api/servers", func(w http.ResponseWriter, r *http.Request) {
-					mu.Lock()
-					calls++
-					first := calls == 1
-					mu.Unlock()
-					if first {
-						// The access token aged out mid-invocation: exactly
-						// one transparent refresh + replay is expected.
-						writeHubError(w, http.StatusUnauthorized, "access token is expired")
-						return
-					}
-					if !e.hub.authorized(r) {
-						writeHubError(w, http.StatusUnauthorized, "access token is expired")
-						return
-					}
-					writeJSON(w, http.StatusOK, api.ServersPage{
-						Servers: []api.Server{{ID: "srv-1", Name: "web-01", Status: "online"}},
-						Total:   1, Limit: 20,
-					})
-				})
-				e.run(t, "servers list with refresh retry", commands.RunServers, cmdutil.ExitOK, "list")
-
-				mu.Lock()
-				got := calls
-				mu.Unlock()
-				if got != 2 {
-					t.Fatalf("GET /api/servers called %d time(s), want 2 (original + one replay after refresh)", got)
-				}
-				// A rotation must have happened, so the sweep is checking a
-				// token the hub actually minted mid-command.
-				e.hub.mu.Lock()
-				gen := e.hub.gen
-				e.hub.mu.Unlock()
-				if gen < 2 {
-					t.Fatalf("token generation = %d, want at least 2 (initial refresh + the retry refresh)", gen)
-				}
-			},
-		},
-		{
-			name: "refresh/terminal-failure",
-			run: func(t *testing.T, e *env) {
-				// A 401 on refresh: the hub's (reflected) message is
-				// discarded and replaced by errSessionExpired's fixed text.
-				e.run(t, "servers list with dead session", commands.RunServers, cmdutil.ExitAuth,
-					deadRefresh(t, e, http.StatusUnauthorized)...)
-			},
-		},
-		{
-			name: "refresh/hub-error-reflects-token",
-			run: func(t *testing.T, e *env) {
-				// A 5xx on refresh: refresh() deliberately surfaces this one
-				// verbatim ("not a race, and not something re-login would
-				// fix"), hub message included — so the scrub in postRefresh
-				// is the only thing between the reflected token and stderr.
-				e.run(t, "servers list with a failing refresh", commands.RunServers, cmdutil.ExitError,
-					deadRefresh(t, e, http.StatusInternalServerError)...)
-			},
-		},
-		{
-			name: "refresh/rate-limited-reflects-token",
-			run: func(t *testing.T, e *env) {
-				// Same verbatim-passthrough path, at the other status the
-				// code calls out by name (429 → exit 7, never retried).
-				e.run(t, "servers list against a rate-limited refresh", commands.RunServers, cmdutil.ExitRateLimited,
-					deadRefresh(t, e, http.StatusTooManyRequests)...)
-			},
-		},
+		{name: "refresh/retry-after-401-then-success", run: scenarioRefreshRetryAfter401ThenSuccess},
+		{name: "refresh/terminal-failure", run: scenarioRefreshTerminalFailure},
+		{name: "refresh/hub-error-reflects-token", run: scenarioRefreshHubErrorReflectsToken},
+		{name: "refresh/rate-limited-reflects-token", run: scenarioRefreshRateLimitedReflectsToken},
 	}
+}
+
+func scenarioLoginHappyPath(t *testing.T, e *env) {
+	pair, err := e.login(t)
+	if err != nil {
+		t.Fatalf("auth.Login: %v", err)
+	}
+	// RunLogin renders exactly {hub, username, role} on success
+	// (commands/login.go loginPayload); assert those three values
+	// carry no credential material of their own.
+	rendered := fmt.Sprintf("hub=%s username=%s role=%s",
+		e.hub.URL(), pair.User.Username, pair.User.Role)
+	scan(t, "login/happy-path", "the values vey login prints on success",
+		rendered, e.vault.snapshot(), false)
+}
+
+func scenarioLoginBadTOTPCode(t *testing.T, e *env) {
+	e.hub.mu.Lock()
+	e.hub.wantCode = "000000" // anything but the code the user types
+	e.hub.mu.Unlock()
+
+	_, err := e.login(t)
+	if err == nil {
+		t.Fatal("auth.Login succeeded with a rejected one-time code, want an error")
+	}
+	if cmdutil.Code(err) != cmdutil.ExitAuth {
+		t.Errorf("exit code = %d, want %d (ExitAuth)", cmdutil.Code(err), cmdutil.ExitAuth)
+	}
+	scan(t, "login/bad-totp-code", "the error returned up the stack",
+		err.Error(), e.vault.snapshot(), false)
+}
+
+func scenarioLoginBadPassword(t *testing.T, e *env) {
+	e.hub.mu.Lock()
+	e.hub.wantPassword = "a-different-password"
+	e.hub.mu.Unlock()
+
+	_, err := e.login(t)
+	if err == nil {
+		t.Fatal("auth.Login succeeded with a rejected password, want an error")
+	}
+	if cmdutil.Code(err) != cmdutil.ExitAuth {
+		t.Errorf("exit code = %d, want %d (ExitAuth)", cmdutil.Code(err), cmdutil.ExitAuth)
+	}
+	scan(t, "login/bad-password", "the error returned up the stack",
+		err.Error(), e.vault.snapshot(), false)
+}
+
+func scenarioLoginTOTPSetupRedirect(t *testing.T, e *env) {
+	e.hub.mu.Lock()
+	e.hub.setupRedirect = true
+	e.hub.mu.Unlock()
+
+	_, err := e.login(t)
+	if err == nil {
+		t.Fatal("auth.Login succeeded against an enrollment redirect, want an error")
+	}
+	if !strings.Contains(err.Error(), "web interface") {
+		t.Errorf("error = %q, want the web-UI enrollment guidance", err.Error())
+	}
+	scan(t, "login/totp-setup-redirect", "the error returned up the stack",
+		err.Error(), e.vault.snapshot(), false)
+}
+
+func scenarioLoginNonTTYFastFail(t *testing.T, e *env) {
+	f := withNonTTYStdin(t)
+	// Whatever a script might pipe in must not reappear anywhere.
+	if _, err := f.WriteString(sentinelPassword + "\n" + sentinelTOTPCode + "\n"); err != nil {
+		t.Fatalf("seeding piped stdin: %v", err)
+	}
+	if _, err := f.Seek(0, io.SeekStart); err != nil {
+		t.Fatalf("rewinding piped stdin: %v", err)
+	}
+	e.run(t, "login non-tty", commands.RunLogin, cmdutil.ExitAuth)
+}
+
+func scenarioLoginTerminalPrompterNoEchoFailure(t *testing.T, e *env) {
+	// The production prompter over a non-terminal file: the
+	// username/code prompts still write their text, and the
+	// no-echo password read fails. Neither the prompt text nor
+	// the failure may carry the bytes that were read.
+	f := withNonTTYStdin(t)
+	if _, err := f.WriteString(sentinelPassword + "\n" + sentinelTOTPCode + "\n"); err != nil {
+		t.Fatalf("seeding prompter input: %v", err)
+	}
+	if _, err := f.Seek(0, io.SeekStart); err != nil {
+		t.Fatalf("rewinding prompter input: %v", err)
+	}
+
+	p := auth.NewTerminalPrompter(f, e.stderr)
+	if _, err := p.Username(""); err != nil {
+		t.Fatalf("Username: %v", err)
+	}
+	if _, err := p.Password(); err == nil {
+		t.Fatal("no-echo password read succeeded on a non-terminal, want an error")
+	} else {
+		scan(t, "login/terminal-prompter-no-echo-failure", "the password-read error",
+			err.Error(), e.vault.snapshot(), false)
+	}
+	if _, err := p.TOTPCode(); err != nil {
+		t.Fatalf("TOTPCode: %v", err)
+	}
+}
+
+func scenarioStatusSessionMode(t *testing.T, e *env) {
+	e.seedSession(t)
+	e.run(t, "status session", commands.RunStatus, cmdutil.ExitOK)
+}
+
+func scenarioStatusAPITokenModeEnv(t *testing.T, e *env) {
+	e.useEnvAPIToken(t)
+	e.run(t, "status api-token env", commands.RunStatus, cmdutil.ExitOK)
+	assertTokenPrefixOnly(t, e, sentinelEnvAPIToken)
+}
+
+func scenarioStatusAPITokenModeConfig(t *testing.T, e *env) {
+	e.useConfigAPIToken()
+	e.run(t, "status api-token config", commands.RunStatus, cmdutil.ExitOK)
+	assertTokenPrefixOnly(t, e, sentinelConfigAPIToken)
+}
+
+func scenarioStatusNotSignedIn(t *testing.T, e *env) {
+	e.run(t, "status none", commands.RunStatus, cmdutil.ExitAuth)
+}
+
+func scenarioServersListOK(t *testing.T, e *env) {
+	e.seedSession(t)
+	e.hub.handle("GET /api/servers", func(w http.ResponseWriter, r *http.Request) {
+		if !e.hub.authorized(r) {
+			writeHubError(w, http.StatusUnauthorized, "access token is expired")
+			return
+		}
+		writeJSON(w, http.StatusOK, api.ServersPage{
+			Servers: []api.Server{{ID: "srv-1", Name: "web-01", Status: "online"}},
+			Total:   1, Limit: 20,
+		})
+	})
+	e.run(t, "servers list", commands.RunServers, cmdutil.ExitOK, "list")
+}
+
+func scenarioServersListForbidden(t *testing.T, e *env) {
+	e.seedSession(t)
+	e.hub.handle("GET /api/servers", func(w http.ResponseWriter, r *http.Request) {
+		writeHubError(w, http.StatusForbidden, "your role may not list servers")
+	})
+	e.run(t, "servers list 403", commands.RunServers, cmdutil.ExitForbidden, "list")
+}
+
+func scenarioServersGetOK(t *testing.T, e *env) {
+	e.seedSession(t)
+	mountServer(e, "srv-1", "web-01")
+	e.run(t, "servers get", commands.RunServers, cmdutil.ExitOK, "get", "srv-1")
+}
+
+func scenarioServersGetNotFound(t *testing.T, e *env) {
+	e.seedSession(t)
+	mountServer(e, "srv-1", "web-01")
+	e.hub.handle("GET /api/servers", func(w http.ResponseWriter, r *http.Request) {
+		writeJSON(w, http.StatusOK, api.ServersPage{})
+	})
+	e.run(t, "servers get 404", commands.RunServers, cmdutil.ExitNotFound, "get", "ghost")
+}
+
+func scenarioServersGetAmbiguous(t *testing.T, e *env) {
+	e.seedSession(t)
+	mountServer(e, "srv-1", "web-01")
+	e.hub.handle("GET /api/servers", func(w http.ResponseWriter, r *http.Request) {
+		writeJSON(w, http.StatusOK, api.ServersPage{
+			Servers: []api.Server{{ID: "srv-2", Name: "web"}, {ID: "srv-3", Name: "web"}},
+			Total:   2,
+		})
+	})
+	e.run(t, "servers get ambiguous", commands.RunServers, cmdutil.ExitUsage, "get", "web")
+}
+
+func scenarioFilesLsOK(t *testing.T, e *env) {
+	e.seedSession(t)
+	mountServer(e, "srv-1", "web-01")
+	e.hub.handle("GET /api/servers/{id}/files", func(w http.ResponseWriter, r *http.Request) {
+		if !e.hub.authorized(r) {
+			writeHubError(w, http.StatusUnauthorized, "access token is expired")
+			return
+		}
+		writeJSON(w, http.StatusOK, api.FileListing{Files: []api.FileEntry{
+			{Name: "app.log", Size: 2048, Readable: true},
+			{Name: "archive", IsDir: true},
+		}})
+	})
+	e.run(t, "files ls", commands.RunFiles, cmdutil.ExitOK, "ls", "srv-1", "/var/log")
+}
+
+func scenarioFilesLsForbidden(t *testing.T, e *env) {
+	e.seedSession(t)
+	mountServer(e, "srv-1", "web-01")
+	e.hub.handle("GET /api/servers/{id}/files", func(w http.ResponseWriter, r *http.Request) {
+		writeHubError(w, http.StatusForbidden, "path /root is outside your allowed roots")
+	})
+	e.run(t, "files ls 403", commands.RunFiles, cmdutil.ExitForbidden, "ls", "srv-1", "/root")
+}
+
+func scenarioFilesCatOK(t *testing.T, e *env) {
+	e.seedSession(t)
+	mountServer(e, "srv-1", "web-01")
+	e.hub.handle("GET /api/servers/{id}/files/read", func(w http.ResponseWriter, r *http.Request) {
+		if !e.hub.authorized(r) {
+			writeHubError(w, http.StatusUnauthorized, "access token is expired")
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+		_, _ = io.WriteString(w, "listen_addr = 0.0.0.0:8443\nworkers = 4\n")
+	})
+	e.run(t, "files cat", commands.RunFiles, cmdutil.ExitOK, "cat", "srv-1", "/etc/app.conf")
+}
+
+func scenarioFilesCatNotFound(t *testing.T, e *env) {
+	e.seedSession(t)
+	mountServer(e, "srv-1", "web-01")
+	e.hub.handle("GET /api/servers/{id}/files/read", func(w http.ResponseWriter, r *http.Request) {
+		writeHubError(w, http.StatusNotFound, "no such file: /etc/nope.conf")
+	})
+	e.run(t, "files cat 404", commands.RunFiles, cmdutil.ExitNotFound, "cat", "srv-1", "/etc/nope.conf")
+}
+
+func scenarioLogsTailBriefStream(t *testing.T, e *env) {
+	e.seedSession(t)
+	mountServer(e, "srv-1", "web-01")
+	e.hub.handle("GET /api/servers/{id}/logs/tail", func(w http.ResponseWriter, r *http.Request) {
+		if !e.hub.authorized(r) {
+			writeHubError(w, http.StatusUnauthorized, "access token is expired")
+			return
+		}
+		flusher, ok := w.(http.Flusher)
+		if !ok {
+			http.Error(w, "no flusher", http.StatusInternalServerError)
+			return
+		}
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.WriteHeader(http.StatusOK)
+		flusher.Flush()
+		// The hub base64-encodes each frame and frames are not
+		// line-aligned (handlers_logs.go / logtailer).
+		for _, chunk := range []string{"boot: ok\npoll ", "cycle 1 complete\n"} {
+			fmt.Fprintf(w, "data: %s\n\n", base64.StdEncoding.EncodeToString([]byte(chunk)))
+			flusher.Flush()
+		}
+		// Returning closes the stream: `vey logs tail` reports
+		// that as an unexpected close (exit 6).
+	})
+	e.run(t, "logs tail", commands.RunLogs, cmdutil.ExitConn, "tail", "srv-1", "/var/log/app.log")
+}
+
+func scenarioAuditExportForbidden(t *testing.T, e *env) {
+	e.seedSession(t)
+	e.hub.handle("GET /api/audit-logs/export", func(w http.ResponseWriter, r *http.Request) {
+		writeHubError(w, http.StatusForbidden, "audit export requires the admin or auditor role")
+	})
+	e.run(t, "audit export 403", commands.RunAudit, cmdutil.ExitForbidden, "export")
+}
+
+func scenarioAuditExportOK(t *testing.T, e *env) {
+	e.seedSession(t)
+	e.hub.handle("GET /api/audit-logs/export", func(w http.ResponseWriter, r *http.Request) {
+		if !e.hub.authorized(r) {
+			writeHubError(w, http.StatusUnauthorized, "access token is expired")
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{
+			"manifest": map[string]any{"count": 1},
+			"entries":  []map[string]any{{"action": "login", "actor": sentinelUsername}},
+		})
+	})
+	e.run(t, "audit export", commands.RunAudit, cmdutil.ExitOK, "export")
+}
+
+func scenarioLogoutSessionMode(t *testing.T, e *env) {
+	e.seedSession(t)
+	e.run(t, "logout session", commands.RunLogout, cmdutil.ExitOK)
+}
+
+func scenarioLogoutAPITokenMode(t *testing.T, e *env) {
+	e.useEnvAPIToken(t)
+	e.run(t, "logout api-token", commands.RunLogout, cmdutil.ExitAuth)
+}
+
+func scenarioRefreshRetryAfter401ThenSuccess(t *testing.T, e *env) {
+	e.seedSession(t)
+	var mu sync.Mutex
+	calls := 0
+	e.hub.handle("GET /api/servers", func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		calls++
+		first := calls == 1
+		mu.Unlock()
+		if first {
+			// The access token aged out mid-invocation: exactly
+			// one transparent refresh + replay is expected.
+			writeHubError(w, http.StatusUnauthorized, "access token is expired")
+			return
+		}
+		if !e.hub.authorized(r) {
+			writeHubError(w, http.StatusUnauthorized, "access token is expired")
+			return
+		}
+		writeJSON(w, http.StatusOK, api.ServersPage{
+			Servers: []api.Server{{ID: "srv-1", Name: "web-01", Status: "online"}},
+			Total:   1, Limit: 20,
+		})
+	})
+	e.run(t, "servers list with refresh retry", commands.RunServers, cmdutil.ExitOK, "list")
+
+	mu.Lock()
+	got := calls
+	mu.Unlock()
+	if got != 2 {
+		t.Fatalf("GET /api/servers called %d time(s), want 2 (original + one replay after refresh)", got)
+	}
+	// A rotation must have happened, so the sweep is checking a
+	// token the hub actually minted mid-command.
+	e.hub.mu.Lock()
+	gen := e.hub.gen
+	e.hub.mu.Unlock()
+	if gen < 2 {
+		t.Fatalf("token generation = %d, want at least 2 (initial refresh + the retry refresh)", gen)
+	}
+}
+
+func scenarioRefreshTerminalFailure(t *testing.T, e *env) {
+	// A 401 on refresh: the hub's (reflected) message is
+	// discarded and replaced by errSessionExpired's fixed text.
+	e.run(t, "servers list with dead session", commands.RunServers, cmdutil.ExitAuth,
+		deadRefresh(t, e, http.StatusUnauthorized)...)
+}
+
+func scenarioRefreshHubErrorReflectsToken(t *testing.T, e *env) {
+	// A 5xx on refresh: refresh() deliberately surfaces this one
+	// verbatim ("not a race, and not something re-login would
+	// fix"), hub message included — so the scrub in postRefresh
+	// is the only thing between the reflected token and stderr.
+	e.run(t, "servers list with a failing refresh", commands.RunServers, cmdutil.ExitError,
+		deadRefresh(t, e, http.StatusInternalServerError)...)
+}
+
+func scenarioRefreshRateLimitedReflectsToken(t *testing.T, e *env) {
+	// Same verbatim-passthrough path, at the other status the
+	// code calls out by name (429 → exit 7, never retried).
+	e.run(t, "servers list against a rate-limited refresh", commands.RunServers, cmdutil.ExitRateLimited,
+		deadRefresh(t, e, http.StatusTooManyRequests)...)
 }
 
 // deadRefresh puts the scenario in session mode with a hub whose
@@ -1121,34 +1100,42 @@ func TestTokenPrefixNeverRevealsWholeToken(t *testing.T) {
 
 	for _, token := range tokens {
 		t.Run(fmt.Sprintf("len-%d", len(token)), func(t *testing.T) {
-			t.Setenv("VEYPORT_TOKEN", token)
-			actx, err := auth.Resolve("https://hub.example.com", token, config.Config{}, nil, t.TempDir())
-			if err != nil {
-				t.Fatalf("auth.Resolve: %v", err)
-			}
-			if actx.Mode() != auth.ModeAPIToken {
-				t.Fatalf("mode = %q, want %q", actx.Mode(), auth.ModeAPIToken)
-			}
-
-			got := actx.TokenPrefix()
-			shown := strings.TrimSuffix(got, "…")
-			if shown == got {
-				t.Fatalf("TokenPrefix() = %q, want it to end in an ellipsis", got)
-			}
-			if strings.Contains(got, token) {
-				t.Errorf("TokenPrefix() rendered the whole %d-byte token; it must only ever show a fragment", len(token))
-			}
-			if len(shown) > apiTokenPrefixLen {
-				t.Errorf("TokenPrefix() showed %d characters, want at most %d", len(shown), apiTokenPrefixLen)
-			}
-			if len(shown)*2 > len(token) {
-				t.Errorf("TokenPrefix() showed %d of %d characters; at least half the token must stay hidden",
-					len(shown), len(token))
-			}
-			if !strings.HasPrefix(token, shown) {
-				t.Errorf("TokenPrefix() = %q, want a leading fragment of the token", got)
-			}
+			assertTokenPrefixInvariants(t, token)
 		})
+	}
+}
+
+// assertTokenPrefixInvariants is TestTokenPrefixNeverRevealsWholeToken's
+// per-token body, extracted to a top-level function so its run of assertions
+// does not nest inside the table loop's subtest closure.
+func assertTokenPrefixInvariants(t *testing.T, token string) {
+	t.Helper()
+	t.Setenv("VEYPORT_TOKEN", token)
+	actx, err := auth.Resolve("https://hub.example.com", token, config.Config{}, nil, t.TempDir())
+	if err != nil {
+		t.Fatalf("auth.Resolve: %v", err)
+	}
+	if actx.Mode() != auth.ModeAPIToken {
+		t.Fatalf("mode = %q, want %q", actx.Mode(), auth.ModeAPIToken)
+	}
+
+	got := actx.TokenPrefix()
+	shown := strings.TrimSuffix(got, "…")
+	if shown == got {
+		t.Fatalf("TokenPrefix() = %q, want it to end in an ellipsis", got)
+	}
+	if strings.Contains(got, token) {
+		t.Errorf("TokenPrefix() rendered the whole %d-byte token; it must only ever show a fragment", len(token))
+	}
+	if len(shown) > apiTokenPrefixLen {
+		t.Errorf("TokenPrefix() showed %d characters, want at most %d", len(shown), apiTokenPrefixLen)
+	}
+	if len(shown)*2 > len(token) {
+		t.Errorf("TokenPrefix() showed %d of %d characters; at least half the token must stay hidden",
+			len(shown), len(token))
+	}
+	if !strings.HasPrefix(token, shown) {
+		t.Errorf("TokenPrefix() = %q, want a leading fragment of the token", got)
 	}
 }
 

@@ -272,3 +272,182 @@ func TestServersGet_MissingArg(t *testing.T) {
 		t.Fatalf("exit code = %d, want %d (ExitUsage); stderr=%q", code, cmdutil.ExitUsage, stderr.String())
 	}
 }
+
+// --- RunServers dispatch --------------------------------------------------
+
+// TestRunServers_NoArgs covers the bare `vey servers` invocation (no
+// subcommand at all): a usage error before any subcommand dispatch.
+func TestRunServers_NoArgs(t *testing.T) {
+	_, srv, configDir := seedForServers(t, "tok-1")
+
+	ctx, stdout, stderr := newCmdContext(srv.URL, configDir, false, nil)
+	code := RunServers(ctx)
+	if code != cmdutil.ExitUsage {
+		t.Fatalf("exit code = %d, want %d (ExitUsage); stdout=%q stderr=%q", code, cmdutil.ExitUsage, stdout.String(), stderr.String())
+	}
+	if stdout.Len() != 0 {
+		t.Errorf("stdout = %q, want empty", stdout.String())
+	}
+}
+
+// TestRunServers_UnknownSubcommand covers `vey servers bogus`.
+func TestRunServers_UnknownSubcommand(t *testing.T) {
+	_, srv, configDir := seedForServers(t, "tok-1")
+
+	ctx, stdout, stderr := newCmdContext(srv.URL, configDir, false, []string{"bogus"})
+	code := RunServers(ctx)
+	if code != cmdutil.ExitUsage {
+		t.Fatalf("exit code = %d, want %d (ExitUsage); stdout=%q stderr=%q", code, cmdutil.ExitUsage, stdout.String(), stderr.String())
+	}
+	if !strings.Contains(stderr.String(), "bogus") {
+		t.Errorf("stderr = %q, want it to name the unknown subcommand", stderr.String())
+	}
+}
+
+// --- shared preamble failures (list and get) ------------------------------
+
+// TestServersList_NoHubExitUsage covers runServersList's RequireHub failure
+// branch: no hub configured at all.
+func TestServersList_NoHubExitUsage(t *testing.T) {
+	t.Setenv("VEYPORT_TOKEN", "")
+	ctx, stdout, stderr := newCmdContext("", t.TempDir(), false, []string{"list"})
+	code := RunServers(ctx)
+	if code != cmdutil.ExitUsage {
+		t.Fatalf("exit code = %d, want %d (ExitUsage); stdout=%q stderr=%q", code, cmdutil.ExitUsage, stdout.String(), stderr.String())
+	}
+}
+
+// TestServersGet_NoHubExitUsage covers runServersGet's RequireHub failure
+// branch.
+func TestServersGet_NoHubExitUsage(t *testing.T) {
+	t.Setenv("VEYPORT_TOKEN", "")
+	ctx, stdout, stderr := newCmdContext("", t.TempDir(), false, []string{"get", "s1"})
+	code := RunServers(ctx)
+	if code != cmdutil.ExitUsage {
+		t.Fatalf("exit code = %d, want %d (ExitUsage); stdout=%q stderr=%q", code, cmdutil.ExitUsage, stdout.String(), stderr.String())
+	}
+}
+
+// TestServersList_AuthContextFailure covers runServersList's newAuthContext
+// error branch: a malformed VEYPORT_TOKEN fails local validation before any
+// hub round trip (auth.validateAPIToken), which is the cheapest way to make
+// auth.Resolve return an error without a real credential store failure.
+func TestServersList_AuthContextFailure(t *testing.T) {
+	t.Setenv("VEYPORT_TOKEN", "malformed-token")
+	srv := httptest.NewServer(http.NewServeMux())
+	defer srv.Close()
+
+	ctx, stdout, stderr := newCmdContext(srv.URL, t.TempDir(), false, []string{"list"})
+	code := RunServers(ctx)
+	if code != cmdutil.ExitUsage {
+		t.Fatalf("exit code = %d, want %d (ExitUsage); stdout=%q stderr=%q", code, cmdutil.ExitUsage, stdout.String(), stderr.String())
+	}
+}
+
+// TestServersGet_AuthContextFailure covers runServersGet's newAuthContext
+// error branch, same technique as the list variant above.
+func TestServersGet_AuthContextFailure(t *testing.T) {
+	t.Setenv("VEYPORT_TOKEN", "malformed-token")
+	srv := httptest.NewServer(http.NewServeMux())
+	defer srv.Close()
+
+	ctx, stdout, stderr := newCmdContext(srv.URL, t.TempDir(), false, []string{"get", "s1"})
+	code := RunServers(ctx)
+	if code != cmdutil.ExitUsage {
+		t.Fatalf("exit code = %d, want %d (ExitUsage); stdout=%q stderr=%q", code, cmdutil.ExitUsage, stdout.String(), stderr.String())
+	}
+}
+
+// TestServersList_HubCallError covers runServersList's actx.Do error branch:
+// the hub answers the servers listing itself with a failure.
+func TestServersList_HubCallError(t *testing.T) {
+	mux, srv, configDir := seedForServers(t, "tok-1")
+	mux.HandleFunc("GET /api/servers", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+	})
+
+	ctx, stdout, stderr := newCmdContext(srv.URL, configDir, false, []string{"list"})
+	code := RunServers(ctx)
+	if code != cmdutil.ExitError {
+		t.Fatalf("exit code = %d, want %d (ExitError); stdout=%q stderr=%q", code, cmdutil.ExitError, stdout.String(), stderr.String())
+	}
+}
+
+// TestServersGet_DirectLookupOtherError covers runServersGet's "direct
+// lookup failed with something other than 404" branch: no fallback search
+// is attempted, the error is surfaced directly.
+func TestServersGet_DirectLookupOtherError(t *testing.T) {
+	mux, srv, configDir := seedForServers(t, "tok-1")
+	var searchCalls int
+	mux.HandleFunc("GET /api/servers/{id}", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+	})
+	mux.HandleFunc("GET /api/servers", func(w http.ResponseWriter, r *http.Request) {
+		searchCalls++
+		w.WriteHeader(http.StatusOK)
+		_ = json.NewEncoder(w).Encode(api.ServersPage{})
+	})
+
+	ctx, stdout, stderr := newCmdContext(srv.URL, configDir, false, []string{"get", "s1"})
+	code := RunServers(ctx)
+	if code != cmdutil.ExitError {
+		t.Fatalf("exit code = %d, want %d (ExitError); stdout=%q stderr=%q", code, cmdutil.ExitError, stdout.String(), stderr.String())
+	}
+	if searchCalls != 0 {
+		t.Errorf("search calls = %d, want 0 (no fallback on a non-404 error)", searchCalls)
+	}
+}
+
+// TestServersGet_SearchCallError covers runServersGet's fallback-search
+// actx.Do error branch: the direct lookup 404s, then the search call itself
+// fails.
+func TestServersGet_SearchCallError(t *testing.T) {
+	mux, srv, configDir := seedForServers(t, "tok-1")
+	mux.HandleFunc("GET /api/servers/{id}", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNotFound)
+	})
+	mux.HandleFunc("GET /api/servers", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+	})
+
+	ctx, stdout, stderr := newCmdContext(srv.URL, configDir, false, []string{"get", "web-1"})
+	code := RunServers(ctx)
+	if code != cmdutil.ExitError {
+		t.Fatalf("exit code = %d, want %d (ExitError); stdout=%q stderr=%q", code, cmdutil.ExitError, stdout.String(), stderr.String())
+	}
+}
+
+// --- printServer (human mode) ---------------------------------------------
+
+// TestServersGet_PrintServer_AllFieldsHuman covers printServer's human
+// rendering with every optional field populated: --json is never used by
+// the other `servers get` tests, so this closure otherwise goes untested.
+func TestServersGet_PrintServer_AllFieldsHuman(t *testing.T) {
+	mux, srv, configDir := seedForServers(t, "tok-1")
+	hostname, ip, os_, agentVersion, lastSeen := "web-1.example.com", "10.0.0.5", "linux", "1.2.3", "2026-01-01T00:00:00Z"
+	mux.HandleFunc("GET /api/servers/{id}", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(api.Server{
+			ID: "s1", Name: "web-1", Status: "online",
+			Hostname: &hostname, IPAddress: &ip, OS: &os_,
+			AgentVersion: &agentVersion, Labels: "prod,web", LastSeenAt: &lastSeen,
+		})
+	})
+
+	ctx, stdout, stderr := newCmdContext(srv.URL, configDir, false, []string{"get", "s1"})
+	code := RunServers(ctx)
+	if code != cmdutil.ExitOK {
+		t.Fatalf("exit code = %d, want %d (ExitOK); stderr=%q", code, cmdutil.ExitOK, stderr.String())
+	}
+
+	out := stdout.String()
+	for _, want := range []string{
+		"ID: s1", "Name: web-1", "Status: online",
+		"Hostname: web-1.example.com", "IP Address: 10.0.0.5", "OS: linux",
+		"Agent Version: 1.2.3", "Labels: prod,web", "Last Seen: 2026-01-01T00:00:00Z",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("stdout = %q, want it to contain %q", out, want)
+		}
+	}
+}

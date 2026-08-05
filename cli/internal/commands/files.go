@@ -15,6 +15,11 @@ import (
 	"github.com/wyiu/veyport/cli/internal/cmdutil"
 )
 
+// apiServersPathPrefix is the shared "/api/servers/{id}/..." URL prefix
+// (contracts/cli-commands.md `vey files ls`, `vey files cat`), used here to
+// avoid repeating the "/api/servers/" literal across this file's requests.
+const apiServersPathPrefix = "/api/servers/"
+
 // RunFiles implements `vey files ls <server> <path>` and `vey files cat
 // <server> <path>` (contracts/cli-commands.md `vey files ls`, `vey files
 // cat`), dispatching on ctx.Args[0].
@@ -66,7 +71,7 @@ func runFilesLs(ctx *Context, args []string) int {
 	var listing api.FileListing
 	query := url.Values{"path": []string{path}}
 	if err := actx.Do(bg, func(c *api.Client) error {
-		return c.Get(bg, "/api/servers/"+url.PathEscape(id)+"/files", query, &listing)
+		return c.Get(bg, apiServersPathPrefix+url.PathEscape(id)+"/files", query, &listing)
 	}); err != nil {
 		ctx.Printer.Error(err)
 		return cmdutil.Code(err)
@@ -120,7 +125,7 @@ func runFilesCat(ctx *Context, args []string) int {
 	query := url.Values{"path": []string{path}}
 	var body io.ReadCloser
 	if err := actx.Do(bg, func(c *api.Client) error {
-		rc, err := c.GetStream(bg, "/api/servers/"+url.PathEscape(id)+"/files/read", query)
+		rc, err := c.GetStream(bg, apiServersPathPrefix+url.PathEscape(id)+"/files/read", query)
 		if err != nil {
 			return err
 		}
@@ -177,7 +182,7 @@ func resolveServerID(actx *auth.AuthContext, ref string) (string, error) {
 
 	var server api.Server
 	getErr := actx.Do(bg, func(c *api.Client) error {
-		return c.Get(bg, "/api/servers/"+url.PathEscape(ref), nil, &server)
+		return c.Get(bg, apiServersPathPrefix+url.PathEscape(ref), nil, &server)
 	})
 	if getErr == nil {
 		return server.ID, nil

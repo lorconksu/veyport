@@ -12,6 +12,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -257,6 +258,15 @@ func TestLoginHappyPathThreeLeg(t *testing.T) {
 		t.Fatalf("Login: %v", err)
 	}
 
+	assertLoginTokenPairAndUser(t, pair)
+	assertLoginRequestBodiesAndPromptOrder(t, stub, prompter)
+	assertLoginStoredSession(t, store, srv.URL, start)
+}
+
+// assertLoginTokenPairAndUser checks the TokenPair Login returns directly:
+// both tokens came from the totp leg, and the user identity matches.
+func assertLoginTokenPairAndUser(t *testing.T, pair *api.TokenPair) {
+	t.Helper()
 	if pair == nil {
 		t.Fatal("Login returned a nil TokenPair")
 	}
@@ -267,7 +277,12 @@ func TestLoginHappyPathThreeLeg(t *testing.T) {
 	if pair.User.Username != loginTestUser || pair.User.Role != "admin" {
 		t.Fatalf("user = %+v, want {alice admin}", pair.User)
 	}
+}
 
+// assertLoginRequestBodiesAndPromptOrder checks what Login actually sent to
+// the hub and the order in which it prompted for credentials.
+func assertLoginRequestBodiesAndPromptOrder(t *testing.T, stub *loginHubStub, prompter *fakeLoginPrompter) {
+	t.Helper()
 	loginReqs, totpReqs := stub.calls()
 	if len(loginReqs) != 1 || len(totpReqs) != 1 {
 		t.Fatalf("calls: login=%d totp=%d, want 1 and 1", len(loginReqs), len(totpReqs))
@@ -282,8 +297,14 @@ func TestLoginHappyPathThreeLeg(t *testing.T) {
 	if want := []string{"username", "password", "totp"}; strings.Join(prompter.calls, ",") != strings.Join(want, ",") {
 		t.Fatalf("prompt order = %v, want %v", prompter.calls, want)
 	}
+}
 
-	sess, ok, err := store.Load(srv.URL)
+// assertLoginStoredSession checks what a successful login persisted: the
+// refresh token and identity, a fresh ObtainedAt, and — the point of the
+// check — that the access token never reaches the credential store.
+func assertLoginStoredSession(t *testing.T, store Store, hubURL string, start time.Time) {
+	t.Helper()
+	sess, ok, err := store.Load(hubURL)
 	if err != nil {
 		t.Fatalf("Load: %v", err)
 	}
@@ -739,5 +760,298 @@ func TestTerminalPrompterEmptyAnswerKeepsDefault(t *testing.T) {
 	}
 	if user != "dana" {
 		t.Fatalf("Username = %q, want the default %q", user, "dana")
+	}
+}
+
+// --- coverage: guard clauses and edge cases not reached above ---------------
+
+// TestLoginRejectsNilClient covers Login's own nil-client guard: a caller
+// bug, not a hub failure, so it must never reach the network.
+func TestLoginRejectsNilClient(t *testing.T) {
+	_, err := Login(context.Background(), LoginOptions{
+		Client:   nil,
+		HubURL:   "https://hub.example.com",
+		Store:    newLoginTestStore(t),
+		Prompter: scriptedPrompter(),
+	})
+	if err == nil {
+		t.Fatal("Login succeeded with a nil client, want error")
+	}
+	if code := cmdutil.Code(err); code != cmdutil.ExitError {
+		t.Errorf("exit code = %d, want %d", code, cmdutil.ExitError)
+	}
+}
+
+// TestLoginRejectsNilStore covers Login's own nil-store guard.
+func TestLoginRejectsNilStore(t *testing.T) {
+	_, err := Login(context.Background(), LoginOptions{
+		Client:   api.NewClient("https://hub.example.com", ""),
+		HubURL:   "https://hub.example.com",
+		Store:    nil,
+		Prompter: scriptedPrompter(),
+	})
+	if err == nil {
+		t.Fatal("Login succeeded with a nil store, want error")
+	}
+	if code := cmdutil.Code(err); code != cmdutil.ExitError {
+		t.Errorf("exit code = %d, want %d", code, cmdutil.ExitError)
+	}
+}
+
+// TestLoginFallsBackToClientBaseURLWhenHubURLEmpty covers Login's HubURL
+// fallback: every other test in this file supplies HubURL explicitly, so
+// this pins the "HubURL empty → use Client.BaseURL as the credential-store
+// key" branch on its own.
+func TestLoginFallsBackToClientBaseURLWhenHubURLEmpty(t *testing.T) {
+	stub := &loginHubStub{
+		loginStatus: http.StatusAccepted,
+		loginBody:   `{"totp_token":"tt-abc123"}`,
+		totpStatus:  http.StatusOK,
+		totpBody:    okTOTPBody(),
+	}
+	srv := newLoginHubStub(t, stub)
+	store := newLoginTestStore(t)
+
+	_, err := Login(context.Background(), LoginOptions{
+		Client:   api.NewClient(srv.URL, ""),
+		HubURL:   "",
+		Store:    store,
+		Prompter: scriptedPrompter(),
+	})
+	if err != nil {
+		t.Fatalf("Login: %v", err)
+	}
+	if _, ok, loadErr := store.Load(srv.URL); loadErr != nil || !ok {
+		t.Fatalf("session not stored under Client.BaseURL = %q: (ok %v, err %v)", srv.URL, ok, loadErr)
+	}
+}
+
+// TestLoginPropagatesTOTPCodePromptError covers Login's own handling of a
+// failed TOTPCode() prompt, distinct from TestLoginPromptFailureAborts (which
+// only exercises the earlier Password() prompt failure).
+func TestLoginPropagatesTOTPCodePromptError(t *testing.T) {
+	stub := &loginHubStub{loginStatus: http.StatusAccepted, loginBody: `{"totp_token":"tt-abc123"}`}
+	srv := newLoginHubStub(t, stub)
+	store := newLoginTestStore(t)
+	prompter := scriptedPrompter()
+	prompter.codeErr = errors.New("terminal closed")
+
+	_, err := Login(context.Background(), LoginOptions{
+		Client:   api.NewClient(srv.URL, ""),
+		HubURL:   srv.URL,
+		Store:    store,
+		Prompter: prompter,
+	})
+	if err == nil {
+		t.Fatal("Login succeeded despite a failed TOTP-code prompt, want error")
+	}
+	if !errors.Is(err, prompter.codeErr) {
+		t.Fatalf("error %v does not wrap the prompt failure", err)
+	}
+	assertNothingStored(t, store, srv.URL)
+}
+
+// TestLoginRejectsEmptyTOTPCode covers Login's local validation of the
+// prompted one-time code: a whitespace-only answer must never reach the hub.
+func TestLoginRejectsEmptyTOTPCode(t *testing.T) {
+	stub := &loginHubStub{loginStatus: http.StatusAccepted, loginBody: `{"totp_token":"tt-abc123"}`}
+	srv := newLoginHubStub(t, stub)
+	store := newLoginTestStore(t)
+	prompter := scriptedPrompter()
+	prompter.code = "   "
+
+	_, err := Login(context.Background(), LoginOptions{
+		Client:   api.NewClient(srv.URL, ""),
+		HubURL:   srv.URL,
+		Store:    store,
+		Prompter: prompter,
+	})
+	assertLoginExitCode(t, err, cmdutil.ExitUsage)
+	if _, totpReqs := stub.calls(); len(totpReqs) != 0 {
+		t.Fatalf("empty one-time code was sent to the hub (%d calls)", len(totpReqs))
+	}
+	assertNothingStored(t, store, srv.URL)
+}
+
+// TestLoginRejectsIncompleteTokenPairFromHub covers Login's guard against a
+// hub bug that accepts the one-time code but returns a half-populated pair:
+// nothing may be adopted or persisted in that case.
+func TestLoginRejectsIncompleteTokenPairFromHub(t *testing.T) {
+	stub := &loginHubStub{
+		loginStatus: http.StatusAccepted,
+		loginBody:   `{"totp_token":"tt-abc123"}`,
+		totpStatus:  http.StatusOK,
+		totpBody:    fmt.Sprintf(`{"access_token":%q,"user":{"username":%q,"role":"admin"}}`, loginTestAccess, loginTestUser),
+	}
+	srv := newLoginHubStub(t, stub)
+	store := newLoginTestStore(t)
+
+	pair, err := Login(context.Background(), LoginOptions{
+		Client:   api.NewClient(srv.URL, ""),
+		HubURL:   srv.URL,
+		Store:    store,
+		Prompter: scriptedPrompter(),
+	})
+	if err == nil {
+		t.Fatal("Login succeeded with a token pair missing its refresh token, want error")
+	}
+	if pair != nil {
+		t.Fatal("Login returned a token pair it should have rejected")
+	}
+	assertNoSecretsIn(t, err)
+	assertNothingStored(t, store, srv.URL)
+}
+
+// TestLoginFallsBackToPromptedUsernameWhenHubOmitsIt covers Login's identity
+// fallback: when the hub's totp-leg response carries no user object at all,
+// the stored session's username must be the one the operator typed, not
+// empty.
+func TestLoginFallsBackToPromptedUsernameWhenHubOmitsIt(t *testing.T) {
+	stub := &loginHubStub{
+		loginStatus: http.StatusAccepted,
+		loginBody:   `{"totp_token":"tt-abc123"}`,
+		totpStatus:  http.StatusOK,
+		totpBody:    fmt.Sprintf(`{"access_token":%q,"refresh_token":%q}`, loginTestAccess, loginTestRefresh),
+	}
+	srv := newLoginHubStub(t, stub)
+	store := newLoginTestStore(t)
+
+	pair, err := Login(context.Background(), LoginOptions{
+		Client:   api.NewClient(srv.URL, ""),
+		HubURL:   srv.URL,
+		Store:    store,
+		Prompter: scriptedPrompter(),
+	})
+	if err != nil {
+		t.Fatalf("Login: %v", err)
+	}
+	if pair.User.Username != loginTestUser {
+		t.Errorf("returned identity = %q, want the prompted username %q", pair.User.Username, loginTestUser)
+	}
+	sess, ok, err := store.Load(srv.URL)
+	if err != nil || !ok {
+		t.Fatalf("Load = (ok %v, err %v)", ok, err)
+	}
+	if sess.Username != loginTestUser {
+		t.Errorf("stored username = %q, want the prompted %q", sess.Username, loginTestUser)
+	}
+}
+
+// TestResolvePrompterDefaultsToOSStdin covers resolvePrompter's own nil-stdin
+// default (every other test that exercises the non-interactive path supplies
+// an explicit Stdin file). Whichever branch it then takes depends on whether
+// the test runner's own stdin happens to be a terminal; either outcome is
+// acceptable here, since the point is exercising the defaulting assignment
+// itself without panicking on a nil *os.File.
+func TestResolvePrompterDefaultsToOSStdin(t *testing.T) {
+	p, err := resolvePrompter(nil, nil)
+	if err != nil {
+		if code := cmdutil.Code(err); code != cmdutil.ExitAuth {
+			t.Errorf("exit code = %d, want %d", code, cmdutil.ExitAuth)
+		}
+		return
+	}
+	if p == nil {
+		t.Fatal("resolvePrompter returned a nil prompter with a nil error")
+	}
+}
+
+// TestPromptCredentialsPropagatesUsernameError covers promptCredentials' own
+// username-prompt error handling, called directly (this file is in package
+// auth).
+func TestPromptCredentialsPropagatesUsernameError(t *testing.T) {
+	p := scriptedPrompter()
+	p.usernameErr = errors.New("terminal closed")
+
+	_, _, err := promptCredentials(p)
+	if err == nil {
+		t.Fatal("promptCredentials succeeded despite a failed username prompt, want error")
+	}
+	if !errors.Is(err, p.usernameErr) {
+		t.Fatalf("error %v does not wrap the prompt failure", err)
+	}
+}
+
+// TestPromptCredentialsRejectsEmptyPassword covers promptCredentials' local
+// validation of the password answer.
+func TestPromptCredentialsRejectsEmptyPassword(t *testing.T) {
+	p := scriptedPrompter()
+	p.password = ""
+
+	_, _, err := promptCredentials(p)
+	if err == nil {
+		t.Fatal("promptCredentials succeeded with an empty password, want error")
+	}
+	if code := cmdutil.Code(err); code != cmdutil.ExitUsage {
+		t.Errorf("exit code = %d, want %d", code, cmdutil.ExitUsage)
+	}
+}
+
+// TestScrubSecretSkipsShortSecrets covers scrubSecret's own guard against
+// substring-matching a secret too short to be worth it: below
+// minRedactableSecret, a real hub message could contain the "secret" by pure
+// coincidence, so scrubSecret leaves the error untouched rather than garbling
+// it.
+func TestScrubSecretSkipsShortSecrets(t *testing.T) {
+	orig := errors.New("hub rejected code abc")
+	got := scrubSecret(orig, "abc") // len 3 < minRedactableSecret (4)
+	if got != orig {
+		t.Errorf("scrubSecret altered an error for a secret shorter than the redaction floor: got %v, want the original error unchanged", got)
+	}
+}
+
+// TestNewTerminalPrompterDefaultsInAndOut covers NewTerminalPrompter's own
+// nil-in and nil-out defaulting, called directly with each left nil in turn
+// (this file is in package auth, so the concrete *terminalPrompter fields
+// are visible for the assertion).
+func TestNewTerminalPrompterDefaultsInAndOut(t *testing.T) {
+	t.Run("nil in defaults to os.Stdin", func(t *testing.T) {
+		var out strings.Builder
+		p, ok := NewTerminalPrompter(nil, &out).(*terminalPrompter)
+		if !ok {
+			t.Fatalf("NewTerminalPrompter returned %T, want *terminalPrompter", NewTerminalPrompter(nil, &out))
+		}
+		if p.in != os.Stdin {
+			t.Error("nil in did not default to os.Stdin")
+		}
+	})
+
+	t.Run("nil out defaults to os.Stderr", func(t *testing.T) {
+		in, err := os.CreateTemp(t.TempDir(), "prompter-in")
+		if err != nil {
+			t.Fatalf("CreateTemp: %v", err)
+		}
+		t.Cleanup(func() { _ = in.Close() })
+
+		p, ok := NewTerminalPrompter(in, nil).(*terminalPrompter)
+		if !ok {
+			t.Fatalf("NewTerminalPrompter returned %T, want *terminalPrompter", NewTerminalPrompter(in, nil))
+		}
+		if p.out != os.Stderr {
+			t.Error("nil out did not default to os.Stderr")
+		}
+	})
+}
+
+// TestTerminalPrompterUsernamePropagatesReadLineError covers both
+// Username()'s own readLine-error return and readLine's non-EOF error-wrap
+// branch: reading from an already-closed file produces a genuine read error
+// (not io.EOF), which must surface as a wrapped "reading input" error rather
+// than being treated as a normal end of input.
+func TestTerminalPrompterUsernamePropagatesReadLineError(t *testing.T) {
+	in, err := os.CreateTemp(t.TempDir(), "prompter-in")
+	if err != nil {
+		t.Fatalf("CreateTemp: %v", err)
+	}
+	if err := in.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+
+	var out strings.Builder
+	p := NewTerminalPrompter(in, &out)
+	if _, err := p.Username("default"); err == nil {
+		t.Fatal("Username succeeded reading from a closed file, want error")
+	} else if errors.Is(err, io.EOF) {
+		t.Errorf("error %v was treated as a normal EOF, want a wrapped read error", err)
 	}
 }

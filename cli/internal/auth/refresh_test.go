@@ -11,6 +11,7 @@ package auth
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -85,6 +86,13 @@ type stubHub struct {
 	// protectedPolicy decides the status for a protected call; nil means
 	// "accept only the current access token".
 	protectedPolicy func(h *stubHub, token string, call int) int
+	// refreshPolicy, when non-nil, can override the default single-use
+	// rotation check for a presented refresh token, answering with an
+	// arbitrary status instead. It exists so a test can pin what rotate()
+	// does when a *second* attempt (after a lost-race reread) fails for a
+	// reason other than the plain 401 the normal mismatch logic always
+	// produces. Returning handled=false falls through to that normal logic.
+	refreshPolicy func(h *stubHub, presented string, call int) (status int, handled bool)
 }
 
 func newStubHub(t *testing.T) *stubHub {
@@ -129,6 +137,17 @@ func (h *stubHub) handleRefresh(w http.ResponseWriter, r *http.Request) {
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		writeStubJSON(w, http.StatusBadRequest, map[string]string{"error": "malformed body"})
 		return
+	}
+
+	if h.refreshPolicy != nil {
+		if status, handled := h.refreshPolicy(h, body.RefreshToken, call); handled {
+			// Hostile on purpose, like the mismatch branch below: the stub
+			// reflects the token it was handed.
+			writeStubJSON(w, status, map[string]string{
+				"error": fmt.Sprintf("refresh token %s was rejected by policy", body.RefreshToken),
+			})
+			return
+		}
 	}
 
 	h.mu.Lock()
@@ -316,49 +335,74 @@ func TestResolvePrefersAPITokenOverStoredSession(t *testing.T) {
 	}}
 
 	t.Run("env token wins over config and session", func(t *testing.T) {
-		ac := f.resolve(t, "adt_from_env", cfg, nil)
-		if got := ac.Mode(); got != ModeAPIToken {
-			t.Errorf("Mode() = %q, want %q", got, ModeAPIToken)
-		}
-		// Identity fields belong to session mode only.
-		if ac.Username() != "" || ac.Role() != "" {
-			t.Errorf("api_token mode exposed identity: username %q role %q", ac.Username(), ac.Role())
-		}
-		c, err := ac.Client(context.Background())
-		if err != nil {
-			t.Fatalf("Client: %v", err)
-		}
-		if c.Token != "adt_from_env" {
-			t.Error("client bearer is not the env API token")
-		}
-		if refresh, _ := f.hub.counts(); refresh != 0 {
-			t.Errorf("resolution/client construction hit the refresh endpoint %d times", refresh)
-		}
+		runAPITokenEnvWinsOverConfigAndSession(t, f, cfg)
 	})
 
 	t.Run("config token used when env is empty", func(t *testing.T) {
-		ac := f.resolve(t, "", cfg, nil)
-		if got := ac.Mode(); got != ModeAPIToken {
-			t.Errorf("Mode() = %q, want %q", got, ModeAPIToken)
-		}
-		c, err := ac.Client(context.Background())
-		if err != nil {
-			t.Fatalf("Client: %v", err)
-		}
-		if c.Token != "adt_from_config" {
-			t.Error("client bearer is not the config API token")
-		}
+		runAPITokenConfigUsedWhenEnvEmpty(t, f, cfg)
 	})
 
 	t.Run("config token for a different hub is ignored", func(t *testing.T) {
-		other := config.Config{Hubs: map[string]config.HubProfile{
-			"https://other.example.com": {APIToken: "adt_other_hub"},
-		}}
-		ac := f.resolve(t, "", other, nil)
-		if got := ac.Mode(); got != ModeSession {
-			t.Errorf("Mode() = %q, want %q (hub B's token must not apply to hub A)", got, ModeSession)
-		}
+		runAPITokenConfigForDifferentHubIgnored(t, f)
 	})
+}
+
+// runAPITokenEnvWinsOverConfigAndSession is
+// TestResolvePrefersAPITokenOverStoredSession's "env token wins" subtest
+// body, extracted to a top-level function so its assertions do not nest
+// inside the enclosing table of t.Run subtests.
+func runAPITokenEnvWinsOverConfigAndSession(t *testing.T, f *refreshFixture, cfg config.Config) {
+	t.Helper()
+	ac := f.resolve(t, "adt_from_env", cfg, nil)
+	if got := ac.Mode(); got != ModeAPIToken {
+		t.Errorf("Mode() = %q, want %q", got, ModeAPIToken)
+	}
+	// Identity fields belong to session mode only.
+	if ac.Username() != "" || ac.Role() != "" {
+		t.Errorf("api_token mode exposed identity: username %q role %q", ac.Username(), ac.Role())
+	}
+	c, err := ac.Client(context.Background())
+	if err != nil {
+		t.Fatalf("Client: %v", err)
+	}
+	if c.Token != "adt_from_env" {
+		t.Error("client bearer is not the env API token")
+	}
+	if refresh, _ := f.hub.counts(); refresh != 0 {
+		t.Errorf("resolution/client construction hit the refresh endpoint %d times", refresh)
+	}
+}
+
+// runAPITokenConfigUsedWhenEnvEmpty is
+// TestResolvePrefersAPITokenOverStoredSession's "config token used" subtest
+// body, extracted for the same reason as its sibling above.
+func runAPITokenConfigUsedWhenEnvEmpty(t *testing.T, f *refreshFixture, cfg config.Config) {
+	t.Helper()
+	ac := f.resolve(t, "", cfg, nil)
+	if got := ac.Mode(); got != ModeAPIToken {
+		t.Errorf("Mode() = %q, want %q", got, ModeAPIToken)
+	}
+	c, err := ac.Client(context.Background())
+	if err != nil {
+		t.Fatalf("Client: %v", err)
+	}
+	if c.Token != "adt_from_config" {
+		t.Error("client bearer is not the config API token")
+	}
+}
+
+// runAPITokenConfigForDifferentHubIgnored is
+// TestResolvePrefersAPITokenOverStoredSession's "different hub ignored"
+// subtest body, extracted for the same reason as its siblings above.
+func runAPITokenConfigForDifferentHubIgnored(t *testing.T, f *refreshFixture) {
+	t.Helper()
+	other := config.Config{Hubs: map[string]config.HubProfile{
+		"https://other.example.com": {APIToken: "adt_other_hub"},
+	}}
+	ac := f.resolve(t, "", other, nil)
+	if got := ac.Mode(); got != ModeSession {
+		t.Errorf("Mode() = %q, want %q (hub B's token must not apply to hub A)", got, ModeSession)
+	}
 }
 
 func TestResolveSessionModeCarriesStoredIdentity(t *testing.T) {
@@ -841,4 +885,318 @@ func equalInts(got, want []int) bool {
 		}
 	}
 	return true
+}
+
+// erroringStore is a Store whose Load and/or Save always fail, for pinning
+// the propagation of a storage backend's own errors through Resolve,
+// refresh(), loadSession, newerSession, and persistAndAdopt — paths a
+// working file/keyring store never exercises.
+type erroringStore struct {
+	loadErr error
+	saveErr error
+}
+
+func (s *erroringStore) Load(string) (StoredSession, bool, error) {
+	return StoredSession{}, false, s.loadErr
+}
+func (s *erroringStore) Save(string, StoredSession) error { return s.saveErr }
+func (s *erroringStore) Delete(string) error              { return nil }
+func (s *erroringStore) Backend() string                  { return "erroring" }
+
+// twoStepStore answers Load with first on the first call and second on every
+// call after, so a test can simulate the store having moved on between
+// refresh's initial read and rotate's reread-after-fail.
+type twoStepStore struct {
+	calls         int
+	first, second StoredSession
+}
+
+func (s *twoStepStore) Load(string) (StoredSession, bool, error) {
+	s.calls++
+	if s.calls == 1 {
+		return s.first, true, nil
+	}
+	return s.second, true, nil
+}
+func (s *twoStepStore) Save(string, StoredSession) error { return nil }
+func (s *twoStepStore) Delete(string) error              { return nil }
+func (s *twoStepStore) Backend() string                  { return "two-step" }
+
+// --- coverage: error paths and edge cases not reached above -----------------
+
+// TestResolveReturnsStoreLoadError covers Resolve's own store.Load error
+// return, distinct from the "no session" (ok=false, err=nil) case every
+// other resolution test exercises.
+func TestResolveReturnsStoreLoadError(t *testing.T) {
+	f := newRefreshFixture(t)
+	store := &erroringStore{loadErr: errors.New("backend unavailable")}
+	if _, err := Resolve(f.hub.url(), "", config.Config{}, store, f.dir); err == nil {
+		t.Error("Resolve succeeded despite a failing store, want error")
+	}
+}
+
+// TestDoRejectsNilOperation covers Do's own nil-op guard, which no caller in
+// this CLI ever exercises in production (every RunXxx supplies one).
+func TestDoRejectsNilOperation(t *testing.T) {
+	f := newRefreshFixture(t)
+	f.seedSession(t)
+	ac := f.resolve(t, "", config.Config{}, nil)
+
+	err := ac.Do(context.Background(), nil)
+	if err == nil {
+		t.Fatal("Do succeeded with a nil operation, want error")
+	}
+	if code := cmdutil.Code(err); code != cmdutil.ExitError {
+		t.Errorf("exit code = %d, want %d", code, cmdutil.ExitError)
+	}
+}
+
+// TestDoRetryRefreshFailsWhenSessionInvalidatedMidCall covers Do's own
+// "the retry refresh itself fails" branch: op's first 401 triggers a retry,
+// but by the time the retry's refresh runs, the stored session has been
+// invalidated out from under it (e.g. another process logged out). The
+// onProtected hook fires right as Do's first (post-Client-refresh) protected
+// call is served, which is exactly the window between the initial successful
+// refresh and the retry's refresh.
+func TestDoRetryRefreshFailsWhenSessionInvalidatedMidCall(t *testing.T) {
+	f := newRefreshFixture(t)
+	f.seedSession(t)
+	ac := f.resolve(t, "", config.Config{}, nil)
+
+	f.hub.onProtected = func(call int) {
+		if call == 1 {
+			if err := f.store.Save(f.hub.url(), StoredSession{
+				RefreshToken: "stale-token-no-longer-valid",
+				Username:     "alice",
+				Role:         "admin",
+				ObtainedAt:   time.Now().UTC(),
+			}); err != nil {
+				t.Fatalf("invalidate stored session mid-call: %v", err)
+			}
+		}
+	}
+	f.hub.protectedPolicy = func(*stubHub, string, int) int { return http.StatusUnauthorized }
+
+	err := ac.Do(context.Background(), listServers(context.Background()))
+	if err == nil {
+		t.Fatal("Do succeeded despite the session being invalidated mid-retry")
+	}
+	assertNoTokenLeak(t, err)
+	if code := cmdutil.Code(err); code != cmdutil.ExitAuth {
+		t.Errorf("exit code = %d, want %d", code, cmdutil.ExitAuth)
+	}
+}
+
+// TestRefreshFailsWhenStoreIsNil covers refresh()'s own nil-store guard.
+// Resolve never produces a ModeSession AuthContext with a nil store, so this
+// constructs one directly (this file is in package auth).
+func TestRefreshFailsWhenStoreIsNil(t *testing.T) {
+	ac := &AuthContext{hubURL: "https://hub.example.com", mode: ModeSession}
+	err := ac.refresh(context.Background())
+	if err == nil {
+		t.Fatal("refresh succeeded with a nil store, want error")
+	}
+	if code := cmdutil.Code(err); code != cmdutil.ExitAuth {
+		t.Errorf("exit code = %d, want %d", code, cmdutil.ExitAuth)
+	}
+}
+
+// TestRefreshFailsWhenLockRefreshErrors covers refresh()'s propagation of a
+// LockRefresh failure (an empty config directory is the simplest way to make
+// LockRefresh itself return an error; see store_test.go's own LockRefresh
+// fault-injection tests for the filesystem-level cases).
+func TestRefreshFailsWhenLockRefreshErrors(t *testing.T) {
+	f := newRefreshFixture(t)
+	f.seedSession(t)
+	ac := &AuthContext{hubURL: f.hub.url(), mode: ModeSession, store: f.store, configDir: "  "}
+
+	err := ac.refresh(context.Background())
+	if err == nil {
+		t.Fatal("refresh succeeded despite LockRefresh failing, want error")
+	}
+	if code := cmdutil.Code(err); code != cmdutil.ExitError {
+		t.Errorf("exit code = %d, want %d", code, cmdutil.ExitError)
+	}
+}
+
+// TestRefreshLoadSessionPropagatesStoreError covers loadSession's own
+// store.Load error return, distinct from the "nothing stored" case
+// TestRefreshFailsWhenNothingIsStored exercises.
+func TestRefreshLoadSessionPropagatesStoreError(t *testing.T) {
+	f := newRefreshFixture(t)
+	ac := &AuthContext{
+		hubURL:    f.hub.url(),
+		mode:      ModeSession,
+		configDir: f.dir,
+		store:     &erroringStore{loadErr: errors.New("backend unavailable")},
+	}
+
+	err := ac.refresh(context.Background())
+	if err == nil {
+		t.Fatal("refresh succeeded despite a failing store, want error")
+	}
+	if code := cmdutil.Code(err); code != cmdutil.ExitError {
+		t.Errorf("exit code = %d, want %d", code, cmdutil.ExitError)
+	}
+}
+
+// raceLostStore backs both rotate-race tests below: it hands refresh() a
+// dead token on the initial loadSession Load, then a *different* dead token
+// on newerSession's reread, so rotate() actually attempts (and can fail) a
+// second postRefresh rather than newerSession short-circuiting because the
+// reread found the same token back (that shorter path is what
+// TestRefreshFailsWhenNoNewerTokenExists already pins).
+func raceLostStore(second StoredSession) *twoStepStore {
+	return &twoStepStore{
+		first:  StoredSession{RefreshToken: "bogus-A", Username: "alice", Role: "admin"},
+		second: second,
+	}
+}
+
+// TestRotateRaceLostBothAttemptsRejected covers rotate()'s "reread found a
+// genuinely different token, but the hub rejects that one too" branch
+// (RaceLost with no recovery).
+func TestRotateRaceLostBothAttemptsRejected(t *testing.T) {
+	f := newRefreshFixture(t)
+	ac := &AuthContext{
+		hubURL:    f.hub.url(),
+		mode:      ModeSession,
+		configDir: f.dir,
+		store:     raceLostStore(StoredSession{RefreshToken: "also-bogus-B", Username: "alice", Role: "admin"}),
+	}
+
+	err := ac.refresh(context.Background())
+	if err == nil {
+		t.Fatal("refresh succeeded despite both attempts being rejected")
+	}
+	assertNoTokenLeak(t, err)
+	if code := cmdutil.Code(err); code != cmdutil.ExitAuth {
+		t.Errorf("exit code = %d, want %d (both rejections are plain 401s)", code, cmdutil.ExitAuth)
+	}
+	if !strings.Contains(err.Error(), "vey login") {
+		t.Errorf("error lacks re-login guidance: %s", err)
+	}
+}
+
+// TestRotateRaceLostSecondAttemptSurfacesNonAuthError covers rotate()'s
+// "reread found a different token, but the retry fails for a reason other
+// than 401" branch: a 5xx on the retry must surface verbatim (scrubbed of the
+// token), the same "not a race, and not something re-login would fix"
+// treatment the first attempt already gets.
+func TestRotateRaceLostSecondAttemptSurfacesNonAuthError(t *testing.T) {
+	f := newRefreshFixture(t)
+	f.hub.mu.Lock()
+	f.hub.refreshPolicy = func(_ *stubHub, presented string, _ int) (int, bool) {
+		switch presented {
+		case "bogus-A":
+			return http.StatusUnauthorized, true
+		case "also-bogus-B":
+			return http.StatusInternalServerError, true
+		default:
+			return 0, false
+		}
+	}
+	f.hub.mu.Unlock()
+
+	ac := &AuthContext{
+		hubURL:    f.hub.url(),
+		mode:      ModeSession,
+		configDir: f.dir,
+		store:     raceLostStore(StoredSession{RefreshToken: "also-bogus-B", Username: "alice", Role: "admin"}),
+	}
+
+	err := ac.refresh(context.Background())
+	if err == nil {
+		t.Fatal("refresh succeeded despite the retry being rejected")
+	}
+	assertNoTokenLeak(t, err)
+	if code := cmdutil.Code(err); code == cmdutil.ExitAuth {
+		t.Errorf("exit code = %d, want something other than ExitAuth: a 5xx on the retry is not a session expiry", code)
+	}
+}
+
+// TestNewerSessionPropagatesStoreError covers newerSession's own store.Load
+// error return.
+func TestNewerSessionPropagatesStoreError(t *testing.T) {
+	ac := &AuthContext{store: &erroringStore{loadErr: errors.New("backend unavailable")}}
+	_, err := ac.newerSession("spent-token")
+	if err == nil {
+		t.Fatal("newerSession succeeded despite a failing store, want error")
+	}
+	if code := cmdutil.Code(err); code != cmdutil.ExitError {
+		t.Errorf("exit code = %d, want %d", code, cmdutil.ExitError)
+	}
+}
+
+// TestPersistAndAdoptRejectsIncompleteTokenPair covers persistAndAdopt's
+// guard against ever adopting a half-populated pair: a hub bug that returns
+// one token but not the other must not destroy the session by persisting an
+// empty refresh token.
+func TestPersistAndAdoptRejectsIncompleteTokenPair(t *testing.T) {
+	f := newRefreshFixture(t)
+	ac := &AuthContext{hubURL: f.hub.url(), store: f.store}
+
+	err := ac.persistAndAdopt(StoredSession{}, api.TokenPair{AccessToken: "atk-only"})
+	if err == nil {
+		t.Fatal("persistAndAdopt accepted a pair with no refresh token, want error")
+	}
+	if code := cmdutil.Code(err); code != cmdutil.ExitError {
+		t.Errorf("exit code = %d, want %d", code, cmdutil.ExitError)
+	}
+	if _, ok, loadErr := f.store.Load(f.hub.url()); loadErr != nil || ok {
+		t.Errorf("an incomplete pair was persisted: (ok %v, err %v)", ok, loadErr)
+	}
+}
+
+// TestPersistAndAdoptUsesHubReturnedIdentityWhenPresent covers the branch
+// where the hub's refresh response does carry a user object: that identity
+// must override the identity carried over from the entry that was spent,
+// rather than always keeping the old one.
+func TestPersistAndAdoptUsesHubReturnedIdentityWhenPresent(t *testing.T) {
+	f := newRefreshFixture(t)
+	ac := &AuthContext{hubURL: f.hub.url(), mode: ModeSession, store: f.store}
+
+	spent := StoredSession{Username: "old-user", Role: "viewer"}
+	pair := api.TokenPair{
+		AccessToken:  "atk-fresh",
+		RefreshToken: "rtk-fresh",
+		User:         api.User{Username: "new-user", Role: "admin"},
+	}
+	if err := ac.persistAndAdopt(spent, pair); err != nil {
+		t.Fatalf("persistAndAdopt: %v", err)
+	}
+	if ac.Username() != "new-user" || ac.Role() != "admin" {
+		t.Errorf("adopted identity = %s/%s, want the hub-returned new-user/admin", ac.Username(), ac.Role())
+	}
+	sess, ok, err := f.store.Load(f.hub.url())
+	if err != nil || !ok {
+		t.Fatalf("Load after persistAndAdopt = (ok %v, err %v)", ok, err)
+	}
+	if sess.Username != "new-user" || sess.Role != "admin" {
+		t.Errorf("stored identity = %s/%s, want new-user/admin", sess.Username, sess.Role)
+	}
+}
+
+// TestPersistAndAdoptScrubsSaveError covers persistAndAdopt's own Save-error
+// path, including the secret-hygiene guard: a storage backend that quotes
+// the value it failed to write must not leak the rotated refresh token
+// through the returned error (the same scrub Login's own Store.Save failure
+// gets, pinned here for the refresh-time write).
+func TestPersistAndAdoptScrubsSaveError(t *testing.T) {
+	const rotatedToken = "rtk-fresh-MUST-NOT-LEAK"
+	ac := &AuthContext{
+		hubURL: "https://hub.example.com",
+		store:  &erroringStore{saveErr: fmt.Errorf("backend rejected value %q", rotatedToken)},
+	}
+
+	err := ac.persistAndAdopt(StoredSession{}, api.TokenPair{AccessToken: "atk", RefreshToken: rotatedToken})
+	if err == nil {
+		t.Fatal("persistAndAdopt succeeded despite a failing Save, want error")
+	}
+	if code := cmdutil.Code(err); code != cmdutil.ExitError {
+		t.Errorf("exit code = %d, want %d", code, cmdutil.ExitError)
+	}
+	if strings.Contains(err.Error(), rotatedToken) {
+		t.Errorf("error leaked the rotated refresh token: %s", err)
+	}
 }

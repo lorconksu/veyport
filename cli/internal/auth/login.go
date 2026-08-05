@@ -79,26 +79,9 @@ type LoginOptions struct {
 // are passed through with the code the API client assigned them (401 → 3,
 // 429 → 7) rather than re-mapped here.
 func Login(ctx context.Context, opts LoginOptions) (*api.TokenPair, error) {
-	stdin := opts.Stdin
-	if stdin == nil {
-		stdin = os.Stdin
-	}
-
-	prompter := opts.Prompter
-	if prompter == nil {
-		// The terminal prompter is the only thing here that requires a TTY,
-		// so the TTY check belongs with it: a caller that brings its own
-		// prompter has its own input source and stdin is irrelevant. With no
-		// terminal there is nothing to prompt, so fail before any prompt and
-		// before any network call, pointing at the non-interactive path
-		// (FR-012, R6).
-		if !term.IsTerminal(int(stdin.Fd())) {
-			return nil, cmdutil.NewAuthError(errors.New(
-				"vey login needs an interactive terminal, and stdin is not one; " +
-					"for scripts and CI, use an API token instead: set VEYPORT_TOKEN=adt_... " +
-					"(create one in the web UI under Settings → API Tokens)"))
-		}
-		prompter = NewTerminalPrompter(stdin, os.Stderr)
+	prompter, err := resolvePrompter(opts.Prompter, opts.Stdin)
+	if err != nil {
+		return nil, err
 	}
 
 	if opts.Client == nil {
@@ -170,6 +153,30 @@ func Login(ctx context.Context, opts LoginOptions) (*api.TokenPair, error) {
 	}
 
 	return &pair, nil
+}
+
+// resolvePrompter returns the prompter Login should use: the caller's, if it
+// supplied one, otherwise a terminal prompter over stdin (os.Stdin when nil).
+//
+// The terminal prompter is the only thing here that requires a TTY, so the TTY
+// check belongs with it: a caller that brings its own prompter has its own
+// input source and stdin is irrelevant. With no terminal there is nothing to
+// prompt, so this fails before any prompt and before any network call,
+// pointing at the non-interactive path (FR-012, R6).
+func resolvePrompter(p LoginPrompter, stdin *os.File) (LoginPrompter, error) {
+	if p != nil {
+		return p, nil
+	}
+	if stdin == nil {
+		stdin = os.Stdin
+	}
+	if !term.IsTerminal(int(stdin.Fd())) {
+		return nil, cmdutil.NewAuthError(errors.New(
+			"vey login needs an interactive terminal, and stdin is not one; " +
+				"for scripts and CI, use an API token instead: set VEYPORT_TOKEN=adt_... " +
+				"(create one in the web UI under Settings → API Tokens)"))
+	}
+	return NewTerminalPrompter(stdin, os.Stderr), nil
 }
 
 // promptCredentials collects username and password, validating the username

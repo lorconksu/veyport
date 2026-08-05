@@ -6,6 +6,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -226,6 +227,114 @@ func TestStatus_Unreachable_ConnError(t *testing.T) {
 		t.Fatalf("exit code = %d, want %d (ExitConn); stdout=%q", code, cmdutil.ExitConn, stdout.String())
 	}
 
+	got := decodeJSON(t, stdout)
+	if got["reachable"] != false {
+		t.Errorf("reachable = %v, want false", got["reachable"])
+	}
+}
+
+// TestStatus_EmptyConfigDir_StoreConstructionError covers newAuthContext's
+// own auth.NewStore failure branch (shared helper, status.go): an empty
+// ConfigDir fails store construction outright, independent of any TTY or
+// credential state.
+func TestStatus_EmptyConfigDir_StoreConstructionError(t *testing.T) {
+	t.Setenv("VEYPORT_TOKEN", "")
+	ctx, stdout, stderr := newCmdContext("https://hub.example.com", "", true, nil)
+	code := RunStatus(ctx)
+	if code != cmdutil.ExitError {
+		t.Fatalf("exit code = %d, want %d (ExitError); stdout=%q stderr=%q", code, cmdutil.ExitError, stdout.String(), stderr.String())
+	}
+	if stdout.Len() != 0 {
+		t.Errorf("stdout = %q, want empty (RunStatus's own newAuthContext failure never reaches printStatus)", stdout.String())
+	}
+}
+
+// TestStatus_AuthContextFailure covers RunStatus's newAuthContext error
+// branch via auth.Resolve failing (a malformed VEYPORT_TOKEN, rejected by
+// local validation before any hub round trip).
+func TestStatus_AuthContextFailure(t *testing.T) {
+	t.Setenv("VEYPORT_TOKEN", "malformed-token")
+	ctx, stdout, stderr := newCmdContext("https://hub.example.com", t.TempDir(), false, nil)
+	code := RunStatus(ctx)
+	if code != cmdutil.ExitUsage {
+		t.Fatalf("exit code = %d, want %d (ExitUsage); stdout=%q stderr=%q", code, cmdutil.ExitUsage, stdout.String(), stderr.String())
+	}
+}
+
+// TestStatus_HumanMode_SessionAndNotSignedIn covers humanMode's "session"
+// case and printStatus's human-mode rendering: every other status test in
+// this file runs with --json, so the human-readable report is otherwise
+// unexercised.
+func TestStatus_HumanMode_SessionAndNotSignedIn(t *testing.T) {
+	t.Run("session", func(t *testing.T) {
+		t.Setenv("VEYPORT_TOKEN", "")
+		mux := http.NewServeMux()
+		mountRefresh(mux, "access-1", "refresh-2")
+		mux.HandleFunc("GET /api/auth/me", func(w http.ResponseWriter, r *http.Request) {
+			_ = json.NewEncoder(w).Encode(map[string]string{"username": "alice", "role": "admin"})
+		})
+		srv := httptest.NewServer(mux)
+		defer srv.Close()
+
+		configDir := t.TempDir()
+		seedSession(t, configDir, srv.URL, auth.StoredSession{
+			RefreshToken: "refresh-1", Username: "alice", Role: "admin", ObtainedAt: time.Now(),
+		})
+
+		ctx, stdout, stderr := newCmdContext(srv.URL, configDir, false, nil)
+		code := RunStatus(ctx)
+		if code != cmdutil.ExitOK {
+			t.Fatalf("exit code = %d, want %d (ExitOK); stderr=%q", code, cmdutil.ExitOK, stderr.String())
+		}
+		out := stdout.String()
+		if !strings.Contains(out, "interactive session as alice (admin)") {
+			t.Errorf("stdout = %q, want the human session line", out)
+		}
+		if !strings.Contains(out, "Reachable: true") {
+			t.Errorf("stdout = %q, want a Reachable line", out)
+		}
+	})
+
+	t.Run("not_signed_in", func(t *testing.T) {
+		t.Setenv("VEYPORT_TOKEN", "")
+		srv := httptest.NewServer(http.NewServeMux())
+		defer srv.Close()
+
+		ctx, stdout, stderr := newCmdContext(srv.URL, t.TempDir(), false, nil)
+		code := RunStatus(ctx)
+		if code != cmdutil.ExitAuth {
+			t.Fatalf("exit code = %d, want %d (ExitAuth); stderr=%q", code, cmdutil.ExitAuth, stderr.String())
+		}
+		if !strings.Contains(stdout.String(), "not signed in") {
+			t.Errorf("stdout = %q, want the human not-signed-in line", stdout.String())
+		}
+	})
+}
+
+// TestStatus_ReachableAuthError_ExitAuth covers RunStatus's final fallback
+// return (exit 3) when GET /api/auth/me fails with something other than a
+// connectivity error: the session itself has been invalidated hub-side.
+func TestStatus_ReachableAuthError_ExitAuth(t *testing.T) {
+	t.Setenv("VEYPORT_TOKEN", "")
+	mux := http.NewServeMux()
+	mountRefresh(mux, "access-1", "refresh-2")
+	mux.HandleFunc("GET /api/auth/me", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusUnauthorized)
+		_ = json.NewEncoder(w).Encode(map[string]string{"error": "session revoked"})
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	configDir := t.TempDir()
+	seedSession(t, configDir, srv.URL, auth.StoredSession{
+		RefreshToken: "refresh-1", Username: "alice", Role: "admin", ObtainedAt: time.Now(),
+	})
+
+	ctx, stdout, stderr := newCmdContext(srv.URL, configDir, true, nil)
+	code := RunStatus(ctx)
+	if code != cmdutil.ExitAuth {
+		t.Fatalf("exit code = %d, want %d (ExitAuth); stdout=%q stderr=%q", code, cmdutil.ExitAuth, stdout.String(), stderr.String())
+	}
 	got := decodeJSON(t, stdout)
 	if got["reachable"] != false {
 		t.Errorf("reachable = %v, want false", got["reachable"])

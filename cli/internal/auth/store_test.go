@@ -182,47 +182,53 @@ func TestNewStoreRejectsEmptyConfigDir(t *testing.T) {
 
 func TestStoreRoundTrip(t *testing.T) {
 	for _, backend := range backends() {
-		t.Run(backend, func(t *testing.T) {
-			s := newTestStore(t, backend)
+		t.Run(backend, func(t *testing.T) { runStoreRoundTrip(t, backend) })
+	}
+}
 
-			if _, ok, err := s.Load(hubA); err != nil || ok {
-				t.Fatalf("Load on empty store = (ok %v, err %v), want (false, nil)", ok, err)
-			}
+// runStoreRoundTrip is TestStoreRoundTrip's per-backend body, split out so the
+// sequence of assertions is not nested inside the loop/subtest closure (which
+// otherwise pushes cognitive complexity well past the threshold).
+func runStoreRoundTrip(t *testing.T, backend string) {
+	t.Helper()
+	s := newTestStore(t, backend)
 
-			want := sessionFor(hubA)
-			if err := s.Save(hubA, want); err != nil {
-				t.Fatalf("Save: %v", err)
-			}
-			got, ok, err := s.Load(hubA)
-			if err != nil || !ok {
-				t.Fatalf("Load = (ok %v, err %v), want (true, nil)", ok, err)
-			}
-			assertSession(t, got, want)
+	if _, ok, err := s.Load(hubA); err != nil || ok {
+		t.Fatalf("Load on empty store = (ok %v, err %v), want (false, nil)", ok, err)
+	}
 
-			// Save replaces rather than accumulating: the rotated token must
-			// fully supersede the old one.
-			rotated := want
-			rotated.RefreshToken = testToken + "/rotated"
-			if err := s.Save(hubA, rotated); err != nil {
-				t.Fatalf("Save rotated: %v", err)
-			}
-			got, _, err = s.Load(hubA)
-			if err != nil {
-				t.Fatalf("Load after rotation: %v", err)
-			}
-			assertSession(t, got, rotated)
+	want := sessionFor(hubA)
+	if err := s.Save(hubA, want); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+	got, ok, err := s.Load(hubA)
+	if err != nil || !ok {
+		t.Fatalf("Load = (ok %v, err %v), want (true, nil)", ok, err)
+	}
+	assertSession(t, got, want)
 
-			if err := s.Delete(hubA); err != nil {
-				t.Fatalf("Delete: %v", err)
-			}
-			if _, ok, err := s.Load(hubA); err != nil || ok {
-				t.Fatalf("Load after Delete = (ok %v, err %v), want (false, nil)", ok, err)
-			}
-			// Deleting an absent session is a no-op, not a failure.
-			if err := s.Delete(hubA); err != nil {
-				t.Errorf("second Delete: %v", err)
-			}
-		})
+	// Save replaces rather than accumulating: the rotated token must
+	// fully supersede the old one.
+	rotated := want
+	rotated.RefreshToken = testToken + "/rotated"
+	if err := s.Save(hubA, rotated); err != nil {
+		t.Fatalf("Save rotated: %v", err)
+	}
+	got, _, err = s.Load(hubA)
+	if err != nil {
+		t.Fatalf("Load after rotation: %v", err)
+	}
+	assertSession(t, got, rotated)
+
+	if err := s.Delete(hubA); err != nil {
+		t.Fatalf("Delete: %v", err)
+	}
+	if _, ok, err := s.Load(hubA); err != nil || ok {
+		t.Fatalf("Load after Delete = (ok %v, err %v), want (false, nil)", ok, err)
+	}
+	// Deleting an absent session is a no-op, not a failure.
+	if err := s.Delete(hubA); err != nil {
+		t.Errorf("second Delete: %v", err)
 	}
 }
 
@@ -230,56 +236,62 @@ func TestStoreRoundTrip(t *testing.T) {
 // to hub A but --hub points at hub B" (FR-005) in both backends.
 func TestStoreScopesCredentialsPerHub(t *testing.T) {
 	for _, backend := range backends() {
-		t.Run(backend, func(t *testing.T) {
-			s := newTestStore(t, backend)
-
-			sessA := sessionFor(hubA)
-			if err := s.Save(hubA, sessA); err != nil {
-				t.Fatalf("Save hub A: %v", err)
-			}
-
-			// Hub B must see nothing at all, not hub A's credentials.
-			got, ok, err := s.Load(hubB)
-			if err != nil {
-				t.Fatalf("Load hub B: %v", err)
-			}
-			if ok {
-				t.Fatalf("hub B returned a session it was never given: %+v", redact(got))
-			}
-			if got.RefreshToken != "" {
-				t.Fatalf("hub B returned token material: %+v", redact(got))
-			}
-
-			// Both hubs populated: each keeps its own token.
-			sessB := sessionFor(hubB)
-			if err := s.Save(hubB, sessB); err != nil {
-				t.Fatalf("Save hub B: %v", err)
-			}
-			gotA, _, err := s.Load(hubA)
-			if err != nil {
-				t.Fatalf("Load hub A: %v", err)
-			}
-			assertSession(t, gotA, sessA)
-			gotB, _, err := s.Load(hubB)
-			if err != nil {
-				t.Fatalf("Load hub B: %v", err)
-			}
-			assertSession(t, gotB, sessB)
-
-			// Deleting one hub leaves the other intact.
-			if err := s.Delete(hubA); err != nil {
-				t.Fatalf("Delete hub A: %v", err)
-			}
-			if _, ok, err := s.Load(hubA); err != nil || ok {
-				t.Fatalf("hub A survived deletion: (ok %v, err %v)", ok, err)
-			}
-			gotB, ok, err = s.Load(hubB)
-			if err != nil || !ok {
-				t.Fatalf("hub B lost after deleting hub A: (ok %v, err %v)", ok, err)
-			}
-			assertSession(t, gotB, sessB)
-		})
+		t.Run(backend, func(t *testing.T) { runStoreScopesCredentialsPerHub(t, backend) })
 	}
+}
+
+// runStoreScopesCredentialsPerHub is TestStoreScopesCredentialsPerHub's
+// per-backend body, extracted so its assertions run outside the loop/subtest
+// closure nesting.
+func runStoreScopesCredentialsPerHub(t *testing.T, backend string) {
+	t.Helper()
+	s := newTestStore(t, backend)
+
+	sessA := sessionFor(hubA)
+	if err := s.Save(hubA, sessA); err != nil {
+		t.Fatalf("Save hub A: %v", err)
+	}
+
+	// Hub B must see nothing at all, not hub A's credentials.
+	got, ok, err := s.Load(hubB)
+	if err != nil {
+		t.Fatalf("Load hub B: %v", err)
+	}
+	if ok {
+		t.Fatalf("hub B returned a session it was never given: %+v", redact(got))
+	}
+	if got.RefreshToken != "" {
+		t.Fatalf("hub B returned token material: %+v", redact(got))
+	}
+
+	// Both hubs populated: each keeps its own token.
+	sessB := sessionFor(hubB)
+	if err := s.Save(hubB, sessB); err != nil {
+		t.Fatalf("Save hub B: %v", err)
+	}
+	gotA, _, err := s.Load(hubA)
+	if err != nil {
+		t.Fatalf("Load hub A: %v", err)
+	}
+	assertSession(t, gotA, sessA)
+	gotB, _, err := s.Load(hubB)
+	if err != nil {
+		t.Fatalf("Load hub B: %v", err)
+	}
+	assertSession(t, gotB, sessB)
+
+	// Deleting one hub leaves the other intact.
+	if err := s.Delete(hubA); err != nil {
+		t.Fatalf("Delete hub A: %v", err)
+	}
+	if _, ok, err := s.Load(hubA); err != nil || ok {
+		t.Fatalf("hub A survived deletion: (ok %v, err %v)", ok, err)
+	}
+	gotB, ok, err = s.Load(hubB)
+	if err != nil || !ok {
+		t.Fatalf("hub B lost after deleting hub A: (ok %v, err %v)", ok, err)
+	}
+	assertSession(t, gotB, sessB)
 }
 
 func TestStoreRejectsEmptyHubURL(t *testing.T) {
@@ -342,37 +354,43 @@ func TestFileStorePermissionEnforcement(t *testing.T) {
 	}
 
 	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			fs := newTestFileStore(t)
-			if err := fs.Save(hubA, sessionFor(hubA)); err != nil {
-				t.Fatalf("Save: %v", err)
-			}
-			if err := os.Chmod(fs.path, tc.mode); err != nil {
-				t.Fatalf("chmod: %v", err)
-			}
+		t.Run(tc.name, func(t *testing.T) { runFileStorePermissionCase(t, tc.mode, tc.wantReject) })
+	}
+}
 
-			_, _, err := fs.Load(hubA)
-			if !tc.wantReject {
-				if err != nil {
-					t.Fatalf("Load with mode %04o failed: %v", tc.mode, err)
-				}
-				return
-			}
-			if err == nil {
-				t.Fatalf("Load with mode %04o succeeded, want rejection", tc.mode)
-			}
-			msg := err.Error()
-			if !strings.Contains(msg, "chmod 600 "+fs.path) {
-				t.Errorf("error lacks remediation %q: %s", "chmod 600 "+fs.path, msg)
-			}
-			if strings.Contains(msg, testToken) {
-				t.Error("error message leaked the refresh token")
-			}
-			// A rejected file must not be silently repaired or written over.
-			if err := fs.Save(hubA, sessionFor(hubA)); err == nil {
-				t.Error("Save over an exposed credentials file succeeded, want rejection")
-			}
-		})
+// runFileStorePermissionCase is TestFileStorePermissionEnforcement's
+// per-case body, extracted so the accept/reject branches are not nested
+// inside the table loop's subtest closure.
+func runFileStorePermissionCase(t *testing.T, mode os.FileMode, wantReject bool) {
+	t.Helper()
+	fs := newTestFileStore(t)
+	if err := fs.Save(hubA, sessionFor(hubA)); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+	if err := os.Chmod(fs.path, mode); err != nil {
+		t.Fatalf("chmod: %v", err)
+	}
+
+	_, _, err := fs.Load(hubA)
+	if !wantReject {
+		if err != nil {
+			t.Fatalf("Load with mode %04o failed: %v", mode, err)
+		}
+		return
+	}
+	if err == nil {
+		t.Fatalf("Load with mode %04o succeeded, want rejection", mode)
+	}
+	msg := err.Error()
+	if !strings.Contains(msg, "chmod 600 "+fs.path) {
+		t.Errorf("error lacks remediation %q: %s", "chmod 600 "+fs.path, msg)
+	}
+	if strings.Contains(msg, testToken) {
+		t.Error("error message leaked the refresh token")
+	}
+	// A rejected file must not be silently repaired or written over.
+	if err := fs.Save(hubA, sessionFor(hubA)); err == nil {
+		t.Error("Save over an exposed credentials file succeeded, want rejection")
 	}
 }
 
@@ -488,6 +506,181 @@ func TestFileStoreRejectsNonRegularFile(t *testing.T) {
 	}
 	if _, _, err := fs.Load(hubA); err == nil {
 		t.Error("Load followed a symlinked credentials file, want rejection")
+	}
+}
+
+// --- error paths (fault injection) ------------------------------------------
+//
+// These exercise the store's I/O failure branches — MkdirAll/OpenFile/Rename
+// rejecting a blocked or hostile path, and a keyring that answers every call
+// with an error — none of which the happy-path tests above ever provoke.
+
+// blockedPath returns a path that can never be created as a directory: dir
+// is first created as a regular file, so anything under it fails MkdirAll
+// with "not a directory".
+func blockedPath(t *testing.T, sub string) string {
+	t.Helper()
+	base := t.TempDir()
+	blocker := filepath.Join(base, "blocker")
+	if err := os.WriteFile(blocker, []byte("not a directory"), 0o600); err != nil {
+		t.Fatalf("write blocker file: %v", err)
+	}
+	return filepath.Join(blocker, sub)
+}
+
+func TestLockRefreshFailsWhenConfigDirCannotBeCreated(t *testing.T) {
+	dir := blockedPath(t, "vey")
+	if _, err := LockRefresh(dir); err == nil {
+		t.Error("LockRefresh under a path blocked by a file succeeded, want error")
+	}
+}
+
+func TestLockRefreshFailsWhenLockPathIsADirectory(t *testing.T) {
+	dir := t.TempDir()
+	// Pre-create the lock file's own path as a directory: opening it for
+	// read/write then fails (EISDIR), the same as a hostile or corrupted
+	// config directory would produce.
+	lockAsDir := filepath.Join(dir, LockFileName)
+	if err := os.Mkdir(lockAsDir, 0o700); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	if _, err := LockRefresh(dir); err == nil {
+		t.Error("LockRefresh succeeded with the lock path occupied by a directory, want error")
+	}
+}
+
+// TestKeyringStoreSurfacesBackendErrors drives the unexported keyringStore
+// directly (this file is in package auth) against a keyring mocked to fail
+// every call, covering the Save/Load/Delete error paths that NewStore's own
+// fallback-to-file behavior never reaches once the file backend is selected.
+func TestKeyringStoreSurfacesBackendErrors(t *testing.T) {
+	keyring.MockInitWithError(errNoKeyring)
+	s := &keyringStore{}
+
+	if err := s.Save(hubA, sessionFor(hubA)); err == nil {
+		t.Error("keyringStore.Save succeeded against a failing keyring, want error")
+	}
+	if _, _, err := s.Load(hubA); err == nil {
+		t.Error("keyringStore.Load succeeded against a failing keyring, want error")
+	}
+	if err := s.Delete(hubA); err == nil {
+		t.Error("keyringStore.Delete succeeded against a failing keyring, want error")
+	}
+}
+
+func TestFileStoreReadAllRejectsPathWithNonDirectoryParent(t *testing.T) {
+	fs := newFileStore(blockedPath(t, "vey"))
+	if _, _, err := fs.Load(hubA); err == nil {
+		t.Error("Load succeeded with a credentials path blocked by a file, want error")
+	}
+}
+
+func TestFileStoreReadAllRejectsUnreadableFile(t *testing.T) {
+	fs := newTestFileStore(t)
+	if err := fs.Save(hubA, sessionFor(hubA)); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+	// Owner-write-only: within the "no bits outside 0600" check (0200 is a
+	// subset of 0600's bits), so the permission-remediation branch does not
+	// fire, but the file genuinely cannot be read back.
+	if err := os.Chmod(fs.path, 0o200); err != nil {
+		t.Fatalf("chmod: %v", err)
+	}
+	if _, _, err := fs.Load(hubA); err == nil {
+		t.Error("Load succeeded on a write-only credentials file, want a read error")
+	}
+}
+
+// TestFileStoreLoadTreatsLiteralJSONNullAsEmpty covers the defensive branch
+// for a credentials file whose entire content decodes to the JSON literal
+// null: unmarshaling into a map leaves it nil, and the store must treat that
+// the same as an absent file rather than panicking on a nil map read.
+func TestFileStoreLoadTreatsLiteralJSONNullAsEmpty(t *testing.T) {
+	fs := newTestFileStore(t)
+	if err := os.MkdirAll(fs.dir, credentialsDirMode); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	if err := os.WriteFile(fs.path, []byte("null"), credentialsFileMode); err != nil {
+		t.Fatalf("write literal null: %v", err)
+	}
+	if _, ok, err := fs.Load(hubA); err != nil || ok {
+		t.Fatalf("Load of a literal-null credentials file = (ok %v, err %v), want (false, nil)", ok, err)
+	}
+}
+
+// TestFileStoreSaveFailsWhenConfigDirCannotBeCreated covers Save propagating
+// a readAll failure (the credentials path is blocked by a file standing
+// where a directory needs to be) before it ever attempts to write.
+func TestFileStoreSaveFailsWhenConfigDirCannotBeCreated(t *testing.T) {
+	fs := newFileStore(blockedPath(t, "vey"))
+	if err := fs.Save(hubA, sessionFor(hubA)); err == nil {
+		t.Error("Save under a path blocked by a file succeeded, want error")
+	}
+}
+
+// TestFileStoreWriteAllFailsWhenConfigDirCannotBeCreated drives the
+// unexported writeAll directly (this file is in package auth), bypassing
+// Save's own readAll precheck, so writeAll's own os.MkdirAll error path is
+// exercised on its own rather than shadowed by readAll rejecting the same
+// blocked path first.
+func TestFileStoreWriteAllFailsWhenConfigDirCannotBeCreated(t *testing.T) {
+	fs := newFileStore(blockedPath(t, "vey"))
+	if err := fs.writeAll(map[string]StoredSession{hubA: sessionFor(hubA)}); err == nil {
+		t.Error("writeAll under a path blocked by a file succeeded, want error")
+	}
+}
+
+// TestFileStoreDeletePropagatesReadAllError covers Delete's own readAll-error
+// return (as distinct from Load's, which TestFileStoreReadAllRejectsUnreadableFile
+// already exercises).
+func TestFileStoreDeletePropagatesReadAllError(t *testing.T) {
+	fs := newTestFileStore(t)
+	if err := fs.Save(hubA, sessionFor(hubA)); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+	if err := os.Chmod(fs.path, 0o200); err != nil { // owner write-only: unreadable
+		t.Fatalf("chmod: %v", err)
+	}
+	if err := fs.Delete(hubA); err == nil {
+		t.Error("Delete succeeded on a write-only credentials file, want a read error")
+	}
+}
+
+// TestFileStoreSaveFailsWhenTempPathIsADirectory covers writeAll's own
+// os.OpenFile failure for the temp file: if something already occupies
+// <path>.tmp as a directory, creating the temp file for a new write can
+// never succeed.
+func TestFileStoreSaveFailsWhenTempPathIsADirectory(t *testing.T) {
+	fs := newTestFileStore(t)
+	if err := os.MkdirAll(fs.path+".tmp", 0o700); err != nil {
+		t.Fatalf("occupy the temp path with a directory: %v", err)
+	}
+	if err := fs.Save(hubA, sessionFor(hubA)); err == nil {
+		t.Error("Save succeeded with the temp path occupied by a directory, want error")
+	}
+}
+
+// TestFileStoreSaveFailsWhenRenameDestinationBecomesADirectory covers
+// writeAll's atomic-rename failure path. Pre-creating the credentials path as
+// a directory would only trip readAll's own "not a regular file" check
+// before writeAll ever runs, so this instead uses the beforeRename hook (the
+// same seam TestFileStoreCrashBeforeRenameLeavesOldStateIntact uses) to swap
+// in a directory at the very last instant — after the temp file is written
+// and fsynced, but before the rename that publishes it — mirroring a hostile
+// or racing change to the destination path.
+func TestFileStoreSaveFailsWhenRenameDestinationBecomesADirectory(t *testing.T) {
+	fs := newTestFileStore(t)
+	fs.beforeRename = func() error {
+		if err := os.MkdirAll(fs.path, 0o700); err != nil {
+			t.Fatalf("occupy the rename destination with a directory: %v", err)
+		}
+		return nil
+	}
+	if err := fs.Save(hubA, sessionFor(hubA)); err == nil {
+		t.Error("Save succeeded despite the rename destination becoming a directory mid-write, want error")
+	}
+	if _, err := os.Stat(fs.path + ".tmp"); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("temp file survived a failed rename: err = %v", err)
 	}
 }
 

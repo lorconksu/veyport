@@ -92,17 +92,8 @@ func NormalizeHubURL(raw string) (string, error) {
 		return "", fmt.Errorf("config: hub URL %q has unsupported scheme %q (must be http or https)", raw, u.Scheme)
 	}
 
-	if u.Path != "" && u.Path != "/" {
-		return "", fmt.Errorf("config: hub URL %q must not include a path", raw)
-	}
-	if u.RawQuery != "" {
-		return "", fmt.Errorf("config: hub URL %q must not include a query", raw)
-	}
-	if u.Fragment != "" {
-		return "", fmt.Errorf("config: hub URL %q must not include a fragment", raw)
-	}
-	if u.User != nil {
-		return "", fmt.Errorf("config: hub URL %q must not include userinfo", raw)
+	if err := rejectExtraURLParts(u, raw); err != nil {
+		return "", err
 	}
 
 	host := strings.ToLower(u.Hostname())
@@ -114,8 +105,33 @@ func NormalizeHubURL(raw string) (string, error) {
 		return "", fmt.Errorf("config: hub URL %q must use https (plain http is only allowed for localhost/127.0.0.1/[::1])", raw)
 	}
 
-	// u.Hostname() strips brackets from IPv6 literals; restore them so the
-	// rebuilt authority is valid regardless of whether a port is present.
+	return scheme + "://" + normalizedAuthority(u, host), nil
+}
+
+// rejectExtraURLParts returns an error if u carries any of the components
+// NormalizeHubURL disallows in a hub base URL (path beyond "/", query,
+// fragment, or userinfo).
+func rejectExtraURLParts(u *url.URL, raw string) error {
+	if u.Path != "" && u.Path != "/" {
+		return fmt.Errorf("config: hub URL %q must not include a path", raw)
+	}
+	if u.RawQuery != "" {
+		return fmt.Errorf("config: hub URL %q must not include a query", raw)
+	}
+	if u.Fragment != "" {
+		return fmt.Errorf("config: hub URL %q must not include a fragment", raw)
+	}
+	if u.User != nil {
+		return fmt.Errorf("config: hub URL %q must not include userinfo", raw)
+	}
+	return nil
+}
+
+// normalizedAuthority rebuilds the host[:port] authority for the normalized
+// URL from u and the already-lowercased host. u.Hostname() strips brackets
+// from IPv6 literals, so they are restored here to keep the rebuilt
+// authority valid regardless of whether a port is present.
+func normalizedAuthority(u *url.URL, host string) string {
 	normalizedHost := host
 	if strings.Contains(host, ":") {
 		normalizedHost = "[" + host + "]"
@@ -123,8 +139,7 @@ func NormalizeHubURL(raw string) (string, error) {
 	if port := u.Port(); port != "" {
 		normalizedHost = net.JoinHostPort(strings.Trim(normalizedHost, "[]"), port)
 	}
-
-	return scheme + "://" + normalizedHost, nil
+	return normalizedHost
 }
 
 // isLocalHost reports whether host (already lowercased, without port) is

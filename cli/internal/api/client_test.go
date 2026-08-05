@@ -2,6 +2,8 @@ package api
 
 import (
 	"context"
+	"crypto/tls"
+	"crypto/x509"
 	"encoding/json"
 	"errors"
 	"net/http"
@@ -505,5 +507,189 @@ func TestClient_NoInsecureSkipVerifyAnywhere(t *testing.T) {
 	c := NewClient("https://example.invalid", "tok")
 	if c.HTTP.Transport != nil {
 		t.Error("Client.HTTP.Transport must be nil (default transport, default TLS verification) — R9 forbids any custom TLS config, including a permissive one")
+	}
+}
+
+// --- newRequest failure propagation ---------------------------------------
+
+// assertBuildRequestError checks that err is the ExitError-coded failure
+// newRequest produces when http.NewRequestWithContext itself rejects the
+// URL, and that both callers (do and GetStream) surface it unchanged.
+func assertBuildRequestError(t *testing.T, err error) {
+	t.Helper()
+	if code := codeOf(t, err); code != cmdutil.ExitError {
+		t.Errorf("exit code = %d, want %d (ExitError)", code, cmdutil.ExitError)
+	}
+	if !strings.Contains(err.Error(), "building request") {
+		t.Errorf("error message %q does not mention request building", err.Error())
+	}
+}
+
+func TestNewRequestFailure_PropagatesFromCallers(t *testing.T) {
+	// A raw control character in the path makes url.Parse (invoked inside
+	// http.NewRequestWithContext) fail before any network I/O happens, so
+	// no test server is needed here — this exercises newRequest's own
+	// error branch plus both of its callers' propagation branches.
+	c := NewClient("http://example.invalid", "tok")
+	const badPath = "/api/\n"
+
+	t.Run("Get", func(t *testing.T) {
+		err := c.Get(context.Background(), badPath, nil, nil)
+		assertBuildRequestError(t, err)
+	})
+
+	t.Run("GetStream", func(t *testing.T) {
+		rc, err := c.GetStream(context.Background(), badPath, nil)
+		if rc != nil {
+			t.Error("expected nil ReadCloser on newRequest failure")
+		}
+		assertBuildRequestError(t, err)
+	})
+}
+
+func TestPost_BodyMarshalError(t *testing.T) {
+	// A channel value can never be JSON-encoded, so json.Marshal fails
+	// inside newRequest before any request is built or sent.
+	c := NewClient("http://example.invalid", "tok")
+	err := c.Post(context.Background(), "/api/x", make(chan int), nil)
+	if code := codeOf(t, err); code != cmdutil.ExitError {
+		t.Errorf("exit code = %d, want %d (ExitError)", code, cmdutil.ExitError)
+	}
+	if !strings.Contains(err.Error(), "encoding request body") {
+		t.Errorf("error message %q does not mention body encoding", err.Error())
+	}
+}
+
+// --- do(): No Content and decode-failure branches -------------------------
+
+func TestDo_NoContentSkipsDecode(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	defer srv.Close()
+
+	c := newTestClient(srv, "tok")
+	out := Me{Username: "unchanged"}
+	if err := c.Get(context.Background(), "/api/auth/me", nil, &out); err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if out.Username != "unchanged" {
+		t.Errorf("out was modified despite 204 No Content: %+v", out)
+	}
+}
+
+func TestDo_DecodeError(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte("not valid json"))
+	}))
+	defer srv.Close()
+
+	c := newTestClient(srv, "tok")
+	err := c.Get(context.Background(), "/api/auth/me", nil, &Me{})
+	if code := codeOf(t, err); code != cmdutil.ExitError {
+		t.Errorf("exit code = %d, want %d (ExitError)", code, cmdutil.ExitError)
+	}
+	if !strings.Contains(err.Error(), "decoding hub response") {
+		t.Errorf("error message %q does not mention response decoding", err.Error())
+	}
+}
+
+// --- GetStream(): transport-error branch -----------------------------------
+
+func TestGetStream_TransportError(t *testing.T) {
+	// Mirrors TestFiles_OfflineAgent_ConnectionRefused but through
+	// GetStream, which maps the HTTP.Do failure independently of do().
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		t.Fatal("handler should not be reached — server is closed before the request")
+	}))
+	srv.Close()
+
+	c := newTestClient(srv, "tok")
+	rc, err := c.GetStream(context.Background(), "/api/audit-logs/export", nil)
+	if rc != nil {
+		t.Error("expected nil ReadCloser on transport failure")
+	}
+	if code := codeOf(t, err); code != cmdutil.ExitConn {
+		t.Errorf("exit code = %d, want %d (ExitConn)", code, cmdutil.ExitConn)
+	}
+}
+
+// --- mapStatusErr: empty-body fallback and default status branch ----------
+
+func TestMapStatusErr_EmptyBodyFallsBackToStatusAndDefaultCode(t *testing.T) {
+	// 400 is not one of the special-cased statuses (401/403/404/429), and
+	// an empty response body means the envelope check is skipped entirely
+	// and msg falls back to resp.Status — this single request exercises
+	// both the "msg == ''" branch and the switch's default case.
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusBadRequest)
+	}))
+	defer srv.Close()
+
+	c := newTestClient(srv, "tok")
+	err := c.Get(context.Background(), "/api/servers", nil, nil)
+	if code := codeOf(t, err); code != cmdutil.ExitError {
+		t.Errorf("exit code = %d, want %d (ExitError, the default case)", code, cmdutil.ExitError)
+	}
+	if !strings.Contains(err.Error(), "400 Bad Request") {
+		t.Errorf("error message %q does not contain the fallback status text", err.Error())
+	}
+}
+
+// --- mapTransportErr: certificate-error branches ---------------------------
+
+// mapTransportErr is exercised directly with synthetic transport errors
+// (rather than spinning up TLS servers for each case) since it is a pure
+// function reachable from within this package. Errors are wrapped in a
+// *url.Error, matching how http.Client actually surfaces RoundTrip/TLS
+// failures to callers.
+func TestMapTransportErr_CertificateBranches(t *testing.T) {
+	tests := []struct {
+		name    string
+		err     error
+		wantSub string
+	}{
+		{
+			name: "CertificateInvalidError",
+			err: &url.Error{Op: "Get", URL: "https://hub.example.com/api", Err: x509.CertificateInvalidError{
+				Reason: x509.Expired,
+				Detail: "certificate has expired",
+			}},
+			wantSub: "invalid or expired",
+		},
+		{
+			name: "HostnameError",
+			err: &url.Error{Op: "Get", URL: "https://hub.example.com/api", Err: x509.HostnameError{
+				Host: "wrong-host.example.com",
+			}},
+			wantSub: "does not match the hostname",
+		},
+		{
+			name: "CertificateVerificationError",
+			err: &url.Error{Op: "Get", URL: "https://hub.example.com/api", Err: &tls.CertificateVerificationError{
+				Err: errors.New("x509: certificate signed by unknown authority"),
+			}},
+			wantSub: "could not be verified",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := mapTransportErr(tt.err)
+			if code := codeOf(t, got); code != cmdutil.ExitConn {
+				t.Errorf("exit code = %d, want %d (ExitConn)", code, cmdutil.ExitConn)
+			}
+			msg := got.Error()
+			if !strings.Contains(msg, "certificate verification failed") {
+				t.Errorf("error message %q does not name the certificate problem", msg)
+			}
+			if !strings.Contains(msg, tt.wantSub) {
+				t.Errorf("error message %q does not contain %q", msg, tt.wantSub)
+			}
+			if !strings.Contains(msg, "trust store") {
+				t.Errorf("error message %q does not point at OS trust-store installation", msg)
+			}
+		})
 	}
 }
