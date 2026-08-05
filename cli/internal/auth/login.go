@@ -137,8 +137,12 @@ func Login(ctx context.Context, opts LoginOptions) (*api.TokenPair, error) {
 		"code":       code,
 	}, &pair); err != nil {
 		// Already a CodedError from the api client (401 → exit 3, 429 → 7);
-		// scrubbed in case the hub echoed the code back in its message.
-		return nil, scrubSecret(err, code)
+		// scrubbed in case the hub echoed either credential back in its
+		// message. Both halves of the request are secret: the one-time code
+		// the user typed, and the challenge token the hub issued in leg 2
+		// (which proves the password was already verified and is a bearer
+		// credential for the 60 s it lives).
+		return nil, scrubSecret(scrubSecret(err, code), totpToken)
 	}
 	if pair.RefreshToken == "" || pair.AccessToken == "" {
 		return nil, cmdutil.NewCodedError(cmdutil.ExitError,
@@ -158,8 +162,11 @@ func Login(ctx context.Context, opts LoginOptions) (*api.TokenPair, error) {
 		ObtainedAt:   time.Now().UTC(),
 	}
 	if err := opts.Store.Save(hubURL, sess); err != nil {
+		// The store error is scrubbed of the value it was handed: a backend
+		// that quotes the secret it failed to write (an OS keyring relaying
+		// a provider message, say) must not turn a save failure into a leak.
 		return nil, cmdutil.NewCodedError(cmdutil.ExitError,
-			fmt.Errorf("signed in, but saving the session failed: %w", err))
+			fmt.Errorf("signed in, but saving the session failed: %w", scrubSecret(err, sess.RefreshToken)))
 	}
 
 	return &pair, nil

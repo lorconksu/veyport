@@ -8,6 +8,7 @@
 **Using Veyport**
 - [[Fleet Dashboard]]
 - [[Server Detail]]
+- [[CLI]]
 
 **Administration**
 - [[Audit Logs]]

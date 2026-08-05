@@ -9,7 +9,6 @@ import (
 	"github.com/wyiu/veyport/cli/internal/api"
 	"github.com/wyiu/veyport/cli/internal/auth"
 	"github.com/wyiu/veyport/cli/internal/cmdutil"
-	"github.com/wyiu/veyport/cli/internal/config"
 )
 
 // newAuthContext builds the credential store for ctx.ConfigDir and resolves
@@ -52,28 +51,6 @@ func modeString(m auth.Mode) string {
 	default:
 		return "none"
 	}
-}
-
-// effectiveTokenPrefix recomputes the same env>config precedence
-// auth.Resolve uses for API tokens (data-model.md Config "api_token": "env
-// VEYPORT_TOKEN overrides") so status can render a token *prefix* only.
-// AuthContext deliberately does not expose the raw token (R17: credentials
-// must never be printed in full), so this is the one place status derives
-// it directly from the same two sources Resolve consults.
-func effectiveTokenPrefix(hubURL string, cfg config.Config) string {
-	token := os.Getenv("VEYPORT_TOKEN")
-	if token == "" {
-		if hp, ok := cfg.Hubs[hubURL]; ok {
-			token = hp.APIToken
-		}
-	}
-	if token == "" {
-		return ""
-	}
-	if len(token) > 8 {
-		return token[:8] + "…"
-	}
-	return token + "…"
 }
 
 // humanMode renders the auth-mode line per contracts/cli-commands.md `vey
@@ -135,10 +112,7 @@ func RunStatus(ctx *Context) int {
 		return cmdutil.ExitAuth
 	}
 
-	tokenPrefix := ""
-	if mode == auth.ModeAPIToken {
-		tokenPrefix = effectiveTokenPrefix(hubURL, ctx.Config)
-	}
+	tokenPrefix := actx.TokenPrefix()
 
 	bg := context.Background()
 	var me api.Me

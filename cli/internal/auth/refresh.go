@@ -299,7 +299,10 @@ func (a *AuthContext) refresh(ctx context.Context) error {
 	// Persist first: the rotated refresh token must be durable before the
 	// access token it came with is used for anything.
 	if err := a.store.Save(a.hubURL, rotated); err != nil {
-		return cmdutil.NewCodedError(cmdutil.ExitError, err)
+		// Scrubbed for the same reason as in Login: a storage backend that
+		// quotes the value it failed to write must not leak the rotated
+		// token through a save failure.
+		return cmdutil.NewCodedError(cmdutil.ExitError, scrubSecret(err, rotated.RefreshToken))
 	}
 
 	a.mu.Lock()
@@ -313,11 +316,18 @@ func (a *AuthContext) refresh(ctx context.Context) error {
 // a bearer on purpose: the refresh token authenticates the request through
 // the JSON body, and sending an expired access token alongside it would only
 // invite the hub to reject the request on the header.
+//
+// The returned error is scrubbed of the token that was just sent (the same
+// guard login.go applies to the password and the one-time code). It matters
+// most on the paths refresh does NOT rewrite: a 401 is replaced by
+// errSessionExpired, but a 429 or a 5xx is surfaced verbatim, hub message
+// and all, so a hub that quoted the submitted token back would put it on the
+// user's terminal (FR-017).
 func (a *AuthContext) postRefresh(ctx context.Context, refreshToken string) (api.TokenPair, error) {
 	client := api.NewClient(a.hubURL, "")
 	var pair api.TokenPair
 	if err := client.Post(ctx, refreshPath, refreshRequest{RefreshToken: refreshToken}, &pair); err != nil {
-		return api.TokenPair{}, err
+		return api.TokenPair{}, scrubSecret(err, refreshToken)
 	}
 	return pair, nil
 }

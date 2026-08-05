@@ -81,3 +81,35 @@ func validateAPIToken(token string, src tokenSource) error {
 			"correct the value, or clear it to use a stored session (vey login)",
 		src, apiTokenPrefix))
 }
+
+// tokenPrefixMaxLen is the most of an API token `vey status` may ever show
+// (contracts/cli-commands.md, Secrets row: "token *prefix* only").
+const tokenPrefixMaxLen = 8
+
+// TokenPrefix reports the display-safe form of the API token this
+// AuthContext resolved to: a leading fragment plus an ellipsis, never the
+// whole value. It answers "" in every mode but ModeAPIToken.
+//
+// The fragment is bounded twice — at tokenPrefixMaxLen characters, and at
+// half the token's length. The second bound is what keeps the guarantee
+// honest for a short token: validateAPIToken accepts anything past `adt_`,
+// so a five-character token under a fixed 8-character rule would have been
+// rendered in full, turning the "prefix only" contract into a disclosure of
+// the entire credential (FR-017).
+//
+// This exists so `vey status` never re-derives the env>config precedence
+// sourceAPIToken already applied when Resolve built this AuthContext —
+// duplicating that chain risks it drifting from the one Resolve actually
+// uses. AuthContext otherwise never exposes the raw token (R17: credentials
+// must never be printed in full); this is the one sanctioned exception, and
+// it only ever hands back a prefix.
+func (a *AuthContext) TokenPrefix() string {
+	if a.mode != ModeAPIToken {
+		return ""
+	}
+	n := tokenPrefixMaxLen
+	if half := len(a.apiToken) / 2; half < n {
+		n = half
+	}
+	return a.apiToken[:n] + "…"
+}
