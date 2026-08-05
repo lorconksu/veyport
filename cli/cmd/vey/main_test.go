@@ -130,24 +130,49 @@ func TestRun_Help(t *testing.T) {
 	}
 }
 
-// TestRun_KnownCommandsDispatch verifies every registered command name
-// reaches its stub (currently "not implemented") rather than being rejected
-// as unknown, and that the global --hub/--json flags are accepted ahead of
-// the subcommand.
+// TestRun_KnownCommandsDispatch verifies every registered command name is
+// recognized by the top-level dispatcher — i.e. it reaches the command's own
+// logic rather than being rejected as unknown — and that the global
+// --hub/--json flags are accepted ahead of the subcommand.
+//
+// This intentionally does NOT use "exit code != ExitUsage" as the
+// recognition signal: a recognized command is free to return ExitUsage (2)
+// for its own usage errors (e.g. `vey servers` with no list/get argument),
+// and that must not be confused with the dispatcher's own "unknown command"
+// rejection. The unambiguous signal is the literal "unknown command"
+// message, which main.go emits only on a Registry miss.
 func TestRun_KnownCommandsDispatch(t *testing.T) {
 	for _, name := range []string{"login", "logout", "status", "servers", "files", "logs", "audit"} {
 		t.Run(name, func(t *testing.T) {
-			var code int
 			_, stderr := captureOutput(t, func() {
-				code = run([]string{"--hub", "https://hub.example.com", "--json", name})
+				run([]string{"--hub", "https://hub.example.com", "--json", name})
 			})
 
-			if code == cmdutil.ExitUsage {
-				t.Errorf("exit code = %d (ExitUsage), want the command to be recognized (stderr: %q)", code, stderr)
-			}
 			if strings.Contains(stderr, "unknown command") {
 				t.Errorf("stderr = %q, want no unknown-command message for registered command %q", stderr, name)
 			}
 		})
+	}
+}
+
+// TestRun_ServersSubcommandRecognized verifies `vey servers` invoked with no
+// list/get argument reaches the real servers command and surfaces its own
+// usage error (contracts/cli-commands.md `vey servers list`/`vey servers
+// get`), rather than being caught by the top-level dispatcher's
+// "unknown command" rejection.
+func TestRun_ServersSubcommandRecognized(t *testing.T) {
+	var code int
+	_, stderr := captureOutput(t, func() {
+		code = run([]string{"--hub", "https://hub.example.com", "servers"})
+	})
+
+	if code != cmdutil.ExitUsage {
+		t.Errorf("exit code = %d, want %d (ExitUsage, servers' own usage error)", code, cmdutil.ExitUsage)
+	}
+	if !strings.Contains(stderr, "usage: vey servers") {
+		t.Errorf("stderr = %q, want it to contain servers' own usage message", stderr)
+	}
+	if strings.Contains(stderr, "unknown command") {
+		t.Errorf("stderr = %q, want no unknown-command message", stderr)
 	}
 }
