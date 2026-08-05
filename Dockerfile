@@ -32,6 +32,18 @@ RUN cd agent && CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -ldflags="-s -w" 
 RUN sha256sum /out/veyport-agent-linux-amd64 | awk '{print $1}' > /out/veyport-agent-linux-amd64.sha256
 RUN sha256sum /out/veyport-agent-linux-arm64 | awk '{print $1}' > /out/veyport-agent-linux-arm64.sha256
 
+# Build vey CLI connector (pure Go, cross-compile for linux+darwin, amd64+arm64).
+# Mirrors `make build-vey` (see Makefile) so the hub can serve it from
+# --agent-bin-dir at GET /install/cli/{os}/{arch}.
+COPY cli/ cli/
+RUN cd cli && CGO_ENABLED=0 GOOS=linux  GOARCH=amd64 go build -ldflags="-s -w -X main.version=${VERSION}" -o /out/vey-linux-amd64 ./cmd/vey/
+RUN cd cli && CGO_ENABLED=0 GOOS=linux  GOARCH=arm64 go build -ldflags="-s -w -X main.version=${VERSION}" -o /out/vey-linux-arm64 ./cmd/vey/
+RUN cd cli && CGO_ENABLED=0 GOOS=darwin GOARCH=amd64 go build -ldflags="-s -w -X main.version=${VERSION}" -o /out/vey-darwin-amd64 ./cmd/vey/
+RUN cd cli && CGO_ENABLED=0 GOOS=darwin GOARCH=arm64 go build -ldflags="-s -w -X main.version=${VERSION}" -o /out/vey-darwin-arm64 ./cmd/vey/
+RUN for bin in vey-linux-amd64 vey-linux-arm64 vey-darwin-amd64 vey-darwin-arm64; do \
+        sha256sum /out/$bin | awk '{print $1}' > /out/$bin.sha256; \
+    done
+
 # Stage 3: Minimal runtime (Wolfi — glibc-based, fast CVE patching, no systemd/ncurses/tar)
 FROM cgr.dev/chainguard/wolfi-base:latest
 # Wolfi pins core packages in /etc/apk/world, so request patched glibc builds explicitly.
@@ -50,6 +62,14 @@ COPY --from=backend /out/veyport-agent-linux-amd64 /app/veyport-agent-linux-amd6
 COPY --from=backend /out/veyport-agent-linux-arm64 /app/veyport-agent-linux-arm64
 COPY --from=backend /out/veyport-agent-linux-amd64.sha256 /app/veyport-agent-linux-amd64.sha256
 COPY --from=backend /out/veyport-agent-linux-arm64.sha256 /app/veyport-agent-linux-arm64.sha256
+COPY --from=backend /out/vey-linux-amd64 /app/vey-linux-amd64
+COPY --from=backend /out/vey-linux-arm64 /app/vey-linux-arm64
+COPY --from=backend /out/vey-darwin-amd64 /app/vey-darwin-amd64
+COPY --from=backend /out/vey-darwin-arm64 /app/vey-darwin-arm64
+COPY --from=backend /out/vey-linux-amd64.sha256 /app/vey-linux-amd64.sha256
+COPY --from=backend /out/vey-linux-arm64.sha256 /app/vey-linux-arm64.sha256
+COPY --from=backend /out/vey-darwin-amd64.sha256 /app/vey-darwin-amd64.sha256
+COPY --from=backend /out/vey-darwin-arm64.sha256 /app/vey-darwin-arm64.sha256
 COPY hub/static/install.sh /app/static/install.sh
 
 RUN chown -R veyport:veyport /app

@@ -1,0 +1,119 @@
+package server
+
+import (
+	"fmt"
+	"log"
+	"net/http"
+	"os"
+	"path/filepath"
+	"strings"
+)
+
+// cliAllowedOS and cliAllowedArch define the platform matrix the `vey` CLI is
+// built for (specs/004-cli-connector/contracts/rest-api.md, Distribution
+// section). Unlike the agent binary allowlist (linux-only, see
+// handleAgentBinary in handlers_servers.go), the CLI also ships for darwin.
+var cliAllowedOS = map[string]bool{
+	"linux":  true,
+	"darwin": true,
+}
+
+var cliAllowedArch = map[string]bool{
+	"amd64": true,
+	"arm64": true,
+}
+
+// isValidBinaryPlatform reports whether osName/arch are both present in the
+// given allowlists. It is the shared "binary-family" validation used by both
+// the agent binary routes and the CLI binary routes below: an explicit
+// allowlist check (rather than trying to sanitize the input) is what
+// prevents path-traversal values (e.g. "..", "../../etc") from ever reaching
+// filepath.Join, since such values simply never match an allowed entry.
+func isValidBinaryPlatform(osName, arch string, allowedOS, allowedArch map[string]bool) bool {
+	return allowedOS[osName] && allowedArch[arch]
+}
+
+// isValidCLIPlatform reports whether os/arch are in the CLI's supported
+// allowlist ({linux,darwin} x {amd64,arm64}).
+func isValidCLIPlatform(osName, arch string) bool {
+	return isValidBinaryPlatform(osName, arch, cliAllowedOS, cliAllowedArch)
+}
+
+// handleCLIBinary serves the `vey` CLI binary for GET /install/cli/{os}/{arch}.
+// It mirrors handleAgentBinary's validation/serving logic exactly, but reads
+// from the CLI allowlist (which additionally permits darwin) and looks up
+// vey-{os}-{arch} filenames instead of veyport-agent-{os}-{arch}.
+func (s *Server) handleCLIBinary(w http.ResponseWriter, r *http.Request) {
+	osName := r.PathValue("os")
+	arch := r.PathValue("arch")
+	if !isValidCLIPlatform(osName, arch) {
+		respondError(w, http.StatusNotFound, "unsupported platform")
+		return
+	}
+	filename := fmt.Sprintf("vey-%s-%s", osName, arch)
+	binaryPath := filepath.Join(s.agentBinDir, filename)
+	if _, err := os.Stat(binaryPath); os.IsNotExist(err) {
+		respondError(w, http.StatusNotFound, "cli binary not found")
+		return
+	}
+	w.Header().Set("Content-Type", "application/octet-stream")
+	w.Header().Set("Content-Disposition", fmt.Sprintf(`attachment; filename="%s"`, filename))
+	http.ServeFile(w, r, binaryPath)
+}
+
+// handleInstall3rdSegmentDispatch handles the 4-path-segment "/install/{a}/{b}/{c}"
+// space, which covers two distinct routes that net/http's ServeMux cannot be
+// given as separate static patterns (see the NOTE in router.go):
+//
+//   - Agent checksum: GET /install/{os}/{arch}/sha256  (c == "sha256")
+//   - CLI binary:      GET /install/cli/{os}/{arch}     (a == "cli")
+//
+// These two interpretations only collide (both conditions true) when
+// a == "cli" and c == "sha256" simultaneously — e.g. "/install/cli/X/sha256".
+// In that case neither interpretation can ever succeed: the agent-checksum
+// reading requires os == "linux" (a == "cli" fails that), and the CLI-binary
+// reading requires arch to be an allowed CLI arch (c == "sha256" fails that).
+// So picking the agent-checksum interpretation first for any c == "sha256"
+// path is safe — it never masks a valid CLI binary request.
+func (s *Server) handleInstall3rdSegmentDispatch(w http.ResponseWriter, r *http.Request) {
+	a := r.PathValue("a")
+	b := r.PathValue("b")
+	c := r.PathValue("c")
+
+	if c == "sha256" {
+		r.SetPathValue("os", a)
+		r.SetPathValue("arch", b)
+		s.handleAgentBinaryChecksum(w, r)
+		return
+	}
+	if a == "cli" {
+		r.SetPathValue("os", b)
+		r.SetPathValue("arch", c)
+		s.handleCLIBinary(w, r)
+		return
+	}
+	respondError(w, http.StatusNotFound, "not found")
+}
+
+// handleCLIBinaryChecksum serves the SHA-256 checksum for the `vey` CLI
+// binary at GET /install/cli/{os}/{arch}/sha256, mirroring
+// handleAgentBinaryChecksum.
+func (s *Server) handleCLIBinaryChecksum(w http.ResponseWriter, r *http.Request) {
+	osName := r.PathValue("os")
+	arch := r.PathValue("arch")
+	if !isValidCLIPlatform(osName, arch) {
+		respondError(w, http.StatusNotFound, "unsupported platform")
+		return
+	}
+	filename := fmt.Sprintf("vey-%s-%s.sha256", osName, arch)
+	checksumPath := filepath.Join(s.agentBinDir, filename)
+	data, err := os.ReadFile(checksumPath)
+	if err != nil {
+		respondError(w, http.StatusNotFound, "checksum not found")
+		return
+	}
+	w.Header().Set("Content-Type", "text/plain")
+	if _, err := w.Write([]byte(strings.TrimSpace(string(data)))); err != nil {
+		log.Printf("cli checksum write failed: %v", err)
+	}
+}
