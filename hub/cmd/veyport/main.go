@@ -19,6 +19,7 @@ import (
 	"github.com/wyiu/veyport/hub/internal/grpcserver"
 	"github.com/wyiu/veyport/hub/internal/notify"
 	"github.com/wyiu/veyport/hub/internal/server"
+	"github.com/wyiu/veyport/hub/internal/sshconfig"
 	"github.com/wyiu/veyport/hub/internal/store"
 )
 
@@ -46,6 +47,7 @@ func runServer() error {
 	grpcAddr := flag.String("grpc-addr", ":9090", "gRPC listen address")
 	grpcExternalAddr := flag.String("grpc-external-addr", "", "external gRPC address for agent install commands (e.g. hub.example.com:9443)")
 	agentBinDir := flag.String("agent-bin-dir", "./bin", "directory containing agent binaries")
+	sshAddr := flag.String("ssh-addr", sshconfig.DefaultAddr, "SSH gateway listen address")
 	flag.Parse()
 
 	// Detect legacy aerodocs.db when the configured veyport.db doesn't exist on the
@@ -66,6 +68,13 @@ func runServer() error {
 		return fmt.Errorf("open database: %w", err)
 	}
 	defer st.Close()
+
+	// Resolved for the future SSH gateway listener (feature 005-ssh-gateway);
+	// not started here yet.
+	sshCfg := sshconfig.Load(st, *sshAddr)
+	if sshCfg.Enabled {
+		fmt.Printf("SSH gateway configured: addr=%s cert_ttl=%dh (listener not yet started)\n", sshCfg.Addr, sshCfg.CertTTLHours)
+	}
 
 	jwtSecret, err := server.InitJWTSecret(st)
 	if err != nil {
