@@ -3,8 +3,10 @@ package main
 import (
 	"context"
 	"crypto/sha256"
+	"errors"
 	"flag"
 	"fmt"
+	"log"
 	"net"
 	"net/http"
 	"os"
@@ -20,7 +22,9 @@ import (
 	"github.com/wyiu/veyport/hub/internal/notify"
 	"github.com/wyiu/veyport/hub/internal/server"
 	"github.com/wyiu/veyport/hub/internal/sshconfig"
+	"github.com/wyiu/veyport/hub/internal/sshgw"
 	"github.com/wyiu/veyport/hub/internal/store"
+	"github.com/wyiu/veyport/hub/internal/userca"
 )
 
 const legacyDBName = "aerodocs.db"
@@ -69,12 +73,9 @@ func runServer() error {
 	}
 	defer st.Close()
 
-	// Resolved for the future SSH gateway listener (feature 005-ssh-gateway);
-	// not started here yet.
+	// Effective SSH gateway configuration; consumed by both the REST handlers
+	// (certificate issuance) and the gateway listener below.
 	sshCfg := sshconfig.Load(st, *sshAddr)
-	if sshCfg.Enabled {
-		fmt.Printf("SSH gateway configured: addr=%s cert_ttl=%dh (listener not yet started)\n", sshCfg.Addr, sshCfg.CertTTLHours)
-	}
 
 	jwtSecret, err := server.InitJWTSecret(st)
 	if err != nil {
@@ -94,6 +95,32 @@ func runServer() error {
 		return fmt.Errorf("init CA: %w", err)
 	}
 	grpcCAPin := fmt.Sprintf("%x", sha256.Sum256(caCert.Raw))
+
+	// SSH trust material. Corrupt or undecryptable key material disables only
+	// the SSH plane: the hub keeps serving REST and gRPC, and the stored value
+	// is left untouched for an operator to restore or clear deliberately
+	// (FR-006). Any other failure is an init failure like the ones above.
+	userCA, err := userca.InitUserCA(st, storageKey)
+	if err != nil {
+		if !errors.Is(err, userca.ErrCorruptKey) {
+			return fmt.Errorf("init SSH user CA: %w", err)
+		}
+		log.Printf("SSH GATEWAY DEGRADED: init SSH user CA: %v. "+
+			"SSH access is disabled until the stored key is restored or cleared; "+
+			"the hub continues to serve REST and gRPC.", err)
+		userCA = nil
+	}
+
+	hostKey, err := userca.InitHostKey(st, storageKey)
+	if err != nil {
+		if !errors.Is(err, userca.ErrCorruptKey) {
+			return fmt.Errorf("init SSH host key: %w", err)
+		}
+		log.Printf("SSH GATEWAY DEGRADED: init SSH host key: %v. "+
+			"SSH access is disabled until the stored key is restored or cleared; "+
+			"the hub continues to serve REST and gRPC.", err)
+		hostKey = nil
+	}
 
 	cm := connmgr.New()
 	pending := grpcserver.NewPendingRequests()
@@ -116,6 +143,9 @@ func runServer() error {
 		LogSessions:      logSessions,
 		TerminalSessions: terminalSessions,
 		Notifier:         notifier,
+		UserCA:           userCA,
+		SSHHostKey:       hostKey,
+		SSHConfig:        sshCfg,
 	})
 
 	// Extract hostname from external gRPC address for TLS SAN
@@ -142,6 +172,21 @@ func runServer() error {
 		StorageKey:       storageKey,
 	})
 
+	// The gateway shares the CA, host key and terminal machinery with the HTTP
+	// and gRPC servers: certificates the hub issues must verify against the key
+	// the gateway presents, and an SSH session must land in the same terminal
+	// registry the web terminal uses.
+	sshSrv := sshgw.New(sshgw.Config{
+		Store:     st,
+		UserCA:    userCA,
+		HostKey:   hostKey,
+		Terminals: terminalSessions,
+		ConnMgr:   cm,
+		Pending:   pending,
+		Addr:      sshCfg.Addr,
+		Enabled:   sshCfg.Enabled,
+	})
+
 	// Wire the gRPC handler into the HTTP server so the re-enroll approve
 	// endpoint can call ReleaseKEK without a global or import cycle.
 	srv.SetReEnrollReleaser(grpcSrv.Handler())
@@ -156,6 +201,15 @@ func runServer() error {
 		grpcErrCh <- grpcSrv.Start()
 	}()
 
+	// Start the SSH gateway in background. Start returns nil without listening
+	// when the gateway is disabled or its key material is unusable, so only a
+	// genuine bind failure is reported here — and it never stops the hub.
+	go func() {
+		if err := sshSrv.Start(); err != nil {
+			log.Printf("SSH gateway stopped: %v", err)
+		}
+	}()
+
 	// Graceful shutdown
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
@@ -164,9 +218,12 @@ func runServer() error {
 		<-ctx.Done()
 		fmt.Println("\nShutting down...")
 		close(stopHeartbeat)
-		grpcSrv.Stop()
 		shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer shutdownCancel()
+		if err := sshSrv.Stop(shutdownCtx); err != nil {
+			log.Printf("SSH gateway shutdown: %v", err)
+		}
+		grpcSrv.Stop()
 		srv.Shutdown(shutdownCtx)
 	}()
 

@@ -76,7 +76,7 @@ RUN chown -R veyport:veyport /app
 USER veyport
 
 VOLUME /data
-EXPOSE 8081 9090
+EXPOSE 8081 9090 2222
 
 ENTRYPOINT ["/app/veyport"]
 CMD ["--addr", ":8081", "--grpc-addr", ":9090", "--db", "/data/veyport.db", "--agent-bin-dir", "/app"]
