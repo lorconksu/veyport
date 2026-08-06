@@ -201,6 +201,8 @@ func deriveAuditResourceType(action string) string {
 		return "log"
 	case strings.HasPrefix(action, "audit."):
 		return "audit"
+	case strings.HasPrefix(action, "ssh."):
+		return "ssh"
 	default:
 		return "system"
 	}

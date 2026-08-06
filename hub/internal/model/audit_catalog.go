@@ -1,7 +1,7 @@
 package model
 
 const (
-	AuditCatalogLastUpdated      = "2026-06-12T00:00:00Z"
+	AuditCatalogLastUpdated      = "2026-08-06T00:00:00Z"
 	auditCategoryUserManagement  = "User Management"
 	auditCategoryAgentLifecycle  = "Agent Lifecycle"
 	auditCategoryFileAccess      = "File Access"
@@ -38,6 +38,11 @@ var AuditCatalog = []AuditCatalogEntry{
 	{Action: AuditLogTailStarted, Label: "Log tail started", Category: "Log Access", Outcome: AuditOutcomeSuccess, ActorType: AuditActorTypeUser, ResourceType: "log"},
 	{Action: AuditTerminalOpened, Label: "Terminal session opened", Category: "Terminal Access", Outcome: AuditOutcomeSuccess, ActorType: AuditActorTypeUser, ResourceType: "terminal"},
 	{Action: AuditTerminalClosed, Label: "Terminal session closed", Category: "Terminal Access", Outcome: AuditOutcomeSuccess, ActorType: AuditActorTypeUser, ResourceType: "terminal"},
+	{Action: AuditSSHCertIssued, Label: "SSH user certificate issued", Category: "SSH Gateway", Outcome: AuditOutcomeSuccess, ActorType: AuditActorTypeUser, ResourceType: "ssh"},
+	{Action: AuditSSHCertIssueRefused, Label: "SSH certificate issuance refused", Category: "SSH Gateway", Outcome: AuditOutcomeFailure, ActorType: AuditActorTypeUser, ResourceType: "ssh"},
+	{Action: AuditSSHSessionOpened, Label: "SSH session opened", Category: "SSH Gateway", Outcome: AuditOutcomeSuccess, ActorType: AuditActorTypeUser, ResourceType: "ssh"},
+	{Action: AuditSSHSessionClosed, Label: "SSH session closed", Category: "SSH Gateway", Outcome: AuditOutcomeSuccess, ActorType: AuditActorTypeUser, ResourceType: "ssh"},
+	{Action: AuditSSHSessionRefused, Label: "SSH session refused", Category: "SSH Gateway", Outcome: AuditOutcomeFailure, ActorType: AuditActorTypeUser, ResourceType: "ssh"},
 	{Action: AuditAuditExported, Label: "Audit exported", Category: auditCategoryAuditGovernance, Outcome: AuditOutcomeSuccess, ActorType: AuditActorTypeUser, ResourceType: "audit"},
 	{Action: AuditAuditReviewCompleted, Label: "Audit review completed", Category: auditCategoryAuditGovernance, Outcome: AuditOutcomeSuccess, ActorType: AuditActorTypeUser, ResourceType: "audit"},
 	{Action: AuditAuditFilterSaved, Label: "Audit filter saved", Category: auditCategoryAuditGovernance, Outcome: AuditOutcomeSuccess, ActorType: AuditActorTypeUser, ResourceType: "audit"},
