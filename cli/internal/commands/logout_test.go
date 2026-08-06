@@ -2,7 +2,6 @@ package commands
 
 import (
 	"encoding/json"
-	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -187,7 +186,10 @@ func TestLogout_StoreDeleteFails(t *testing.T) {
 		RefreshToken: "refresh-1", Username: "alice", Role: "admin", ObtainedAt: time.Now(),
 	})
 
-	store, err := auth.NewStore(configDir, io.Discard)
+	// nil, not io.Discard: this probe must not consume the process-wide
+	// fallback-warning budget (see seedSession's doc comment in
+	// status_test.go) ahead of any test that asserts on it.
+	store, err := auth.NewStore(configDir, nil)
 	if err != nil {
 		t.Fatalf("auth.NewStore: %v", err)
 	}

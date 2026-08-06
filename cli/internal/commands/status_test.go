@@ -3,7 +3,6 @@ package commands
 import (
 	"bytes"
 	"encoding/json"
-	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -36,9 +35,16 @@ func newCmdContext(hubURL, configDir string, jsonMode bool, args []string) (*Con
 // seedSession persists sess for hubURL in configDir's credential store, so
 // a command run against a Context pointed at configDir resolves to session
 // auth mode for that hub.
+//
+// warnW is nil, not io.Discard: per auth.NewStore's docs, nil suppresses the
+// keyring-fallback warning without consuming the process-wide one-time
+// budget, whereas a non-nil writer (even a discarding one) does consume it.
+// seedSession runs ahead of nearly every test in this package, so using
+// io.Discard here would silently exhaust that budget before any test that
+// actually asserts the warning's behavior gets to run.
 func seedSession(t *testing.T, configDir, hubURL string, sess auth.StoredSession) {
 	t.Helper()
-	store, err := auth.NewStore(configDir, io.Discard)
+	store, err := auth.NewStore(configDir, nil)
 	if err != nil {
 		t.Fatalf("auth.NewStore: %v", err)
 	}

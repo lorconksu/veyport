@@ -13,10 +13,20 @@ import (
 
 // newAuthContext builds the credential store for ctx.ConfigDir and resolves
 // the AuthContext for hubURL (api_token > session > none, per
-// data-model.md "AuthContext"). Shared by status, logout, and servers so
-// precedence and storage-backend selection live in exactly one place.
+// data-model.md "AuthContext"). Shared by status, logout, servers, files,
+// logs, and audit so precedence and storage-backend selection live in
+// exactly one place.
+//
+// The keyring-fallback warning is suppressed here (nil warnW — auth.NewStore
+// documents nil as "suppress without consuming the one-time budget"): the
+// moment that warning matters is `vey login`, when credentials are first
+// written and the storage choice is decided (RunLogin passes ctx.Printer.Err
+// directly to its own auth.NewStore call for that reason). Every other
+// command is a read of an already-decided storage backend, and `vey status`
+// already reports it via the "storage" field, so repeating the warning on
+// every invocation on a headless machine would just be noise.
 func newAuthContext(ctx *Context, hubURL string) (auth.Store, *auth.AuthContext, error) {
-	store, err := auth.NewStore(ctx.ConfigDir, ctx.Printer.Err)
+	store, err := auth.NewStore(ctx.ConfigDir, nil)
 	if err != nil {
 		return nil, nil, fmt.Errorf("opening credential store: %w", err)
 	}

@@ -29,10 +29,12 @@ package commands
 import (
 	"fmt"
 	"os"
+	"strings"
 	"testing"
 
 	"golang.org/x/sys/unix"
 
+	"github.com/wyiu/veyport/cli/internal/auth"
 	"github.com/wyiu/veyport/cli/internal/cmdutil"
 )
 
@@ -123,7 +125,27 @@ func TestLogin_TTY_EmptyConfigDir_StoreConstructionError(t *testing.T) {
 // for the rest of the test — closing it would deallocate the pty pair and
 // make the slave stop presenting as a terminal, defeating the TTY check
 // this test exists to exercise.
+//
+// This is also the one place in the whole package that can observe the
+// keyring-fallback warning: RunLogin (login.go) is the only call site that
+// passes a real writer (ctx.Printer.Err) to auth.NewStore — every other
+// command routes through newAuthContext (status.go), which passes nil so
+// the warning never fires outside login. The credential store is
+// file-backed in this environment (no OS keyring), same precondition as
+// TestLogout_StoreDeleteFails, which is what should trigger the warning
+// here; if this ever runs somewhere with a real keyring, the assertion is
+// skipped rather than asserting a warning that would not fire.
 func TestLogin_TTY_StoreConstructionSucceeds_EOFAtPrompt(t *testing.T) {
+	configDir := t.TempDir()
+	// nil, not io.Discard: this probe must not consume the process-wide
+	// fallback-warning budget before RunLogin's own NewStore call below gets
+	// to (that consumption is exactly what this test asserts on).
+	probe, err := auth.NewStore(configDir, nil)
+	if err != nil {
+		t.Fatalf("auth.NewStore (backend probe): %v", err)
+	}
+	fileBacked := probe.Backend() == auth.BackendFile
+
 	master, slave := openTestPTY(t)
 	defer master.Close()
 	withStdin(t, slave)
@@ -135,7 +157,7 @@ func TestLogin_TTY_StoreConstructionSucceeds_EOFAtPrompt(t *testing.T) {
 		t.Fatalf("writing blank username line to pty master: %v", err)
 	}
 
-	ctx, stdout, stderr := newCmdContext("https://hub.example.com", t.TempDir(), false, nil)
+	ctx, stdout, stderr := newCmdContext("https://hub.example.com", configDir, false, nil)
 	code := RunLogin(ctx)
 	// auth.Login rejects the blank username as a usage error ("username is
 	// required"), proving store/client construction (and the call into
@@ -145,5 +167,13 @@ func TestLogin_TTY_StoreConstructionSucceeds_EOFAtPrompt(t *testing.T) {
 	}
 	if stdout.Len() != 0 {
 		t.Errorf("stdout = %q, want empty", stdout.String())
+	}
+
+	if !fileBacked {
+		t.Skip("credential store is keyring-backed in this environment; fallback warning does not apply")
+	}
+	const warning = "OS keyring unavailable"
+	if !strings.Contains(stderr.String(), warning) {
+		t.Errorf("stderr = %q, want it to contain the keyring-fallback warning %q", stderr.String(), warning)
 	}
 }
