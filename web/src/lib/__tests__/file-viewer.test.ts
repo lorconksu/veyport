@@ -6,7 +6,6 @@ import {
   formatFileSize,
   highlightFileContent,
   isMarkdownFile,
-  parseSseChunk,
   sortFileNodes,
 } from '../file-viewer'
 
@@ -90,17 +89,6 @@ describe('file-viewer', () => {
       const html = highlightFileContent('<img src=x onerror=alert(1)>', 'notes.txt')
       expect(html).toContain('&lt;img')
       expect(html).not.toContain('<img')
-    })
-  })
-
-  describe('parseSseChunk', () => {
-    it('decodes streamed base64 data lines', () => {
-      const data = btoa('line 1\nline 2\n')
-      expect(parseSseChunk([`data: ${data}`])).toEqual(['line 1', 'line 2'])
-    })
-
-    it('ignores malformed or non-data lines', () => {
-      expect(parseSseChunk(['event: ping', 'data: !!!'])).toEqual([])
     })
   })
 })

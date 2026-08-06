@@ -153,23 +153,3 @@ export function highlightFileContent(content: string, filename: string): string 
     }
   }
 }
-
-export function parseSseChunk(sseLines: string[]): string[] {
-  const newLogLines: string[] = []
-  for (const sseLine of sseLines) {
-    if (!sseLine.startsWith('data: ')) continue
-    const base64Data = sseLine.slice(6)
-    if (!base64Data) continue
-
-    try {
-      const bytes = Uint8Array.from(atob(base64Data), (c) => c.codePointAt(0)!)
-      const text = new TextDecoder('utf-8').decode(bytes)
-      for (const line of text.split('\n')) {
-        if (line !== '') newLogLines.push(line)
-      }
-    } catch {
-      // Skip malformed base64 chunks
-    }
-  }
-  return newLogLines
-}
