@@ -6,6 +6,10 @@ name: Staging Build
 on:
   workflow_dispatch:
 
+# Registry auth uses DOCKERHUB_* secrets; the GITHUB_TOKEN only needs checkout.
+permissions:
+  contents: read
+
 jobs:
   build-and-push-staging:
     runs-on: ubuntu-latest
