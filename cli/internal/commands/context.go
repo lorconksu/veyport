@@ -102,4 +102,5 @@ var Registry = map[string]func(ctx *Context) int{
 	"logs":     RunLogs,
 	"audit":    RunAudit,
 	"ssh-cert": RunSSHCert,
+	"ssh":      RunSSH,
 }

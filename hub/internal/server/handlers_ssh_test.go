@@ -4,6 +4,8 @@ import (
 	"crypto/ed25519"
 	"crypto/rand"
 	"encoding/json"
+	"errors"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -360,26 +362,30 @@ func TestHandleIssueSSHCertificate_RateLimited(t *testing.T) {
 	}
 }
 
+// getSSHHostKey reads GET /api/ssh/host-key as an authenticated caller.
+func getSSHHostKey(t *testing.T, h http.Handler, token string) model.SSHHostKeyResponse {
+	t.Helper()
+
+	req := httptest.NewRequest("GET", testSSHHostKeyPath, nil)
+	req.Header.Set("Authorization", testBearerPrefix+token)
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf(testExpected200Body, rec.Code, rec.Body.String())
+	}
+	var resp model.SSHHostKeyResponse
+	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
+		t.Fatalf(testDecodeRespErr, err)
+	}
+	return resp
+}
+
 func TestHandleSSHHostKey_StableAndMatchesGatewayKey(t *testing.T) {
 	s, hostKey := testSSHServer(t)
 	token := registerAndGetAdminToken(t, s)
 	h := s.routes()
 
-	get := func() model.SSHHostKeyResponse {
-		t.Helper()
-		req := httptest.NewRequest("GET", testSSHHostKeyPath, nil)
-		req.Header.Set("Authorization", testBearerPrefix+token)
-		rec := httptest.NewRecorder()
-		h.ServeHTTP(rec, req)
-		if rec.Code != http.StatusOK {
-			t.Fatalf(testExpected200Body, rec.Code, rec.Body.String())
-		}
-		var resp model.SSHHostKeyResponse
-		if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
-			t.Fatalf(testDecodeRespErr, err)
-		}
-		return resp
-	}
+	get := func() model.SSHHostKeyResponse { return getSSHHostKey(t, h, token) }
 
 	first, second := get(), get()
 
@@ -400,6 +406,94 @@ func TestHandleSSHHostKey_StableAndMatchesGatewayKey(t *testing.T) {
 	}
 	if string(parsed.Marshal()) != string(hostKey.PublicKey().Marshal()) {
 		t.Fatal("expected the published host public key to match the gateway host key")
+	}
+}
+
+// observeHostKeyOverTheWire returns the host key an SSH client actually sees
+// through HostKeyCallback when it connects to a listener carrying signer.
+//
+// The listener is a stand-in for the gateway rather than the gateway itself:
+// internal/sshgw imports internal/server (for AuthorizeTerminalExecution), so
+// this package cannot import sshgw without an import cycle. What makes the
+// stand-in sound is that it is handed the SAME *ssh.Signer instance that
+// cmd/veyport/main.go passes to BOTH server.Config.SSHHostKey (what this API
+// publishes) and sshgw.Config.HostKey (what the gateway presents) — one key
+// object, two consumers. The real gateway's key is separately pinned end to end
+// in internal/integration/ssh_gateway_test.go.
+func observeHostKeyOverTheWire(t *testing.T, signer ssh.Signer) ssh.PublicKey {
+	t.Helper()
+
+	lis, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	defer func() { _ = lis.Close() }()
+
+	serverCfg := &ssh.ServerConfig{
+		// The probe never authenticates; only the key exchange matters, and the
+		// host key is presented during key exchange, before any auth attempt.
+		PublicKeyCallback: func(ssh.ConnMetadata, ssh.PublicKey) (*ssh.Permissions, error) {
+			return nil, errors.New("probe connection: authentication not attempted")
+		},
+	}
+	serverCfg.AddHostKey(signer)
+
+	go func() {
+		conn, acceptErr := lis.Accept()
+		if acceptErr != nil {
+			return
+		}
+		defer func() { _ = conn.Close() }()
+		_, _, _, _ = ssh.NewServerConn(conn, serverCfg)
+	}()
+
+	var presented ssh.PublicKey
+	client, dialErr := ssh.Dial("tcp", lis.Addr().String(), &ssh.ClientConfig{
+		User: "probe",
+		HostKeyCallback: func(_ string, _ net.Addr, key ssh.PublicKey) error {
+			presented = key
+			return nil
+		},
+		Timeout: 5 * time.Second,
+	})
+	if dialErr == nil {
+		_ = client.Close()
+	}
+	if presented == nil {
+		t.Fatalf("the client never observed a host key: %v", dialErr)
+	}
+	return presented
+}
+
+// TestHandleSSHHostKey_MatchesKeyPresentedToClients closes the "discoverable"
+// half of FR-006: the fingerprint and public key published by
+// GET /api/ssh/host-key must be the ones a connecting SSH client verifies
+// against, or pre-pinning from the API buys the operator nothing. Restart
+// stability of the key itself is covered by userca's tests.
+func TestHandleSSHHostKey_MatchesKeyPresentedToClients(t *testing.T) {
+	s, hostKey := testSSHServer(t)
+	token := registerAndGetAdminToken(t, s)
+
+	published := getSSHHostKey(t, s.routes(), token)
+	presented := observeHostKeyOverTheWire(t, hostKey)
+
+	if got := ssh.FingerprintSHA256(presented); got != published.Fingerprint {
+		t.Fatalf("the API publishes fingerprint %q but a connecting client sees %q",
+			published.Fingerprint, got)
+	}
+	if got := authorizedKeyLine(presented); got != published.PublicKey {
+		t.Fatalf("the API publishes public key %q but a connecting client sees %q",
+			published.PublicKey, got)
+	}
+
+	// The published line must also be directly usable as a known_hosts pin, so
+	// verify it round-trips into the callback the CLI builds (FR-013).
+	pinned, _, _, _, err := ssh.ParseAuthorizedKey([]byte(published.PublicKey))
+	if err != nil {
+		t.Fatalf("parse published host public key: %v", err)
+	}
+	if err := ssh.FixedHostKey(pinned)("", nil, presented); err != nil {
+		t.Fatalf("pinning the published key rejects the key the client is presented: %v", err)
 	}
 }
 
