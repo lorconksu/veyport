@@ -1,7 +1,7 @@
 # Veyport Hub API Reference
 
 > **TL;DR**
-> - **What:** 50+ REST API endpoints covering auth, user management, server operations, terminal sessions, audit logs, notifications, LDAP config, SMTP config, hub settings, and agent installation
+> - **What:** 50+ REST API endpoints covering auth, user management, server operations, terminal sessions, audit logs, notifications, LDAP config, SMTP config, hub settings, and agent/CLI installation
 > - **Who:** Frontend developers, integration builders, and anyone automating Veyport
 > - **Why:** Complete reference for every HTTP endpoint with request/response schemas
 > - **Where:** All endpoints served by the Hub on the HTTP port (default :8081)
@@ -1604,6 +1604,58 @@ Download the agent binary for a specific platform.
 
 ```bash
 curl - O https://hub.example.com/install/linux/amd64
+```
+
+---
+
+### GET /install/cli/{os}/{arch}
+
+Download the `vey` CLI binary for a specific platform. See [[CLI]] for the full install walkthrough and command reference.
+
+| Property | Value |
+|---|---|
+| Auth | None |
+| Content-Type (response) | `application/octet-stream` |
+
+**Path Parameters:**
+- `os` - Operating system (`linux` or `darwin`)
+- `arch` - Architecture (`amd64` or `arm64`)
+
+**Response:** Binary file download with `Content-Disposition: attachment; filename="vey-{os}-{arch}"`
+
+**Error Cases:**
+- `404` - Unsupported platform (outside the `{linux,darwin}` x `{amd64,arm64}` allowlist) or binary not built for this Hub
+
+**cURL:**
+
+```bash
+curl -o vey https://hub.example.com/install/cli/linux/amd64
+```
+
+---
+
+### GET /install/cli/{os}/{arch}/sha256
+
+Get the SHA-256 checksum of the `vey` CLI binary for a specific platform, for verifying the download from the endpoint above.
+
+| Property | Value |
+|---|---|
+| Auth | None |
+| Content-Type (response) | `text/plain` |
+
+**Path Parameters:**
+- `os` - Operating system (`linux` or `darwin`)
+- `arch` - Architecture (`amd64` or `arm64`)
+
+**Response:** The hex-encoded SHA-256 checksum as plain text.
+
+**Error Cases:**
+- `404` - Unsupported platform or checksum not found
+
+**cURL:**
+
+```bash
+curl https://hub.example.com/install/cli/linux/amd64/sha256
 ```
 
 ---
