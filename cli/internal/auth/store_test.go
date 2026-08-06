@@ -18,6 +18,12 @@ import (
 // A distinctive value so leak assertions cannot pass by accident.
 const testToken = "refresh-token-MUST-NOT-LEAK-9f8e7d6c"
 
+// testSSHKey stands in for the openssh-form private key `vey ssh-cert`
+// generates. The store never parses it, so a distinctive placeholder is
+// enough — and, like testToken, a substring hit anywhere it does not belong
+// is unambiguous.
+const testSSHKey = "-----BEGIN OPENSSH PRIVATE KEY-----\nssh-private-key-MUST-NOT-LEAK-1a2b3c4d\n-----END OPENSSH PRIVATE KEY-----\n"
+
 const (
 	hubA = "https://hub-a.example.com"
 	hubB = "https://hub-b.example.com:8443"
@@ -53,6 +59,41 @@ func redact(s StoredSession) StoredSession {
 		s.RefreshToken = "<redacted>"
 	}
 	return s
+}
+
+// sshFor builds the SSH material for one hub, distinct per hub so a
+// cross-hub leak is visible (data-model.md "Stored SSH material").
+func sshFor(hub string) StoredSSH {
+	return StoredSSH{
+		PrivateKey:  testSSHKey + hub,
+		Certificate: "ssh-ed25519-cert-v01@openssh.com AAAAcert-" + hub + " alice",
+		// Truncate strips the monotonic reading so the value survives a
+		// JSON round trip unchanged.
+		CertExpiresAt:   time.Now().UTC().Add(12 * time.Hour).Truncate(time.Second),
+		HostFingerprint: "SHA256:host-key-fingerprint-" + hub,
+	}
+}
+
+func assertSSH(t *testing.T, got, want StoredSSH) {
+	t.Helper()
+	if got.PrivateKey != want.PrivateKey {
+		t.Errorf("SSH private key mismatch:\n got %+v\nwant %+v", redactSSH(got), redactSSH(want))
+	}
+	if got.Certificate != want.Certificate || got.HostFingerprint != want.HostFingerprint {
+		t.Errorf("SSH material mismatch:\n got %+v\nwant %+v", redactSSH(got), redactSSH(want))
+	}
+	if !got.CertExpiresAt.Equal(want.CertExpiresAt) {
+		t.Errorf("CertExpiresAt = %v, want %v", got.CertExpiresAt, want.CertExpiresAt)
+	}
+}
+
+// redactSSH is redact's counterpart for SSH material: the certificate,
+// expiry, and fingerprint are public, the private key is not.
+func redactSSH(m StoredSSH) StoredSSH {
+	if m.PrivateKey != "" {
+		m.PrivateKey = "<redacted>"
+	}
+	return m
 }
 
 // freshWarnOnce resets the process-wide one-time warning budget so each test
@@ -309,6 +350,390 @@ func TestStoreRejectsEmptyHubURL(t *testing.T) {
 			}
 		})
 	}
+}
+
+// --- SSH material (005-ssh-gateway T012) ------------------------------------
+
+// TestStoreSSHRoundTrip pins the SSH half of the store in both backends:
+// absent until written, returned in full once written, and replaced (not
+// accumulated) by the next write — the re-issuance path of FR-004.
+func TestStoreSSHRoundTrip(t *testing.T) {
+	for _, backend := range backends() {
+		t.Run(backend, func(t *testing.T) { runStoreSSHRoundTrip(t, backend) })
+	}
+}
+
+func runStoreSSHRoundTrip(t *testing.T, backend string) {
+	t.Helper()
+	s := newTestStore(t, backend)
+
+	if got, ok, err := s.LoadSSH(hubA); err != nil || ok || got.PrivateKey != "" {
+		t.Fatalf("LoadSSH on empty store = (%+v, ok %v, err %v), want (zero, false, nil)", redactSSH(got), ok, err)
+	}
+
+	want := sshFor(hubA)
+	if err := s.SaveSSH(hubA, want); err != nil {
+		t.Fatalf("SaveSSH: %v", err)
+	}
+	got, ok, err := s.LoadSSH(hubA)
+	if err != nil || !ok {
+		t.Fatalf("LoadSSH = (ok %v, err %v), want (true, nil)", ok, err)
+	}
+	assertSSH(t, got, want)
+
+	// Re-issuance replaces the certificate and keeps whatever key the caller
+	// hands back (FR-004: the CLI reuses the keypair, the hub re-signs it).
+	reissued := want
+	reissued.Certificate = "ssh-ed25519-cert-v01@openssh.com AAAAcert-reissued alice"
+	reissued.CertExpiresAt = want.CertExpiresAt.Add(12 * time.Hour)
+	if err := s.SaveSSH(hubA, reissued); err != nil {
+		t.Fatalf("SaveSSH reissued: %v", err)
+	}
+	got, _, err = s.LoadSSH(hubA)
+	if err != nil {
+		t.Fatalf("LoadSSH after re-issuance: %v", err)
+	}
+	assertSSH(t, got, reissued)
+}
+
+// TestStoreSSHWithoutPrivateKeyIsAbsent pins LoadSSH's "ok" contract: SSH
+// material with no private key is unusable (nothing can be signed with it),
+// so it reports absent rather than handing a caller a half-record it would
+// have to re-validate.
+func TestStoreSSHWithoutPrivateKeyIsAbsent(t *testing.T) {
+	for _, backend := range backends() {
+		t.Run(backend, func(t *testing.T) {
+			s := newTestStore(t, backend)
+			if err := s.SaveSSH(hubA, StoredSSH{HostFingerprint: "SHA256:only-a-fingerprint"}); err != nil {
+				t.Fatalf("SaveSSH: %v", err)
+			}
+			got, ok, err := s.LoadSSH(hubA)
+			if err != nil {
+				t.Fatalf("LoadSSH: %v", err)
+			}
+			if ok {
+				t.Errorf("LoadSSH reported present for keyless material: %+v", redactSSH(got))
+			}
+		})
+	}
+}
+
+// TestSaveSessionPreservesSSHMaterial is the invariant that decides the
+// storage shape. AuthContext.persistAndAdopt builds a *fresh* StoredSession
+// on every refresh-token rotation and hands it to Save; if the SSH key and
+// certificate lived on StoredSession, every rotation (i.e. every session-mode
+// command) would silently erase them. Each half of a hub's record must
+// therefore survive a write of the other half.
+func TestSaveSessionPreservesSSHMaterial(t *testing.T) {
+	for _, backend := range backends() {
+		t.Run(backend, func(t *testing.T) { runSaveSessionPreservesSSHMaterial(t, backend) })
+	}
+}
+
+func runSaveSessionPreservesSSHMaterial(t *testing.T, backend string) {
+	t.Helper()
+	s := newTestStore(t, backend)
+
+	sess := sessionFor(hubA)
+	material := sshFor(hubA)
+	if err := s.Save(hubA, sess); err != nil {
+		t.Fatalf("Save session: %v", err)
+	}
+	if err := s.SaveSSH(hubA, material); err != nil {
+		t.Fatalf("SaveSSH: %v", err)
+	}
+
+	// A rotation: exactly what refresh.go writes, a whole new StoredSession.
+	rotated := sess
+	rotated.RefreshToken = testToken + "/rotated"
+	if err := s.Save(hubA, rotated); err != nil {
+		t.Fatalf("Save rotated session: %v", err)
+	}
+
+	gotSSH, ok, err := s.LoadSSH(hubA)
+	if err != nil || !ok {
+		t.Fatalf("LoadSSH after a session rotation = (ok %v, err %v), want (true, nil)", ok, err)
+	}
+	assertSSH(t, gotSSH, material)
+
+	// And the mirror image: re-issuing the certificate must not disturb the
+	// session that authorized it.
+	reissued := material
+	reissued.Certificate = "ssh-ed25519-cert-v01@openssh.com AAAAcert-reissued alice"
+	if err := s.SaveSSH(hubA, reissued); err != nil {
+		t.Fatalf("SaveSSH re-issued: %v", err)
+	}
+	gotSess, ok, err := s.Load(hubA)
+	if err != nil || !ok {
+		t.Fatalf("Load after re-issuance = (ok %v, err %v), want (true, nil)", ok, err)
+	}
+	assertSession(t, gotSess, rotated)
+}
+
+// TestStoreScopesSSHMaterialPerHub extends FR-005's per-hub scoping to the
+// SSH key: a certificate issued by hub A must be structurally unreachable
+// under hub B.
+func TestStoreScopesSSHMaterialPerHub(t *testing.T) {
+	for _, backend := range backends() {
+		t.Run(backend, func(t *testing.T) { runStoreScopesSSHMaterialPerHub(t, backend) })
+	}
+}
+
+func runStoreScopesSSHMaterialPerHub(t *testing.T, backend string) {
+	t.Helper()
+	s := newTestStore(t, backend)
+
+	if err := s.SaveSSH(hubA, sshFor(hubA)); err != nil {
+		t.Fatalf("SaveSSH hub A: %v", err)
+	}
+	got, ok, err := s.LoadSSH(hubB)
+	if err != nil {
+		t.Fatalf("LoadSSH hub B: %v", err)
+	}
+	if ok || got.PrivateKey != "" {
+		t.Fatalf("hub B returned SSH material it was never given: %+v", redactSSH(got))
+	}
+
+	if err := s.SaveSSH(hubB, sshFor(hubB)); err != nil {
+		t.Fatalf("SaveSSH hub B: %v", err)
+	}
+	gotA, _, err := s.LoadSSH(hubA)
+	if err != nil {
+		t.Fatalf("LoadSSH hub A: %v", err)
+	}
+	assertSSH(t, gotA, sshFor(hubA))
+	gotB, _, err := s.LoadSSH(hubB)
+	if err != nil {
+		t.Fatalf("LoadSSH hub B: %v", err)
+	}
+	assertSSH(t, gotB, sshFor(hubB))
+}
+
+// TestDeleteRemovesSSHMaterial pins `vey logout`'s promise ("removes all
+// locally stored credentials for that hub", FR-006 of 004): the single
+// store.Delete logout issues must take the SSH private key and certificate
+// with it, not just the refresh token.
+func TestDeleteRemovesSSHMaterial(t *testing.T) {
+	for _, backend := range backends() {
+		t.Run(backend, func(t *testing.T) {
+			s := newTestStore(t, backend)
+			if err := s.Save(hubA, sessionFor(hubA)); err != nil {
+				t.Fatalf("Save: %v", err)
+			}
+			if err := s.SaveSSH(hubA, sshFor(hubA)); err != nil {
+				t.Fatalf("SaveSSH: %v", err)
+			}
+			if err := s.Delete(hubA); err != nil {
+				t.Fatalf("Delete: %v", err)
+			}
+			got, ok, err := s.LoadSSH(hubA)
+			if err != nil {
+				t.Fatalf("LoadSSH after Delete: %v", err)
+			}
+			if ok || got.PrivateKey != "" {
+				t.Errorf("SSH material survived logout: %+v", redactSSH(got))
+			}
+		})
+	}
+}
+
+func TestStoreRejectsEmptyHubURLForSSH(t *testing.T) {
+	for _, backend := range backends() {
+		t.Run(backend, func(t *testing.T) {
+			s := newTestStore(t, backend)
+			if err := s.SaveSSH("", sshFor(hubA)); err == nil {
+				t.Error("SaveSSH with empty hub URL succeeded, want error")
+			}
+			if _, _, err := s.LoadSSH("  "); err == nil {
+				t.Error("LoadSSH with blank hub URL succeeded, want error")
+			}
+		})
+	}
+}
+
+// TestFileStoreSSHMaterialIsOwnerOnly holds SSH material to the refresh
+// token's at-rest bar: the same 0600 file, written the same atomic way.
+func TestFileStoreSSHMaterialIsOwnerOnly(t *testing.T) {
+	fs := newTestFileStore(t)
+	if err := fs.SaveSSH(hubA, sshFor(hubA)); err != nil {
+		t.Fatalf("SaveSSH: %v", err)
+	}
+	fi, err := os.Stat(fs.path)
+	if err != nil {
+		t.Fatalf("stat credentials file: %v", err)
+	}
+	if perm := fi.Mode().Perm(); perm != credentialsFileMode {
+		t.Errorf("credentials file mode = %04o, want %04o", perm, credentialsFileMode)
+	}
+	if _, err := os.Stat(fs.path + ".tmp"); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("temp file survived a successful SSH write: err = %v", err)
+	}
+
+	// The world-readable check applies to the SSH read path too.
+	if err := os.Chmod(fs.path, 0o644); err != nil {
+		t.Fatalf("chmod: %v", err)
+	}
+	if _, _, err := fs.LoadSSH(hubA); err == nil {
+		t.Error("LoadSSH succeeded on a world-readable credentials file, want rejection")
+	} else if strings.Contains(err.Error(), testSSHKey) {
+		t.Error("permission error leaked the SSH private key")
+	}
+}
+
+// TestFileStoreOnDiskShapeMatchesDataModel pins the persisted field names
+// (data-model.md "Stored SSH material") and the format compatibility that
+// makes one record per hub safe: a 004-era entry (session only) still loads,
+// and an entry with no SSH material still serializes without SSH keys.
+func TestFileStoreOnDiskShapeMatchesDataModel(t *testing.T) {
+	fs := newTestFileStore(t)
+	if err := fs.Save(hubA, sessionFor(hubA)); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+
+	sessionOnly, err := os.ReadFile(fs.path)
+	if err != nil {
+		t.Fatalf("read credentials file: %v", err)
+	}
+	if strings.Contains(string(sessionOnly), "ssh_") {
+		t.Errorf("a session-only entry emitted SSH fields, breaking format compatibility with 004:\n%s", sessionOnly)
+	}
+
+	if err := fs.SaveSSH(hubA, sshFor(hubA)); err != nil {
+		t.Fatalf("SaveSSH: %v", err)
+	}
+	raw, err := os.ReadFile(fs.path)
+	if err != nil {
+		t.Fatalf("read credentials file: %v", err)
+	}
+	for _, field := range []string{"ssh_private_key", "ssh_certificate", "ssh_cert_expires_at", "ssh_host_fingerprint"} {
+		if !strings.Contains(string(raw), field) {
+			t.Errorf("credentials file does not carry %q:\n%s", field, raw)
+		}
+	}
+	// The refresh token must still sit at the top level of the entry, where
+	// a store written by 004 puts it.
+	var parsed map[string]struct {
+		RefreshToken  string `json:"refresh_token"`
+		SSHPrivateKey string `json:"ssh_private_key"`
+		CertExpiresAt string `json:"ssh_cert_expires_at"`
+	}
+	if err := json.Unmarshal(raw, &parsed); err != nil {
+		t.Fatalf("credentials file is not the documented flat shape: %v", err)
+	}
+	entry := parsed[hubA]
+	if entry.RefreshToken == "" || entry.SSHPrivateKey == "" {
+		t.Fatalf("entry lost a half of its record: refresh token present=%v, ssh key present=%v",
+			entry.RefreshToken != "", entry.SSHPrivateKey != "")
+	}
+	if _, err := time.Parse(time.RFC3339, entry.CertExpiresAt); err != nil {
+		t.Errorf("ssh_cert_expires_at = %q, want RFC3339 (data-model.md): %v", entry.CertExpiresAt, err)
+	}
+
+	// A store written by 004 (no SSH fields at all) still loads.
+	legacy := `{"` + hubA + `":{"refresh_token":"` + testToken + `","username":"alice","role":"admin"}}`
+	if err := os.WriteFile(fs.path, []byte(legacy), credentialsFileMode); err != nil {
+		t.Fatalf("write legacy credentials file: %v", err)
+	}
+	sess, ok, err := fs.Load(hubA)
+	if err != nil || !ok || sess.RefreshToken != testToken {
+		t.Fatalf("legacy entry did not load: (ok %v, err %v)", ok, err)
+	}
+	if _, ok, err := fs.LoadSSH(hubA); err != nil || ok {
+		t.Fatalf("legacy entry reported SSH material = (ok %v, err %v), want (false, nil)", ok, err)
+	}
+}
+
+// TestKeyringStoreSaveOverCorruptEntryRepairs pins the keyring backend's
+// merge tolerance: Save and SaveSSH read the existing entry to carry the
+// other half over, and an unreadable entry must not turn a fresh `vey login`
+// into a permanent failure. The write replaces the corrupt value outright.
+func TestKeyringStoreSaveOverCorruptEntryRepairs(t *testing.T) {
+	s := newTestStore(t, BackendKeyring)
+	if err := keyring.Set(KeyringService, hubA, "{not json"); err != nil {
+		t.Fatalf("seed keyring: %v", err)
+	}
+	if _, _, err := s.Load(hubA); err == nil {
+		t.Fatal("Load of a corrupt keyring entry succeeded, want error")
+	}
+	if err := s.Save(hubA, sessionFor(hubA)); err != nil {
+		t.Fatalf("Save over a corrupt keyring entry: %v", err)
+	}
+	got, ok, err := s.Load(hubA)
+	if err != nil || !ok {
+		t.Fatalf("Load after repair = (ok %v, err %v), want (true, nil)", ok, err)
+	}
+	assertSession(t, got, sessionFor(hubA))
+}
+
+// TestKeyringStoreSurfacesSSHBackendErrors is
+// TestKeyringStoreSurfacesBackendErrors' counterpart for the SSH half.
+// SaveSSH is deliberately absent from the "must fail" list: it tolerates an
+// unreadable existing entry (see TestKeyringStoreSaveOverCorruptEntryRepairs)
+// but must still fail when the write itself cannot land.
+func TestKeyringStoreSurfacesSSHBackendErrors(t *testing.T) {
+	keyring.MockInitWithError(errNoKeyring)
+	s := &keyringStore{}
+
+	if err := s.SaveSSH(hubA, sshFor(hubA)); err == nil {
+		t.Error("keyringStore.SaveSSH succeeded against a failing keyring, want error")
+	}
+	if _, _, err := s.LoadSSH(hubA); err == nil {
+		t.Error("keyringStore.LoadSSH succeeded against a failing keyring, want error")
+	}
+}
+
+func TestFileStoreSSHPropagatesReadAllError(t *testing.T) {
+	fs := newTestFileStore(t)
+	if err := fs.SaveSSH(hubA, sshFor(hubA)); err != nil {
+		t.Fatalf("SaveSSH: %v", err)
+	}
+	if err := os.Chmod(fs.path, 0o200); err != nil { // owner write-only: unreadable
+		t.Fatalf("chmod: %v", err)
+	}
+	if _, _, err := fs.LoadSSH(hubA); err == nil {
+		t.Error("LoadSSH succeeded on a write-only credentials file, want a read error")
+	}
+	if err := fs.SaveSSH(hubA, sshFor(hubA)); err == nil {
+		t.Error("SaveSSH succeeded on a write-only credentials file, want a read error")
+	}
+}
+
+// TestErrorsNeverContainTheSSHPrivateKey is
+// TestErrorsNeverContainTheRefreshToken's counterpart for the second piece
+// of long-lived secret material vey persists.
+func TestErrorsNeverContainTheSSHPrivateKey(t *testing.T) {
+	corrupt := `{"` + hubA + `": {"ssh_private_key": "` + testSSHKey // truncated JSON containing the key
+
+	t.Run("file corrupt", func(t *testing.T) {
+		fs := newTestFileStore(t)
+		if err := os.MkdirAll(fs.dir, credentialsDirMode); err != nil {
+			t.Fatalf("mkdir: %v", err)
+		}
+		if err := os.WriteFile(fs.path, []byte(corrupt), credentialsFileMode); err != nil {
+			t.Fatalf("write: %v", err)
+		}
+		_, _, err := fs.LoadSSH(hubA)
+		if err == nil {
+			t.Fatal("LoadSSH of corrupt file succeeded, want error")
+		}
+		if strings.Contains(err.Error(), testSSHKey) {
+			t.Errorf("error leaked the SSH private key: %s", err)
+		}
+	})
+
+	t.Run("keyring corrupt", func(t *testing.T) {
+		s := newTestStore(t, BackendKeyring)
+		if err := keyring.Set(KeyringService, hubA, corrupt); err != nil {
+			t.Fatalf("seed keyring: %v", err)
+		}
+		_, _, err := s.LoadSSH(hubA)
+		if err == nil {
+			t.Fatal("LoadSSH of corrupt keyring entry succeeded, want error")
+		}
+		if strings.Contains(err.Error(), testSSHKey) {
+			t.Errorf("error leaked the SSH private key: %s", err)
+		}
+	})
 }
 
 // --- file fallback specifics -----------------------------------------------
@@ -625,7 +1050,7 @@ func TestFileStoreSaveFailsWhenConfigDirCannotBeCreated(t *testing.T) {
 // blocked path first.
 func TestFileStoreWriteAllFailsWhenConfigDirCannotBeCreated(t *testing.T) {
 	fs := newFileStore(blockedPath(t, "vey"))
-	if err := fs.writeAll(map[string]StoredSession{hubA: sessionFor(hubA)}); err == nil {
+	if err := fs.writeAll(map[string]hubEntry{hubA: {StoredSession: sessionFor(hubA)}}); err == nil {
 		t.Error("writeAll under a path blocked by a file succeeded, want error")
 	}
 }

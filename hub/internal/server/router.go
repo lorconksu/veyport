@@ -15,6 +15,7 @@ func (s *Server) routes() http.Handler {
 	refreshLimiter := newRateLimiter(30, 60*time.Second)
 	fileOpsLimiter := newRateLimiter(60, 60*time.Second)
 	terminalLimiter := newRateLimiter(3600, 60*time.Second)
+	sshCertLimiter := newRateLimiter(10, time.Minute)
 
 	// Public auth endpoints (rate-limited)
 	mux.Handle("GET /api/health", loggingMiddleware(http.HandlerFunc(s.handleHealth)))
@@ -120,6 +121,14 @@ func (s *Server) routes() http.Handler {
 
 	// Server unregister (admin only)
 	mux.Handle("DELETE /api/servers/{id}/unregister", loggingMiddleware(s.authMiddleware(auth.TokenTypeAccess, s.adminOnly(http.HandlerFunc(s.handleUnregisterServer)))))
+
+	// SSH gateway endpoints.
+	// Issuance is interactive-only — API tokens are categorically excluded
+	// (FR-002/SC-004) — and rate-limited to 10 requests/minute.
+	// The host key is public trust material, so any authenticated caller may
+	// read it to pin the gateway.
+	mux.Handle("POST /api/ssh/certificates", loggingMiddleware(sshCertLimiter.middleware(s.authMiddleware(auth.TokenTypeAccess, s.auditNonInteractiveSSHCertAttempt(s.interactiveOnly(http.HandlerFunc(s.handleIssueSSHCertificate)))))))
+	mux.Handle("GET /api/ssh/host-key", loggingMiddleware(s.authMiddleware(auth.TokenTypeAccess, http.HandlerFunc(s.handleSSHHostKey))))
 
 	// Public endpoints (no auth required)
 	mux.Handle("GET /install.sh", loggingMiddleware(http.HandlerFunc(s.handleInstallScript)))

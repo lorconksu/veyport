@@ -94,11 +94,12 @@ func (c *Context) RequireHub() (string, error) {
 // in the file named for the task that will replace it with the real
 // implementation.
 var Registry = map[string]func(ctx *Context) int{
-	"login":   RunLogin,
-	"logout":  RunLogout,
-	"status":  RunStatus,
-	"servers": RunServers,
-	"files":   RunFiles,
-	"logs":    RunLogs,
-	"audit":   RunAudit,
+	"login":    RunLogin,
+	"logout":   RunLogout,
+	"status":   RunStatus,
+	"servers":  RunServers,
+	"files":    RunFiles,
+	"logs":     RunLogs,
+	"audit":    RunAudit,
+	"ssh-cert": RunSSHCert,
 }
