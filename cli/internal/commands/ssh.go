@@ -115,13 +115,7 @@ func RunSSH(ctx *Context) int {
 	if err != nil {
 		return fail(err)
 	}
-	if fp := strings.TrimSpace(material.HostFingerprint); fp != "" && fp != strings.TrimSpace(host.Fingerprint) {
-		// Not fatal: the live fetch is authoritative for the connection
-		// about to happen. But a fingerprint that moved since the last `vey
-		// ssh-cert` is exactly what FR-013/SC-007 (host-key stability) exists
-		// to catch, so the operator is told.
-		ctx.Printer.Errorf("warning: gateway host key fingerprint changed since the last vey ssh-cert (%s -> %s)\n", fp, host.Fingerprint)
-	}
+	warnIfHostFingerprintChanged(ctx, material.HostFingerprint, host)
 
 	gatewayHost, err := gatewayHostFromHub(hubURL)
 	if err != nil {
@@ -285,6 +279,20 @@ func resolveSSHServer(bg context.Context, actx *auth.AuthContext, ref string) (a
 		}
 		sort.Strings(names)
 		return api.Server{}, cmdutil.NewUsageError(fmt.Errorf("%q matches multiple servers: %s", ref, strings.Join(names, ", ")))
+	}
+}
+
+// warnIfHostFingerprintChanged tells the operator when the gateway's live
+// host-key fingerprint no longer matches the one cached by the last `vey
+// ssh-cert` (cached, from material.HostFingerprint). Not fatal: the live
+// fetch is authoritative for the connection about to happen. But a
+// fingerprint that moved since the last `vey ssh-cert` is exactly what
+// FR-013/SC-007 (host-key stability) exists to catch, so the operator is
+// told.
+func warnIfHostFingerprintChanged(ctx *Context, cached string, host sshHostKeyResponse) {
+	fp := strings.TrimSpace(cached)
+	if fp != "" && fp != strings.TrimSpace(host.Fingerprint) {
+		ctx.Printer.Errorf("warning: gateway host key fingerprint changed since the last vey ssh-cert (%s -> %s)\n", fp, host.Fingerprint)
 	}
 }
 

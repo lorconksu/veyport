@@ -60,46 +60,75 @@ type Config struct {
 // treated as absent, falling back to the next level rather than aborting
 // startup.
 func Load(st *store.Store, flagAddr string) Config {
-	cfg := Config{
-		Enabled:      defaultEnabled,
-		Addr:         flagAddr,
-		CertTTLHours: defaultCertTTLHours,
-	}
-	if cfg.Addr == "" {
-		cfg.Addr = DefaultAddr
+	fallbackAddr := flagAddr
+	if fallbackAddr == "" {
+		fallbackAddr = DefaultAddr
 	}
 
-	if v, ok, err := st.LookupConfig(keyEnabled); err != nil {
+	return Config{
+		Enabled:      resolveEnabled(st),
+		Addr:         resolveAddr(st, fallbackAddr),
+		CertTTLHours: resolveCertTTLHours(st),
+	}
+}
+
+// resolveEnabled resolves ssh_gateway_enabled: DB value, else the hardcoded
+// default (true). An invalid stored value is logged and treated as absent.
+// Split out of Load to keep its cognitive complexity down (go:S3776).
+func resolveEnabled(st *store.Store) bool {
+	v, ok, err := st.LookupConfig(keyEnabled)
+	if err != nil {
 		log.Printf("sshconfig: lookup %s: %v; using default %v", keyEnabled, err, defaultEnabled)
-	} else if ok {
-		b, perr := strconv.ParseBool(v)
-		if perr != nil {
-			log.Printf("sshconfig: invalid %s %q; using default %v", keyEnabled, v, defaultEnabled)
-		} else {
-			cfg.Enabled = b
-		}
+		return defaultEnabled
 	}
-
-	if v, ok, err := st.LookupConfig(keyAddr); err != nil {
-		log.Printf("sshconfig: lookup %s: %v; using fallback %q", keyAddr, err, cfg.Addr)
-	} else if ok {
-		if v == "" {
-			log.Printf("sshconfig: empty %s; using fallback %q", keyAddr, cfg.Addr)
-		} else {
-			cfg.Addr = v
-		}
+	if !ok {
+		return defaultEnabled
 	}
+	b, perr := strconv.ParseBool(v)
+	if perr != nil {
+		log.Printf("sshconfig: invalid %s %q; using default %v", keyEnabled, v, defaultEnabled)
+		return defaultEnabled
+	}
+	return b
+}
 
-	if v, ok, err := st.LookupConfig(keyCertTTLHrs); err != nil {
+// resolveAddr resolves ssh_addr: DB value, else fallback (already resolved
+// from --ssh-addr or DefaultAddr by Load). An invalid (empty) stored value is
+// logged and treated as absent. Split out of Load to keep its cognitive
+// complexity down (go:S3776).
+func resolveAddr(st *store.Store, fallback string) string {
+	v, ok, err := st.LookupConfig(keyAddr)
+	if err != nil {
+		log.Printf("sshconfig: lookup %s: %v; using fallback %q", keyAddr, err, fallback)
+		return fallback
+	}
+	if !ok {
+		return fallback
+	}
+	if v == "" {
+		log.Printf("sshconfig: empty %s; using fallback %q", keyAddr, fallback)
+		return fallback
+	}
+	return v
+}
+
+// resolveCertTTLHours resolves ssh_cert_ttl_hours: DB value, else the
+// hardcoded default. An invalid or non-positive stored value is logged and
+// treated as absent. Split out of Load to keep its cognitive complexity down
+// (go:S3776).
+func resolveCertTTLHours(st *store.Store) int {
+	v, ok, err := st.LookupConfig(keyCertTTLHrs)
+	if err != nil {
 		log.Printf("sshconfig: lookup %s: %v; using default %d", keyCertTTLHrs, err, defaultCertTTLHours)
-	} else if ok {
-		n, perr := strconv.Atoi(v)
-		if perr != nil || n <= 0 {
-			log.Printf("sshconfig: invalid %s %q; using default %d", keyCertTTLHrs, v, defaultCertTTLHours)
-		} else {
-			cfg.CertTTLHours = n
-		}
+		return defaultCertTTLHours
 	}
-
-	return cfg
+	if !ok {
+		return defaultCertTTLHours
+	}
+	n, perr := strconv.Atoi(v)
+	if perr != nil || n <= 0 {
+		log.Printf("sshconfig: invalid %s %q; using default %d", keyCertTTLHrs, v, defaultCertTTLHours)
+		return defaultCertTTLHours
+	}
+	return n
 }

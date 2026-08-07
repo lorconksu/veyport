@@ -111,3 +111,23 @@ func TestLoad(t *testing.T) {
 		})
 	}
 }
+
+// TestLoad_LookupConfigError covers the err != nil branch of each of the
+// three st.LookupConfig calls in Load (as opposed to the "absent" or
+// "invalid" cases the table above covers) — a genuine DB error rather than a
+// missing or malformed value. Closing the store before calling Load makes
+// every subsequent query fail the same way, hitting all three branches in a
+// single call, and Load must still fall back to defaults/flag rather than
+// panic or propagate the error (Load has no error return).
+func TestLoad_LookupConfigError(t *testing.T) {
+	st := testStore(t)
+	if err := st.Close(); err != nil {
+		t.Fatalf("close store: %v", err)
+	}
+
+	got := Load(st, ":2225")
+	want := Config{Enabled: true, Addr: ":2225", CertTTLHours: 12}
+	if got != want {
+		t.Errorf("Load() = %+v, want %+v", got, want)
+	}
+}

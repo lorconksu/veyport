@@ -69,68 +69,107 @@ func (s *Server) serveChannels(sshConn *ssh.ServerConn, chans <-chan ssh.NewChan
 	}
 }
 
+// sessionState is the mutable state of one session channel: the PTY geometry
+// agreed so far, the resize queue, and whether a shell has already started.
+type sessionState struct {
+	cols    uint32
+	rows    uint32
+	win     chan windowSize
+	started bool
+
+	// clientGone closes when the session channel is finished. That, and not a
+	// half-closed stdin, is the authoritative end-of-session signal.
+	clientGone chan struct{}
+	shellWG    sync.WaitGroup
+}
+
+func newSessionState() *sessionState {
+	return &sessionState{
+		cols:       defaultCols,
+		rows:       defaultRows,
+		win:        make(chan windowSize, windowBuffer),
+		clientGone: make(chan struct{}),
+	}
+}
+
+// finish releases the session: the shell is told the client is gone and awaited,
+// and only then is the channel closed.
+func (st *sessionState) finish(ch ssh.Channel) {
+	close(st.clientGone)
+	st.shellWG.Wait()
+	_ = ch.Close()
+}
+
+// applyPTY records the geometry carried by a pty-req.
+func (st *sessionState) applyPTY(req *ssh.Request) {
+	var payload ptyRequest
+	if err := ssh.Unmarshal(req.Payload, &payload); err != nil {
+		replyTo(req, false)
+		return
+	}
+	st.cols, st.rows = sanitizeGeometry(payload.Cols, payload.Rows)
+	replyTo(req, true)
+}
+
+// applyWindowChange relays a resize to a running shell, or folds it into the
+// geometry the shell will start with.
+func (st *sessionState) applyWindowChange(req *ssh.Request) {
+	var payload windowChangeRequest
+	if err := ssh.Unmarshal(req.Payload, &payload); err != nil {
+		replyTo(req, false)
+		return
+	}
+	c, r := sanitizeGeometry(payload.Cols, payload.Rows)
+	if st.started {
+		pushWindow(st.win, windowSize{cols: c, rows: r})
+	} else {
+		st.cols, st.rows = c, r
+	}
+	replyTo(req, false)
+}
+
 // serveSession handles one session channel: it collects the PTY geometry,
 // starts at most one shell, relays window changes, and refuses everything
 // else without tearing the channel down (an out-of-scope request must not kill
 // a session that is otherwise valid).
 func (s *Server) serveSession(sshConn *ssh.ServerConn, ch ssh.Channel, reqs <-chan *ssh.Request) {
-	cols, rows := defaultCols, defaultRows
-	win := make(chan windowSize, windowBuffer)
-	started := false
-
-	// The request channel closing is the authoritative "this session channel
-	// is finished" signal; a half-closed stdin is not.
-	clientGone := make(chan struct{})
-	var shellWG sync.WaitGroup
-	defer func() {
-		close(clientGone)
-		shellWG.Wait()
-		_ = ch.Close()
-	}()
+	st := newSessionState()
+	defer st.finish(ch)
 
 	for req := range reqs {
-		switch req.Type {
-		case reqPTY:
-			var payload ptyRequest
-			if err := ssh.Unmarshal(req.Payload, &payload); err != nil {
-				replyTo(req, false)
-				continue
-			}
-			cols, rows = sanitizeGeometry(payload.Cols, payload.Rows)
-			replyTo(req, true)
-
-		case reqWindowChange:
-			var payload windowChangeRequest
-			if err := ssh.Unmarshal(req.Payload, &payload); err != nil {
-				replyTo(req, false)
-				continue
-			}
-			c, r := sanitizeGeometry(payload.Cols, payload.Rows)
-			if started {
-				pushWindow(win, windowSize{cols: c, rows: r})
-			} else {
-				cols, rows = c, r
-			}
-			replyTo(req, false)
-
-		case reqShell:
-			if started {
-				replyTo(req, false)
-				continue
-			}
-			started = true
-			replyTo(req, true)
-			shellCols, shellRows := cols, rows
-			shellWG.Add(1)
-			go func() {
-				defer shellWG.Done()
-				s.runShell(sshConn, ch, shellCols, shellRows, win, clientGone)
-			}()
-
-		default:
-			s.refuseRequest(ch, req)
-		}
+		s.handleSessionRequest(sshConn, ch, req, st)
 	}
+}
+
+// handleSessionRequest dispatches one channel request against the session state.
+func (s *Server) handleSessionRequest(sshConn *ssh.ServerConn, ch ssh.Channel, req *ssh.Request, st *sessionState) {
+	switch req.Type {
+	case reqPTY:
+		st.applyPTY(req)
+	case reqWindowChange:
+		st.applyWindowChange(req)
+	case reqShell:
+		s.startShell(sshConn, ch, req, st)
+	default:
+		s.refuseRequest(ch, req)
+	}
+}
+
+// startShell honours the first shell request on a channel and refuses every
+// later one: a session channel carries exactly one shell.
+func (s *Server) startShell(sshConn *ssh.ServerConn, ch ssh.Channel, req *ssh.Request, st *sessionState) {
+	if st.started {
+		replyTo(req, false)
+		return
+	}
+	st.started = true
+	replyTo(req, true)
+	shellCols, shellRows := st.cols, st.rows
+	st.shellWG.Add(1)
+	go func() {
+		defer st.shellWG.Done()
+		s.runShell(sshConn, ch, shellCols, shellRows, st.win, st.clientGone)
+	}()
 }
 
 // refuseRequest denies an out-of-scope or unknown channel request. SSH's

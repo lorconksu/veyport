@@ -22,7 +22,6 @@ import (
 	"golang.org/x/crypto/ssh"
 
 	"github.com/wyiu/veyport/hub/internal/auth"
-	"github.com/wyiu/veyport/hub/internal/store"
 )
 
 // _config keys holding the SSH gateway key material.
@@ -35,6 +34,18 @@ const (
 // clockSkew backdates ValidAfter so a client whose clock runs slightly ahead of
 // the hub still sees a valid certificate.
 const clockSkew = 60 * time.Second
+
+// ConfigStore is the slice of the datastore this package needs: the _config
+// key/value pair holding one piece of SSH key material. *store.Store satisfies
+// it, so callers pass their store unchanged.
+//
+// The narrow interface is deliberate. The FR-006 promise — a key that cannot be
+// stored or read is reported, never silently regenerated — lives entirely in
+// the datastore failure paths, and those are only testable behind a seam.
+type ConfigStore interface {
+	LookupConfig(key string) (string, bool, error)
+	SetConfig(key, value string) error
+}
 
 // ErrCorruptKey reports that a key exists in _config but could not be decoded,
 // decrypted, or parsed. Callers must disable the SSH gateway rather than
@@ -55,7 +66,7 @@ type UserCA struct {
 //
 // A stored-but-unusable key yields an error wrapping ErrCorruptKey and is left
 // untouched on disk.
-func InitUserCA(st *store.Store, storageKey string) (*UserCA, error) {
+func InitUserCA(st ConfigStore, storageKey string) (*UserCA, error) {
 	signer, err := loadOrGenerateSigner(st, configUserCAKey, storageKey, "SSH user CA")
 	if err != nil {
 		return nil, err
@@ -74,7 +85,7 @@ func InitUserCA(st *store.Store, storageKey string) (*UserCA, error) {
 // A stored-but-unusable key yields an error wrapping ErrCorruptKey and is left
 // untouched on disk; the caller must disable the gateway rather than serve a
 // changed host key.
-func InitHostKey(st *store.Store, storageKey string) (ssh.Signer, error) {
+func InitHostKey(st ConfigStore, storageKey string) (ssh.Signer, error) {
 	return loadOrGenerateSigner(st, configHostKey, storageKey, "SSH gateway host key")
 }
 
@@ -157,7 +168,7 @@ func (c *UserCA) SignUserCert(clientPub ssh.PublicKey, principal string, ttl tim
 
 // persistPublicKey writes the CA public key in authorized_keys form if it is
 // missing or out of sync with the private key, which is the source of truth.
-func (c *UserCA) persistPublicKey(st *store.Store) error {
+func (c *UserCA) persistPublicKey(st ConfigStore) error {
 	want := hex.EncodeToString([]byte(c.AuthorizedKey()))
 	got, _, err := st.LookupConfig(configUserCAPub)
 	if err != nil {
@@ -175,7 +186,7 @@ func (c *UserCA) persistPublicKey(st *store.Store) error {
 // loadOrGenerateSigner returns the Ed25519 signer stored under configKey,
 // generating and persisting one if the key is absent. label is a human-readable
 // name used in logs and errors; it never includes key material.
-func loadOrGenerateSigner(st *store.Store, configKey, storageKey, label string) (ssh.Signer, error) {
+func loadOrGenerateSigner(st ConfigStore, configKey, storageKey, label string) (ssh.Signer, error) {
 	encKey := auth.DeriveKey(storageKey)
 
 	stored, ok, err := st.LookupConfig(configKey)

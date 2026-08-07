@@ -595,3 +595,25 @@ func TestSSHCert_IsRegistered(t *testing.T) {
 		t.Error(`Registry has no "ssh-cert" entry`)
 	}
 }
+
+// erroringSSHLoadStore wraps a normal auth.Store but makes LoadSSH always
+// fail, so loadOrGenerateSSHKey's own store-read failure branch is directly
+// testable. RunSSHCert can never reach this branch itself: it refuses
+// api_token mode before ever calling loadOrGenerateSSHKey, and in session
+// mode auth.Resolve's own store.Load call would already have failed
+// identically (same underlying file) before RunSSHCert got this far — so
+// loadOrGenerateSSHKey is exercised directly, as the plain function it is.
+type erroringSSHLoadStore struct{ auth.Store }
+
+func (erroringSSHLoadStore) LoadSSH(string) (auth.StoredSSH, bool, error) {
+	return auth.StoredSSH{}, false, errors.New("boom: simulated store read failure")
+}
+
+// TestLoadOrGenerateSSHKey_StoreReadFailure covers that store-read failure
+// branch directly.
+func TestLoadOrGenerateSSHKey_StoreReadFailure(t *testing.T) {
+	ctx, _, _ := newCmdContext("https://hub.example.com", t.TempDir(), false, nil)
+	if _, err := loadOrGenerateSSHKey(ctx, erroringSSHLoadStore{}, "https://hub.example.com"); err == nil {
+		t.Fatal("loadOrGenerateSSHKey with a failing store returned nil error")
+	}
+}

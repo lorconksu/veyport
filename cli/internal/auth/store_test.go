@@ -515,25 +515,28 @@ func runStoreScopesSSHMaterialPerHub(t *testing.T, backend string) {
 // with it, not just the refresh token.
 func TestDeleteRemovesSSHMaterial(t *testing.T) {
 	for _, backend := range backends() {
-		t.Run(backend, func(t *testing.T) {
-			s := newTestStore(t, backend)
-			if err := s.Save(hubA, sessionFor(hubA)); err != nil {
-				t.Fatalf("Save: %v", err)
-			}
-			if err := s.SaveSSH(hubA, sshFor(hubA)); err != nil {
-				t.Fatalf("SaveSSH: %v", err)
-			}
-			if err := s.Delete(hubA); err != nil {
-				t.Fatalf("Delete: %v", err)
-			}
-			got, ok, err := s.LoadSSH(hubA)
-			if err != nil {
-				t.Fatalf("LoadSSH after Delete: %v", err)
-			}
-			if ok || got.PrivateKey != "" {
-				t.Errorf("SSH material survived logout: %+v", redactSSH(got))
-			}
-		})
+		t.Run(backend, func(t *testing.T) { runDeleteRemovesSSHMaterial(t, backend) })
+	}
+}
+
+func runDeleteRemovesSSHMaterial(t *testing.T, backend string) {
+	t.Helper()
+	s := newTestStore(t, backend)
+	if err := s.Save(hubA, sessionFor(hubA)); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+	if err := s.SaveSSH(hubA, sshFor(hubA)); err != nil {
+		t.Fatalf("SaveSSH: %v", err)
+	}
+	if err := s.Delete(hubA); err != nil {
+		t.Fatalf("Delete: %v", err)
+	}
+	got, ok, err := s.LoadSSH(hubA)
+	if err != nil {
+		t.Fatalf("LoadSSH after Delete: %v", err)
+	}
+	if ok || got.PrivateKey != "" {
+		t.Errorf("SSH material survived logout: %+v", redactSSH(got))
 	}
 }
 
@@ -582,8 +585,9 @@ func TestFileStoreSSHMaterialIsOwnerOnly(t *testing.T) {
 
 // TestFileStoreOnDiskShapeMatchesDataModel pins the persisted field names
 // (data-model.md "Stored SSH material") and the format compatibility that
-// makes one record per hub safe: a 004-era entry (session only) still loads,
-// and an entry with no SSH material still serializes without SSH keys.
+// makes one record per hub safe: an entry with no SSH material still
+// serializes without SSH keys. See TestFileStoreLoadsLegacySessionOnlyEntry
+// for the other half — a 004-era entry (session only) still loads.
 func TestFileStoreOnDiskShapeMatchesDataModel(t *testing.T) {
 	fs := newTestFileStore(t)
 	if err := fs.Save(hubA, sessionFor(hubA)); err != nil {
@@ -605,13 +609,19 @@ func TestFileStoreOnDiskShapeMatchesDataModel(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read credentials file: %v", err)
 	}
+	assertOnDiskSSHFields(t, raw)
+}
+
+// assertOnDiskSSHFields pins the persisted SSH field names (data-model.md
+// "Stored SSH material") and confirms the refresh token still sits at the
+// top level of the entry, where a store written by 004 puts it.
+func assertOnDiskSSHFields(t *testing.T, raw []byte) {
+	t.Helper()
 	for _, field := range []string{"ssh_private_key", "ssh_certificate", "ssh_cert_expires_at", "ssh_host_fingerprint"} {
 		if !strings.Contains(string(raw), field) {
 			t.Errorf("credentials file does not carry %q:\n%s", field, raw)
 		}
 	}
-	// The refresh token must still sit at the top level of the entry, where
-	// a store written by 004 puts it.
 	var parsed map[string]struct {
 		RefreshToken  string `json:"refresh_token"`
 		SSHPrivateKey string `json:"ssh_private_key"`
@@ -628,8 +638,20 @@ func TestFileStoreOnDiskShapeMatchesDataModel(t *testing.T) {
 	if _, err := time.Parse(time.RFC3339, entry.CertExpiresAt); err != nil {
 		t.Errorf("ssh_cert_expires_at = %q, want RFC3339 (data-model.md): %v", entry.CertExpiresAt, err)
 	}
+}
 
-	// A store written by 004 (no SSH fields at all) still loads.
+// TestFileStoreLoadsLegacySessionOnlyEntry pins the other half of format
+// compatibility (data-model.md "Stored SSH material"): a credentials file
+// written by 004 (session only, no SSH fields at all) still loads, and
+// correctly reports no SSH material rather than erroring.
+func TestFileStoreLoadsLegacySessionOnlyEntry(t *testing.T) {
+	fs := newTestFileStore(t)
+	// newTestFileStore only builds the Store value; the config directory
+	// itself is created lazily on first write (writeAll's own MkdirAll), so
+	// it must exist before this test writes the legacy file directly.
+	if err := os.MkdirAll(fs.dir, credentialsDirMode); err != nil {
+		t.Fatalf("create config directory: %v", err)
+	}
 	legacy := `{"` + hubA + `":{"refresh_token":"` + testToken + `","username":"alice","role":"admin"}}`
 	if err := os.WriteFile(fs.path, []byte(legacy), credentialsFileMode); err != nil {
 		t.Fatalf("write legacy credentials file: %v", err)

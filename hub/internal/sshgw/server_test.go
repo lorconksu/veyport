@@ -155,6 +155,21 @@ func TestGatewayShellRoundTrip(t *testing.T) {
 	f.start()
 
 	client := f.mustDial(testUsername + "+" + testServerName)
+	sess, stdin, stdout := startPTYShell(t, client)
+
+	sessionID := f.openSessionID()
+	f.assertOpenRequestGeometry(t, 80, 24)
+	f.assertAgentOutputReachesClient(t, sessionID, stdout)
+	f.assertClientInputReachesAgent(t, stdin)
+	f.assertWindowChangeReachesAgent(t, sess)
+	f.assertRemoteExitStatus(t, sess, sessionID, 7)
+	f.assertRoundTripAudits(t)
+}
+
+// startPTYShell opens a session, requests an 80x24 PTY and starts the shell,
+// returning the session, its stdin pipe and the buffer collecting its stdout.
+func startPTYShell(t *testing.T, client *ssh.Client) (*ssh.Session, io.WriteCloser, *lockedBuffer) {
+	t.Helper()
 	sess, err := client.NewSession()
 	if err != nil {
 		t.Fatalf(fmtNewSession, err)
@@ -171,29 +186,38 @@ func TestGatewayShellRoundTrip(t *testing.T) {
 	if err := sess.Shell(); err != nil {
 		t.Fatalf(fmtShell, err)
 	}
+	return sess, stdin, stdout
+}
 
-	sessionID := f.openSessionID()
+// assertOpenRequestGeometry pins the geometry and execution user the agent is
+// asked to open the terminal with. A local admin authorizes with an EMPTY
+// execution user — the agent's default RunAsUser — which is success, not a
+// failure.
+func (f *fixture) assertOpenRequestGeometry(t *testing.T, cols, rows uint32) {
+	t.Helper()
 	open := f.agent.waitForMessage(t, "TerminalOpenRequest", func(m *pb.HubMessage) bool {
 		return m.GetTerminalOpenRequest() != nil
 	}).GetTerminalOpenRequest()
-	if open.Cols != 80 || open.Rows != 24 {
-		t.Errorf("TerminalOpenRequest geometry = %dx%d, want 80x24", open.Cols, open.Rows)
+	if open.Cols != cols || open.Rows != rows {
+		t.Errorf("TerminalOpenRequest geometry = %dx%d, want %dx%d", open.Cols, open.Rows, cols, rows)
 	}
-	// A local admin authorizes with an empty execution user: the agent's
-	// default RunAsUser. That is success, not a failure.
 	if open.RunAsUser != "" {
 		t.Errorf("RunAsUser = %q, want empty for a local admin", open.RunAsUser)
 	}
+}
 
-	// agent -> client
+func (f *fixture) assertAgentOutputReachesClient(t *testing.T, sessionID string, stdout *lockedBuffer) {
+	t.Helper()
 	if !f.terminals.DeliverData(testServerID, sessionID, []byte("motd line\r\n")) {
 		t.Fatal("DeliverData() dropped the payload")
 	}
 	waitFor(t, "agent output at the ssh client", func() bool {
 		return strings.Contains(stdout.String(), "motd line")
 	})
+}
 
-	// client -> agent
+func (f *fixture) assertClientInputReachesAgent(t *testing.T, stdin io.Writer) {
+	t.Helper()
 	if _, err := stdin.Write([]byte("uptime\r")); err != nil {
 		t.Fatalf("write stdin: %v", err)
 	}
@@ -203,8 +227,10 @@ func TestGatewayShellRoundTrip(t *testing.T) {
 	if string(input.Data) != "uptime\r" {
 		t.Errorf("TerminalInput.Data = %q, want %q", input.Data, "uptime\r")
 	}
+}
 
-	// resize
+func (f *fixture) assertWindowChangeReachesAgent(t *testing.T, sess *ssh.Session) {
+	t.Helper()
 	if err := sess.WindowChange(43, 132); err != nil {
 		t.Fatalf("WindowChange() error: %v", err)
 	}
@@ -214,18 +240,25 @@ func TestGatewayShellRoundTrip(t *testing.T) {
 	if resize.Cols != 132 || resize.Rows != 43 {
 		t.Errorf("TerminalResize = %dx%d, want 132x43", resize.Cols, resize.Rows)
 	}
+}
 
-	// remote exit
-	f.terminals.End(testServerID, sessionID, 7, "")
-	err = sess.Wait()
+// assertRemoteExitStatus ends the terminal on the agent side and asserts the
+// remote status reaches the SSH client verbatim.
+func (f *fixture) assertRemoteExitStatus(t *testing.T, sess *ssh.Session, sessionID string, want int) {
+	t.Helper()
+	f.terminals.End(testServerID, sessionID, int32(want), "")
+	err := sess.Wait()
 	var exitErr *ssh.ExitError
 	if !errors.As(err, &exitErr) {
 		t.Fatalf("Wait() error = %v, want *ssh.ExitError", err)
 	}
-	if exitErr.ExitStatus() != 7 {
-		t.Errorf("exit status = %d, want 7", exitErr.ExitStatus())
+	if exitErr.ExitStatus() != want {
+		t.Errorf("exit status = %d, want %d", exitErr.ExitStatus(), want)
 	}
+}
 
+func (f *fixture) assertRoundTripAudits(t *testing.T) {
+	t.Helper()
 	opened := f.waitForAudit(model.AuditSSHSessionOpened)
 	if opened.UserID == nil || *opened.UserID != testUserID {
 		t.Errorf("ssh.session_opened user = %v, want %q", opened.UserID, testUserID)
@@ -437,94 +470,100 @@ func TestGatewayRefusesOutOfScopeCapabilities(t *testing.T) {
 	client := f.mustDial(testUsername + "+" + testServerName)
 
 	// A live PTY session that must survive every refusal below.
-	sess, err := client.NewSession()
-	if err != nil {
-		t.Fatalf(fmtNewSession, err)
-	}
-	stdout := &lockedBuffer{}
-	sess.Stdout = stdout
-	if err := sess.RequestPty("xterm", 24, 80, ssh.TerminalModes{}); err != nil {
-		t.Fatalf(fmtRequestPty, err)
-	}
-	if err := sess.Shell(); err != nil {
-		t.Fatalf(fmtShell, err)
-	}
+	sess, _, stdout := startPTYShell(t, client)
 	sessionID := f.openSessionID()
 
-	t.Run("exec", func(t *testing.T) {
-		ch, reqs, err := client.OpenChannel("session", nil)
-		if err != nil {
-			t.Fatalf("OpenChannel() error: %v", err)
-		}
-		defer func() { _ = ch.Close() }()
-		go ssh.DiscardRequests(reqs)
-		ok, err := ch.SendRequest("exec", true, ssh.Marshal(struct{ Command string }{Command: "id"}))
-		if err != nil {
-			t.Fatalf("SendRequest(exec) error: %v", err)
-		}
-		if ok {
-			t.Fatal("exec was accepted, want a clean refusal")
-		}
-		if msg := readWithTimeout(ch.Stderr(), 2*time.Second); !strings.Contains(msg, "veyport") {
-			t.Errorf("exec refusal message = %q, want an explanation", msg)
-		}
-	})
+	t.Run("exec", func(t *testing.T) { assertExecRefused(t, client) })
+	t.Run("subsystem", func(t *testing.T) { assertSubsystemRefused(t, client) })
+	t.Run("direct-tcpip", func(t *testing.T) { assertDirectTCPIPRefused(t, client) })
+	t.Run("remote-forward", func(t *testing.T) { assertRemoteForwardRefused(t, client) })
+	t.Run("agent-forward", func(t *testing.T) { assertAgentForwardRefused(t, sess) })
 
-	t.Run("subsystem", func(t *testing.T) {
-		ch, reqs, err := client.OpenChannel("session", nil)
-		if err != nil {
-			t.Fatalf("OpenChannel() error: %v", err)
-		}
-		defer func() { _ = ch.Close() }()
-		go ssh.DiscardRequests(reqs)
-		ok, err := ch.SendRequest("subsystem", true, ssh.Marshal(struct{ Subsystem string }{Subsystem: "sftp"}))
-		if err != nil {
-			t.Fatalf("SendRequest(subsystem) error: %v", err)
-		}
-		if ok {
-			t.Fatal("subsystem was accepted, want a clean refusal")
-		}
-	})
+	f.assertSessionStillRelaying(t, sessionID, stdout)
 
-	t.Run("direct-tcpip", func(t *testing.T) {
-		conn, err := client.Dial("tcp", "192.0.2.10:80")
-		if err == nil {
-			_ = conn.Close()
-			t.Fatal("direct-tcpip was accepted, want a clean refusal")
-		}
-		if !strings.Contains(err.Error(), "veyport") {
-			t.Errorf("direct-tcpip refusal = %q, want an explanation", err)
-		}
-	})
+	f.terminals.End(testServerID, sessionID, 0, "")
+	_ = sess.Wait()
+}
 
-	t.Run("remote-forward", func(t *testing.T) {
-		lis, err := client.Listen("tcp", "127.0.0.1:0")
-		if err == nil {
-			_ = lis.Close()
-			t.Fatal("tcpip-forward was accepted, want a clean refusal")
-		}
-	})
+// openRawSession opens a session channel and discards its replies, so a test
+// can drive the exact channel requests the gateway sees.
+func openRawSession(t *testing.T, client *ssh.Client) ssh.Channel {
+	t.Helper()
+	ch, reqs, err := client.OpenChannel(channelSession, nil)
+	if err != nil {
+		t.Fatalf("OpenChannel() error: %v", err)
+	}
+	go ssh.DiscardRequests(reqs)
+	t.Cleanup(func() { _ = ch.Close() })
+	return ch
+}
 
-	t.Run("agent-forward", func(t *testing.T) {
-		ok, err := sess.SendRequest("auth-agent-req@openssh.com", true, nil)
-		if err != nil {
-			t.Fatalf("SendRequest(auth-agent-req) error: %v", err)
-		}
-		if ok {
-			t.Fatal("agent forwarding was accepted, want a clean refusal")
-		}
-	})
+// sendChannelRequest sends one channel request and reports the gateway's reply.
+func sendChannelRequest(t *testing.T, ch ssh.Channel, name string, payload []byte) bool {
+	t.Helper()
+	ok, err := ch.SendRequest(name, true, payload)
+	if err != nil {
+		t.Fatalf("SendRequest(%s) error: %v", name, err)
+	}
+	return ok
+}
 
-	// The PTY session is still alive and relaying in both directions.
+func assertExecRefused(t *testing.T, client *ssh.Client) {
+	ch := openRawSession(t, client)
+	if sendChannelRequest(t, ch, "exec", ssh.Marshal(struct{ Command string }{Command: "id"})) {
+		t.Fatal("exec was accepted, want a clean refusal")
+	}
+	if msg := readWithTimeout(ch.Stderr(), 2*time.Second); !strings.Contains(msg, "veyport") {
+		t.Errorf("exec refusal message = %q, want an explanation", msg)
+	}
+}
+
+func assertSubsystemRefused(t *testing.T, client *ssh.Client) {
+	ch := openRawSession(t, client)
+	if sendChannelRequest(t, ch, "subsystem", ssh.Marshal(struct{ Subsystem string }{Subsystem: "sftp"})) {
+		t.Fatal("subsystem was accepted, want a clean refusal")
+	}
+}
+
+func assertDirectTCPIPRefused(t *testing.T, client *ssh.Client) {
+	conn, err := client.Dial("tcp", "192.0.2.10:80")
+	if err == nil {
+		_ = conn.Close()
+		t.Fatal("direct-tcpip was accepted, want a clean refusal")
+	}
+	if !strings.Contains(err.Error(), "veyport") {
+		t.Errorf("direct-tcpip refusal = %q, want an explanation", err)
+	}
+}
+
+func assertRemoteForwardRefused(t *testing.T, client *ssh.Client) {
+	lis, err := client.Listen("tcp", "127.0.0.1:0")
+	if err == nil {
+		_ = lis.Close()
+		t.Fatal("tcpip-forward was accepted, want a clean refusal")
+	}
+}
+
+func assertAgentForwardRefused(t *testing.T, sess *ssh.Session) {
+	ok, err := sess.SendRequest("auth-agent-req@openssh.com", true, nil)
+	if err != nil {
+		t.Fatalf("SendRequest(auth-agent-req) error: %v", err)
+	}
+	if ok {
+		t.Fatal("agent forwarding was accepted, want a clean refusal")
+	}
+}
+
+// assertSessionStillRelaying proves the concurrent PTY session survived every
+// refusal: a rejected request must never disturb a live shell.
+func (f *fixture) assertSessionStillRelaying(t *testing.T, sessionID string, stdout *lockedBuffer) {
+	t.Helper()
 	if !f.terminals.DeliverData(testServerID, sessionID, []byte("still here\r\n")) {
 		t.Fatal("DeliverData() dropped the payload")
 	}
 	waitFor(t, "the concurrent PTY session to keep relaying", func() bool {
 		return strings.Contains(stdout.String(), "still here")
 	})
-
-	f.terminals.End(testServerID, sessionID, 0, "")
-	_ = sess.Wait()
 }
 
 // TestGatewayDropsIdleUnauthenticatedConnection pins SC-009 / FR-014.

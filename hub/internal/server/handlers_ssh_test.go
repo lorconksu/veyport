@@ -1,6 +1,7 @@
 package server
 
 import (
+	"crypto/dsa"
 	"crypto/ed25519"
 	"crypto/rand"
 	"encoding/json"
@@ -88,6 +89,45 @@ func testSSHServer(t *testing.T, configure ...func(*testing.T, *store.Store)) (*
 	return s, hostKey
 }
 
+// testSSHServerDegraded builds a server with the SSH gateway enabled in
+// config but with no usable key material (UserCA and SSHHostKey both nil),
+// the FR-006 degraded state main.go's initSSHTrust produces when the stored
+// key is corrupt. It stands in for that state without needing to corrupt a
+// stored key end to end.
+func testSSHServerDegraded(t *testing.T) *Server {
+	t.Helper()
+
+	st, err := store.New(testMemoryDB)
+	if err != nil {
+		t.Fatalf(testCreateStoreErr, err)
+	}
+	t.Cleanup(func() { st.Close() })
+
+	jwtSecret, err := InitJWTSecret(st)
+	if err != nil {
+		t.Fatalf("init jwt secret: %v", err)
+	}
+	storageKey, err := InitStorageKey(st)
+	if err != nil {
+		t.Fatalf("init storage key: %v", err)
+	}
+
+	notifier := notify.New(st)
+	t.Cleanup(func() { notifier.Close() })
+
+	return New(Config{
+		Addr:       ":0",
+		Store:      st,
+		JWTSecret:  jwtSecret,
+		StorageKey: storageKey,
+		IsDev:      true,
+		Notifier:   notifier,
+		UserCA:     nil,
+		SSHHostKey: nil,
+		SSHConfig:  sshconfig.Load(st, ""),
+	})
+}
+
 // testSSHClientPublicKey returns a fresh ed25519 public key in authorized_keys form.
 func testSSHClientPublicKey(t *testing.T) string {
 	t.Helper()
@@ -163,6 +203,23 @@ func TestHandleIssueSSHCertificate_Success(t *testing.T) {
 		t.Fatalf(testDecodeRespErr, err)
 	}
 
+	assertSSHCertResponseFields(t, resp, hostKey)
+	cert := parseSSHCertFromResponse(t, resp.Certificate)
+	assertSSHCertProperties(t, s, cert)
+	assertSSHCertExpiry(t, resp, cert)
+
+	if got := countSSHAuditAction(t, s, model.AuditSSHCertIssued); got != 1 {
+		t.Fatalf("expected 1 %s audit entry, got %d", model.AuditSSHCertIssued, got)
+	}
+}
+
+// assertSSHCertResponseFields checks the response envelope fields that don't
+// require parsing the certificate itself. Split out of
+// TestHandleIssueSSHCertificate_Success to keep its cognitive complexity down
+// (go:S3776).
+func assertSSHCertResponseFields(t *testing.T, resp model.SSHCertificateResponse, hostKey ssh.Signer) {
+	t.Helper()
+
 	if resp.Principal != testSSHAdminUsername {
 		t.Fatalf("expected principal %q, got %q", testSSHAdminUsername, resp.Principal)
 	}
@@ -172,8 +229,14 @@ func TestHandleIssueSSHCertificate_Success(t *testing.T) {
 	if want := ssh.FingerprintSHA256(hostKey.PublicKey()); resp.HostKeyFingerprint != want {
 		t.Fatalf("expected host_key_fingerprint %q, got %q", want, resp.HostKeyFingerprint)
 	}
+}
 
-	parsed, _, _, _, err := ssh.ParseAuthorizedKey([]byte(resp.Certificate))
+// parseSSHCertFromResponse parses the authorized_keys-form certificate line
+// returned by the issuance endpoint into an *ssh.Certificate.
+func parseSSHCertFromResponse(t *testing.T, certLine string) *ssh.Certificate {
+	t.Helper()
+
+	parsed, _, _, _, err := ssh.ParseAuthorizedKey([]byte(certLine))
 	if err != nil {
 		t.Fatalf(testSSHParseCertErr, err)
 	}
@@ -181,6 +244,16 @@ func TestHandleIssueSSHCertificate_Success(t *testing.T) {
 	if !ok {
 		t.Fatalf("expected an *ssh.Certificate, got %T", parsed)
 	}
+	return cert
+}
+
+// assertSSHCertProperties checks the issued certificate's type, signing
+// authority, and sole principal. Split out of
+// TestHandleIssueSSHCertificate_Success to keep its cognitive complexity down
+// (go:S3776).
+func assertSSHCertProperties(t *testing.T, s *Server, cert *ssh.Certificate) {
+	t.Helper()
+
 	if cert.CertType != ssh.UserCert {
 		t.Fatalf("expected a user certificate, got cert type %d", cert.CertType)
 	}
@@ -190,6 +263,14 @@ func TestHandleIssueSSHCertificate_Success(t *testing.T) {
 	if len(cert.ValidPrincipals) != 1 || cert.ValidPrincipals[0] != testSSHAdminUsername {
 		t.Fatalf("expected sole principal %q, got %v", testSSHAdminUsername, cert.ValidPrincipals)
 	}
+}
+
+// assertSSHCertExpiry checks the certificate's ValidBefore against the
+// configured TTL and that expires_at in the response matches it. Split out of
+// TestHandleIssueSSHCertificate_Success to keep its cognitive complexity down
+// (go:S3776).
+func assertSSHCertExpiry(t *testing.T, resp model.SSHCertificateResponse, cert *ssh.Certificate) {
+	t.Helper()
 
 	validBefore := time.Unix(int64(cert.ValidBefore), 0).UTC()
 	wantExpiry := time.Now().UTC().Add(testSSHCertTTL)
@@ -203,10 +284,6 @@ func TestHandleIssueSSHCertificate_Success(t *testing.T) {
 	}
 	if !expiresAt.UTC().Equal(validBefore) {
 		t.Fatalf("expected expires_at %s to match certificate ValidBefore %s", expiresAt.UTC(), validBefore)
-	}
-
-	if got := countSSHAuditAction(t, s, model.AuditSSHCertIssued); got != 1 {
-		t.Fatalf("expected 1 %s audit entry, got %d", model.AuditSSHCertIssued, got)
 	}
 }
 
@@ -529,4 +606,193 @@ func TestHandleSSHEndpoints_RequireAuthentication(t *testing.T) {
 	if getRec.Code != http.StatusUnauthorized {
 		t.Fatalf(testExpected401Body, getRec.Code, getRec.Body.String())
 	}
+}
+
+// ---------------------------------------------------------------------------
+// Coverage top-up tests for handlers_ssh.go — these exercise branches that
+// are unreachable (or reachable only via a race) through the normal HTTP
+// router: degraded key material, a malformed body, a mid-request user lookup
+// failure, the host-key-unavailable read path, the anonymous-actor branch of
+// auditSSHCertRefused, the sshGatewayPort fallback paths, and the
+// unsupported-key-type branch of parseSSHSubjectKey (distinct from the
+// "certificate as subject" branch already covered).
+// ---------------------------------------------------------------------------
+
+// TestHandleIssueSSHCertificate_KeyMaterialUnavailable covers the FR-006
+// degraded state (nil UserCA/SSHHostKey) with the gateway otherwise enabled —
+// distinct from TestHandleIssueSSHCertificate_GatewayDisabled, which covers
+// FR-015's separate "disabled by config" branch.
+func TestHandleIssueSSHCertificate_KeyMaterialUnavailable(t *testing.T) {
+	s := testSSHServerDegraded(t)
+	token := registerAndGetAdminToken(t, s)
+
+	rec := postSSHCert(t, s.routes(), token, map[string]string{"public_key": testSSHClientPublicKey(t)})
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Fatalf(testSSHExpected503, rec.Code, rec.Body.String())
+	}
+
+	var resp map[string]string
+	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
+		t.Fatalf(testDecodeRespErr, err)
+	}
+	if !strings.Contains(strings.ToLower(resp["error"]), "unavailable") {
+		t.Fatalf("expected a clear 'unavailable' error, got %q", resp["error"])
+	}
+	if got := countSSHAuditAction(t, s, model.AuditSSHCertIssueRefused); got != 1 {
+		t.Fatalf("expected 1 %s audit entry, got %d", model.AuditSSHCertIssueRefused, got)
+	}
+}
+
+// TestHandleIssueSSHCertificate_MalformedBody covers the decodeJSON error
+// branch: a body that isn't valid JSON at all, as opposed to
+// TestHandleIssueSSHCertificate_InvalidPublicKey's valid-JSON-bad-key cases.
+func TestHandleIssueSSHCertificate_MalformedBody(t *testing.T) {
+	s, _ := testSSHServer(t)
+	token := registerAndGetAdminToken(t, s)
+
+	req := httptest.NewRequest("POST", testSSHCertPath, strings.NewReader("{not valid json"))
+	req.Header.Set("Authorization", testBearerPrefix+token)
+	rec := httptest.NewRecorder()
+	s.routes().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf(testExpected400Body, rec.Code, rec.Body.String())
+	}
+	if got := countSSHAuditAction(t, s, model.AuditSSHCertIssued); got != 0 {
+		t.Fatalf("expected no %s audit entry, got %d", model.AuditSSHCertIssued, got)
+	}
+}
+
+// TestHandleIssueSSHCertificate_UserLookupFailure covers the
+// s.store.GetUserByID error branch inside the handler itself. In the full
+// stack this is effectively unreachable: authMiddleware already resolves the
+// same user for an access token before the handler runs, so a normal request
+// can't get here with a missing user. It calls handleIssueSSHCertificate
+// directly (bypassing the router and its auth middleware) with a context
+// carrying a user ID that doesn't exist in the store — the same technique
+// handlers_reenroll_topup_test.go uses for its own unreachable-branch tests.
+func TestHandleIssueSSHCertificate_UserLookupFailure(t *testing.T) {
+	s, _ := testSSHServer(t)
+
+	req := withUserID(
+		httptest.NewRequest("POST", testSSHCertPath, mustJSON(t, map[string]string{"public_key": testSSHClientPublicKey(t)})),
+		"no-such-user-id",
+	)
+	rec := httptest.NewRecorder()
+	s.handleIssueSSHCertificate(rec, req)
+
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("expected 404, got %d: %s", rec.Code, rec.Body.String())
+	}
+}
+
+// TestHandleSSHHostKey_KeyUnavailable covers the FR-006 degraded read path:
+// GET /api/ssh/host-key must fail clearly rather than publish a nil key.
+func TestHandleSSHHostKey_KeyUnavailable(t *testing.T) {
+	s := testSSHServerDegraded(t)
+	token := registerAndGetAdminToken(t, s)
+
+	req := httptest.NewRequest("GET", testSSHHostKeyPath, nil)
+	req.Header.Set("Authorization", testBearerPrefix+token)
+	rec := httptest.NewRecorder()
+	s.routes().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Fatalf(testSSHExpected503, rec.Code, rec.Body.String())
+	}
+}
+
+// TestAuditSSHCertRefused_AnonymousActor covers the else branch of
+// auditSSHCertRefused: an empty userID (an unauthenticated caller) is
+// recorded with AuditActorTypeAnonymous and no UserID, rather than an empty
+// UserID pointer. It calls the unexported method directly since every HTTP
+// path that reaches it already has a non-empty userID — the endpoint
+// requires authentication before either caller of auditSSHCertRefused runs.
+func TestAuditSSHCertRefused_AnonymousActor(t *testing.T) {
+	s, _ := testSSHServer(t)
+
+	req := httptest.NewRequest("POST", testSSHCertPath, nil)
+	s.auditSSHCertRefused(req, "", "probe")
+
+	action := model.AuditSSHCertIssueRefused
+	entries, _, err := s.store.ListAuditLogs(model.AuditFilter{Action: &action, Limit: 10})
+	if err != nil {
+		t.Fatalf("list audit logs: %v", err)
+	}
+	if len(entries) != 1 {
+		t.Fatalf("expected 1 audit entry, got %d", len(entries))
+	}
+	if entries[0].ActorType != model.AuditActorTypeAnonymous {
+		t.Fatalf("expected actor type %q, got %q", model.AuditActorTypeAnonymous, entries[0].ActorType)
+	}
+	if entries[0].UserID != nil {
+		t.Fatalf("expected no user id, got %q", *entries[0].UserID)
+	}
+}
+
+// TestSSHGatewayPort_Fallbacks pins the three ways sshGatewayPort falls back
+// to defaultSSHGatewayPort: an address with no parseable port, a
+// non-numeric port, and a port outside 1-65535.
+func TestSSHGatewayPort_Fallbacks(t *testing.T) {
+	s, _ := testSSHServer(t)
+
+	cases := []struct {
+		name string
+		addr string
+	}{
+		{"unparseable address", "not-a-host-port"},
+		{"non-numeric port", "example.com:abc"},
+		{"port out of range", "example.com:99999"},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			s.sshConfig.Addr = tc.addr
+			if got := s.sshGatewayPort(); got != defaultSSHGatewayPort {
+				t.Fatalf("expected fallback port %d, got %d", defaultSSHGatewayPort, got)
+			}
+		})
+	}
+}
+
+// TestParseSSHSubjectKey_UnsupportedKeyType covers the branch where the
+// parsed key is a valid, non-certificate authorized_keys entry but of a type
+// this hub refuses as a certificate subject — distinct from
+// TestHandleIssueSSHCertificate_InvalidPublicKey's "unsupported type:
+// certificate" case, which exercises the isCert branch instead. DSA
+// ("ssh-dss") is the one type ssh.ParseAuthorizedKey still parses that isn't
+// in supportedSSHKeyTypes.
+func TestParseSSHSubjectKey_UnsupportedKeyType(t *testing.T) {
+	line := testSSHDSAPublicKey(t)
+
+	_, err := parseSSHSubjectKey(line)
+	if err == nil {
+		t.Fatal("expected an error for an unsupported key type")
+	}
+	if !strings.Contains(err.Error(), "unsupported public key type") {
+		t.Fatalf("expected an 'unsupported public key type' error, got %v", err)
+	}
+}
+
+// testSSHDSAPublicKey returns a fresh DSA public key in authorized_keys form.
+// DSA is deprecated (crypto/dsa says so) but still parseable by
+// ssh.ParseAuthorizedKey, which is exactly why it's useful here: it's a real,
+// well-formed key of a type this hub deliberately doesn't support.
+func testSSHDSAPublicKey(t *testing.T) string {
+	t.Helper()
+
+	var params dsa.Parameters
+	if err := dsa.GenerateParameters(&params, rand.Reader, dsa.L1024N160); err != nil {
+		t.Fatalf("generate dsa parameters: %v", err)
+	}
+	var priv dsa.PrivateKey
+	priv.PublicKey.Parameters = params
+	if err := dsa.GenerateKey(&priv, rand.Reader); err != nil {
+		t.Fatalf("generate dsa key: %v", err)
+	}
+	pub, err := ssh.NewPublicKey(&priv.PublicKey)
+	if err != nil {
+		t.Fatalf("wrap dsa public key: %v", err)
+	}
+	return string(ssh.MarshalAuthorizedKey(pub))
 }

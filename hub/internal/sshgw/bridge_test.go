@@ -57,6 +57,13 @@ type stubAgent struct {
 	ackError   string
 	silent     bool
 	sendErr    error
+	// wrongAck answers a TerminalOpenRequest with a message that is not a
+	// TerminalOpenAck, which a real agent must never do.
+	wrongAck bool
+	// onOpen runs, if set, just before the ack is delivered — the only moment a
+	// test can perturb hub state between "the agent accepted" and "the bridge
+	// attaches".
+	onOpen func(sessionID string)
 }
 
 func newStubAgent(pending *grpcserver.PendingRequests, serverID string) *stubAgent {
@@ -72,15 +79,25 @@ func (a *stubAgent) Send(msg *pb.HubMessage) error {
 	}
 	a.sent = append(a.sent, msg)
 	silent, success, ackErr := a.silent, a.ackSuccess, a.ackError
+	onOpen, wrongAck := a.onOpen, a.wrongAck
 	a.mu.Unlock()
 
-	if open := msg.GetTerminalOpenRequest(); open != nil && !silent {
-		a.pending.Deliver(a.serverID, open.SessionId, &pb.TerminalOpenAck{
-			SessionId: open.SessionId,
-			Success:   success,
-			Error:     ackErr,
-		})
+	open := msg.GetTerminalOpenRequest()
+	if open == nil || silent {
+		return nil
 	}
+	if onOpen != nil {
+		onOpen(open.SessionId)
+	}
+	if wrongAck {
+		a.pending.Deliver(a.serverID, open.SessionId, &pb.TerminalInput{SessionId: open.SessionId})
+		return nil
+	}
+	a.pending.Deliver(a.serverID, open.SessionId, &pb.TerminalOpenAck{
+		SessionId: open.SessionId,
+		Success:   success,
+		Error:     ackErr,
+	})
 	return nil
 }
 
@@ -126,6 +143,26 @@ func (a *stubAgent) setSilent(silent bool) {
 func (a *stubAgent) setAck(success bool, ackErr string) {
 	a.mu.Lock()
 	a.ackSuccess, a.ackError = success, ackErr
+	a.mu.Unlock()
+}
+
+func (a *stubAgent) setWrongAck(wrong bool) {
+	a.mu.Lock()
+	a.wrongAck = wrong
+	a.mu.Unlock()
+}
+
+func (a *stubAgent) setOnOpen(hook func(sessionID string)) {
+	a.mu.Lock()
+	a.onOpen = hook
+	a.mu.Unlock()
+}
+
+// setSendErr makes every later Send fail, simulating an agent stream that dies
+// mid-session.
+func (a *stubAgent) setSendErr(err error) {
+	a.mu.Lock()
+	a.sendErr = err
 	a.mu.Unlock()
 }
 
@@ -175,7 +212,16 @@ type fakeChannel struct {
 	inR    *io.PipeReader
 	inW    *io.PipeWriter
 	errBuf *lockedBuffer
+	// stderrBroken makes Stderr() hand back a writer that always fails, which
+	// is what a channel whose transport died looks like.
+	stderrBroken bool
 }
+
+// brokenPipe is an io.ReadWriter that fails every operation.
+type brokenPipe struct{}
+
+func (brokenPipe) Read([]byte) (int, error)  { return 0, io.ErrClosedPipe }
+func (brokenPipe) Write([]byte) (int, error) { return 0, io.ErrClosedPipe }
 
 func newFakeChannel() *fakeChannel {
 	r, w := io.Pipe()
@@ -218,7 +264,21 @@ func (c *fakeChannel) SendRequest(name string, wantReply bool, payload []byte) (
 	return true, nil
 }
 
-func (c *fakeChannel) Stderr() io.ReadWriter { return c.errBuf }
+func (c *fakeChannel) Stderr() io.ReadWriter {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.stderrBroken {
+		return brokenPipe{}
+	}
+	return c.errBuf
+}
+
+// breakStderr makes every later operator message fail to reach the client.
+func (c *fakeChannel) breakStderr() {
+	c.mu.Lock()
+	c.stderrBroken = true
+	c.mu.Unlock()
+}
 
 // clientWrite feeds bytes to the bridge as if typed by the SSH client.
 func (c *fakeChannel) clientWrite(t *testing.T, data string) {
@@ -627,7 +687,7 @@ func TestBridgeAgentDisconnectClosesClient(t *testing.T) {
 	if got := ch.errBuf.String(); !strings.Contains(got, "agent disconnected") {
 		t.Errorf("stderr = %q, want it to explain the agent disconnect", got)
 	}
-	if got := ch.exitStatus(t); got == 0 {
+	if ch.exitStatus(t) == 0 {
 		t.Error("exit-status = 0, want a non-zero status for an aborted session")
 	}
 }
