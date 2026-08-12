@@ -617,6 +617,7 @@ func TestBuildSSHArgs_HappyPath(t *testing.T) {
 		t.Fatalf("buildSSHArgs: %v", err)
 	}
 	want := []string{
+		"-F", "/dev/null",
 		"-i", "/tmp/x/id_ed25519",
 		"-p", "2222",
 		"-o", "UserKnownHostsFile=/tmp/x/known_hosts",

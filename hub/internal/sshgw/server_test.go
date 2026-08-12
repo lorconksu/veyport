@@ -318,10 +318,18 @@ func TestGatewayRejectsBarePublicKey(t *testing.T) {
 	f.connectAgent()
 	f.start()
 
-	client, err := f.dial(testUsername+"+"+testServerName, ssh.PublicKeys(newClientKey(t)), nil)
+	seen := &banners{}
+	client, err := f.dial(testUsername+"+"+testServerName, ssh.PublicKeys(newClientKey(t)), seen)
 	if err == nil {
 		_ = client.Close()
 		t.Fatalf(fmtDialUnwanted, "an uncertified public key")
+	}
+	// The guidance must not misname a bare key a "certificate": OpenSSH users
+	// whose agent/config keys get probed first read this banner verbatim
+	// (T026 finding, 2026-08-12).
+	banner := seen.joined()
+	if !strings.Contains(banner, "requires a certificate") || strings.Contains(banner, "certificate rejected") {
+		t.Errorf("bare-key banner = %q, want the requires-a-certificate guidance", banner)
 	}
 }
 

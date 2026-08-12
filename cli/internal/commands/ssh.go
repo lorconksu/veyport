@@ -390,6 +390,14 @@ func buildSSHArgs(in sshInvocation) ([]string, error) {
 	}
 
 	return []string{
+		// -F /dev/null: ignore the user's (and system's) ssh config. vey
+		// fully specifies this connection, and config-supplied IdentityFile
+		// entries survive IdentitiesOnly=yes — they count as "explicit" — so
+		// without this, a `Host *` IdentityFile gets offered to the gateway
+		// before vey's certificate and the operator sees a spurious
+		// "requires a certificate" banner on every connect (T026 finding,
+		// 2026-08-12).
+		"-F", "/dev/null",
 		"-i", in.identityFile,
 		"-p", strconv.Itoa(in.port),
 		"-o", "UserKnownHostsFile=" + in.knownHostsFile,

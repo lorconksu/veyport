@@ -422,6 +422,17 @@ func (s *Server) authenticate(conn ssh.ConnMetadata, key ssh.PublicKey, state *c
 		return nil, &ssh.BannerError{Err: err, Message: usernameFormatMessage}
 	}
 
+	// A bare public key gets its own message: real clients probe agent- and
+	// config-supplied keys before the certificate, and calling those probes a
+	// rejected "certificate" reads as a failure even when the cert attempt
+	// that follows succeeds (T026 finding, 2026-08-12).
+	if _, isCert := key.(*ssh.Certificate); !isCert {
+		return nil, &ssh.BannerError{
+			Err:     errors.New("ssh gateway: bare public key offered"),
+			Message: "veyport: this key was skipped — the gateway requires a certificate. Run: vey ssh-cert",
+		}
+	}
+
 	// CertChecker.Authenticate — never CheckCert — is what enforces the trust
 	// root (IsUserAuthority), CertType == UserCert, and, with UserKeyFallback
 	// nil, the rejection of bare public keys (research R1a, FR-005).
