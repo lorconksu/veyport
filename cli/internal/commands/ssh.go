@@ -399,6 +399,14 @@ func buildSSHArgs(in sshInvocation) ([]string, error) {
 		// 2026-08-12).
 		"-F", "/dev/null",
 		"-i", in.identityFile,
+		// CertificateFile must be EXPLICIT even though ssh auto-discovers
+		// "<identity>-cert.pub": with only auto-discovery, OpenSSH offers the
+		// plain key BEFORE the certificate (observed via ssh -vv, T026
+		// 2026-08-12), so every connect printed the gateway's "key was
+		// skipped" banner before the cert attempt succeeded. An explicit
+		// CertificateFile makes the certificate the first (and only needed)
+		// offer. The path is the writeCredentialFiles pairing convention.
+		"-o", "CertificateFile=" + in.identityFile + "-cert.pub",
 		"-p", strconv.Itoa(in.port),
 		"-o", "UserKnownHostsFile=" + in.knownHostsFile,
 		"-o", "StrictHostKeyChecking=yes",

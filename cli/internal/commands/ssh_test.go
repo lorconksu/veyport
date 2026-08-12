@@ -619,6 +619,7 @@ func TestBuildSSHArgs_HappyPath(t *testing.T) {
 	want := []string{
 		"-F", "/dev/null",
 		"-i", "/tmp/x/id_ed25519",
+		"-o", "CertificateFile=/tmp/x/id_ed25519-cert.pub",
 		"-p", "2222",
 		"-o", "UserKnownHostsFile=/tmp/x/known_hosts",
 		"-o", "StrictHostKeyChecking=yes",
