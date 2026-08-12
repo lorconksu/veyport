@@ -33,6 +33,11 @@ type HubProfile struct {
 // with usage guidance.
 var ErrNoHub = errors.New("no hub configured: pass --hub, set VEYPORT_HUB, or set default_hub in the config file")
 
+// FileName is the config file's base name inside the vey config directory,
+// shared by DefaultPath and callers that rebuild the path from the directory
+// (commands.Context.ConfigPath).
+const FileName = "config.json"
+
 // DefaultPath returns the path to vey's config file, honoring
 // XDG_CONFIG_HOME when set and falling back to ~/.config otherwise.
 func DefaultPath() (string, error) {
@@ -44,7 +49,7 @@ func DefaultPath() (string, error) {
 		}
 		base = filepath.Join(home, ".config")
 	}
-	return filepath.Join(base, "vey", "config.json"), nil
+	return filepath.Join(base, "vey", FileName), nil
 }
 
 // Load reads and parses the config file at path.
@@ -66,6 +71,50 @@ func Load(path string) (Config, error) {
 		return Config{}, fmt.Errorf("config: parse %s: %w", path, err)
 	}
 	return cfg, nil
+}
+
+// Save writes cfg to path atomically (write-temp-then-rename, the credential
+// store's discipline), creating the parent directory with 0700 if needed.
+// The file is written 0600 because the config can carry API tokens
+// (HubProfile.APIToken).
+//
+// Caveat: Save serializes the Config struct, so unknown fields a future vey
+// (or a hand-edit) put in the file are dropped on rewrite. Today vey itself
+// only ever writes fields it knows, so this is acceptable; revisit if the
+// config grows externally-owned keys.
+func Save(path string, cfg Config) error {
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		return fmt.Errorf("config: create %s: %w", filepath.Dir(path), err)
+	}
+
+	data, err := json.MarshalIndent(cfg, "", "  ")
+	if err != nil {
+		return fmt.Errorf("config: encode: %w", err)
+	}
+	data = append(data, '\n')
+
+	tmp, err := os.CreateTemp(filepath.Dir(path), ".config-*.json")
+	if err != nil {
+		return fmt.Errorf("config: create temp file: %w", err)
+	}
+	tmpName := tmp.Name()
+	defer os.Remove(tmpName) // no-op after a successful rename
+
+	if err := tmp.Chmod(0o600); err != nil {
+		tmp.Close()
+		return fmt.Errorf("config: chmod temp file: %w", err)
+	}
+	if _, err := tmp.Write(data); err != nil {
+		tmp.Close()
+		return fmt.Errorf("config: write temp file: %w", err)
+	}
+	if err := tmp.Close(); err != nil {
+		return fmt.Errorf("config: close temp file: %w", err)
+	}
+	if err := os.Rename(tmpName, path); err != nil {
+		return fmt.Errorf("config: rename into place: %w", err)
+	}
+	return nil
 }
 
 // NormalizeHubURL normalizes a hub base URL into the canonical form used as

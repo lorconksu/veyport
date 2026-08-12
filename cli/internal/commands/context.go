@@ -1,6 +1,8 @@
 package commands
 
 import (
+	"path/filepath"
+
 	"github.com/wyiu/veyport/cli/internal/cmdutil"
 	"github.com/wyiu/veyport/cli/internal/config"
 )
@@ -66,6 +68,14 @@ func NewContext(hubFlag, hubEnv string, cfg config.Config, configDir string, pri
 		hubFlag:   hubFlag,
 		hubEnv:    hubEnv,
 	}
+}
+
+// ConfigPath returns the path of vey's config file inside ConfigDir. It
+// reconstructs what cmd/vey/main.go split apart (main resolves
+// config.DefaultPath() and passes its directory), for the commands that
+// write the config back (login's default_hub persistence).
+func (c *Context) ConfigPath() string {
+	return filepath.Join(c.ConfigDir, config.FileName)
 }
 
 // RequireHub lazily resolves and caches the effective hub URL — flag > env >
