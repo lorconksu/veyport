@@ -30,12 +30,13 @@ const (
 	reqShell        = "shell"
 	reqWindowChange = "window-change"
 	reqExitStatus   = "exit-status"
+	reqExec         = "exec"
 )
 
 // outOfScope maps a refused request type to the explanation written to the
 // client's stderr. v1 is an interactive-PTY gateway only.
 var outOfScope = map[string]string{
-	"exec":                       "remote command execution is not available through the Veyport SSH gateway; open an interactive session instead",
+	reqExec:                      "remote command execution is not available through the Veyport SSH gateway; open an interactive session instead",
 	"subsystem":                  "file-transfer subsystems (sftp/scp) are not available through the Veyport SSH gateway",
 	"auth-agent-req@openssh.com": "SSH agent forwarding is not available through the Veyport SSH gateway",
 	"x11-req":                    "X11 forwarding is not available through the Veyport SSH gateway",
@@ -150,9 +151,32 @@ func (s *Server) handleSessionRequest(sshConn *ssh.ServerConn, ch ssh.Channel, r
 		st.applyWindowChange(req)
 	case reqShell:
 		s.startShell(sshConn, ch, req, st)
+	case reqExec:
+		refuseExec(ch, req, st)
 	default:
 		s.refuseRequest(ch, req)
 	}
+}
+
+// refuseExec declines an exec request in the one way real clients actually
+// display (FR-010): accept it at the protocol level, put the explanation on
+// stderr, and fail the "command" immediately with exit-status 1. A plain
+// request-refusal is invisible in practice — OpenSSH prints only its own
+// "exec request failed on channel 0" and tears the channel down before
+// showing any stderr data racing the failure reply (observed 0/11 message
+// deliveries against OpenSSH in the T026 staging run). Non-fatal accessory
+// requests (x11, agent forwarding) keep the plain refusal in refuseRequest:
+// their session continues, so their stderr message does reach the operator.
+func refuseExec(ch ssh.Channel, req *ssh.Request, st *sessionState) {
+	if st.started {
+		replyTo(req, false)
+		return
+	}
+	st.started = true
+	replyTo(req, true)
+	writeClientMessage(ch, outOfScope[reqExec])
+	sendExitStatus(ch, 1)
+	_ = ch.Close()
 }
 
 // startShell honours the first shell request on a channel and refuses every

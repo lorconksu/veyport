@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/ed25519"
 	"crypto/rand"
+	"encoding/binary"
 	"errors"
 	"io"
 	"net"
@@ -508,13 +509,45 @@ func sendChannelRequest(t *testing.T, ch ssh.Channel, name string, payload []byt
 	return ok
 }
 
+// assertExecRefused pins the client-visible exec refusal (FR-010). The
+// request is ACCEPTED at the protocol level and then failed with a stderr
+// explanation and exit-status 1, because a plain request-refusal is invisible
+// to real clients: OpenSSH prints only its own "exec request failed on
+// channel 0" and tears down before displaying stderr data racing the reply
+// (observed 0/11 message deliveries against OpenSSH on the T026 staging run).
 func assertExecRefused(t *testing.T, client *ssh.Client) {
-	ch := openRawSession(t, client)
-	if sendChannelRequest(t, ch, "exec", ssh.Marshal(struct{ Command string }{Command: "id"})) {
-		t.Fatal("exec was accepted, want a clean refusal")
+	ch, reqs, err := client.OpenChannel(channelSession, nil)
+	if err != nil {
+		t.Fatalf("OpenChannel() error: %v", err)
+	}
+	t.Cleanup(func() { _ = ch.Close() })
+
+	exitStatus := make(chan uint32, 1)
+	go func() {
+		for r := range reqs {
+			if r.Type == reqExitStatus && len(r.Payload) >= 4 {
+				exitStatus <- binary.BigEndian.Uint32(r.Payload[:4])
+			}
+		}
+	}()
+
+	ok, err := ch.SendRequest("exec", true, ssh.Marshal(struct{ Command string }{Command: "id"}))
+	if err != nil {
+		t.Fatalf("SendRequest(exec) error: %v", err)
+	}
+	if !ok {
+		t.Fatal("exec request was refused at the protocol level; want it accepted and then failed visibly (stderr + exit-status)")
 	}
 	if msg := readWithTimeout(ch.Stderr(), 2*time.Second); !strings.Contains(msg, "veyport") {
 		t.Errorf("exec refusal message = %q, want an explanation", msg)
+	}
+	select {
+	case code := <-exitStatus:
+		if code == 0 {
+			t.Error("exec exit-status = 0, want non-zero")
+		}
+	case <-time.After(2 * time.Second):
+		t.Error("no exit-status request received after refused exec")
 	}
 }
 
