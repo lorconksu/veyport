@@ -94,6 +94,11 @@ func printStatus(ctx *Context, p statusPayload, tokenPrefix string) {
 // status`): effective hub, auth mode, reachability (GET /api/auth/me
 // through the resolved AuthContext), and credential-storage backend.
 func RunStatus(ctx *Context) int {
+	if err := requireNoArgs("status", ctx.Args); err != nil {
+		ctx.Printer.Error(err)
+		return cmdutil.Code(err)
+	}
+
 	hubURL, err := ctx.RequireHub()
 	if err != nil {
 		ctx.Printer.Error(err)

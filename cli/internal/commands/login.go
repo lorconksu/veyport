@@ -9,6 +9,7 @@ import (
 	"github.com/wyiu/veyport/cli/internal/api"
 	"github.com/wyiu/veyport/cli/internal/auth"
 	"github.com/wyiu/veyport/cli/internal/cmdutil"
+	"github.com/wyiu/veyport/cli/internal/config"
 )
 
 // loginPayload is the --json shape for a successful `vey login`.
@@ -23,6 +24,11 @@ type loginPayload struct {
 // TOTP handling, and persistence to auth.Login. Non-TTY fast-fail (exit 3
 // with API-token guidance) is handled inside auth.Login itself.
 func RunLogin(ctx *Context) int {
+	if err := requireNoArgs("login", ctx.Args); err != nil {
+		ctx.Printer.Error(err)
+		return cmdutil.Code(err)
+	}
+
 	hubURL, err := ctx.RequireHub()
 	if err != nil {
 		ctx.Printer.Error(err)
@@ -63,6 +69,8 @@ func RunLogin(ctx *Context) int {
 		return cmdutil.Code(err)
 	}
 
+	persistDefaultHub(ctx)
+
 	payload := loginPayload{Hub: hubURL, Username: pair.User.Username, Role: pair.User.Role}
 	_ = ctx.Printer.Payload(payload, func(w io.Writer, v any) error {
 		p := v.(loginPayload)
@@ -70,4 +78,26 @@ func RunLogin(ctx *Context) int {
 		return err
 	})
 	return cmdutil.ExitOK
+}
+
+// persistDefaultHub records the hub just signed into as default_hub in the
+// config file, so follow-up bare commands (`vey ssh-cert`, `vey servers
+// list`) resolve a hub without --hub/VEYPORT_HUB. Last-login-wins when the
+// default was a different hub (the old hub's credentials stay stored and
+// reachable via --hub); a no-op when the default is already current. A write
+// failure only warns: the login itself succeeded and credentials are stored,
+// so the session is fully usable with explicit --hub.
+func persistDefaultHub(ctx *Context) {
+	if ctx.Config.DefaultHub == ctx.HubURL {
+		return
+	}
+	cfg := ctx.Config
+	cfg.DefaultHub = ctx.HubURL
+	if err := config.Save(ctx.ConfigPath(), cfg); err != nil {
+		fmt.Fprintf(ctx.Printer.Err,
+			"warning: could not save default_hub to %s: %v (pass --hub or set VEYPORT_HUB for future commands)\n",
+			ctx.ConfigPath(), err)
+		return
+	}
+	ctx.Config = cfg
 }

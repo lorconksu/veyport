@@ -3,6 +3,7 @@ package server
 import (
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"strings"
@@ -11,6 +12,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/wyiu/veyport/hub/internal/grpcserver"
 	"github.com/wyiu/veyport/hub/internal/model"
+	"github.com/wyiu/veyport/hub/internal/store"
 	pb "github.com/wyiu/veyport/proto/veyport/v1"
 )
 
@@ -306,38 +308,91 @@ func (s *Server) handleCloseTerminalSession(w http.ResponseWriter, r *http.Reque
 	w.WriteHeader(http.StatusNoContent)
 }
 
-func (s *Server) resolveTerminalExecutionUser(w http.ResponseWriter, r *http.Request, serverID string) (string, bool) {
-	user, err := s.store.GetUserByID(UserIDFromContext(r.Context()))
+// Terminal authorization outcomes returned by AuthorizeTerminalExecution. They are
+// transport-agnostic: the HTTP handler maps them to status codes, and the SSH
+// gateway maps them to connection refusals and audit reasons.
+var (
+	// ErrTerminalNotAuthorized means the principal may not open a terminal at
+	// all: unknown/deleted user, or a non-admin without LDAP terminal access.
+	ErrTerminalNotAuthorized = errors.New("terminal access required")
+	// ErrTerminalNoAssignment means the principal has terminal access but no
+	// root ("/") assignment on the requested server.
+	ErrTerminalNoAssignment = errors.New("root server assignment required for terminal access")
+	// ErrTerminalNoExecUser means the principal is authorized but no execution
+	// username could be resolved from their LDAP identity.
+	ErrTerminalNoExecUser = errors.New("LDAP execution user not available")
+	// ErrTerminalLookupFailed means the server-assignment lookup itself failed;
+	// the decision is unknown rather than denied.
+	ErrTerminalLookupFailed = errors.New("failed to check server assignment")
+)
+
+// AuthorizeTerminalExecution is the single authorization decision for opening a
+// terminal on a server, shared by the web terminal and the SSH gateway. It is
+// evaluated against live store state on every attempt — nothing is cached — so a
+// deleted user or a revoked assignment is denied immediately.
+//
+// On success it returns the username the agent should run the shell as. Note that
+// a local (non-LDAP) admin authorizes with an EMPTY execution user, which the
+// agent interprets as its default RunAsUser.
+func AuthorizeTerminalExecution(st *store.Store, userID, serverID string) (string, error) {
+	user, err := st.GetUserByID(userID)
 	if err != nil {
-		respondError(w, http.StatusForbidden, "terminal access required")
-		return "", false
+		return "", ErrTerminalNotAuthorized
 	}
 
 	if user.Role == model.RoleAdmin {
-		return ldapExecutionUsername(user), true
+		return ldapExecutionUsername(user), nil
 	}
 
 	if user.AuthProvider != model.AuthProviderLDAP || !user.TerminalAccess {
-		respondError(w, http.StatusForbidden, "terminal access required")
-		return "", false
+		return "", ErrTerminalNotAuthorized
 	}
 
-	paths, err := s.store.GetUserPathsForServer(user.ID, serverID)
+	paths, err := st.GetUserPathsForServer(user.ID, serverID)
 	if err != nil {
-		respondError(w, http.StatusInternalServerError, "failed to check server assignment")
-		return "", false
+		return "", fmt.Errorf("%w: %w", ErrTerminalLookupFailed, err)
 	}
 	if !hasTerminalServerAssignment(paths) {
-		respondError(w, http.StatusForbidden, "root server assignment required for terminal access")
-		return "", false
+		return "", ErrTerminalNoAssignment
 	}
 
 	executionUser := ldapExecutionUsername(user)
 	if executionUser == "" {
-		respondError(w, http.StatusForbidden, "LDAP execution user not available")
+		return "", ErrTerminalNoExecUser
+	}
+	return executionUser, nil
+}
+
+// resolveTerminalExecutionUser is the HTTP transport wrapper around
+// AuthorizeTerminalExecution: it maps each authorization outcome to the status
+// code and message the web terminal expects.
+func (s *Server) resolveTerminalExecutionUser(w http.ResponseWriter, r *http.Request, serverID string) (string, bool) {
+	executionUser, err := AuthorizeTerminalExecution(s.store, UserIDFromContext(r.Context()), serverID)
+	if err != nil {
+		respondError(w, terminalAuthzStatus(err), terminalAuthzMessage(err))
 		return "", false
 	}
 	return executionUser, true
+}
+
+func terminalAuthzStatus(err error) int {
+	if errors.Is(err, ErrTerminalLookupFailed) {
+		return http.StatusInternalServerError
+	}
+	return http.StatusForbidden
+}
+
+func terminalAuthzMessage(err error) string {
+	switch {
+	case errors.Is(err, ErrTerminalNoAssignment):
+		return ErrTerminalNoAssignment.Error()
+	case errors.Is(err, ErrTerminalNoExecUser):
+		return ErrTerminalNoExecUser.Error()
+	case errors.Is(err, ErrTerminalLookupFailed):
+		return ErrTerminalLookupFailed.Error()
+	default:
+		return ErrTerminalNotAuthorized.Error()
+	}
 }
 
 func hasTerminalServerAssignment(paths []string) bool {

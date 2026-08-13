@@ -1,6 +1,8 @@
 package commands
 
 import (
+	"path/filepath"
+
 	"github.com/wyiu/veyport/cli/internal/cmdutil"
 	"github.com/wyiu/veyport/cli/internal/config"
 )
@@ -68,6 +70,14 @@ func NewContext(hubFlag, hubEnv string, cfg config.Config, configDir string, pri
 	}
 }
 
+// ConfigPath returns the path of vey's config file inside ConfigDir. It
+// reconstructs what cmd/vey/main.go split apart (main resolves
+// config.DefaultPath() and passes its directory), for the commands that
+// write the config back (login's default_hub persistence).
+func (c *Context) ConfigPath() string {
+	return filepath.Join(c.ConfigDir, config.FileName)
+}
+
 // RequireHub lazily resolves and caches the effective hub URL — flag > env >
 // config file, per contracts/cli-commands.md "Global behavior" — for the
 // commands that need one (servers, files, logs, audit). login and status
@@ -94,11 +104,13 @@ func (c *Context) RequireHub() (string, error) {
 // in the file named for the task that will replace it with the real
 // implementation.
 var Registry = map[string]func(ctx *Context) int{
-	"login":   RunLogin,
-	"logout":  RunLogout,
-	"status":  RunStatus,
-	"servers": RunServers,
-	"files":   RunFiles,
-	"logs":    RunLogs,
-	"audit":   RunAudit,
+	"login":    RunLogin,
+	"logout":   RunLogout,
+	"status":   RunStatus,
+	"servers":  RunServers,
+	"files":    RunFiles,
+	"logs":     RunLogs,
+	"audit":    RunAudit,
+	"ssh-cert": RunSSHCert,
+	"ssh":      RunSSH,
 }

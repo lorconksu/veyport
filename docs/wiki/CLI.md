@@ -26,13 +26,15 @@
 
 `vey` is a Go binary that talks to the same Hub REST API the web dashboard uses (`Authorization: Bearer <token>`, JSON bodies, `Cache-Control: no-store`). There is no cookie handling and no CSRF token — Bearer requests bypass CSRF the same way a CLI-created API token does.
 
-`vey` currently covers fleet visibility, remote file/log access, and audit export. There is no interactive terminal command yet — `vey terminal` is planned for a future release. Until then, use the web dashboard's terminal (see [[Server Detail]]).
+`vey` currently covers fleet visibility, remote file/log access, audit export, and — as of the SSH gateway feature — native interactive shell access via `vey ssh-cert` / `vey ssh`. There is still no REST-driven `vey terminal` command mirroring the browser's SSE-based terminal stream; use the web dashboard's terminal (see [[Server Detail]]) for that specific flow, or `vey ssh` for a real terminal from your own machine (see [[SSH Gateway]]).
 
 ```mermaid
 flowchart LR
     A[vey CLI] -- "Bearer JWT or adt_ API token" --> B[Hub REST API]
     B -- gRPC --> C[Agent on remote server]
     A -. "GET /install/cli/os/arch" .-> B
+    A -- "ssh -p 2222 (cert auth)" --> D[Hub SSH Gateway]
+    D -- gRPC --> C
 ```
 
 ## Install
@@ -207,9 +209,17 @@ Streams matching lines to stdout as they arrive over Server-Sent Events; filteri
 
 Streams the Hub's audit export to stdout unmodified; `--json` is a documented no-op passthrough since the response is already machine-consumable JSON. Role-gated to admin/auditor — any other role gets a `403`, which exits 4.
 
+### `vey ssh-cert`
+
+Provisions or refreshes your SSH credential for the SSH gateway. Generates (or reuses) a local ed25519 keypair, fetches the gateway's host key for pinning, requests a signed short-lived certificate (`POST /api/ssh/certificates`) for your own username, and stores the result with the same at-rest protection as your login session. Requires an interactive `vey login` session — an API-token credential is refused with exit 3 before any request is sent (SSH access is an operator capability, not a script capability). Idempotent: re-running keeps the keypair and just refreshes the certificate. `--json`: `{principal, expires_at, host_key_fingerprint, gateway_port}`. Rate-limited server-side to 10 issuances/minute (`429` → exit 7). Full details: [[SSH Gateway]].
+
+### `vey ssh <server>`
+
+Opens a native interactive SSH session to a fleet server through the Hub's SSH gateway. `<server>` resolves the same way as `vey servers get` (unique name/ID → connect; ambiguous → exit 2 listing candidates; unknown → exit 5). Checks for a valid, unexpired certificate up front (missing/expired → guidance to run `vey ssh-cert`, exit 3), pre-configures host verification from the cached gateway fingerprint (no blind trust-on-first-use), and execs your machine's own `ssh` client — it never edits `~/.ssh/config`. Exits with whatever status code the underlying `ssh` process returns. v1 is an interactive shell only: no `exec`, no `scp`/`sftp`, no port/agent forwarding, no Windows support. Full details, the manual `ssh` equivalent, and the `user+server` addressing scheme: [[SSH Gateway]].
+
 ### Not yet supported
 
-`vey terminal` (a future release), creating/listing/revoking API tokens from the CLI, and any admin mutation (creating/deleting users or servers) are out of scope for this version of `vey`. Use the web dashboard or `veyport admin ...` on the Hub host for those.
+A REST-driven `vey terminal` command mirroring the browser's SSE-based terminal stream (superseded in practice by `vey ssh`, above), creating/listing/revoking API tokens from the CLI, and any admin mutation (creating/deleting users or servers) are out of scope for this version of `vey`. Use the web dashboard or `veyport admin ...` on the Hub host for those.
 
 ## Exit Codes
 
@@ -242,4 +252,4 @@ If your Hub uses a certificate from a private/internal CA, install that CA into 
 
 ---
 
-*Related: [[API Reference]] for the underlying REST endpoints, [[Logging In]] for the web login/2FA flow, [[Fleet Dashboard]] and [[Server Detail]] for the equivalent web UI views.*
+*Related: [[API Reference]] for the underlying REST endpoints, [[Logging In]] for the web login/2FA flow, [[Fleet Dashboard]] and [[Server Detail]] for the equivalent web UI views, [[SSH Gateway]] for `vey ssh-cert`/`vey ssh` in depth.*

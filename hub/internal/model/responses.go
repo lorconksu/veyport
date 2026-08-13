@@ -45,6 +45,22 @@ type TerminalSessionResponse struct {
 	SessionID string `json:"session_id"`
 }
 
+// SSHCertificateResponse is returned after issuing a user SSH certificate.
+type SSHCertificateResponse struct {
+	Certificate        string `json:"certificate"`
+	Principal          string `json:"principal"`
+	ExpiresAt          string `json:"expires_at"`
+	HostKeyFingerprint string `json:"host_key_fingerprint"`
+	GatewayPort        int    `json:"gateway_port"`
+}
+
+// SSHHostKeyResponse describes the SSH gateway's host identity for pinning.
+type SSHHostKeyResponse struct {
+	Fingerprint string `json:"fingerprint"`
+	PublicKey   string `json:"public_key"`
+	Port        int    `json:"port"`
+}
+
 // PermissionListResponse wraps a list of path permissions for a server.
 type PermissionListResponse struct {
 	Paths []Permission `json:"paths"`
