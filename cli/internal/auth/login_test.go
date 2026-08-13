@@ -186,6 +186,15 @@ func (s *failingLoginStore) Load(hubURL string) (StoredSession, bool, error) {
 func (s *failingLoginStore) Delete(hubURL string) error { return s.backed.Delete(hubURL) }
 func (s *failingLoginStore) Backend() string            { return s.backed.Backend() }
 
+// The SSH half of the Store interface is irrelevant to login and is simply
+// delegated: login neither reads nor writes SSH material.
+func (s *failingLoginStore) SaveSSH(hubURL string, m StoredSSH) error {
+	return s.backed.SaveSSH(hubURL, m)
+}
+func (s *failingLoginStore) LoadSSH(hubURL string) (StoredSSH, bool, error) {
+	return s.backed.LoadSSH(hubURL)
+}
+
 // ------------------------------------------------------------- assertions
 
 func assertLoginExitCode(t *testing.T, err error, want int) {

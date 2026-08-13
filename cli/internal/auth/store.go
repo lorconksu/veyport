@@ -1,8 +1,10 @@
 package auth
 
-// Credential storage for vey (data-model.md "StoredSession", research.md R2/R3).
+// Credential storage for vey (004 data-model.md "StoredSession", research.md
+// R2/R3; 005-ssh-gateway data-model.md "Stored SSH material").
 //
-// Only the refresh token is ever persisted; access tokens live in process
+// Two kinds of long-lived secret are persisted: the refresh token, and the
+// SSH private key `vey ssh-cert` generates. Access tokens live in process
 // memory for their 15-minute lifetime and passwords/TOTP codes/API tokens are
 // never written. Storage is scoped per hub: every operation takes the
 // normalized hub URL, which is the key in both backends, so credentials issued
@@ -71,7 +73,59 @@ type StoredSession struct {
 	ObtainedAt   time.Time `json:"obtained_at"`
 }
 
-// Store persists one StoredSession per hub.
+// StoredSSH is the SSH material vey holds for one hub (005-ssh-gateway
+// data-model.md "Stored SSH material"): the ed25519 keypair `vey ssh-cert`
+// generates, the certificate the hub signs for it, that certificate's expiry
+// (so `vey ssh` can refuse up front rather than at the gateway, FR-013), and
+// the gateway host-key fingerprint used to pin the host on connect.
+//
+// PrivateKey is the second piece of long-lived secret material vey persists,
+// and it carries exactly the refresh token's guarantees: the same backend,
+// the same 0600 fallback, the same per-hub scoping, and it is never printed,
+// logged, or quoted in an error message. Everything else in this struct is
+// public material.
+type StoredSSH struct {
+	// PrivateKey is the openssh-form (PEM) ed25519 private key. Secret.
+	PrivateKey string `json:"ssh_private_key,omitempty"`
+	// Certificate is the hub-signed user certificate in authorized_keys
+	// form, replaced on every re-issuance.
+	Certificate string `json:"ssh_certificate,omitempty"`
+	// CertExpiresAt is Certificate's expiry, persisted as RFC3339.
+	CertExpiresAt time.Time `json:"ssh_cert_expires_at,omitzero"`
+	// HostFingerprint is the cached gateway host-key fingerprint
+	// ("SHA256:…"), refreshed from GET /api/ssh/host-key on each issuance.
+	HostFingerprint string `json:"ssh_host_fingerprint,omitempty"`
+}
+
+// hasMaterial reports whether m holds a usable keypair. A record without a
+// private key can sign nothing, so it counts as "no SSH material" rather than
+// as a partial record every caller would have to re-validate.
+func (m StoredSSH) hasMaterial() bool { return strings.TrimSpace(m.PrivateKey) != "" }
+
+// hubEntry is one hub's whole credential record — the interactive session and
+// the SSH material — held as a single value under the hub's key in both
+// backends.
+//
+// Both structs are embedded, so the encoding stays flat and byte-compatible
+// with what 004 wrote: an entry written before SSH material existed decodes
+// with a zero StoredSSH, and an entry that has no SSH material re-encodes
+// exactly as 004 encoded it (every SSH field is omitempty/omitzero).
+//
+// One record, two independently written halves, is what keeps the
+// refresh-token invariants intact. AuthContext.persistAndAdopt builds a
+// *fresh* StoredSession on every rotation and hands it to Save; had the SSH
+// fields been added to StoredSession, every rotation — that is, every
+// session-mode command — would have silently erased the key and certificate.
+// Save and SaveSSH therefore each replace only their own half and carry the
+// other over untouched, while Delete (`vey logout`) still removes everything
+// for the hub in one atomic write.
+type hubEntry struct {
+	StoredSession
+	StoredSSH
+}
+
+// Store persists one credential record per hub: the interactive session
+// (Save/Load) and the SSH material (SaveSSH/LoadSSH).
 //
 // Implementations must uphold the credential persistence invariant
 // (data-model.md): at every observable moment a hub's entry is either the
@@ -83,14 +137,25 @@ type StoredSession struct {
 // against that outer lock, since flock treats two file descriptors in one
 // process as two independent lock holders.
 type Store interface {
-	// Save writes s as the session for hubURL, replacing any existing entry.
+	// Save writes s as the session for hubURL, replacing any session already
+	// stored there and leaving that hub's SSH material untouched.
 	Save(hubURL string, s StoredSession) error
 	// Load returns the session stored for hubURL. The bool is false (with a
 	// nil error) when no session exists for that hub, which is a normal
-	// state, not a failure.
+	// state, not a failure. A hub that holds only SSH material has no
+	// session.
 	Load(hubURL string) (StoredSession, bool, error)
-	// Delete removes the session for hubURL. Deleting an absent session is
-	// not an error.
+	// SaveSSH writes m as the SSH material for hubURL, replacing any SSH
+	// material already stored there and leaving that hub's session
+	// untouched.
+	SaveSSH(hubURL string, m StoredSSH) error
+	// LoadSSH returns the SSH material stored for hubURL. The bool is false
+	// (with a nil error) when that hub holds no usable material — no record
+	// at all, or a record with no private key.
+	LoadSSH(hubURL string) (StoredSSH, bool, error)
+	// Delete removes everything stored for hubURL — session and SSH material
+	// alike, which is what `vey logout` promises. Deleting an absent record
+	// is not an error.
 	Delete(hubURL string) error
 	// Backend reports which storage is in use: BackendKeyring or BackendFile.
 	Backend() string
@@ -199,18 +264,35 @@ func validateHubKey(hubURL string) error {
 	return nil
 }
 
-// keyringStore keeps one JSON-encoded StoredSession per hub in the OS keyring.
+// keyringStore keeps one JSON-encoded hubEntry per hub in the OS keyring.
 type keyringStore struct{}
 
 func (s *keyringStore) Backend() string { return BackendKeyring }
 
 func (s *keyringStore) Save(hubURL string, sess StoredSession) error {
+	return s.update(hubURL, func(e *hubEntry) { e.StoredSession = sess })
+}
+
+func (s *keyringStore) SaveSSH(hubURL string, m StoredSSH) error {
+	return s.update(hubURL, func(e *hubEntry) { e.StoredSSH = m })
+}
+
+// update rewrites one half of hubURL's entry, carrying the other half over.
+//
+// A read failure here is deliberately not fatal: the write that follows
+// replaces the stored value outright, so an unreadable or corrupt entry must
+// not turn a fresh `vey login` into a permanent failure. What it costs is the
+// other half of a corrupt entry, which was already unrecoverable.
+func (s *keyringStore) update(hubURL string, apply func(*hubEntry)) error {
 	if err := validateHubKey(hubURL); err != nil {
 		return err
 	}
-	blob, err := json.Marshal(sess)
+	entry, _, _ := s.loadEntry(hubURL)
+	apply(&entry)
+
+	blob, err := json.Marshal(entry)
 	if err != nil {
-		return fmt.Errorf("auth: encode session for %s: %w", hubURL, err)
+		return fmt.Errorf("auth: encode credentials for %s: %w", hubURL, err)
 	}
 	if err := keyring.Set(KeyringService, hubURL, string(blob)); err != nil {
 		return fmt.Errorf("auth: store credentials for %s in keyring: %w", hubURL, err)
@@ -219,24 +301,43 @@ func (s *keyringStore) Save(hubURL string, sess StoredSession) error {
 }
 
 func (s *keyringStore) Load(hubURL string) (StoredSession, bool, error) {
-	if err := validateHubKey(hubURL); err != nil {
+	entry, ok, err := s.loadEntry(hubURL)
+	if err != nil || !ok {
 		return StoredSession{}, false, err
+	}
+	return entry.StoredSession, strings.TrimSpace(entry.RefreshToken) != "", nil
+}
+
+func (s *keyringStore) LoadSSH(hubURL string) (StoredSSH, bool, error) {
+	entry, ok, err := s.loadEntry(hubURL)
+	if err != nil || !ok {
+		return StoredSSH{}, false, err
+	}
+	return entry.StoredSSH, entry.hasMaterial(), nil
+}
+
+// loadEntry reads hubURL's whole record. A missing record is (zero, false,
+// nil): a normal state, not a failure.
+func (s *keyringStore) loadEntry(hubURL string) (hubEntry, bool, error) {
+	if err := validateHubKey(hubURL); err != nil {
+		return hubEntry{}, false, err
 	}
 	blob, err := keyring.Get(KeyringService, hubURL)
 	if errors.Is(err, keyring.ErrNotFound) {
-		return StoredSession{}, false, nil
+		return hubEntry{}, false, nil
 	}
 	if err != nil {
-		return StoredSession{}, false, fmt.Errorf("auth: read credentials for %s from keyring: %w", hubURL, err)
+		return hubEntry{}, false, fmt.Errorf("auth: read credentials for %s from keyring: %w", hubURL, err)
 	}
 
-	var sess StoredSession
+	var entry hubEntry
 	// The decode error is deliberately not wrapped: json errors can quote
-	// fragments of the input, and the input here is the refresh token.
-	if err := json.Unmarshal([]byte(blob), &sess); err != nil {
-		return StoredSession{}, false, fmt.Errorf("auth: stored credentials for %s are corrupt; run: vey login --hub %s", hubURL, hubURL)
+	// fragments of the input, and the input here is the refresh token and the
+	// SSH private key.
+	if err := json.Unmarshal([]byte(blob), &entry); err != nil {
+		return hubEntry{}, false, fmt.Errorf("auth: stored credentials for %s are corrupt; run: vey login --hub %s", hubURL, hubURL)
 	}
-	return sess, true, nil
+	return entry, true, nil
 }
 
 func (s *keyringStore) Delete(hubURL string) error {
@@ -251,7 +352,7 @@ func (s *keyringStore) Delete(hubURL string) error {
 }
 
 // fileStore is the reduced-protection fallback: a single JSON object mapping
-// hub URL to StoredSession, owner-only, replaced by atomic rename.
+// hub URL to hubEntry, owner-only, replaced by atomic rename.
 type fileStore struct {
 	dir  string
 	path string
@@ -274,6 +375,19 @@ func newFileStore(configDir string) *fileStore {
 func (s *fileStore) Backend() string { return BackendFile }
 
 func (s *fileStore) Save(hubURL string, sess StoredSession) error {
+	return s.update(hubURL, func(e *hubEntry) { e.StoredSession = sess })
+}
+
+func (s *fileStore) SaveSSH(hubURL string, m StoredSSH) error {
+	return s.update(hubURL, func(e *hubEntry) { e.StoredSSH = m })
+}
+
+// update rewrites one half of hubURL's entry, carrying the other half over.
+//
+// Unlike the keyring backend, a read failure here is fatal: readAll rejects a
+// credentials file whose permissions expose it, and that file must never be
+// silently written over — the user has to see that it was exposed.
+func (s *fileStore) update(hubURL string, apply func(*hubEntry)) error {
 	if err := validateHubKey(hubURL); err != nil {
 		return err
 	}
@@ -281,20 +395,38 @@ func (s *fileStore) Save(hubURL string, sess StoredSession) error {
 	if err != nil {
 		return err
 	}
-	all[hubURL] = sess
+	entry := all[hubURL]
+	apply(&entry)
+	all[hubURL] = entry
 	return s.writeAll(all)
 }
 
 func (s *fileStore) Load(hubURL string) (StoredSession, bool, error) {
-	if err := validateHubKey(hubURL); err != nil {
+	entry, ok, err := s.loadEntry(hubURL)
+	if err != nil || !ok {
 		return StoredSession{}, false, err
+	}
+	return entry.StoredSession, strings.TrimSpace(entry.RefreshToken) != "", nil
+}
+
+func (s *fileStore) LoadSSH(hubURL string) (StoredSSH, bool, error) {
+	entry, ok, err := s.loadEntry(hubURL)
+	if err != nil || !ok {
+		return StoredSSH{}, false, err
+	}
+	return entry.StoredSSH, entry.hasMaterial(), nil
+}
+
+func (s *fileStore) loadEntry(hubURL string) (hubEntry, bool, error) {
+	if err := validateHubKey(hubURL); err != nil {
+		return hubEntry{}, false, err
 	}
 	all, err := s.readAll()
 	if err != nil {
-		return StoredSession{}, false, err
+		return hubEntry{}, false, err
 	}
-	sess, ok := all[hubURL]
-	return sess, ok, nil
+	entry, ok := all[hubURL]
+	return entry, ok, nil
 }
 
 func (s *fileStore) Delete(hubURL string) error {
@@ -310,18 +442,20 @@ func (s *fileStore) Delete(hubURL string) error {
 		// no-op delete.
 		return nil
 	}
+	// The whole entry goes, SSH material included: `vey logout` removes every
+	// locally stored credential for the hub.
 	delete(all, hubURL)
 	return s.writeAll(all)
 }
 
 // readAll loads the whole credentials map, refusing to read a file that other
 // users can see.
-func (s *fileStore) readAll() (map[string]StoredSession, error) {
+func (s *fileStore) readAll() (map[string]hubEntry, error) {
 	// Lstat, not Stat: a symlink here would let the permission check inspect
 	// one file while the read consumes another.
 	info, err := os.Lstat(s.path)
 	if errors.Is(err, os.ErrNotExist) {
-		return map[string]StoredSession{}, nil
+		return map[string]hubEntry{}, nil
 	}
 	if err != nil {
 		return nil, fmt.Errorf("auth: inspect credentials file %s: %w", s.path, err)
@@ -340,17 +474,17 @@ func (s *fileStore) readAll() (map[string]StoredSession, error) {
 		return nil, fmt.Errorf("auth: read credentials file %s: %w", s.path, err)
 	}
 	if len(bytes.TrimSpace(data)) == 0 {
-		return map[string]StoredSession{}, nil
+		return map[string]hubEntry{}, nil
 	}
 
-	var all map[string]StoredSession
+	var all map[string]hubEntry
 	// As in keyringStore.Load, the decode error is not wrapped: it may quote
 	// the token.
 	if err := json.Unmarshal(data, &all); err != nil {
 		return nil, fmt.Errorf("auth: credentials file %s is corrupt (invalid JSON); remove it and run vey login again", s.path)
 	}
 	if all == nil { // literal JSON null
-		all = map[string]StoredSession{}
+		all = map[string]hubEntry{}
 	}
 	return all, nil
 }
@@ -361,7 +495,7 @@ func (s *fileStore) readAll() (map[string]StoredSession, error) {
 // either the previous file untouched (temp not yet renamed) or the new file
 // complete (rename is atomic on POSIX). A stale temp file is never read by
 // readAll and is overwritten by the next write.
-func (s *fileStore) writeAll(all map[string]StoredSession) error {
+func (s *fileStore) writeAll(all map[string]hubEntry) error {
 	if err := os.MkdirAll(s.dir, credentialsDirMode); err != nil {
 		return fmt.Errorf("auth: create config directory %s: %w", s.dir, err)
 	}

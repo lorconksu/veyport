@@ -33,7 +33,8 @@ import { apiFetch } from '@/lib/api'
 import { getCSRFToken } from '@/lib/auth'
 import { useFileContentViewer } from '@/hooks/use-file-content-viewer'
 import { relativeTime } from '@/lib/time'
-import { formatFileSize, isMarkdownFile, parseSseChunk, sortFileNodes } from '@/lib/file-viewer'
+import { formatFileSize, isMarkdownFile, sortFileNodes } from '@/lib/file-viewer'
+import { createLogLineAssembler } from '@/lib/log-stream'
 import { statusDot } from '@/lib/server-utils'
 import { useAuth } from '@/hooks/use-auth'
 import { OfflineTerminalState, ServerTerminal } from '@/components/server-terminal'
@@ -748,9 +749,12 @@ function LiveTail({
     rafIdRef.current ??= requestAnimationFrame(flushPendingLines)
   }, [flushPendingLines])
 
-  // Reads an SSE stream and forwards parsed log lines via appendLogLines.
+  // Reads an SSE stream and forwards reassembled log lines via appendLogLines.
+  // Frames are not line-aligned, so the assembler carries partial lines across
+  // frames and emits the remainder once the stream ends.
   const readStream = useCallback(async (reader: ReadableStreamDefaultReader<Uint8Array>) => {
     const decoder = new TextDecoder()
+    const assembler = createLogLineAssembler()
     let sseBuffer = ''
 
     while (true) {
@@ -761,10 +765,15 @@ function LiveTail({
       const sseLines = sseBuffer.split('\n')
       sseBuffer = sseLines.pop() || ''
 
-      const newLogLines = parseSseChunk(sseLines)
+      const newLogLines = assembler.push(sseLines)
       if (newLogLines.length > 0) {
         appendLogLines(newLogLines)
       }
+    }
+
+    const finalLines = assembler.flush()
+    if (finalLines.length > 0) {
+      appendLogLines(finalLines)
     }
   }, [appendLogLines])
 

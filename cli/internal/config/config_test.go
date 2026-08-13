@@ -308,3 +308,64 @@ func checkEffectiveHubWantErr(t *testing.T, wantErr, err error) {
 // errSentinelInvalid is a test-local marker distinguishing "expect any
 // error" from "expect ErrNoHub specifically" in the EffectiveHub table.
 var errSentinelInvalid = errors.New("sentinel: any error expected")
+
+func TestSaveThenLoadRoundTrips(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "vey", "config.json")
+	cfg := Config{
+		DefaultHub: "https://hub.example.com",
+		Hubs:       map[string]HubProfile{"https://hub.example.com": {APIToken: "adt_x"}},
+	}
+	if err := Save(path, cfg); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+	got, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load after Save: %v", err)
+	}
+	if got.DefaultHub != cfg.DefaultHub {
+		t.Errorf("DefaultHub = %q, want %q", got.DefaultHub, cfg.DefaultHub)
+	}
+	if got.Hubs["https://hub.example.com"].APIToken != "adt_x" {
+		t.Errorf("Hubs not round-tripped: %+v", got.Hubs)
+	}
+}
+
+func TestSaveCreatesParentDirAndRestrictsPermissions(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "vey", "config.json")
+	if err := Save(path, Config{DefaultHub: "https://h.example.com"}); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+	di, err := os.Stat(filepath.Dir(path))
+	if err != nil {
+		t.Fatalf("stat parent dir: %v", err)
+	}
+	if perm := di.Mode().Perm(); perm != 0o700 {
+		t.Errorf("parent dir perm = %o, want 700", perm)
+	}
+	fi, err := os.Stat(path)
+	if err != nil {
+		t.Fatalf("stat config: %v", err)
+	}
+	// The config file can carry API tokens (HubProfile.APIToken), so it gets
+	// the same 0600 discipline as the credential fallback file.
+	if perm := fi.Mode().Perm(); perm != 0o600 {
+		t.Errorf("config perm = %o, want 600", perm)
+	}
+}
+
+func TestSaveOverwritesExistingConfig(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.json")
+	if err := Save(path, Config{DefaultHub: "https://first.example.com"}); err != nil {
+		t.Fatalf("first Save: %v", err)
+	}
+	if err := Save(path, Config{DefaultHub: "https://second.example.com"}); err != nil {
+		t.Fatalf("second Save: %v", err)
+	}
+	got, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if got.DefaultHub != "https://second.example.com" {
+		t.Errorf("DefaultHub = %q, want the overwritten value", got.DefaultHub)
+	}
+}

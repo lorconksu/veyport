@@ -72,6 +72,15 @@ const (
 	AuditTerminalClosed = "terminal.closed"
 )
 
+// SSH gateway events
+const (
+	AuditSSHCertIssued       = "ssh.cert_issued"
+	AuditSSHCertIssueRefused = "ssh.cert_issue_refused"
+	AuditSSHSessionOpened    = "ssh.session_opened"
+	AuditSSHSessionClosed    = "ssh.session_closed"
+	AuditSSHSessionRefused   = "ssh.session_refused"
+)
+
 const (
 	AuditFileUploaded = "file.uploaded"
 )
