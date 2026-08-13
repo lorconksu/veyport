@@ -23,6 +23,15 @@ vi.mock('@/pages/add-server-modal', () => ({
   ),
 }))
 
+// Stub InstallCliModal to simplify
+vi.mock('@/pages/install-cli-modal', () => ({
+  InstallCliModal: ({ onClose }: { onClose: () => void }) => (
+    <div data-testid="install-cli-modal">
+      <button onClick={onClose}>Close Install CLI Modal</button>
+    </div>
+  ),
+}))
+
 import { apiFetch } from '@/lib/api'
 const mockApiFetch = apiFetch as ReturnType<typeof vi.fn>
 
@@ -165,6 +174,42 @@ describe('DashboardPage', () => {
     fireEvent.click(screen.getByText('Close Modal'))
     await waitFor(() => {
       expect(screen.queryByTestId('add-server-modal')).not.toBeInTheDocument()
+    })
+  })
+
+  it('shows Install CLI button for admin', async () => {
+    mockApiFetch.mockResolvedValue({ servers: mockServers, total: 3 })
+    renderPage()
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: /install cli/i })).toBeInTheDocument()
+    })
+  })
+
+  it('shows Install CLI button for non-admin (viewer)', async () => {
+    mockUseAuth.mockReturnValue({
+      user: { id: '2', username: 'viewer', role: 'viewer', email: 'v@b.com', avatar: null, totp_enabled: true, created_at: '', updated_at: '' },
+    })
+    mockApiFetch.mockResolvedValue({ servers: mockServers, total: 3 })
+    renderPage()
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: /install cli/i })).toBeInTheDocument()
+    })
+  })
+
+  it('opens Install CLI modal when button clicked, and closes it', async () => {
+    mockUseAuth.mockReturnValue({
+      user: { id: '2', username: 'viewer', role: 'viewer', email: 'v@b.com', avatar: null, totp_enabled: true, created_at: '', updated_at: '' },
+    })
+    mockApiFetch.mockResolvedValue({ servers: mockServers, total: 3 })
+    renderPage()
+    expect(await screen.findByRole('button', { name: /install cli/i })).toBeInTheDocument()
+
+    fireEvent.click(screen.getByRole('button', { name: /install cli/i }))
+    expect(await screen.findByTestId('install-cli-modal')).toBeInTheDocument()
+
+    fireEvent.click(screen.getByText('Close Install CLI Modal'))
+    await waitFor(() => {
+      expect(screen.queryByTestId('install-cli-modal')).not.toBeInTheDocument()
     })
   })
 

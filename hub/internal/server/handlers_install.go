@@ -1,12 +1,16 @@
 package server
 
 import (
+	"bytes"
 	"fmt"
 	"log"
 	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
+	"text/template"
+
+	"github.com/wyiu/veyport/hub"
 )
 
 // cliAllowedOS and cliAllowedArch define the platform matrix the `vey` CLI is
@@ -115,5 +119,38 @@ func (s *Server) handleCLIBinaryChecksum(w http.ResponseWriter, r *http.Request)
 	w.Header().Set("Content-Type", "text/plain")
 	if _, err := w.Write([]byte(strings.TrimSpace(string(data)))); err != nil {
 		log.Printf("cli checksum write failed: %v", err)
+	}
+}
+
+// installCLIScriptTemplate is parsed at init via template.Must: the script
+// is an embedded asset, so a parse failure is a build defect that should
+// fail startup loudly, not a runtime condition to limp past per-request.
+var installCLIScriptTemplate = template.Must(
+	template.New("install-cli.sh").Parse(string(hub.InstallCLIScript)))
+
+// handleInstallCLIScript serves the templated `vey` CLI install one-liner at
+// GET /install/cli.sh (specs/006-cli-install-script/proposal.md). Unlike the
+// static agent installer (install.sh), this script is rendered through
+// text/template so the hub injects its own public base URL and the
+// one-liner needs zero arguments: `curl -fsSL <hub>/install/cli.sh | sh`.
+// Rendered into a buffer first so a template error never ships a partial
+// script with a 200 status.
+func (s *Server) handleInstallCLIScript(w http.ResponseWriter, r *http.Request) {
+	baseURL, err := s.resolvePublicBaseURL(r)
+	if err != nil {
+		respondError(w, http.StatusInternalServerError, "public hub address is not configured")
+		return
+	}
+
+	var buf bytes.Buffer
+	if err := installCLIScriptTemplate.Execute(&buf, struct{ BaseURL string }{BaseURL: baseURL}); err != nil {
+		log.Printf("install-cli.sh template execute failed: %v", err)
+		respondError(w, http.StatusInternalServerError, "install script is not available")
+		return
+	}
+
+	w.Header().Set("Content-Type", "text/x-shellscript; charset=utf-8")
+	if _, err := w.Write(buf.Bytes()); err != nil {
+		log.Printf("install-cli.sh write failed: %v", err)
 	}
 }

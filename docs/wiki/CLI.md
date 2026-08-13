@@ -39,6 +39,16 @@ flowchart LR
 
 ## Install
 
+The quickest path is the Hub-served install script — one command on Linux and macOS (it detects your platform, verifies the checksum, and installs to `/usr/local/bin`, falling back to `~/.local/bin` when it can't write there):
+
+```bash
+curl -fsSL https://hub.example.com/install/cli.sh | sh
+```
+
+Re-running the same command upgrades an existing install in place. The same one-liner is available in the web UI under **Install CLI** on the dashboard.
+
+### Manual install (verify by hand)
+
 Binaries are served directly by your own Hub — there is no separate download site. Pick your platform and verify the checksum before running anything:
 
 ```bash
