@@ -123,13 +123,15 @@ case ":${PATH}:" in
     ;;
 esac
 
-NEW_VERSION=$("$INSTALLED_PATH" --version 2>/dev/null || echo "unknown")
+# `vey --version` prints "vey vX.Y.Z-..."; use its output verbatim rather
+# than prefixing another "vey" (T-verify finding: "Installed vey vey ...").
+NEW_VERSION=$("$INSTALLED_PATH" --version 2>/dev/null || echo "vey (version unknown)")
 
 echo ""
 if [ -n "$OLD_VERSION" ]; then
-  echo "==> Upgraded vey: ${OLD_VERSION} -> ${NEW_VERSION}"
+  echo "==> Upgraded: ${OLD_VERSION} -> ${NEW_VERSION}"
 else
-  echo "==> Installed vey ${NEW_VERSION}"
+  echo "==> Installed ${NEW_VERSION}"
 fi
 echo ""
 echo "Next step:"
