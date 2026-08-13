@@ -15,6 +15,7 @@ func (s *Server) routes() http.Handler {
 	refreshLimiter := newRateLimiter(30, 60*time.Second)
 	fileOpsLimiter := newRateLimiter(60, 60*time.Second)
 	terminalLimiter := newRateLimiter(3600, 60*time.Second)
+	sshCertLimiter := newRateLimiter(10, time.Minute)
 
 	// Public auth endpoints (rate-limited)
 	mux.Handle("GET /api/health", loggingMiddleware(http.HandlerFunc(s.handleHealth)))
@@ -121,10 +122,29 @@ func (s *Server) routes() http.Handler {
 	// Server unregister (admin only)
 	mux.Handle("DELETE /api/servers/{id}/unregister", loggingMiddleware(s.authMiddleware(auth.TokenTypeAccess, s.adminOnly(http.HandlerFunc(s.handleUnregisterServer)))))
 
+	// SSH gateway endpoints.
+	// Issuance is interactive-only — API tokens are categorically excluded
+	// (FR-002/SC-004) — and rate-limited to 10 requests/minute.
+	// The host key is public trust material, so any authenticated caller may
+	// read it to pin the gateway.
+	mux.Handle("POST /api/ssh/certificates", loggingMiddleware(sshCertLimiter.middleware(s.authMiddleware(auth.TokenTypeAccess, s.auditNonInteractiveSSHCertAttempt(s.interactiveOnly(http.HandlerFunc(s.handleIssueSSHCertificate)))))))
+	mux.Handle("GET /api/ssh/host-key", loggingMiddleware(s.authMiddleware(auth.TokenTypeAccess, http.HandlerFunc(s.handleSSHHostKey))))
+
 	// Public endpoints (no auth required)
 	mux.Handle("GET /install.sh", loggingMiddleware(http.HandlerFunc(s.handleInstallScript)))
 	mux.Handle("GET /install/{os}/{arch}", loggingMiddleware(http.HandlerFunc(s.handleAgentBinary)))
-	mux.Handle("GET /install/{os}/{arch}/sha256", loggingMiddleware(http.HandlerFunc(s.handleAgentBinaryChecksum)))
+	// NOTE: "GET /install/{os}/{arch}/sha256" (agent checksum) and
+	// "GET /install/cli/{os}/{arch}" (CLI binary) are both 4-path-segment
+	// patterns with their literal segment ("sha256" vs "cli") in different
+	// positions, which net/http's ServeMux statically rejects as ambiguous
+	// at registration time (neither pattern's match set is a subset of the
+	// other's). They're routed through a single dispatcher instead; see
+	// handleInstall3rdSegmentDispatch in handlers_install.go for why the
+	// dispatch is unambiguous in practice (a=="cli" and c=="sha256" can
+	// never both correspond to a valid platform, so picking one
+	// interpretation over the other never changes the response).
+	mux.Handle("GET /install/{a}/{b}/{c}", loggingMiddleware(http.HandlerFunc(s.handleInstall3rdSegmentDispatch)))
+	mux.Handle("GET /install/cli/{os}/{arch}/sha256", loggingMiddleware(http.HandlerFunc(s.handleCLIBinaryChecksum)))
 	mux.Handle("DELETE /api/servers/{id}/self-unregister", loggingMiddleware(http.HandlerFunc(s.handleSelfUnregister)))
 
 	// SPA catch-all — serves embedded frontend, falls back to index.html

@@ -46,6 +46,18 @@ jobs:
       - name: Agent tests with coverage
         run: cd agent && go test ./... -coverprofile=../coverage-agent.out -covermode=atomic
 
+      - name: CLI vet
+        run: cd cli && go vet ./...
+
+      - name: CLI tests with coverage
+        run: cd cli && go test ./... -coverprofile=../coverage-cli.out -covermode=atomic
+
+      - name: Build CLI binary (linux/amd64)
+        run: cd cli && go build -o ../bin/vey-linux-amd64 ./cmd/vey
+
+      - name: CLI binary smoke test
+        run: ./bin/vey-linux-amd64 --version
+
       - name: Upload coverage artifacts
         uses: actions/upload-artifact@v7
         with:
@@ -54,6 +66,7 @@ jobs:
             coverage-hub.out
             coverage-hub-cmd.out
             coverage-agent.out
+            coverage-cli.out
             web/coverage/lcov.info
 
   integration:

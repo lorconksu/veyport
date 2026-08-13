@@ -8,6 +8,8 @@
 **Using Veyport**
 - [[Fleet Dashboard]]
 - [[Server Detail]]
+- [[CLI]]
+- [[SSH Gateway]]
 
 **Administration**
 - [[Audit Logs]]

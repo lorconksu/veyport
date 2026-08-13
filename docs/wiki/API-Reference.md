@@ -1,7 +1,7 @@
 # Veyport Hub API Reference
 
 > **TL;DR**
-> - **What:** 50+ REST API endpoints covering auth, user management, server operations, terminal sessions, audit logs, notifications, LDAP config, SMTP config, hub settings, and agent installation
+> - **What:** 50+ REST API endpoints covering auth, user management, server operations, terminal sessions, audit logs, notifications, LDAP config, SMTP config, hub settings, and agent/CLI installation
 > - **Who:** Frontend developers, integration builders, and anyone automating Veyport
 > - **Why:** Complete reference for every HTTP endpoint with request/response schemas
 > - **Where:** All endpoints served by the Hub on the HTTP port (default :8081)
@@ -28,6 +28,7 @@
 14. [SMTP and Notification Endpoints](#smtp-and-notification-endpoints)
 15. [Re-Enrollment Endpoints](#re-enrollment-endpoints)
 16. [Terminal Endpoints](#terminal-endpoints)
+17. [SSH Gateway Endpoints](#ssh-gateway-endpoints)
 
 ---
 
@@ -1608,6 +1609,58 @@ curl - O https://hub.example.com/install/linux/amd64
 
 ---
 
+### GET /install/cli/{os}/{arch}
+
+Download the `vey` CLI binary for a specific platform. See [[CLI]] for the full install walkthrough and command reference.
+
+| Property | Value |
+|---|---|
+| Auth | None |
+| Content-Type (response) | `application/octet-stream` |
+
+**Path Parameters:**
+- `os` - Operating system (`linux` or `darwin`)
+- `arch` - Architecture (`amd64` or `arm64`)
+
+**Response:** Binary file download with `Content-Disposition: attachment; filename="vey-{os}-{arch}"`
+
+**Error Cases:**
+- `404` - Unsupported platform (outside the `{linux,darwin}` x `{amd64,arm64}` allowlist) or binary not built for this Hub
+
+**cURL:**
+
+```bash
+curl -o vey https://hub.example.com/install/cli/linux/amd64
+```
+
+---
+
+### GET /install/cli/{os}/{arch}/sha256
+
+Get the SHA-256 checksum of the `vey` CLI binary for a specific platform, for verifying the download from the endpoint above.
+
+| Property | Value |
+|---|---|
+| Auth | None |
+| Content-Type (response) | `text/plain` |
+
+**Path Parameters:**
+- `os` - Operating system (`linux` or `darwin`)
+- `arch` - Architecture (`amd64` or `arm64`)
+
+**Response:** The hex-encoded SHA-256 checksum as plain text.
+
+**Error Cases:**
+- `404` - Unsupported platform or checksum not found
+
+**cURL:**
+
+```bash
+curl https://hub.example.com/install/cli/linux/amd64/sha256
+```
+
+---
+
 ## Server Removal Endpoints
 
 ### 35. DELETE /api/servers/{id}/unregister
@@ -2367,3 +2420,91 @@ Close an active terminal session.
 
 **Error Cases:**
 - `404` - Terminal session not found
+
+---
+
+## SSH Gateway Endpoints
+
+These two endpoints support the native SSH gateway (see [[SSH Gateway]]): issuing a short-lived user certificate and publishing the gateway's host identity for pinning. The gateway itself is a raw SSH listener on a separate port (default `:2222`), not an HTTP endpoint — these are the only two HTTP touchpoints for it.
+
+### 53. POST /api/ssh/certificates
+
+Issue a short-lived SSH user certificate for the caller's own identity, for use against the SSH gateway.
+
+| Property | Value |
+|---|---|
+| Auth | Access token (Bearer), **interactive session only** — API tokens are refused (SC-004) |
+| Rate Limited | Yes (10 requests / 60s per caller) |
+
+**Request Body:**
+
+```json
+{
+  "public_key": "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAA... client-key"
+}
+```
+
+`public_key` must be an `authorized_keys`-form ed25519, ECDSA, or RSA key (not a certificate). The principal on the issued certificate is always the caller's own username, resolved from the access token — it cannot be requested in the body.
+
+**Response (200):**
+
+```json
+{
+  "certificate": "ssh-ed25519-cert-v01@openssh.com AAAA...",
+  "principal": "alice",
+  "expires_at": "2026-08-06T20:14:03Z",
+  "host_key_fingerprint": "SHA256:AbCdEf...",
+  "gateway_port": 2222
+}
+```
+
+**Error Cases:**
+- `400` - Invalid or unsupported public key, or an existing certificate submitted as the subject key
+- `401` - No or invalid access token
+- `403` - `{"error":"interactive login required"}` — the credential is an API token, not an interactive session (audited `ssh.cert_issue_refused`)
+- `429` - Rate limit exceeded
+- `503` - SSH gateway disabled by configuration, or its key material is unavailable
+
+Successful issuance is audited `ssh.cert_issued` with principal and TTL.
+
+**cURL:**
+
+```bash
+curl -X POST https://hub.example.com/api/ssh/certificates \
+  -H 'Authorization: Bearer <access_token>' \
+  -H 'Content-Type: application/json' \
+  -d '{"public_key":"ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAA... client-key"}'
+```
+
+---
+
+### 54. GET /api/ssh/host-key
+
+Get the SSH gateway's host identity, for pinning instead of trust-on-first-use.
+
+| Property | Value |
+|---|---|
+| Auth | Access token (Bearer) — any authenticated caller, **including API tokens**; this is public trust material, not a capability |
+| Rate Limited | No |
+
+**Response (200):**
+
+```json
+{
+  "fingerprint": "SHA256:AbCdEf...",
+  "public_key": "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAA... host-key",
+  "port": 2222
+}
+```
+
+Stable across Hub restarts and upgrades — the host key is never silently regenerated (FR-006).
+
+**Error Cases:**
+- `503` - SSH gateway key material is unavailable
+
+**cURL:**
+
+```bash
+curl https://hub.example.com/api/ssh/host-key \
+  -H 'Authorization: Bearer <access_token>'
+```
