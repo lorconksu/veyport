@@ -14,10 +14,12 @@ package auth_test
 // of secret material that was in play:
 //
 //	password, one-time code, TOTP challenge token, TOTP setup token,
-//	API token, access token, and every refresh token the stub minted.
+//	API token, access token, every refresh token the stub minted, and the
+//	SSH private key `vey ssh-cert` generates or reuses.
 //
-// Refresh tokens are the one kind allowed to reach disk (data-model.md
-// "StoredSession"); nothing is allowed to reach stdout or stderr.
+// Refresh tokens and the SSH private key are the two kinds allowed to reach
+// disk (004 data-model.md "StoredSession", 005 data-model.md "Stored SSH
+// material"); nothing is allowed to reach stdout or stderr.
 //
 // Placement: this file lives in package auth_test (the external test package
 // of internal/auth) and imports internal/commands. That is legal and
@@ -39,8 +41,11 @@ package auth_test
 import (
 	"bytes"
 	"context"
+	"crypto/ed25519"
+	"crypto/rand"
 	"encoding/base64"
 	"encoding/json"
+	"encoding/pem"
 	"errors"
 	"fmt"
 	"io"
@@ -60,6 +65,7 @@ import (
 	"github.com/wyiu/veyport/cli/internal/commands"
 	"github.com/wyiu/veyport/cli/internal/config"
 	"github.com/zalando/go-keyring"
+	"golang.org/x/crypto/ssh"
 )
 
 // --- sentinels ------------------------------------------------------------
@@ -105,15 +111,21 @@ const (
 	kindAPIToken     secretKind = "API token"
 	kindAccessToken  secretKind = "access token"
 	kindRefreshToken secretKind = "refresh token"
+	// kindSSHPrivateKey is 005-ssh-gateway's addition: the ed25519 key
+	// `vey ssh-cert` generates. Like the refresh token it legitimately
+	// reaches the credential store (data-model.md "Stored SSH material") and,
+	// like the refresh token, it may never reach stdout, stderr, or an error.
+	kindSSHPrivateKey secretKind = "SSH private key"
 )
 
 // secret is one piece of credential material in play for a scenario.
 type secret struct {
 	kind  secretKind
 	value string
-	// onDiskOK marks the only kind that legitimately reaches the credential
-	// store: the refresh token (data-model.md — access tokens, passwords,
-	// one-time codes and API tokens are never persisted by the CLI).
+	// onDiskOK marks the two kinds that legitimately reach the credential
+	// store: the refresh token and the SSH private key (data-model.md —
+	// access tokens, passwords, one-time codes and API tokens are never
+	// persisted by the CLI).
 	onDiskOK bool
 }
 
@@ -646,6 +658,17 @@ func hygieneScenarios() []scenario {
 		{name: "audit/export-forbidden", run: scenarioAuditExportForbidden},
 		{name: "audit/export-ok", run: scenarioAuditExportOK},
 
+		// --- vey ssh-cert ----------------------------------------------
+		{name: "ssh-cert/issue", run: scenarioSSHCertIssue},
+		{name: "ssh-cert/reuse-stored-key", run: scenarioSSHCertReuseStoredKey},
+		{name: "ssh-cert/api-token-refused", run: scenarioSSHCertAPITokenRefused},
+		{name: "ssh-cert/hub-refusal", run: scenarioSSHCertHubRefusal},
+
+		// --- vey ssh -----------------------------------------------------
+		{name: "ssh/no-certificate", run: scenarioSSHNoCertificate},
+		{name: "ssh/expired-certificate", run: scenarioSSHExpiredCertificate},
+		{name: "ssh/unknown-server", run: scenarioSSHUnknownServer},
+
 		// --- vey logout ------------------------------------------------
 		{name: "logout/session-mode", run: scenarioLogoutSessionMode},
 		{name: "logout/api-token-mode", run: scenarioLogoutAPITokenMode},
@@ -928,6 +951,260 @@ func scenarioAuditExportOK(t *testing.T, e *env) {
 		})
 	})
 	e.run(t, "audit export", commands.RunAudit, cmdutil.ExitOK, "export")
+}
+
+// --- vey ssh-cert ---------------------------------------------------------
+//
+// The SSH private key is the second piece of long-lived secret material vey
+// persists. It is generated locally rather than minted by the hub, so a
+// scenario registers it in the vault either up front (when it seeds the key
+// itself) or by reading back what the command stored — never by guessing a
+// value the command might not have used.
+
+const sshHygieneExpiry = "2030-01-02T03:04:05Z"
+
+// mountSSHGateway registers the two routes `vey ssh-cert` calls. The
+// certificate it returns is public material and is deliberately *not* a
+// secret: what must never surface is the private key that signs against it.
+func mountSSHGateway(e *env) {
+	mountSSHHostKey(e)
+	mountSSHIssuance(e)
+}
+
+// mountSSHHostKey registers only the pinning endpoint, for scenarios that
+// supply their own issuance handler (a ServeMux pattern can be registered
+// exactly once).
+func mountSSHHostKey(e *env) {
+	e.hub.handle("GET /api/ssh/host-key", func(w http.ResponseWriter, r *http.Request) {
+		if !e.hub.authorized(r) {
+			writeHubError(w, http.StatusUnauthorized, "access token is expired")
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{
+			"fingerprint": "SHA256:hygiene-gateway-host-key",
+			"public_key":  "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIHygieneHostKey gateway",
+			"port":        2222,
+		})
+	})
+}
+
+func mountSSHIssuance(e *env) {
+	e.hub.handle("POST /api/ssh/certificates", func(w http.ResponseWriter, r *http.Request) {
+		if !e.hub.authorized(r) {
+			writeHubError(w, http.StatusUnauthorized, "access token is expired")
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{
+			"certificate":          "ssh-ed25519-cert-v01@openssh.com AAAAhygiene-cert " + sentinelUsername,
+			"principal":            sentinelUsername,
+			"expires_at":           sshHygieneExpiry,
+			"host_key_fingerprint": "SHA256:hygiene-gateway-host-key",
+			"gateway_port":         2222,
+		})
+	})
+}
+
+// newSentinelSSHKey generates a real ed25519 key in the openssh form the CLI
+// stores, so a scenario can seed the store with a key `vey ssh-cert` has to
+// read back and reuse — and the sweep can then hunt for that exact value.
+func newSentinelSSHKey(t *testing.T) string {
+	t.Helper()
+	_, priv, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatalf("generating a sentinel SSH key: %v", err)
+	}
+	block, err := ssh.MarshalPrivateKey(priv, "")
+	if err != nil {
+		t.Fatalf("encoding the sentinel SSH key: %v", err)
+	}
+	return string(pem.EncodeToMemory(block))
+}
+
+// registerStoredSSHKey adds whatever private key ended up in the credential
+// store to the vault, so the sweep scans for the value the command actually
+// used rather than a hardcoded guess. It fails the scenario if nothing was
+// stored, which would make this half of the sweep vacuous.
+func registerStoredSSHKey(t *testing.T, e *env) {
+	t.Helper()
+	material, ok, err := e.store(t).LoadSSH(e.hub.URL())
+	if err != nil {
+		t.Fatalf("reading back the stored SSH material: %v", err)
+	}
+	if !ok || material.PrivateKey == "" {
+		t.Fatal("vey ssh-cert stored no SSH private key; the SSH half of the sweep would be vacuous")
+	}
+	e.vault.add(kindSSHPrivateKey, material.PrivateKey, true)
+}
+
+func scenarioSSHCertIssue(t *testing.T, e *env) {
+	e.seedSession(t)
+	mountSSHGateway(e)
+	e.run(t, "ssh-cert", commands.RunSSHCert, cmdutil.ExitOK)
+	registerStoredSSHKey(t, e)
+}
+
+func scenarioSSHCertReuseStoredKey(t *testing.T, e *env) {
+	e.seedSession(t)
+	mountSSHGateway(e)
+
+	// Seeded up front and registered before the run: this covers the read
+	// path (FR-004 reuse), where the key comes out of the store and back
+	// through the command's own code rather than being freshly generated.
+	seeded := newSentinelSSHKey(t)
+	e.vault.add(kindSSHPrivateKey, seeded, true)
+	if err := e.store(t).SaveSSH(e.hub.URL(), auth.StoredSSH{PrivateKey: seeded}); err != nil {
+		t.Fatalf("seeding SSH material: %v", err)
+	}
+
+	e.run(t, "ssh-cert reuse", commands.RunSSHCert, cmdutil.ExitOK)
+
+	material, ok, err := e.store(t).LoadSSH(e.hub.URL())
+	if err != nil || !ok {
+		t.Fatalf("LoadSSH after re-issuance = (ok %v, err %v)", ok, err)
+	}
+	if material.PrivateKey != seeded {
+		t.Error("vey ssh-cert replaced a usable stored keypair instead of reusing it (FR-004)")
+	}
+}
+
+func scenarioSSHCertAPITokenRefused(t *testing.T, e *env) {
+	e.useEnvAPIToken(t)
+	mountSSHGateway(e)
+	// Refused locally, before any request: nothing is generated and nothing
+	// is stored, so the only secrets in play are the static sentinels.
+	e.run(t, "ssh-cert api-token", commands.RunSSHCert, cmdutil.ExitAuth)
+}
+
+func scenarioSSHCertHubRefusal(t *testing.T, e *env) {
+	e.seedSession(t)
+	mountSSHHostKey(e)
+	// Hostile on purpose: the hub reflects the whole request body in its
+	// refusal. The body carries the *public* key, but this is the channel
+	// through which a hub message reaches stderr verbatim (issueSSHCertificate
+	// surfaces the hub's 403 text), so the sweep watches it.
+	e.hub.handle("POST /api/ssh/certificates", func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(io.LimitReader(r.Body, 8192))
+		writeHubError(w, http.StatusForbidden,
+			fmt.Sprintf("interactive login required (request was %s)", body))
+	})
+	e.run(t, "ssh-cert refused", commands.RunSSHCert, cmdutil.ExitAuth)
+}
+
+// --- vey ssh ----------------------------------------------------------
+//
+// `vey ssh` reads back the same SSH private key `vey ssh-cert` stores
+// (commands/ssh.go RunSSH's preflight, loadSSHCredential), so it is a second
+// reader of that secret material rather than a second source of it. The
+// three scenarios below only exercise the paths that fail *before*
+// commands.execSSH — the one seam that actually spawns a process — since
+// execSSH and sshStdinIsTTY are unexported package-level vars in package
+// commands and this file lives in package auth_test, so neither can be
+// stubbed from here. That is not a gap: every preflight/resolution failure
+// is itself a documented exit code (contracts/cli-commands.md `vey ssh`),
+// and none of them ever reaches the TTY check or execSSH, so a real ssh
+// process is never at risk of being spawned by this sweep either.
+
+// newSentinelSSHUserCert mints a real, parseable ed25519 user certificate for
+// principal, signed by a fresh throwaway CA, expiring at expiry. It mirrors
+// the shape internal/commands/ssh_test.go's makeTestUserCert produces (that
+// helper is unexported in package commands, so this external test package
+// mints its own rather than reaching into it). Returns the PEM private key
+// and the authorized_keys-form certificate line the credential store holds.
+func newSentinelSSHUserCert(t *testing.T, principal string, expiry time.Time) (privatePEM, certLine string) {
+	t.Helper()
+
+	_, caPriv, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatalf("generating sentinel CA key: %v", err)
+	}
+	caSigner, err := ssh.NewSignerFromKey(caPriv)
+	if err != nil {
+		t.Fatalf("building sentinel CA signer: %v", err)
+	}
+
+	userPub, userPriv, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatalf("generating sentinel user key: %v", err)
+	}
+	sshUserPub, err := ssh.NewPublicKey(userPub)
+	if err != nil {
+		t.Fatalf("wrapping sentinel user public key: %v", err)
+	}
+
+	cert := &ssh.Certificate{
+		Key:             sshUserPub,
+		Serial:          1,
+		CertType:        ssh.UserCert,
+		KeyId:           principal,
+		ValidPrincipals: []string{principal},
+		ValidAfter:      0,
+		ValidBefore:     uint64(expiry.Unix()),
+	}
+	if err := cert.SignCert(rand.Reader, caSigner); err != nil {
+		t.Fatalf("signing sentinel certificate: %v", err)
+	}
+
+	block, err := ssh.MarshalPrivateKey(userPriv, "")
+	if err != nil {
+		t.Fatalf("encoding sentinel private key: %v", err)
+	}
+	return string(pem.EncodeToMemory(block)), strings.TrimSpace(string(ssh.MarshalAuthorizedKey(cert)))
+}
+
+// seedSSHMaterialForRun stores principal's certificate (expiring at expiry)
+// and its private key under hubURL, registers the private key in the vault
+// (it legitimately reaches the store, per kindSSHPrivateKey's contract), and
+// returns it so a scenario can assert against the exact value the command
+// will read back.
+func seedSSHMaterialForRun(t *testing.T, e *env, principal string, expiry time.Time) (privatePEM string) {
+	t.Helper()
+	privatePEM, certLine := newSentinelSSHUserCert(t, principal, expiry)
+	e.vault.add(kindSSHPrivateKey, privatePEM, true)
+	if err := e.store(t).SaveSSH(e.hub.URL(), auth.StoredSSH{
+		PrivateKey:    privatePEM,
+		Certificate:   certLine,
+		CertExpiresAt: expiry,
+	}); err != nil {
+		t.Fatalf("seeding SSH material: %v", err)
+	}
+	return privatePEM
+}
+
+// scenarioSSHNoCertificate covers the Preflight row's first half
+// (loadSSHCredential): no SSH material stored at all → exit 3, guidance
+// names `vey ssh-cert`. No SSH private key is in play for this scenario, so
+// only the static sentinels are swept.
+func scenarioSSHNoCertificate(t *testing.T, e *env) {
+	e.seedSession(t)
+	e.run(t, "ssh no cert", commands.RunSSH, cmdutil.ExitAuth, "bastion1")
+}
+
+// scenarioSSHExpiredCertificate covers the Preflight row's other half: a
+// certificate whose *stored* expiry has already passed is refused exactly
+// like a missing one (exit 3) without ever parsing the certificate or
+// resolving the server — so the stored private key must survive on disk but
+// never reach stdout/stderr/the error string.
+func scenarioSSHExpiredCertificate(t *testing.T, e *env) {
+	e.seedSession(t)
+	seedSSHMaterialForRun(t, e, sentinelUsername, time.Now().Add(-1*time.Hour))
+	e.run(t, "ssh expired cert", commands.RunSSH, cmdutil.ExitAuth, "bastion1")
+}
+
+// scenarioSSHUnknownServer covers server resolution parity with `vey servers
+// get`'s "unknown → exit 5" row: a valid, unexpired stored certificate gets
+// past the preflight, but the <server> argument resolves to nothing (direct
+// GET 404s, the search fallback returns no matches). This is still entirely
+// pre-exec — resolveSSHServer runs before the host-key fetch, the TTY check,
+// and execSSH — so the stored private key is again in play only for the
+// on-disk half of the sweep.
+func scenarioSSHUnknownServer(t *testing.T, e *env) {
+	e.seedSession(t)
+	seedSSHMaterialForRun(t, e, sentinelUsername, time.Now().Add(2*time.Hour))
+	mountServer(e, "srv-1", "web-01")
+	e.hub.handle("GET /api/servers", func(w http.ResponseWriter, r *http.Request) {
+		writeJSON(w, http.StatusOK, api.ServersPage{})
+	})
+	e.run(t, "ssh unknown server", commands.RunSSH, cmdutil.ExitNotFound, "ghost")
 }
 
 func scenarioLogoutSessionMode(t *testing.T, e *env) {

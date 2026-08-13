@@ -13,12 +13,16 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"golang.org/x/crypto/ssh"
+
 	"github.com/wyiu/veyport/hub/internal/auth"
 	"github.com/wyiu/veyport/hub/internal/connmgr"
 	"github.com/wyiu/veyport/hub/internal/grpcserver"
 	"github.com/wyiu/veyport/hub/internal/model"
 	"github.com/wyiu/veyport/hub/internal/notify"
+	"github.com/wyiu/veyport/hub/internal/sshconfig"
 	"github.com/wyiu/veyport/hub/internal/store"
+	"github.com/wyiu/veyport/hub/internal/userca"
 )
 
 // Version is set at build time via -ldflags.
@@ -55,6 +59,13 @@ type Server struct {
 	notifier          *notify.Notifier
 	ldapAuthenticator LDAPAuthenticator
 	ldapDial          func(LDAPConfig) (LDAPConnection, error)
+	// SSH gateway material. userCA signs short-lived user certificates,
+	// sshHostKey is the gateway's stable host identity, and sshConfig is the
+	// effective gateway configuration. All three are nil/zero when the gateway
+	// is not wired up, which the SSH handlers treat as "unavailable".
+	userCA     *userca.UserCA
+	sshHostKey ssh.Signer
+	sshConfig  sshconfig.Config
 }
 
 type Config struct {
@@ -75,6 +86,11 @@ type Config struct {
 	ReEnrollReleaser  ReEnrollReleaser
 	Notifier          *notify.Notifier
 	LDAPAuthenticator LDAPAuthenticator
+	// UserCA, SSHHostKey and SSHConfig wire the SSH gateway. Leave them unset
+	// to run the hub without SSH certificate issuance.
+	UserCA     *userca.UserCA
+	SSHHostKey ssh.Signer
+	SSHConfig  sshconfig.Config
 }
 
 func New(cfg Config) *Server {
@@ -106,6 +122,9 @@ func New(cfg Config) *Server {
 		tokenBlacklist:    auth.NewTokenBlacklist(cfg.Store.DB()),
 		notifier:          cfg.Notifier,
 		ldapAuthenticator: cfg.LDAPAuthenticator,
+		userCA:            cfg.UserCA,
+		sshHostKey:        cfg.SSHHostKey,
+		sshConfig:         cfg.SSHConfig,
 	}
 
 	s.installAuditObservers()

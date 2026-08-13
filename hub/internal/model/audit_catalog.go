@@ -1,11 +1,18 @@
 package model
 
+// auditCategorySSHGateway is the only category constant among these five that
+// exists purely to satisfy go:S1192 (5+ occurrences of the same string
+// literal): every other category below it ("Authentication", "Log Access",
+// "Terminal Access", ...) also repeats several times in AuditCatalog but
+// stays inline, so this file's use of constants is inconsistent rather than a
+// deliberate convention.
 const (
-	AuditCatalogLastUpdated      = "2026-06-12T00:00:00Z"
+	AuditCatalogLastUpdated      = "2026-08-06T00:00:00Z"
 	auditCategoryUserManagement  = "User Management"
 	auditCategoryAgentLifecycle  = "Agent Lifecycle"
 	auditCategoryFileAccess      = "File Access"
 	auditCategoryAuditGovernance = "Audit Governance"
+	auditCategorySSHGateway      = "SSH Gateway"
 )
 
 var AuditCatalog = []AuditCatalogEntry{
@@ -38,6 +45,11 @@ var AuditCatalog = []AuditCatalogEntry{
 	{Action: AuditLogTailStarted, Label: "Log tail started", Category: "Log Access", Outcome: AuditOutcomeSuccess, ActorType: AuditActorTypeUser, ResourceType: "log"},
 	{Action: AuditTerminalOpened, Label: "Terminal session opened", Category: "Terminal Access", Outcome: AuditOutcomeSuccess, ActorType: AuditActorTypeUser, ResourceType: "terminal"},
 	{Action: AuditTerminalClosed, Label: "Terminal session closed", Category: "Terminal Access", Outcome: AuditOutcomeSuccess, ActorType: AuditActorTypeUser, ResourceType: "terminal"},
+	{Action: AuditSSHCertIssued, Label: "SSH user certificate issued", Category: auditCategorySSHGateway, Outcome: AuditOutcomeSuccess, ActorType: AuditActorTypeUser, ResourceType: "ssh"},
+	{Action: AuditSSHCertIssueRefused, Label: "SSH certificate issuance refused", Category: auditCategorySSHGateway, Outcome: AuditOutcomeFailure, ActorType: AuditActorTypeUser, ResourceType: "ssh"},
+	{Action: AuditSSHSessionOpened, Label: "SSH session opened", Category: auditCategorySSHGateway, Outcome: AuditOutcomeSuccess, ActorType: AuditActorTypeUser, ResourceType: "ssh"},
+	{Action: AuditSSHSessionClosed, Label: "SSH session closed", Category: auditCategorySSHGateway, Outcome: AuditOutcomeSuccess, ActorType: AuditActorTypeUser, ResourceType: "ssh"},
+	{Action: AuditSSHSessionRefused, Label: "SSH session refused", Category: auditCategorySSHGateway, Outcome: AuditOutcomeFailure, ActorType: AuditActorTypeUser, ResourceType: "ssh"},
 	{Action: AuditAuditExported, Label: "Audit exported", Category: auditCategoryAuditGovernance, Outcome: AuditOutcomeSuccess, ActorType: AuditActorTypeUser, ResourceType: "audit"},
 	{Action: AuditAuditReviewCompleted, Label: "Audit review completed", Category: auditCategoryAuditGovernance, Outcome: AuditOutcomeSuccess, ActorType: AuditActorTypeUser, ResourceType: "audit"},
 	{Action: AuditAuditFilterSaved, Label: "Audit filter saved", Category: auditCategoryAuditGovernance, Outcome: AuditOutcomeSuccess, ActorType: AuditActorTypeUser, ResourceType: "audit"},

@@ -903,6 +903,13 @@ func (s *erroringStore) Save(string, StoredSession) error { return s.saveErr }
 func (s *erroringStore) Delete(string) error              { return nil }
 func (s *erroringStore) Backend() string                  { return "erroring" }
 
+// Refresh never touches SSH material; these satisfy the Store interface and
+// answer as an empty store would.
+func (s *erroringStore) SaveSSH(string, StoredSSH) error { return s.saveErr }
+func (s *erroringStore) LoadSSH(string) (StoredSSH, bool, error) {
+	return StoredSSH{}, false, s.loadErr
+}
+
 // twoStepStore answers Load with first on the first call and second on every
 // call after, so a test can simulate the store having moved on between
 // refresh's initial read and rotate's reread-after-fail.
@@ -921,6 +928,10 @@ func (s *twoStepStore) Load(string) (StoredSession, bool, error) {
 func (s *twoStepStore) Save(string, StoredSession) error { return nil }
 func (s *twoStepStore) Delete(string) error              { return nil }
 func (s *twoStepStore) Backend() string                  { return "two-step" }
+func (s *twoStepStore) SaveSSH(string, StoredSSH) error  { return nil }
+func (s *twoStepStore) LoadSSH(string) (StoredSSH, bool, error) {
+	return StoredSSH{}, false, nil
+}
 
 // --- coverage: error paths and edge cases not reached above -----------------
 

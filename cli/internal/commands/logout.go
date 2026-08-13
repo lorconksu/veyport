@@ -23,6 +23,11 @@ type logoutPayload struct {
 // FR-006: invalidates the session at the hub and removes all locally
 // stored credentials for that hub.
 func RunLogout(ctx *Context) int {
+	if err := requireNoArgs("logout", ctx.Args); err != nil {
+		ctx.Printer.Error(err)
+		return cmdutil.Code(err)
+	}
+
 	hubURL, err := ctx.RequireHub()
 	if err != nil {
 		ctx.Printer.Error(err)
