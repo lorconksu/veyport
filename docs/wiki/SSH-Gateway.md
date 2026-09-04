@@ -70,7 +70,7 @@ flowchart LR
 
 ## Prerequisites
 
-- `vey` installed and a hub configured (see [[CLI]] for install and `vey login`).
+- `vey` installed and a hub configured — quickest: `curl -fsSL https://<your-hub>/install/cli.sh | sh`, then `vey --hub https://<your-hub> login` (see [[CLI]] for details and manual install).
 - An **interactive** `vey login` session. Certificate issuance is refused to API-token credentials — see [FR-002/SC-004 below](#enrollment-vey-ssh-cert).
 - A native `ssh` client on your machine (OpenSSH or compatible). There is no bundled SSH client — `vey ssh` execs your system's `ssh`.
 - The gateway must be enabled and reachable on the Hub you're connecting to (see [Hub configuration](#hub-configuration) and [Troubleshooting](#troubleshooting)).

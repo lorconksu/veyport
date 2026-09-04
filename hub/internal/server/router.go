@@ -132,6 +132,7 @@ func (s *Server) routes() http.Handler {
 
 	// Public endpoints (no auth required)
 	mux.Handle("GET /install.sh", loggingMiddleware(http.HandlerFunc(s.handleInstallScript)))
+	mux.Handle("GET /install/cli.sh", loggingMiddleware(http.HandlerFunc(s.handleInstallCLIScript)))
 	mux.Handle("GET /install/{os}/{arch}", loggingMiddleware(http.HandlerFunc(s.handleAgentBinary)))
 	// NOTE: "GET /install/{os}/{arch}/sha256" (agent checksum) and
 	// "GET /install/cli/{os}/{arch}" (CLI binary) are both 4-path-segment
