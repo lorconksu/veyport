@@ -16,6 +16,11 @@ Enter your username and password, then click **Sign In**.
 
 If the username or password is wrong, you will see an error message. After 5 failed attempts in one minute, login is temporarily blocked from your IP address. Wait a minute and try again.
 
+Separately, after too many consecutive failed attempts against the same account (the default is
+5), Veyport locks that account and the page shows **"account temporarily locked — try again
+later"**. Wait for the lock to lift - by default 15 minutes - then try again. A correct password
+does not bypass an active lock.
+
 ---
 
 ## Step 2: Enter Your 2FA Code
@@ -92,5 +97,9 @@ This resets your TOTP and sets a temporary password, which is printed to the ter
 ### I am locked out and there is no other admin
 
 Contact whoever manages the Veyport server. They will need to run the CLI break-glass command (see above) to restore access.
+
+### I see "account temporarily locked"
+
+See [[Troubleshooting]] for the difference between the per-IP rate limit and the per-account lock, and how long each takes to clear.
 
 For more login-related solutions, see [[Troubleshooting]].

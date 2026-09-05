@@ -274,6 +274,7 @@ Authenticate with username and password.
 
 **Error Cases:**
 - `401` - Invalid credentials
+- `423` - Account temporarily locked: `{"error":"account temporarily locked — try again later"}`. Returned before the password is checked or any LDAP bind is attempted, and does not change the account's failure count.
 
 **cURL:**
 
@@ -324,6 +325,7 @@ On success, the Hub also sets `veyport_access`, `veyport_refresh`, and `veyport_
 
 **Error Cases:**
 - `401` - Invalid or expired TOTP token, invalid TOTP code, user not found
+- `423` - Account temporarily locked: `{"error":"account temporarily locked — try again later"}`. Returned before the code is validated. A wrong code counts as a failure exactly like a wrong password; a correct code resets the failure count and clears the lock.
 
 **cURL:**
 
@@ -441,7 +443,7 @@ Verify and enable TOTP by providing a valid code. For users created with a tempo
 }
 ```
 
-On success, the Hub also sets `veyport_access`, `veyport_refresh`, and `veyport_csrf` cookies for browser clients.
+On success, the Hub also sets `veyport_access`, `veyport_refresh`, and `veyport_csrf` cookies for browser clients. This also counts as a successful sign-in: the account's failure count resets and `last_login_at` is stamped, same as a normal login.
 
 **Error Cases:**
 - `401` - Invalid TOTP code
@@ -650,11 +652,25 @@ List all users.
       "totp_enabled": true,
       "avatar": null,
       "created_at": "2025-01-01T00:00:00Z",
-      "updated_at": "2025-01-01T00:00:00Z"
+      "updated_at": "2025-01-01T00:00:00Z",
+      "failed_login_count": 2,
+      "last_failed_login_at": "2026-09-05T10:41:07Z",
+      "last_login_at": "2026-09-04T22:10:33Z",
+      "locked_until": "2026-09-05T10:56:07Z"
     }
   ]
 }
 ```
+
+| Field | Notes |
+|---|---|
+| `failed_login_count` | Consecutive credential failures since the last success or window reset. Always present. |
+| `last_failed_login_at` | RFC 3339 UTC timestamp of the most recent failure. Absent if the account has never failed a login. |
+| `last_login_at` | RFC 3339 UTC timestamp of the most recent successful sign-in. Absent if the account has never signed in. |
+| `locked_until` | RFC 3339 UTC timestamp of lock expiry. Absent when not locked. May be in the past (a stale lock the next attempt will clear). `9999-12-31T00:00:00Z` means the lock has no automatic expiry. |
+
+The same four fields appear on `GET /api/auth/me` and in the `user` object returned by login -- a
+non-admin only ever sees their own values there.
 
 **cURL:**
 
@@ -1726,7 +1742,7 @@ curl - X DELETE https://hub.example.com/api/servers/SERVER_UUID/self-unregister
 
 ### 37. GET /api/settings/hub
 
-Get the Hub configuration (currently the gRPC external address).
+Get the Hub configuration (currently the gRPC external address and the account lockout policy).
 
 | Property | Value |
 |---|---|
@@ -1737,7 +1753,10 @@ Get the Hub configuration (currently the gRPC external address).
 ```json
 {
   "grpc_external_addr": "veyport.example.com:9443",
-  "jwt_secret_rotated_at": "2026-06-12T04:10:00Z"
+  "jwt_secret_rotated_at": "2026-06-12T04:10:00Z",
+  "lockout_threshold": 5,
+  "lockout_window_minutes": 15,
+  "lockout_duration_minutes": 15
 }
 ```
 
@@ -1745,6 +1764,9 @@ Get the Hub configuration (currently the gRPC external address).
 |---|---|
 | `grpc_external_addr` | Configured external gRPC address |
 | `jwt_secret_rotated_at` | RFC 3339 UTC timestamp of the last `admin rotate-jwt-secret` run. `null` until the secret has been rotated at least once. Read-only — ignored on PUT. |
+| `lockout_threshold` | Effective consecutive-failure count that locks an account. Built-in default `5` when unset. |
+| `lockout_window_minutes` | Effective window, in minutes, that failures count toward the threshold before it restarts at 1. Built-in default `15`. |
+| `lockout_duration_minutes` | Effective lock length in minutes. Built-in default `15`. `0` means a lock does not auto-expire. |
 
 **cURL:**
 
@@ -1767,12 +1789,17 @@ Update the Hub configuration.
 
 ```json
 {
-  "grpc_external_addr": "veyport.example.com:9443"
+  "grpc_external_addr": "veyport.example.com:9443",
+  "lockout_threshold": 3,
+  "lockout_window_minutes": 15,
+  "lockout_duration_minutes": 1
 }
 ```
 
 **Validation:**
-- `grpc_external_addr` must match `^[a-zA-Z0-9._:\-\[\]]+$` (hostnames, IPs, and ports only -- no shell metacharacters)
+- All fields are optional. A field left out of the request body is unchanged.
+- `grpc_external_addr`, if present and non-empty, must match `^[a-zA-Z0-9._:\-\[\]]+$` (hostnames, IPs, and ports only -- no shell metacharacters). A present-but-empty string (`""`) clears the stored address; omitting the field entirely leaves it unchanged.
+- `lockout_threshold`, `lockout_window_minutes`, `lockout_duration_minutes` are each optional non-negative integers. `lockout_threshold: 0` disables locking (failures are still counted); `lockout_duration_minutes: 0` means a lock never auto-expires. Changes apply to future attempts only -- an account already locked keeps its original expiry.
 
 **Response (200):**
 
@@ -1784,6 +1811,7 @@ Update the Hub configuration.
 
 **Error Cases:**
 - `400` - Invalid gRPC address format
+- `400` - Invalid lockout field, field-specific message, e.g. `{"error":"lockout_threshold must be a non-negative integer"}`
 
 **cURL:**
 

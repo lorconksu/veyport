@@ -19,12 +19,29 @@ Veyport does not have a "forgot password" email flow. Ask an admin to delete you
 
 ### I'm locked out after too many attempts
 
-Veyport enforces separate auth rate limits per IP address:
+There are two independent controls that can produce a "too many attempts" style block. Check
+which one applies:
+
+**Per-IP rate limits.** Veyport enforces separate auth rate limits per IP address:
 
 - Login and registration: 10 attempts per minute
 - TOTP verification: 3 attempts per minute
 
-Wait one minute and try again. These limits are IP-based, not per-account.
+Wait one minute and try again. These limits are IP-based, not per-account, so they clear whether
+or not you used the right credentials.
+
+**Per-account lockout.** Separately, after 5 consecutive failed sign-in attempts against the same
+account within a 15-minute window (the default policy), that account locks for 15 minutes. Both
+wrong passwords and wrong 2FA codes count toward the same limit. The error message is **"account
+temporarily locked — try again later"**, shown in place of the usual invalid-credentials message,
+and a correct password does not bypass it.
+
+- Wait for the lock to expire (15 minutes by default), then sign in normally.
+- Administrators can see whether an account is locked, and its unlock time, in **Settings → Users**
+  (see [[Settings]]). There is no manual unlock action in this release — administrator unlock ships
+  in a future release.
+- If your account is directory-backed (LDAP) and your directory enforces its own lockout policy,
+  you may need to wait out both locks — Veyport's lock and the directory's are independent.
 
 ### I'm the only admin and lost my authenticator
 

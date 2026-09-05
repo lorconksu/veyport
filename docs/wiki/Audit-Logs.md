@@ -106,6 +106,11 @@ Actions follow a `resource.action` naming pattern.
 | `user.password_reuse_rejected` | A password change was rejected because it reused a previous password |
 | `user.role_updated` | An admin changed a user's role |
 | `user.deleted` | An admin deleted a user account |
+| `user.locked` | An account was locked after too many consecutive failed sign-in attempts (system actor; detail includes the failure threshold, source IP, and lock expiry) |
+
+When a sign-in attempt is refused because the account is currently locked, it produces a
+`user.login_failed` entry with detail `account locked` and a failure outcome, rather than the
+usual wrong-password detail. This entry does not change the account's failure count.
 
 ### Server actions
 
