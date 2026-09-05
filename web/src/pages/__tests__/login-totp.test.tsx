@@ -105,6 +105,22 @@ describe('LoginTOTPPage', () => {
     })
   })
 
+  it('shows the 423 locked message verbatim', async () => {
+    mockApiFetch.mockRejectedValueOnce(new Error('account temporarily locked — try again later'))
+    renderPage()
+
+    const inputs = screen.getAllByRole('textbox')
+    inputs.forEach((input, i) => {
+      fireEvent.change(input, { target: { value: String(i + 1) } })
+    })
+
+    fireEvent.click(screen.getByRole('button', { name: /verify/i }))
+
+    await waitFor(() => {
+      expect(screen.getByText('account temporarily locked — try again later')).toBeInTheDocument()
+    })
+  })
+
   it('shows error and resets digits on failure', async () => {
     mockApiFetch.mockRejectedValueOnce(new Error('Invalid code'))
     renderPage()

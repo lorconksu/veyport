@@ -11,6 +11,10 @@ export interface User {
   avatar: string | null
   must_change_password?: boolean
   temp_password_expires_at?: string | null
+  failed_login_count?: number
+  last_failed_login_at?: string | null
+  last_login_at?: string | null
+  locked_until?: string | null
   created_at: string
   updated_at: string
 }
@@ -350,6 +354,9 @@ export interface LDAPConfig {
 export interface HubConfig {
   grpc_external_addr: string
   jwt_secret_rotated_at?: string | null
+  lockout_threshold?: number
+  lockout_window_minutes?: number
+  lockout_duration_minutes?: number
 }
 
 export interface NotificationPreference {

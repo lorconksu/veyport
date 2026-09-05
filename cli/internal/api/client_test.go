@@ -107,6 +107,28 @@ func TestLogin_BadCredentials401(t *testing.T) {
 	}
 }
 
+func TestLogin_AccountLocked423(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusLocked)
+		json.NewEncoder(w).Encode(map[string]string{"error": "account temporarily locked — try again later"})
+	}))
+	defer srv.Close()
+
+	c := newTestClient(srv, "")
+	err := c.Post(context.Background(), "/api/auth/login", map[string]string{"username": "x", "password": "y"}, nil)
+	if code := codeOf(t, err); code != cmdutil.ExitAuth {
+		t.Errorf("exit code = %d, want %d (ExitAuth)", code, cmdutil.ExitAuth)
+	}
+	if err.Error() != "account temporarily locked — try again later" {
+		t.Errorf("error message = %q, want the hub's message verbatim", err.Error())
+	}
+	var coded *cmdutil.CodedError
+	if !errors.As(err, &coded) {
+		t.Fatalf("err is not a *cmdutil.CodedError: %T", err)
+	}
+}
+
 func TestLogin_RateLimited429(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")

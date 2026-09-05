@@ -187,6 +187,8 @@ func mapStatusErr(resp *http.Response) error {
 	switch resp.StatusCode {
 	case http.StatusUnauthorized:
 		return cmdutil.NewAuthError(errors.New(msg))
+	case http.StatusLocked:
+		return cmdutil.NewAuthError(errors.New(msg))
 	case http.StatusForbidden:
 		return cmdutil.NewForbiddenError(errors.New(msg))
 	case http.StatusNotFound:
