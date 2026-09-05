@@ -14,7 +14,8 @@ const configInitialSetupComplete = "initial_setup_completed"
 
 const userSelectColumns = `id, username, email, password_hash, role, auth_provider, external_id,
         ldap_dn, ldap_username, ldap_last_sync_at, terminal_access, totp_secret, totp_enabled,
-        token_generation, avatar, must_change_password, temp_password_expires_at, created_at, updated_at`
+        token_generation, avatar, must_change_password, temp_password_expires_at,
+        failed_login_count, last_failed_login_at, last_login_at, locked_until, created_at, updated_at`
 
 func (s *Store) CreateUser(u *model.User) error {
 	if u.AuthProvider == "" {
@@ -364,10 +365,13 @@ func (s *Store) scanUser(row *sql.Row) (*model.User, error) {
 	var u model.User
 	var createdAt, updatedAt string
 	var ldapLastSyncAt, tempPasswordExpiresAt sql.NullString
+	var lastFailedLoginAt, lastLoginAt, lockedUntil sql.NullString
 	err := row.Scan(&u.ID, &u.Username, &u.Email, &u.PasswordHash, &u.Role,
 		&u.AuthProvider, &u.ExternalID, &u.LDAPDN, &u.LDAPUsername, &ldapLastSyncAt,
 		&u.TerminalAccess, &u.TOTPSecret, &u.TOTPEnabled, &u.TokenGeneration, &u.Avatar,
-		&u.MustChangePassword, &tempPasswordExpiresAt, &createdAt, &updatedAt)
+		&u.MustChangePassword, &tempPasswordExpiresAt,
+		&u.FailedLoginCount, &lastFailedLoginAt, &lastLoginAt, &lockedUntil,
+		&createdAt, &updatedAt)
 	if err == sql.ErrNoRows {
 		return nil, fmt.Errorf(errUserNotFound)
 	}
@@ -386,6 +390,21 @@ func (s *Store) scanUser(row *sql.Row) (*model.User, error) {
 			u.TempPasswordExpiresAt = &parsed
 		}
 	}
+	if lastFailedLoginAt.Valid {
+		if parsed, err := time.Parse(sqliteTimeFormat, lastFailedLoginAt.String); err == nil {
+			u.LastFailedLoginAt = &parsed
+		}
+	}
+	if lastLoginAt.Valid {
+		if parsed, err := time.Parse(sqliteTimeFormat, lastLoginAt.String); err == nil {
+			u.LastLoginAt = &parsed
+		}
+	}
+	if lockedUntil.Valid {
+		if parsed, err := time.Parse(sqliteTimeFormat, lockedUntil.String); err == nil {
+			u.LockedUntil = &parsed
+		}
+	}
 	return &u, nil
 }
 
@@ -393,15 +412,33 @@ func (s *Store) scanUserRow(rows *sql.Rows) (*model.User, error) {
 	var u model.User
 	var createdAt, updatedAt string
 	var ldapLastSyncAt, tempPasswordExpiresAt sql.NullString
+	var lastFailedLoginAt, lastLoginAt, lockedUntil sql.NullString
 	err := rows.Scan(&u.ID, &u.Username, &u.Email, &u.PasswordHash, &u.Role,
 		&u.AuthProvider, &u.ExternalID, &u.LDAPDN, &u.LDAPUsername, &ldapLastSyncAt,
 		&u.TerminalAccess, &u.TOTPSecret, &u.TOTPEnabled, &u.TokenGeneration, &u.Avatar,
-		&u.MustChangePassword, &tempPasswordExpiresAt, &createdAt, &updatedAt)
+		&u.MustChangePassword, &tempPasswordExpiresAt,
+		&u.FailedLoginCount, &lastFailedLoginAt, &lastLoginAt, &lockedUntil,
+		&createdAt, &updatedAt)
 	if err != nil {
 		return nil, fmt.Errorf("scan user row: %w", err)
 	}
 	u.CreatedAt, _ = time.Parse(sqliteTimeFormat, createdAt)
 	u.UpdatedAt, _ = time.Parse(sqliteTimeFormat, updatedAt)
+	if lastFailedLoginAt.Valid {
+		if parsed, err := time.Parse(sqliteTimeFormat, lastFailedLoginAt.String); err == nil {
+			u.LastFailedLoginAt = &parsed
+		}
+	}
+	if lastLoginAt.Valid {
+		if parsed, err := time.Parse(sqliteTimeFormat, lastLoginAt.String); err == nil {
+			u.LastLoginAt = &parsed
+		}
+	}
+	if lockedUntil.Valid {
+		if parsed, err := time.Parse(sqliteTimeFormat, lockedUntil.String); err == nil {
+			u.LockedUntil = &parsed
+		}
+	}
 	if ldapLastSyncAt.Valid {
 		if parsed, err := time.Parse(sqliteTimeFormat, ldapLastSyncAt.String); err == nil {
 			u.LDAPLastSyncAt = &parsed

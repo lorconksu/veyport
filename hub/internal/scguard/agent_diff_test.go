@@ -7,6 +7,17 @@
 // something that checks it, so this package diffs agent/ and proto/ against
 // the point where this branch diverged from main and fails if either changed.
 //
+// The guard's concern is capability, logging/recording, and wire format —
+// not exact dependency versions. A routine dependency bump (e.g. a Go
+// toolchain or grpc point release to clear a CVE) touches agent/go.mod,
+// agent/go.sum, proto/go.mod, and proto/go.sum without adding the agent any
+// new capability, so those four manifests are excluded from the diff via
+// dependencyManifests below. Everything else under agent/ and proto/ stays
+// guarded: hand-written .go, .proto sources, generated .pb.go output,
+// Dockerfiles, and scripts. In particular, if a dependency bump ever changes
+// generated .pb.go output (a real wire-format change), that file is NOT in
+// dependencyManifests, so the guard still catches it.
+//
 // This lives in its own tiny package — not in hub/internal/sshgw,
 // hub/internal/server, or hub/internal/integration — so it has no
 // dependency on, and no risk of file-level conflict with, the packages that
@@ -29,6 +40,22 @@ import (
 // logging/recording capability.
 var guardedPaths = []string{"agent/", "proto/"}
 
+// dependencyManifests are pathspecs excluded from the SC-008 diff because
+// they record third-party dependency *versions*, not agent capability. A
+// security patch bump (Go toolchain, grpc, x/net, x/text, ...) touches these
+// files as a side effect and is not itself a capability, logging, or
+// wire-format change — see the package comment above. Keep this list to
+// exactly the dependency manifests for the guarded trees; do not widen it to
+// cover any other file, and do not add lockfiles for anything other than
+// agent/ or proto/ (hub/'s own go.mod and go.sum are not under guardedPaths
+// and so need no exclusion here).
+var dependencyManifests = []string{
+	":(exclude)agent/go.mod",
+	":(exclude)agent/go.sum",
+	":(exclude)proto/go.mod",
+	":(exclude)proto/go.sum",
+}
+
 // candidateMainRefs are tried in order when resolving the merge-base. A local
 // checkout typically has "main"; a CI checkout of a feature branch often has
 // only "origin/main" fetched.
@@ -36,7 +63,8 @@ var candidateMainRefs = []string{"main", "origin/main"}
 
 // TestAgentAndProtoUnchangedSinceMainMergeBase is the SC-008 guard: it fails
 // the build if this feature branch has modified anything under agent/ or
-// proto/ relative to the commit where it forked from main.
+// proto/ — other than the dependency manifests in dependencyManifests —
+// relative to the commit where it forked from main.
 //
 // It is deliberately tolerant of running outside a full git checkout (a
 // downloaded source tarball, a git-less container, a shallow clone with no
@@ -55,7 +83,9 @@ func TestAgentAndProtoUnchangedSinceMainMergeBase(t *testing.T) {
 		return
 	}
 
-	diffArgs := append([]string{"diff", "--stat", mergeBase, "--"}, guardedPaths...)
+	diffArgs := []string{"diff", "--stat", mergeBase, "--"}
+	diffArgs = append(diffArgs, guardedPaths...)
+	diffArgs = append(diffArgs, dependencyManifests...)
 	out, err := runGit(repoRoot, diffArgs...)
 	if err != nil {
 		// Unlike an unresolvable merge-base, a diff invocation failing after
@@ -65,12 +95,87 @@ func TestAgentAndProtoUnchangedSinceMainMergeBase(t *testing.T) {
 	}
 
 	if strings.TrimSpace(out) != "" {
-		t.Fatalf("SC-008 violated: agent/ or proto/ changed relative to merge-base %s with main:\n\n%s\n"+
+		t.Fatalf("SC-008 violated: agent/ or proto/ changed relative to merge-base %s with main "+
+			"(dependency manifests agent/go.{mod,sum} and proto/go.{mod,sum} are already excluded "+
+			"from this diff, so this is a real change to source, generated, or build files):\n\n%s\n"+
 			"Feature 005-ssh-gateway (spec.md SC-008) requires the agent codebase to ship "+
-			"with zero changes. Revert the offending file(s), or — if a protocol-level "+
+			"with zero new capability. Revert the offending file(s), or — if a protocol-level "+
 			"accommodation has genuinely proven unavoidable — get explicit review sign-off "+
 			"confirming it adds no new logging/recording capability before updating this guard.",
 			mergeBase, out)
+	}
+}
+
+// TestGuardPathspecExcludesOnlyDependencyManifests locks the scope of
+// dependencyManifests down to exactly the four dependency manifest files for
+// agent/ and proto/. It exists so that widening the exclude list — say, to
+// silence an unrelated future violation — can't happen silently: this test
+// fails the moment anyone adds, removes, or generalizes an entry.
+func TestGuardPathspecExcludesOnlyDependencyManifests(t *testing.T) {
+	want := []string{
+		":(exclude)agent/go.mod",
+		":(exclude)agent/go.sum",
+		":(exclude)proto/go.mod",
+		":(exclude)proto/go.sum",
+	}
+
+	if len(dependencyManifests) != len(want) {
+		t.Fatalf("dependencyManifests has %d entries, want exactly %d: got %v, want %v",
+			len(dependencyManifests), len(want), dependencyManifests, want)
+	}
+	for i, w := range want {
+		if dependencyManifests[i] != w {
+			t.Fatalf("dependencyManifests[%d] = %q, want %q (full slice: %v)",
+				i, dependencyManifests[i], w, dependencyManifests)
+		}
+	}
+}
+
+// TestAgentAndProtoDiffWithoutExcludesIsOnlyDependencyManifests documents,
+// and pins, the exact situation the dependencyManifests exclusion exists
+// for on this branch: with NO excludes applied, the only files that differ
+// under agent/ and proto/ relative to main's merge-base must be the four
+// dependency manifests themselves. If this test ever fails because some
+// other file also changed, that file needs its own review under SC-008 —
+// it must not be silently swept in by widening dependencyManifests.
+//
+// On main (and on any branch with no agent/proto changes at all) this test
+// passes trivially, since the unfiltered diff is then empty too.
+func TestAgentAndProtoDiffWithoutExcludesIsOnlyDependencyManifests(t *testing.T) {
+	repoRoot, ok := requireGitCheckout(t)
+	if !ok {
+		return
+	}
+
+	mergeBase, ok := resolveMergeBase(t, repoRoot)
+	if !ok {
+		return
+	}
+
+	diffArgs := append([]string{"diff", "--name-only", mergeBase, "--"}, guardedPaths...)
+	out, err := runGit(repoRoot, diffArgs...)
+	if err != nil {
+		t.Fatalf("SC-008 guard: %v", err)
+	}
+
+	allowed := map[string]bool{
+		"agent/go.mod": true,
+		"agent/go.sum": true,
+		"proto/go.mod": true,
+		"proto/go.sum": true,
+	}
+
+	trimmed := strings.TrimSpace(out)
+	if trimmed == "" {
+		return // nothing changed under agent/ or proto/ at all — fine.
+	}
+
+	for _, file := range strings.Split(trimmed, "\n") {
+		if !allowed[file] {
+			t.Fatalf("unfiltered agent/proto diff against merge-base %s with main contains %q, "+
+				"which is not a dependency manifest — this file needs SC-008 review, not a widened "+
+				"exclusion:\n\n%s", mergeBase, file, out)
+		}
 	}
 }
 

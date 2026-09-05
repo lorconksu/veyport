@@ -1,4 +1,4 @@
-import { render, screen, fireEvent, waitFor } from '@testing-library/react'
+import { render, screen, fireEvent, waitFor, within } from '@testing-library/react'
 import { vi } from 'vitest'
 import { MemoryRouter } from 'react-router-dom'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
@@ -593,6 +593,147 @@ describe('SettingsPage', () => {
     await waitFor(() => {
       // Should show something like "Jan 15, 2023"
       expect(screen.getByText(/Jan 15, 2023/)).toBeInTheDocument()
+    })
+  })
+
+  describe('UsersTab lockout columns', () => {
+    const NOW = new Date('2026-09-05T12:00:00Z')
+
+    beforeEach(() => {
+      // Only fake Date — faking setTimeout/setInterval too would starve
+      // waitFor's internal polling, which relies on real timers.
+      vi.useFakeTimers({ toFake: ['Date'] })
+      vi.setSystemTime(NOW)
+    })
+
+    afterEach(() => {
+      vi.useRealTimers()
+    })
+
+    const lockoutUsers = [
+      { ...mockUsers[0], last_login_at: null, locked_until: null, failed_login_count: 0 },
+      {
+        ...mockUsers[1],
+        last_login_at: '2026-09-05T09:00:00Z', // 3 hours before NOW
+        locked_until: null,
+        failed_login_count: 0,
+      },
+      {
+        id: 'u3',
+        username: 'locked-user',
+        email: 'locked@test.com',
+        role: 'viewer',
+        totp_enabled: false,
+        avatar: null,
+        created_at: '2024-01-15T00:00:00Z',
+        updated_at: '',
+        last_login_at: null,
+        locked_until: '2026-09-05T12:10:00Z', // 10 minutes ahead of NOW
+        failed_login_count: 4,
+      },
+      {
+        id: 'u4',
+        username: 'stale-lock-user',
+        email: 'stale@test.com',
+        role: 'viewer',
+        totp_enabled: false,
+        avatar: null,
+        created_at: '2024-01-15T00:00:00Z',
+        updated_at: '',
+        last_login_at: null,
+        locked_until: '2026-09-05T11:00:00Z', // in the past
+        failed_login_count: 5,
+      },
+      {
+        id: 'u5',
+        username: 'sentinel-lock-user',
+        email: 'sentinel@test.com',
+        role: 'viewer',
+        totp_enabled: false,
+        avatar: null,
+        created_at: '2024-01-15T00:00:00Z',
+        updated_at: '',
+        last_login_at: null,
+        locked_until: '9999-12-31T00:00:00Z',
+        failed_login_count: 10,
+      },
+    ]
+
+    it('renders "Last login" and "Status" header cells', async () => {
+      mockApiFetch.mockResolvedValueOnce({ users: lockoutUsers })
+      renderPage()
+
+      fireEvent.click(screen.getByRole('button', { name: 'Users' }))
+      await waitFor(() => {
+        expect(screen.getByText('Last login')).toBeInTheDocument()
+        expect(screen.getByText('Status')).toBeInTheDocument()
+      })
+    })
+
+    it('shows "Never" (muted) for a user with no last_login_at', async () => {
+      mockApiFetch.mockResolvedValueOnce({ users: lockoutUsers })
+      renderPage()
+
+      fireEvent.click(screen.getByRole('button', { name: 'Users' }))
+      await waitFor(() => {
+        expect(screen.getAllByText('Never').length).toBeGreaterThan(0)
+      })
+    })
+
+    it('shows relative last login with absolute title', async () => {
+      mockApiFetch.mockResolvedValueOnce({ users: lockoutUsers })
+      renderPage()
+
+      fireEvent.click(screen.getByRole('button', { name: 'Users' }))
+      await waitFor(() => {
+        expect(screen.getByText('3 hours ago')).toBeInTheDocument()
+      })
+      const cell = screen.getByText('3 hours ago')
+      expect(cell).toHaveAttribute('title', expect.stringContaining('2026'))
+    })
+
+    it('shows a "Locked until HH:MM" badge for a future lock with failed-attempt title', async () => {
+      mockApiFetch.mockResolvedValueOnce({ users: lockoutUsers })
+      renderPage()
+
+      fireEvent.click(screen.getByRole('button', { name: 'Users' }))
+      await waitFor(() => {
+        expect(screen.getByText(/^Locked until \d{2}:\d{2}$/)).toBeInTheDocument()
+      })
+      expect(screen.getByText(/^Locked until \d{2}:\d{2}$/)).toHaveAttribute('title', '4 failed attempts')
+    })
+
+    it('shows "Active" for a lock whose expiry has already passed', async () => {
+      mockApiFetch.mockResolvedValueOnce({ users: lockoutUsers })
+      renderPage()
+
+      fireEvent.click(screen.getByRole('button', { name: 'Users' }))
+      await waitFor(() => {
+        expect(screen.getByText('stale-lock-user')).toBeInTheDocument()
+      })
+      const row = screen.getByText('stale-lock-user').closest('tr')!
+      expect(within(row).getByText('Active')).toBeInTheDocument()
+    })
+
+    it('shows "Locked (no auto-unlock)" for the far-future sentinel', async () => {
+      mockApiFetch.mockResolvedValueOnce({ users: lockoutUsers })
+      renderPage()
+
+      fireEvent.click(screen.getByRole('button', { name: 'Users' }))
+      await waitFor(() => {
+        expect(screen.getByText('Locked (no auto-unlock)')).toBeInTheDocument()
+      })
+    })
+
+    it('never renders an Unlock button', async () => {
+      mockApiFetch.mockResolvedValueOnce({ users: lockoutUsers })
+      renderPage()
+
+      fireEvent.click(screen.getByRole('button', { name: 'Users' }))
+      await waitFor(() => {
+        expect(screen.getByText('Locked (no auto-unlock)')).toBeInTheDocument()
+      })
+      expect(screen.queryByRole('button', { name: /unlock/i })).not.toBeInTheDocument()
     })
   })
 

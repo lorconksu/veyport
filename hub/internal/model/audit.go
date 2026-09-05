@@ -45,6 +45,7 @@ const (
 	AuditUserPasswordReuseRejected = "user.password_reuse_rejected"
 	AuditUserRoleUpdated           = "user.role_updated"
 	AuditUserDeleted               = "user.deleted"
+	AuditUserLocked                = "user.locked"
 )
 
 const (

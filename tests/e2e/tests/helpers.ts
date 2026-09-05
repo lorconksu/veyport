@@ -1,4 +1,4 @@
-import { Page } from '@playwright/test'
+import { APIRequestContext, Page, request as apiRequest } from '@playwright/test'
 import { authenticator } from 'otplib'
 import fs from 'fs'
 import path from 'path'
@@ -107,4 +107,45 @@ export async function loginViaAPI(page: Page, baseURL: string) {
 
   // Now navigate to the app — auth cookies are set, so auth will succeed
   await page.goto(baseURL + '/')
+}
+
+/**
+ * Build an APIRequestContext authenticated as the admin with a Bearer access
+ * token. Bearer requests are exempt from the double-submit CSRF check, so this
+ * context can issue mutating admin calls (PUT /api/settings/hub, POST/DELETE
+ * /api/users) without juggling the veyport_csrf cookie.
+ *
+ * Costs one POST /api/auth/login and one POST /api/auth/login/totp against the
+ * per-IP limiters (10/min and 3/min respectively).
+ */
+export async function adminApiContext(baseURL: string): Promise<APIRequestContext> {
+  const { totpSecret } = loadState()
+
+  const anon = await apiRequest.newContext({ baseURL })
+  try {
+    const loginResp = await anon.post('/api/auth/login', {
+      data: { username: 'admin', password: 'E2eTestPass!2026' },
+    })
+    if (!loginResp.ok()) {
+      throw new Error(`password login failed: ${loginResp.status()} ${await loginResp.text()}`)
+    }
+    const { totp_token: totpToken } = await loginResp.json() as { totp_token: string }
+
+    const code = await waitForFreshTOTPCode(totpSecret)
+    const totpResp = await anon.post('/api/auth/login/totp', {
+      data: { totp_token: totpToken, code },
+    })
+    markTOTPCodeUsed(code)
+    if (!totpResp.ok()) {
+      throw new Error(`totp login failed: ${totpResp.status()} ${await totpResp.text()}`)
+    }
+    const { access_token: accessToken } = await totpResp.json() as { access_token: string }
+
+    return await apiRequest.newContext({
+      baseURL,
+      extraHTTPHeaders: { Authorization: `Bearer ${accessToken}` },
+    })
+  } finally {
+    await anon.dispose()
+  }
 }

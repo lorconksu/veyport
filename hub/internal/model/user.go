@@ -44,6 +44,10 @@ type User struct {
 	Avatar                *string      `json:"avatar"`
 	MustChangePassword    bool         `json:"must_change_password,omitempty"`
 	TempPasswordExpiresAt *time.Time   `json:"temp_password_expires_at,omitempty"`
+	FailedLoginCount      int          `json:"failed_login_count"`
+	LastFailedLoginAt     *time.Time   `json:"last_failed_login_at,omitempty"`
+	LastLoginAt           *time.Time   `json:"last_login_at,omitempty"`
+	LockedUntil           *time.Time   `json:"locked_until,omitempty"`
 	CreatedAt             time.Time    `json:"created_at"`
 	UpdatedAt             time.Time    `json:"updated_at"`
 }

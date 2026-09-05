@@ -6,6 +6,7 @@ import { useAuth } from '@/hooks/use-auth'
 import { apiFetch } from '@/lib/api'
 import { getAvatarColor, setAvatarColor as persistAvatarColor, AVATAR_COLORS } from '@/lib/avatar'
 import { validatePassword } from '@/lib/password'
+import { formatRelative, isFuture, isNoAutoUnlock } from '@/lib/time'
 import type { ChangePasswordRequest, User, Role, TOTPDisableRequest } from '@/types/api'
 import { CreateUserModal } from '@/pages/create-user-modal'
 import { NotificationsTab } from '@/pages/settings-notifications-tab'
@@ -359,6 +360,15 @@ function UsersTab() {
     return date.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })
   }
 
+  // Exact local date-time for the "Last login" cell's title attribute.
+  const formatDateTime = (iso: string) => new Date(iso).toLocaleString()
+
+  const lockedUntilLabel = (lockedUntil: string) => {
+    if (isNoAutoUnlock(lockedUntil)) return 'Locked (no auto-unlock)'
+    const hh = new Date(lockedUntil).toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: false })
+    return `Locked until ${hh}`
+  }
+
   return (
     <div>
       <div className="flex items-center justify-between mb-4">
@@ -386,16 +396,18 @@ function UsersTab() {
               <th className="text-left px-4 py-2 text-text-muted font-medium text-xs uppercase tracking-wider">Email</th>
               <th className="text-left px-4 py-2 text-text-muted font-medium text-xs uppercase tracking-wider">Role</th>
               <th className="text-left px-4 py-2 text-text-muted font-medium text-xs uppercase tracking-wider">2FA</th>
+              <th className="text-left px-4 py-2 text-text-muted font-medium text-xs uppercase tracking-wider">Last login</th>
+              <th className="text-left px-4 py-2 text-text-muted font-medium text-xs uppercase tracking-wider">Status</th>
               <th className="text-left px-4 py-2 text-text-muted font-medium text-xs uppercase tracking-wider">Created</th>
               <th className="text-left px-4 py-2 text-text-muted font-medium text-xs uppercase tracking-wider">Actions</th>
             </tr>
           </thead>
           <tbody>
             {isLoading && (
-              <tr><td colSpan={6} className="px-4 py-8 text-center text-text-muted">Loading...</td></tr>
+              <tr><td colSpan={8} className="px-4 py-8 text-center text-text-muted">Loading...</td></tr>
             )}
             {!isLoading && (!users || users.length === 0) && (
-              <tr><td colSpan={6} className="px-4 py-8 text-center text-text-muted">No users found.</td></tr>
+              <tr><td colSpan={8} className="px-4 py-8 text-center text-text-muted">No users found.</td></tr>
             )}
             {!isLoading && users && users.length > 0 && users.map(u => (
               <tr key={u.id} className="border-b border-border last:border-b-0 hover:bg-surface/50">
@@ -425,6 +437,24 @@ function UsersTab() {
                     <span className="text-xs text-status-online">Enabled</span>
                   ) : (
                     <span className="text-xs text-status-warning">Not set up</span>
+                  )}
+                </td>
+                <td className="px-4 py-2 text-xs">
+                  {u.last_login_at ? (
+                    <span className="text-text-secondary" title={formatDateTime(u.last_login_at)}>
+                      {formatRelative(u.last_login_at)}
+                    </span>
+                  ) : (
+                    <span className="text-text-muted">Never</span>
+                  )}
+                </td>
+                <td className="px-4 py-2 text-xs">
+                  {u.locked_until && isFuture(u.locked_until) ? (
+                    <span className="text-status-warning" title={`${u.failed_login_count ?? 0} failed attempts`}>
+                      {lockedUntilLabel(u.locked_until)}
+                    </span>
+                  ) : (
+                    <span className="text-text-muted">Active</span>
                   )}
                 </td>
                 <td className="px-4 py-2 text-text-muted text-xs">{formatDate(u.created_at)}</td>
