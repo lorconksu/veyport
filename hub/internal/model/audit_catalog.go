@@ -7,7 +7,7 @@ package model
 // stays inline, so this file's use of constants is inconsistent rather than a
 // deliberate convention.
 const (
-	AuditCatalogLastUpdated      = "2026-08-06T00:00:00Z"
+	AuditCatalogLastUpdated      = "2026-09-05T00:00:00Z"
 	auditCategoryUserManagement  = "User Management"
 	auditCategoryAgentLifecycle  = "Agent Lifecycle"
 	auditCategoryFileAccess      = "File Access"
@@ -19,6 +19,7 @@ var AuditCatalog = []AuditCatalogEntry{
 	{Action: AuditUserLogin, Label: "User login", Category: "Authentication", Outcome: AuditOutcomeSuccess, ActorType: AuditActorTypeUser, ResourceType: "user"},
 	{Action: AuditUserLoginFailed, Label: "User login failed", Category: "Authentication", Outcome: AuditOutcomeFailure, ActorType: AuditActorTypeAnonymous, ResourceType: "user"},
 	{Action: AuditUserLoginTOTPFailed, Label: "User TOTP failed", Category: "Authentication", Outcome: AuditOutcomeFailure, ActorType: AuditActorTypeUser, ResourceType: "user"},
+	{Action: AuditUserLocked, Label: "Account locked", Category: "Authentication", Outcome: AuditOutcomeSuccess, ActorType: AuditActorTypeSystem, ResourceType: "user"},
 	{Action: AuditUserRegistered, Label: "Initial admin registered", Category: "Authentication", Outcome: AuditOutcomeSuccess, ActorType: AuditActorTypeAnonymous, ResourceType: "user"},
 	{Action: AuditUserTOTPSetup, Label: "TOTP setup started", Category: "Authentication", Outcome: AuditOutcomeSuccess, ActorType: AuditActorTypeUser, ResourceType: "user"},
 	{Action: AuditUserTOTPEnabled, Label: "TOTP enabled", Category: "Authentication", Outcome: AuditOutcomeSuccess, ActorType: AuditActorTypeUser, ResourceType: "user"},

@@ -23,6 +23,7 @@ const queueSize = 100
 // when the queue is full. They get a dedicated overflow slot.
 var securityEvents = map[string]bool{
 	model.NotifyLoginFailed:     true,
+	model.NotifyAccountLocked:   true,
 	model.NotifyUserCreated:     true,
 	model.NotifyTOTPChanged:     true,
 	model.NotifyPasswordChanged: true,

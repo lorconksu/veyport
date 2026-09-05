@@ -10,6 +10,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/wyiu/veyport/hub/internal/auth"
+	"github.com/wyiu/veyport/hub/internal/lockout"
 	"github.com/wyiu/veyport/hub/internal/model"
 )
 
@@ -133,13 +134,21 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// The lock is checked before any credential work — before the directory
+	// branch and before the password compare — so a locked account can never
+	// reveal whether the supplied password was right (spec FR-005, SC-002).
+	if lockout.IsLocked(user.LockedUntil, s.now()) {
+		s.refuseLocked(w, r, user)
+		return
+	}
+
 	if user.AuthProvider == model.AuthProviderLDAP {
 		s.handleLDAPUserLogin(w, r, req, user)
 		return
 	}
 
 	if !auth.ComparePassword(user.PasswordHash, req.Password) {
-		s.recordLoginFailure(r, &user.ID, req.Username, nil, true)
+		s.recordFailureAndMaybeLock(r, user, nil, true)
 		respondError(w, http.StatusUnauthorized, errInvalidCredentials)
 		return
 	}
@@ -166,9 +175,15 @@ func (s *Server) handleUnknownUserLogin(w http.ResponseWriter, r *http.Request, 
 }
 
 func (s *Server) handleLDAPUserLogin(w http.ResponseWriter, r *http.Request, req model.LoginRequest, user *model.User) {
+	// Re-checked here as well as in handleLogin: no directory is contacted on
+	// behalf of a locked account, whatever route reaches this branch (FR-005).
+	if lockout.IsLocked(user.LockedUntil, s.now()) {
+		s.refuseLocked(w, r, user)
+		return
+	}
 	ldapUser, ldapErr := s.authenticateLDAPLogin(r.Context(), req.Username, req.Password)
 	if ldapErr != nil {
-		s.recordLoginFailure(r, &user.ID, req.Username, nil, true)
+		s.recordFailureAndMaybeLock(r, user, nil, true)
 		respondError(w, http.StatusUnauthorized, errInvalidCredentials)
 		return
 	}
@@ -248,6 +263,13 @@ func (s *Server) handleLoginTOTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// An account that locked between the two stages is refused here too, before
+	// the stored secret is decrypted or the code is evaluated (FR-005).
+	if lockout.IsLocked(user.LockedUntil, s.now()) {
+		s.refuseLocked(w, r, user)
+		return
+	}
+
 	// Decrypt TOTP secret if encrypted
 	totpSecret := user.TOTPSecret
 	if totpSecret != nil && strings.HasPrefix(*totpSecret, "enc:") {
@@ -260,16 +282,13 @@ func (s *Server) handleLoginTOTP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if totpSecret == nil || !auth.ValidateTOTPWithReplay(s.totpCache, user.ID, *totpSecret, req.Code) {
-		ip := clientIP(r)
-		s.auditLogRequest(r, model.AuditEntry{
-			ID:        uuid.NewString(),
-			UserID:    &user.ID,
-			Action:    model.AuditUserLoginTOTPFailed,
-			IPAddress: &ip,
-		})
+		s.recordTOTPFailure(r, user)
 		respondError(w, http.StatusUnauthorized, "invalid TOTP code")
 		return
 	}
+
+	// Sign-in is complete: clear the failure streak and stamp the sign-in time.
+	s.recordLoginSuccess(user)
 
 	accessToken, refreshToken, err := auth.GenerateTokenPair(s.jwtSecret, user.ID, string(user.Role), user.TokenGeneration)
 	if err != nil {
@@ -526,6 +545,10 @@ func (s *Server) handleTOTPEnable(w http.ResponseWriter, r *http.Request) {
 			"timestamp": time.Now().UTC().Format(model.NotifyTimestampFormat),
 		})
 	}
+
+	// This path completes a first sign-in, so it resets the lockout counter and
+	// stamps the sign-in time exactly like the code stage does.
+	s.recordLoginSuccess(user)
 
 	// Generate full access tokens now that 2FA is enabled
 	accessToken, refreshToken, err := auth.GenerateTokenPair(s.jwtSecret, user.ID, string(user.Role), user.TokenGeneration)

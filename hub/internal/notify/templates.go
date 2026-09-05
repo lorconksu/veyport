@@ -36,6 +36,20 @@ var templates = map[string]emailTemplate{
 			"IP Address: {{ip}}\n\n" +
 			"If this was not you, please review your security settings.",
 	},
+	// NotifyAccountLocked: substitute() only does plain {{key}} replacement with
+	// no conditionals, so the "locked_until" value must already be the final
+	// display string — the caller is responsible for passing the phrase
+	// "until an administrator intervenes" when there is no lock expiry to show
+	// (e.g. an indefinite lock), rather than an empty string.
+	model.NotifyAccountLocked: {
+		subject: "Account Locked: {{username}}",
+		body: "An account has been locked after repeated failed sign-in attempts.\n\n" +
+			"Username: {{username}}\n" +
+			"Source IP: {{ip}}\n" +
+			"Locked until: {{locked_until}}\n" +
+			"Time: {{timestamp}}\n\n" +
+			"If this was not expected, review the audit log for this account.",
+	},
 	model.NotifyUserCreated: {
 		subject: "New User Created: {{username}}",
 		body: "A new user account has been created.\n\n" +

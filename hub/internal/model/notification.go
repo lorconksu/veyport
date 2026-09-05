@@ -9,6 +9,7 @@ const (
 	NotifyAgentOnline     = "agent.online"
 	NotifyAgentRegistered = "agent.registered"
 	NotifyLoginFailed     = "security.login_failed"
+	NotifyAccountLocked   = "security.account_locked"
 	NotifyUserCreated     = "security.user_created"
 	NotifyTOTPChanged     = "security.totp_changed"
 	NotifyPasswordChanged = "security.password_changed"
@@ -23,6 +24,7 @@ var AllNotifyEvents = []NotifyEventDef{
 	{Type: NotifyAgentOnline, Label: "Agent came online", Category: "Agent", DefaultOn: false},
 	{Type: NotifyAgentRegistered, Label: "New agent enrolled", Category: "Agent", DefaultOn: true},
 	{Type: NotifyLoginFailed, Label: "Failed login attempt", Category: "Security", DefaultOn: true},
+	{Type: NotifyAccountLocked, Label: "Account locked after repeated failures", Category: "Security", DefaultOn: true},
 	{Type: NotifyUserCreated, Label: "New user created", Category: "Security", DefaultOn: true},
 	{Type: NotifyTOTPChanged, Label: "2FA configuration changed", Category: "Security", DefaultOn: true},
 	{Type: NotifyPasswordChanged, Label: "Password changed", Category: "Security", DefaultOn: false},

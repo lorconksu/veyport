@@ -66,6 +66,10 @@ type Server struct {
 	userCA     *userca.UserCA
 	sshHostKey ssh.Signer
 	sshConfig  sshconfig.Config
+	// now is the server's clock. It defaults to the real UTC clock and exists
+	// so account-lockout tests can advance time deterministically without
+	// sleeping; override it in tests with SetClock.
+	now func() time.Time
 }
 
 type Config struct {
@@ -125,6 +129,7 @@ func New(cfg Config) *Server {
 		userCA:            cfg.UserCA,
 		sshHostKey:        cfg.SSHHostKey,
 		sshConfig:         cfg.SSHConfig,
+		now:               func() time.Time { return time.Now().UTC() },
 	}
 
 	s.installAuditObservers()
@@ -195,6 +200,13 @@ func (s *Server) Shutdown(ctx context.Context) error {
 // Intended for use in tests where the same TOTP code may be reused across steps.
 func (s *Server) ClearTOTPCache() {
 	s.totpCache.Clear()
+}
+
+// SetClock overrides the server's clock. Intended for use in tests that need
+// to advance time deterministically (e.g. to observe a lockout window elapse
+// or a lock expire) without sleeping.
+func (s *Server) SetClock(now func() time.Time) {
+	s.now = now
 }
 
 // DecryptTOTPSecret decrypts an encrypted TOTP secret (with "enc:" prefix).
