@@ -7,6 +7,25 @@ export function useTOTPDigits(onComplete: (code: string) => void) {
   const handleDigitChange = (index: number, value: string) => {
     if (!/^\d*$/.test(value)) return
 
+    // Password managers (e.g. 1Password) can autofill a full one-time code into
+    // whichever box currently has focus as a single change event. Distribute it
+    // across the remaining boxes the same way a paste is distributed.
+    if (value.length > 1) {
+      const distributed = value.slice(0, 6 - index)
+      const newDigits = [...digits]
+      for (let i = 0; i < distributed.length; i++) {
+        newDigits[index + i] = distributed[i]
+      }
+      setDigits(newDigits)
+
+      const lastFilledIndex = index + distributed.length - 1
+      const nextIndex = lastFilledIndex < 5 ? lastFilledIndex + 1 : 5
+      inputRefs.current[nextIndex]?.focus()
+
+      if (newDigits.every(Boolean)) onComplete(newDigits.join(''))
+      return
+    }
+
     const newDigits = [...digits]
     newDigits[index] = value.slice(-1)
     setDigits(newDigits)
@@ -75,7 +94,8 @@ export function TOTPDigitInput({
           ref={el => { inputRefs.current[position] = el }}
           type="text"
           inputMode="numeric"
-          maxLength={1}
+          maxLength={position === 0 ? 6 : 1}
+          autoComplete={position === 0 ? 'one-time-code' : 'off'}
           value={digits[position]}
           onChange={(e) => handleDigitChange(position, e.target.value)}
           onKeyDown={(e) => handleKeyDown(position, e)}
