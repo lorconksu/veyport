@@ -1,5 +1,7 @@
 export type Role = 'admin' | 'auditor' | 'viewer'
 
+export type AccountStatus = 'active' | 'locked' | 'disabled' | 'dormant'
+
 export interface User {
   id: string
   username: string
@@ -15,6 +17,12 @@ export interface User {
   last_failed_login_at?: string | null
   last_login_at?: string | null
   locked_until?: string | null
+  status?: AccountStatus
+  disabled_at?: string | null
+  disabled_by?: string | null
+  reactivated_at?: string | null
+  dormancy_exempt?: boolean
+  last_activity_at?: string | null
   created_at: string
   updated_at: string
 }
@@ -357,6 +365,7 @@ export interface HubConfig {
   lockout_threshold?: number
   lockout_window_minutes?: number
   lockout_duration_minutes?: number
+  dormant_days?: number
 }
 
 export interface NotificationPreference {

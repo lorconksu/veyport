@@ -317,6 +317,67 @@ func TestFiles_Forbidden403(t *testing.T) {
 	}
 }
 
+// --- Account lifecycle (008): disabled/dormant accounts map to ExitAuth,
+// distinct from an ordinary 403 permission denial (ExitForbidden) ---------
+
+func TestForbidden_AccountDisabled_MapsToExitAuth(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusForbidden)
+		json.NewEncoder(w).Encode(map[string]string{"error": "account disabled — contact an administrator"})
+	}))
+	defer srv.Close()
+
+	c := newTestClient(srv, "tok")
+	err := c.Get(context.Background(), "/api/servers/srv1/files", nil, &FileListing{})
+	if code := codeOf(t, err); code != cmdutil.ExitAuth {
+		t.Errorf("exit code = %d, want %d (ExitAuth)", code, cmdutil.ExitAuth)
+	}
+	if err.Error() != "account disabled — contact an administrator" {
+		t.Errorf("error message = %q, want the hub's message verbatim", err.Error())
+	}
+}
+
+func TestForbidden_AccountDormant_MapsToExitAuth(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusForbidden)
+		json.NewEncoder(w).Encode(map[string]string{"error": "account dormant — contact an administrator"})
+	}))
+	defer srv.Close()
+
+	c := newTestClient(srv, "tok")
+	err := c.Get(context.Background(), "/api/servers/srv1/files", nil, &FileListing{})
+	if code := codeOf(t, err); code != cmdutil.ExitAuth {
+		t.Errorf("exit code = %d, want %d (ExitAuth)", code, cmdutil.ExitAuth)
+	}
+	if err.Error() != "account dormant — contact an administrator" {
+		t.Errorf("error message = %q, want the hub's message verbatim", err.Error())
+	}
+}
+
+// TestForbidden_PermissionDenied_StillExitForbidden guards against
+// over-matching: an ordinary permission 403 (any message not starting with
+// "account disabled"/"account dormant") must keep mapping to ExitForbidden,
+// unchanged from TestFiles_Forbidden403 above.
+func TestForbidden_PermissionDenied_StillExitForbidden(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusForbidden)
+		json.NewEncoder(w).Encode(map[string]string{"error": "permission denied"})
+	}))
+	defer srv.Close()
+
+	c := newTestClient(srv, "tok")
+	err := c.Get(context.Background(), "/api/servers/srv1/files", nil, &FileListing{})
+	if code := codeOf(t, err); code != cmdutil.ExitForbidden {
+		t.Errorf("exit code = %d, want %d (ExitForbidden)", code, cmdutil.ExitForbidden)
+	}
+	if err.Error() != "permission denied" {
+		t.Errorf("error message = %q, want %q", err.Error(), "permission denied")
+	}
+}
+
 func TestFiles_OfflineAgent_ConnectionRefused(t *testing.T) {
 	// Simulate an unreachable/offline agent path by pointing the client at
 	// a server that has already stopped listening: the request fails at

@@ -190,6 +190,13 @@ func mapStatusErr(resp *http.Response) error {
 	case http.StatusLocked:
 		return cmdutil.NewAuthError(errors.New(msg))
 	case http.StatusForbidden:
+		// A disabled/dormant account (008) is an auth-state problem, not a
+		// permission denial — map it to ExitAuth (like 401/423) so scripts
+		// distinguish "sign in as someone else / contact an admin" from an
+		// ordinary role-based 403 (contracts/ui-cli.md CLI table).
+		if strings.HasPrefix(msg, "account disabled") || strings.HasPrefix(msg, "account dormant") {
+			return cmdutil.NewAuthError(errors.New(msg))
+		}
 		return cmdutil.NewForbiddenError(errors.New(msg))
 	case http.StatusNotFound:
 		return cmdutil.NewNotFoundError(errors.New(msg))
