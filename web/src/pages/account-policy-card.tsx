@@ -3,21 +3,30 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { apiFetch } from '@/lib/api'
 import type { HubConfig } from '@/types/api'
 
-type PolicyField = 'lockout_threshold' | 'lockout_window_minutes' | 'lockout_duration_minutes' | 'dormant_days'
+type PolicyField =
+  | 'lockout_threshold'
+  | 'lockout_window_minutes'
+  | 'lockout_duration_minutes'
+  | 'dormant_days'
+  | 'session_idle_minutes'
+  | 'session_max_hours'
 
 const FIELDS: { key: PolicyField; label: string; helper: string; id: string }[] = [
   { key: 'lockout_threshold', label: 'Lockout threshold (failures)', helper: '0 disables locking', id: 'policy-lockout-threshold' },
   { key: 'lockout_window_minutes', label: 'Lockout window (minutes)', helper: '', id: 'policy-lockout-window-minutes' },
   { key: 'lockout_duration_minutes', label: 'Lock duration (minutes)', helper: '0 = no auto-unlock', id: 'policy-lockout-duration-minutes' },
   { key: 'dormant_days', label: 'Dormant after (days)', helper: '0 disables dormancy', id: 'policy-dormant-days' },
+  { key: 'session_idle_minutes', label: 'Idle timeout (minutes)', helper: '0 disables the idle limit', id: 'policy-session-idle-minutes' },
+  { key: 'session_max_hours', label: 'Maximum session (hours)', helper: '0 disables the absolute limit', id: 'policy-session-max-hours' },
 ]
 
 const NON_NEGATIVE_INTEGER = /^\d+$/
 
 /**
- * "Account policy" card (Settings → Users, admin): the four lockout/dormancy
- * fields from HubConfig, editable together. Mirrors HubConfigSection's
- * loading/error/success visual language (settings-notifications-tab.tsx).
+ * "Account policy" card (Settings → Users, admin): the lockout/dormancy
+ * fields plus the session idle/absolute-timeout fields (009) from
+ * HubConfig, editable together. Mirrors HubConfigSection's loading/error/
+ * success visual language (settings-notifications-tab.tsx).
  */
 export function AccountPolicyCard() {
   const queryClient = useQueryClient()
@@ -26,6 +35,8 @@ export function AccountPolicyCard() {
     lockout_window_minutes: '',
     lockout_duration_minutes: '',
     dormant_days: '',
+    session_idle_minutes: '',
+    session_max_hours: '',
   })
   const [formLoaded, setFormLoaded] = useState(false)
   const [errors, setErrors] = useState<Partial<Record<PolicyField, string>>>({})
@@ -43,6 +54,8 @@ export function AccountPolicyCard() {
         lockout_window_minutes: String(data.lockout_window_minutes ?? 0),
         lockout_duration_minutes: String(data.lockout_duration_minutes ?? 0),
         dormant_days: String(data.dormant_days ?? 0),
+        session_idle_minutes: String(data.session_idle_minutes ?? 0),
+        session_max_hours: String(data.session_max_hours ?? 0),
       })
       setFormLoaded(true)
     }

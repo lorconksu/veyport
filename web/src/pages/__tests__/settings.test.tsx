@@ -180,7 +180,10 @@ describe('SettingsPage', () => {
   })
 
   it('shows error on password change failure', async () => {
-    mockApiFetch.mockRejectedValueOnce(new Error('Wrong current password'))
+    // Path-routed (not a bare mockRejectedValueOnce): the Profile tab's "Your
+    // sessions" card (009) fires its own GET /auth/sessions on mount, which
+    // would otherwise consume this rejection meant for PUT /auth/password.
+    mockApiRoutes({ '/auth/password': [new Error('Wrong current password')] })
     renderPage()
 
     fireEvent.change(screen.getByPlaceholderText('Current password'), { target: { value: 'WrongOld1@#$' } })
@@ -513,7 +516,9 @@ describe('SettingsPage', () => {
   })
 
   it('shows avatar mutation error when upload fails', async () => {
-    mockApiFetch.mockRejectedValueOnce(new Error('Avatar upload failed'))
+    // Path-routed: the "Your sessions" card's own GET /auth/sessions call
+    // must not consume the rejection meant for PUT /auth/avatar.
+    mockApiRoutes({ '/auth/avatar': [new Error('Avatar upload failed')] })
     mockUseAuth.mockReturnValue({
       user: { id: 'u1', username: 'admin', email: 'admin@test.com', role: 'admin', totp_enabled: true, avatar: 'data:image/png;base64,abc', created_at: '', updated_at: '' },
       login: vi.fn(),
@@ -843,11 +848,14 @@ describe('SettingsPage', () => {
       user: { id: 'u1', username: 'admin', email: 'admin@test.com', role: 'admin', totp_enabled: true, avatar: 'data:image/png;base64,abc', created_at: '', updated_at: '' },
       login: mockLogin,
     })
-    // Remove avatar mutation succeeds, then /auth/me returns updated user
+    // Remove avatar mutation succeeds, then /auth/me returns updated user.
+    // Path-routed: the "Your sessions" card's own GET /auth/sessions call
+    // must not consume either queued response.
     const updatedUser = { id: 'u1', username: 'admin', email: 'admin@test.com', role: 'admin', totp_enabled: true, avatar: null, created_at: '', updated_at: '' }
-    mockApiFetch
-      .mockResolvedValueOnce({ status: 'ok' }) // PUT /auth/avatar
-      .mockResolvedValueOnce(updatedUser)       // GET /auth/me
+    mockApiRoutes({
+      '/auth/avatar': [{ status: 'ok' }],
+      '/auth/me': [updatedUser],
+    })
     renderPage()
     fireEvent.click(screen.getByText('Remove'))
     await waitFor(() => {
@@ -868,9 +876,10 @@ describe('SettingsPage', () => {
       login: mockLogin,
     })
     const updatedUser = { id: 'u1', username: 'admin', email: 'admin@test.com', role: 'admin', totp_enabled: true, avatar: null, created_at: '', updated_at: '' }
-    mockApiFetch
-      .mockResolvedValueOnce({ status: 'ok' }) // PUT /auth/avatar
-      .mockResolvedValueOnce(updatedUser)       // GET /auth/me
+    mockApiRoutes({
+      '/auth/avatar': [{ status: 'ok' }],
+      '/auth/me': [updatedUser],
+    })
     renderPage()
     fireEvent.click(screen.getByText('Remove'))
     await waitFor(() => {
@@ -919,8 +928,9 @@ describe('SettingsPage', () => {
     const file = new File(['data'], 'test.txt', { type: 'text/plain' })
     Object.defineProperty(file, 'size', { value: 100 })
     fireEvent.change(fileInput, { target: { files: [file] } })
-    // No upload should occur
-    expect(mockApiFetch).not.toHaveBeenCalled()
+    // No upload should occur (the "Your sessions" card's own GET
+    // /auth/sessions call on mount is expected and unrelated).
+    expect(mockApiFetch).not.toHaveBeenCalledWith('/auth/avatar', expect.anything())
   })
 
   it('handleFileUpload alerts on large file (> 500KB)', () => {
@@ -943,8 +953,10 @@ describe('SettingsPage', () => {
     // Button is disabled due to mismatch — but simulate direct form submit
     const form = screen.getByPlaceholderText('Current password').closest('form')!
     fireEvent.submit(form)
-    // mutation.reset() is called — no API call should be made
-    expect(mockApiFetch).not.toHaveBeenCalled()
+    // mutation.reset() is called — no password-change API call should be
+    // made (the "Your sessions" card's own GET /auth/sessions call on mount
+    // is expected and unrelated).
+    expect(mockApiFetch).not.toHaveBeenCalledWith('/auth/password', expect.anything())
   })
 
   it('shows own role as static Admin text for admin user (line 388 Admin branch)', async () => {
@@ -1399,6 +1411,222 @@ describe('SettingsPage', () => {
 
       await waitFor(() => {
         expect(screen.getByText('dormancy exemption applies to administrator accounts only')).toBeInTheDocument()
+      })
+    })
+  })
+
+  describe('Sessions (009) — Users tab', () => {
+    /** Scopes to a confirm dialog's own card by its heading, same pattern as the lifecycle describe above. */
+    function getModal(headingText: string): HTMLElement {
+      return screen.getByRole('heading', { name: headingText }).closest('div') as HTMLElement
+    }
+
+    it('shows a Sessions action on every row, including the viewer\'s own', async () => {
+      mockApiRoutes({ '/users': [{ users: mockUsers }] })
+      renderPage()
+      fireEvent.click(screen.getByRole('button', { name: 'Users' }))
+      await screen.findByText('User Management')
+
+      const buttons = await screen.findAllByRole('button', { name: 'Sessions' })
+      expect(buttons).toHaveLength(mockUsers.length)
+    })
+
+    it('opens "Sessions — <username>" and lists that user\'s sessions', async () => {
+      mockApiRoutes({
+        '/users': [{ users: mockUsers }],
+        '/users/u2/sessions': [{
+          sessions: [
+            { id: 's1', kind: 'web', ip: '10.0.0.5', created_at: '2026-09-01T00:00:00Z', last_seen_at: '2026-09-05T00:00:00Z', current: false },
+          ],
+        }],
+      })
+      renderPage()
+      fireEvent.click(screen.getByRole('button', { name: 'Users' }))
+      const row = (await screen.findByText('viewer')).closest('tr')!
+      fireEvent.click(within(row).getByRole('button', { name: 'Sessions' }))
+
+      await screen.findByRole('heading', { name: 'Sessions — viewer' })
+      expect(await screen.findByText('10.0.0.5')).toBeInTheDocument()
+      expect(screen.getByText('Web')).toBeInTheDocument()
+    })
+
+    it('shows "No active sessions." when the user has none', async () => {
+      mockApiRoutes({
+        '/users': [{ users: mockUsers }],
+        '/users/u2/sessions': [{ sessions: [] }],
+      })
+      renderPage()
+      fireEvent.click(screen.getByRole('button', { name: 'Users' }))
+      const row = (await screen.findByText('viewer')).closest('tr')!
+      fireEvent.click(within(row).getByRole('button', { name: 'Sessions' }))
+
+      await screen.findByRole('heading', { name: 'Sessions — viewer' })
+      expect(await screen.findByText('No active sessions.')).toBeInTheDocument()
+    })
+
+    it('Log out row action confirms and issues DELETE /users/{id}/sessions/{sid}', async () => {
+      mockApiRoutes({
+        '/users': [{ users: mockUsers }],
+        '/users/u2/sessions': [
+          { sessions: [{ id: 's1', kind: 'web', ip: '10.0.0.5', created_at: '2026-09-01T00:00:00Z', last_seen_at: '2026-09-05T00:00:00Z', current: false }] },
+          { sessions: [] }, // refetch after the invalidate
+        ],
+        '/users/u2/sessions/s1': [{ status: 'ended' }],
+      })
+      renderPage()
+      fireEvent.click(screen.getByRole('button', { name: 'Users' }))
+      const row = (await screen.findByText('viewer')).closest('tr')!
+      fireEvent.click(within(row).getByRole('button', { name: 'Sessions' }))
+      await screen.findByRole('heading', { name: 'Sessions — viewer' })
+
+      fireEvent.click(await screen.findByRole('button', { name: 'Log out' }))
+      await screen.findByRole('heading', { name: 'Log out session' })
+      fireEvent.click(within(getModal('Log out session')).getByRole('button', { name: 'Log out' }))
+
+      await waitFor(() => {
+        expect(mockApiFetch).toHaveBeenCalledWith('/users/u2/sessions/s1', expect.objectContaining({ method: 'DELETE' }))
+      })
+    })
+
+    it('Terminate on a shell row confirms and issues DELETE /users/{id}/sessions/{shell-id}', async () => {
+      mockApiRoutes({
+        '/users': [{ users: mockUsers }],
+        '/users/u2/sessions': [
+          { sessions: [{ id: 'shell:srv1:sess1', kind: 'ssh', server: 'web-01', started_at: '2026-09-01T00:00:00Z', last_activity_at: '2026-09-05T00:00:00Z', current: false }] },
+          { sessions: [] },
+        ],
+        '/users/u2/sessions/shell:srv1:sess1': [{ status: 'ended' }],
+      })
+      renderPage()
+      fireEvent.click(screen.getByRole('button', { name: 'Users' }))
+      const row = (await screen.findByText('viewer')).closest('tr')!
+      fireEvent.click(within(row).getByRole('button', { name: 'Sessions' }))
+      await screen.findByRole('heading', { name: 'Sessions — viewer' })
+
+      expect(await screen.findByText('SSH shell')).toBeInTheDocument()
+      expect(screen.getByText('web-01')).toBeInTheDocument()
+
+      fireEvent.click(screen.getByRole('button', { name: 'Terminate' }))
+      await screen.findByRole('heading', { name: 'Terminate shell' })
+      fireEvent.click(within(getModal('Terminate shell')).getByRole('button', { name: 'Terminate' }))
+
+      await waitFor(() => {
+        expect(mockApiFetch).toHaveBeenCalledWith('/users/u2/sessions/shell:srv1:sess1', expect.objectContaining({ method: 'DELETE' }))
+      })
+    })
+
+    it('Log out everywhere confirms with the contract copy and issues DELETE /users/{id}/sessions', async () => {
+      mockApiRoutes({
+        '/users': [{ users: mockUsers }],
+        '/users/u2/sessions': [
+          { sessions: [{ id: 's1', kind: 'cli', ip: '10.0.0.9', created_at: '2026-09-01T00:00:00Z', last_seen_at: '2026-09-05T00:00:00Z', current: false }] },
+          { sessions: [] },
+        ],
+      })
+      renderPage()
+      fireEvent.click(screen.getByRole('button', { name: 'Users' }))
+      const row = (await screen.findByText('viewer')).closest('tr')!
+      fireEvent.click(within(row).getByRole('button', { name: 'Sessions' }))
+      await screen.findByRole('heading', { name: 'Sessions — viewer' })
+
+      fireEvent.click(await screen.findByRole('button', { name: 'Log out everywhere' }))
+      await screen.findByRole('heading', { name: 'Log out everywhere' })
+      expect(screen.getByText(
+        'Log out viewer everywhere? All web and CLI sessions end now and any open SSH shells are closed.',
+      )).toBeInTheDocument()
+
+      fireEvent.click(within(getModal('Log out everywhere')).getByRole('button', { name: 'Log out everywhere' }))
+
+      await waitFor(() => {
+        expect(mockApiFetch).toHaveBeenCalledWith('/users/u2/sessions', expect.objectContaining({ method: 'DELETE' }))
+      })
+    })
+
+    it('closes the modal via the Close button', async () => {
+      mockApiRoutes({
+        '/users': [{ users: mockUsers }],
+        '/users/u2/sessions': [{ sessions: [] }],
+      })
+      renderPage()
+      fireEvent.click(screen.getByRole('button', { name: 'Users' }))
+      const row = (await screen.findByText('viewer')).closest('tr')!
+      fireEvent.click(within(row).getByRole('button', { name: 'Sessions' }))
+      await screen.findByRole('heading', { name: 'Sessions — viewer' })
+
+      fireEvent.click(screen.getByRole('button', { name: 'Close' }))
+      await waitFor(() => {
+        expect(screen.queryByRole('heading', { name: 'Sessions — viewer' })).not.toBeInTheDocument()
+      })
+    })
+  })
+
+  describe('Sessions (009) — Profile tab "Your sessions"', () => {
+    function getModal(headingText: string): HTMLElement {
+      return screen.getByRole('heading', { name: headingText }).closest('div') as HTMLElement
+    }
+
+    it('shows a loading state then the only-session empty text when just the current session exists', async () => {
+      mockApiRoutes({
+        '/auth/sessions': [{ sessions: [{ id: 'cur', kind: 'web', ip: '10.0.0.1', current: true }] }],
+      })
+      renderPage()
+      expect(await screen.findByText('Your sessions')).toBeInTheDocument()
+      expect(await screen.findByText('This is your only active session.')).toBeInTheDocument()
+    })
+
+    it('lists other sessions with a This session tag and a per-row Sign out, and confirms "Sign out other sessions"', async () => {
+      mockApiRoutes({
+        '/auth/sessions': [
+          {
+            sessions: [
+              { id: 'cur', kind: 'web', ip: '10.0.0.1', current: true },
+              { id: 'other', kind: 'cli', ip: '10.0.0.2', current: false },
+            ],
+          },
+          { sessions: [{ id: 'cur', kind: 'web', ip: '10.0.0.1', current: true }] }, // refetch after sign-out-others
+        ],
+        '/auth/sessions/sign-out-others': [{ ended: 1, shells_closed: 0 }],
+      })
+      renderPage()
+      expect(await screen.findByText('This session')).toBeInTheDocument()
+      expect(screen.getByRole('button', { name: 'Sign out' })).toBeInTheDocument()
+
+      fireEvent.click(screen.getByRole('button', { name: 'Sign out other sessions' }))
+      await screen.findByRole('heading', { name: 'Sign out other sessions' })
+      fireEvent.click(within(getModal('Sign out other sessions')).getByRole('button', { name: 'Sign out' }))
+
+      await waitFor(() => {
+        expect(mockApiFetch).toHaveBeenCalledWith('/auth/sessions/sign-out-others', expect.objectContaining({ method: 'POST' }))
+      })
+    })
+
+    it('per-row Sign out issues DELETE /auth/sessions/{id} directly (no confirmation)', async () => {
+      mockApiRoutes({
+        '/auth/sessions': [
+          {
+            sessions: [
+              { id: 'cur', kind: 'web', ip: '10.0.0.1', current: true },
+              { id: 'other', kind: 'cli', ip: '10.0.0.2', current: false },
+            ],
+          },
+        ],
+        '/auth/sessions/other': [{ status: 'ended' }],
+      })
+      renderPage()
+      fireEvent.click(await screen.findByRole('button', { name: 'Sign out' }))
+
+      await waitFor(() => {
+        expect(mockApiFetch).toHaveBeenCalledWith('/auth/sessions/other', expect.objectContaining({ method: 'DELETE' }))
+      })
+    })
+
+    it('shows an error banner when the sessions list fails to load', async () => {
+      mockApiRoutes({
+        '/auth/sessions': [new Error('failed to fetch sessions')],
+      })
+      renderPage()
+      await waitFor(() => {
+        expect(screen.getByText('Failed to load sessions.')).toBeInTheDocument()
       })
     })
   })

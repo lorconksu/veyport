@@ -7,12 +7,14 @@ import { apiFetch } from '@/lib/api'
 import { getAvatarColor, setAvatarColor as persistAvatarColor, AVATAR_COLORS } from '@/lib/avatar'
 import { validatePassword } from '@/lib/password'
 import { formatRelative, isFuture, isNoAutoUnlock } from '@/lib/time'
-import type { ChangePasswordRequest, User, Role, TOTPDisableRequest, AccountStatus } from '@/types/api'
+import type { ChangePasswordRequest, User, Role, TOTPDisableRequest, AccountStatus, Session, SessionListResponse, EndedCountResponse } from '@/types/api'
 import { CreateUserModal } from '@/pages/create-user-modal'
 import { NotificationsTab } from '@/pages/settings-notifications-tab'
 import { PreferencesTab } from '@/pages/settings-preferences-tab'
 import { DirectoryTab } from '@/pages/settings-directory-tab'
 import { AccountPolicyCard } from '@/pages/account-policy-card'
+import { ConfirmActionModal } from '@/pages/confirm-action-modal'
+import { SessionsModal, SessionsTable } from '@/pages/sessions-modal'
 
 /** u.status when present; otherwise derives from `locked_until` (007 fallback, still exercised by pre-008 fixtures). */
 function effectiveStatus(u: User): AccountStatus {
@@ -73,52 +75,6 @@ function firstMutationError(...muts: { isError: boolean; error: unknown }[]): st
   return null
 }
 
-function ConfirmActionModal({
-  title,
-  body,
-  confirmLabel,
-  danger,
-  isPending,
-  onCancel,
-  onConfirm,
-}: Readonly<{
-  title: string
-  body: string
-  confirmLabel: string
-  danger?: boolean
-  isPending: boolean
-  onCancel: () => void
-  onConfirm: () => void
-}>) {
-  return (
-    <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
-      <div className="bg-surface border border-border rounded-lg p-6 w-full max-w-sm">
-        <h3 className="text-sm font-semibold text-text-primary mb-2">{title}</h3>
-        <p className="text-text-muted text-xs mb-4">{body}</p>
-        <div className="flex gap-2">
-          <button
-            type="button"
-            onClick={onCancel}
-            className="flex-1 border border-border rounded py-2 text-sm text-text-secondary hover:bg-elevated transition-colors"
-          >
-            Cancel
-          </button>
-          <button
-            type="button"
-            onClick={onConfirm}
-            disabled={isPending}
-            className={`flex-1 text-white text-sm font-semibold rounded py-2 transition-colors disabled:opacity-50 ${
-              danger ? 'bg-status-error hover:bg-status-error/80' : 'bg-accent hover:bg-accent-hover'
-            }`}
-          >
-            {isPending ? `${confirmLabel}...` : confirmLabel}
-          </button>
-        </div>
-      </div>
-    </div>
-  )
-}
-
 function roleBadgeTone(role: Role): string {
   switch (role) {
     case 'admin':
@@ -139,6 +95,98 @@ function roleLabel(role: Role): string {
     default:
       return 'Viewer'
   }
+}
+
+function YourSessionsCard() {
+  const queryClient = useQueryClient()
+  const [confirmSignOutOthers, setConfirmSignOutOthers] = useState(false)
+  const [pendingId, setPendingId] = useState<string | null>(null)
+
+  const { data, isLoading, isError } = useQuery({
+    queryKey: ['my-sessions'],
+    queryFn: () => apiFetch<SessionListResponse>('/auth/sessions'),
+  })
+
+  const invalidate = () => {
+    queryClient.invalidateQueries({ queryKey: ['my-sessions'] })
+    queryClient.invalidateQueries({ queryKey: ['users'] })
+  }
+
+  const endOneMutation = useMutation({
+    mutationFn: (session: Session) =>
+      apiFetch<{ status: string }>(`/auth/sessions/${session.id}`, { method: 'DELETE' }),
+    onSuccess: () => { invalidate(); setPendingId(null) },
+    onError: () => setPendingId(null),
+  })
+
+  const signOutOthersMutation = useMutation({
+    mutationFn: () => apiFetch<EndedCountResponse>('/auth/sessions/sign-out-others', { method: 'POST' }),
+    onSuccess: () => {
+      invalidate()
+      setConfirmSignOutOthers(false)
+    },
+  })
+
+  const sessions = data?.sessions ?? []
+  const onlyCurrentSession = sessions.length <= 1
+  const errorMessage = endOneMutation.isError
+    ? (endOneMutation.error instanceof Error ? endOneMutation.error.message : 'Failed to end session')
+    : signOutOthersMutation.isError
+      ? (signOutOthersMutation.error instanceof Error ? signOutOthersMutation.error.message : 'Failed to sign out other sessions')
+      : null
+
+  return (
+    <div>
+      <h3 className="text-sm font-semibold text-text-primary mb-3">Your sessions</h3>
+      <div className="bg-surface border border-border rounded p-4">
+        {errorMessage && (
+          <div className="bg-status-error/10 border border-status-error/20 text-status-error text-xs rounded px-3 py-2 mb-3">
+            {errorMessage}
+          </div>
+        )}
+        {isLoading && <div className="text-text-muted text-sm py-2 text-center">Loading...</div>}
+        {!isLoading && isError && (
+          <div className="bg-status-error/10 border border-status-error/20 text-status-error text-xs rounded px-3 py-2">
+            Failed to load sessions.
+          </div>
+        )}
+        {!isLoading && !isError && onlyCurrentSession && (
+          <div className="text-text-muted text-sm py-2 text-center">This is your only active session.</div>
+        )}
+        {!isLoading && !isError && !onlyCurrentSession && (
+          <SessionsTable
+            sessions={sessions}
+            rowActionLabel={s => (s.current ? null : (s.kind === 'ssh' || s.kind === 'terminal' ? 'Terminate' : 'Sign out'))}
+            onRowAction={s => { endOneMutation.reset(); setPendingId(s.id); endOneMutation.mutate(s) }}
+            pendingId={pendingId}
+          />
+        )}
+        {!isLoading && !isError && !onlyCurrentSession && (
+          <div className="mt-3 flex justify-end">
+            <button
+              type="button"
+              onClick={() => { signOutOthersMutation.reset(); setConfirmSignOutOthers(true) }}
+              className="text-xs text-status-error hover:text-status-error/80 font-semibold transition-colors"
+            >
+              Sign out other sessions
+            </button>
+          </div>
+        )}
+      </div>
+
+      {confirmSignOutOthers && (
+        <ConfirmActionModal
+          title="Sign out other sessions"
+          body="Sign out all other sessions? They end now and any open SSH shells are closed."
+          confirmLabel="Sign out"
+          danger
+          isPending={signOutOthersMutation.isPending}
+          onCancel={() => setConfirmSignOutOthers(false)}
+          onConfirm={() => signOutOthersMutation.mutate()}
+        />
+      )}
+    </div>
+  )
 }
 
 function ProfileTab() {
@@ -393,6 +441,8 @@ function ProfileTab() {
           </button>
         </form>
       </div>
+
+      <YourSessionsCard />
     </div>
   )
 }
@@ -406,6 +456,7 @@ function UsersTab() {
   const [deleteUserId, setDeleteUserId] = useState<string | null>(null)
   const [deleteUsername, setDeleteUsername] = useState('')
   const [confirmAction, setConfirmAction] = useState<{ type: ConfirmActionType; user: User } | null>(null)
+  const [sessionsUser, setSessionsUser] = useState<User | null>(null)
 
   const { data: usersData, isLoading } = useQuery({
     queryKey: ['users'],
@@ -673,6 +724,13 @@ function UsersTab() {
                 <td className="px-4 py-2 text-text-muted text-xs">{formatDate(u.created_at)}</td>
                 <td className="px-4 py-2">
                   <div className="flex items-center gap-3 flex-wrap">
+                    <button
+                      type="button"
+                      onClick={() => setSessionsUser(u)}
+                      className="text-xs text-text-secondary hover:text-text-primary transition-colors"
+                    >
+                      Sessions
+                    </button>
                     {u.id !== currentUser?.id && u.totp_enabled && (
                       <button
                         type="button"
@@ -841,6 +899,16 @@ function UsersTab() {
           />
         )
       })()}
+
+      {/* Sessions modal (admin) */}
+      {sessionsUser && (
+        <SessionsModal
+          mode="admin"
+          userId={sessionsUser.id}
+          username={sessionsUser.username}
+          onClose={() => setSessionsUser(null)}
+        />
+      )}
     </div>
   )
 }

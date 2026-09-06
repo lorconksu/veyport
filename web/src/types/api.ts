@@ -366,6 +366,37 @@ export interface HubConfig {
   lockout_window_minutes?: number
   lockout_duration_minutes?: number
   dormant_days?: number
+  session_idle_minutes?: number
+  session_max_hours?: number
+}
+
+export type SessionKind = 'web' | 'cli' | 'ssh' | 'terminal'
+
+export interface Session {
+  id: string
+  kind: SessionKind
+  ip?: string
+  user_agent?: string
+  created_at?: string
+  last_seen_at?: string
+  expires_at?: string | null
+  idle_deadline_at?: string | null
+  ended_at?: string | null
+  end_reason?: string
+  current: boolean
+  // Shell-only fields (kind ssh/terminal), sourced from the terminal-session registry.
+  server?: string
+  started_at?: string
+  last_activity_at?: string
+}
+
+export interface SessionListResponse {
+  sessions: Session[]
+}
+
+export interface EndedCountResponse {
+  ended: number
+  shells_closed: number
 }
 
 export interface NotificationPreference {
