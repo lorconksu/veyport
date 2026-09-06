@@ -184,6 +184,30 @@ func assertRefused(t *testing.T, rec *httptest.ResponseRecorder, wantCode int, w
 // (a) The password stage refuses before the credential is ever examined: the
 // answer is identical for a right and a wrong password, and neither moves the
 // failure counter. Together those two facts show ComparePassword was skipped.
+// assertNoCredentialWasChecked confirms neither refused attempt moved the
+// failure counter or set a lock, then confirms the audit trail recorded both
+// as refusals carrying the account-state detail rather than a bad password.
+func assertNoCredentialWasChecked(t *testing.T, f *authLifecycleFixture, state authLifecycleState) {
+	t.Helper()
+	after := f.reload(t)
+	if after.FailedLoginCount != 0 {
+		t.Fatalf("failure counter moved to %d: a credential was checked", after.FailedLoginCount)
+	}
+	if after.LockedUntil != nil {
+		t.Fatalf("refused attempts locked the account until %s", after.LockedUntil)
+	}
+
+	entries := auditEntriesFor(t, f.s, f.user.ID, model.AuditUserLoginFailed)
+	if len(entries) != 2 {
+		t.Fatalf("expected two %s entries, got %d", model.AuditUserLoginFailed, len(entries))
+	}
+	for _, entry := range entries {
+		if entry.Detail == nil || *entry.Detail != state.detail {
+			t.Fatalf("audit detail = %v, want %q", entry.Detail, state.detail)
+		}
+	}
+}
+
 func TestAccountLifecycle_LoginRefusedBeforeCredentialCheck(t *testing.T) {
 	for _, state := range refusingAccountStates() {
 		t.Run(state.name, func(t *testing.T) {
@@ -201,23 +225,7 @@ func TestAccountLifecycle_LoginRefusedBeforeCredentialCheck(t *testing.T) {
 					correct.Body.String(), wrong.Body.String())
 			}
 
-			after := f.reload(t)
-			if after.FailedLoginCount != 0 {
-				t.Fatalf("failure counter moved to %d: a credential was checked", after.FailedLoginCount)
-			}
-			if after.LockedUntil != nil {
-				t.Fatalf("refused attempts locked the account until %s", after.LockedUntil)
-			}
-
-			entries := auditEntriesFor(t, f.s, f.user.ID, model.AuditUserLoginFailed)
-			if len(entries) != 2 {
-				t.Fatalf("expected two %s entries, got %d", model.AuditUserLoginFailed, len(entries))
-			}
-			for _, entry := range entries {
-				if entry.Detail == nil || *entry.Detail != state.detail {
-					t.Fatalf("audit detail = %v, want %q", entry.Detail, state.detail)
-				}
-			}
+			assertNoCredentialWasChecked(t, f, state)
 		})
 	}
 }

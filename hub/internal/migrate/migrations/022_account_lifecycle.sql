@@ -13,7 +13,8 @@ UPDATE users SET last_activity_at = (
     ELSE u.last_login_at END
   FROM users u LEFT JOIN (SELECT user_id, MAX(last_used_at) AS max_used FROM api_tokens GROUP BY user_id) t
     ON t.user_id = u.id
-  WHERE u.id = users.id);
+  WHERE u.id = users.id)
+WHERE last_activity_at IS NULL;
 
 -- the earliest-created admin is the default recovery admin
 UPDATE users SET dormancy_exempt = 1

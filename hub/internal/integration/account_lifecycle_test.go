@@ -360,7 +360,7 @@ func TestAccountLifecycle_DormancyRefusesStaleAccounts(t *testing.T) {
 	backDateActivity(t, h, admin.ID, 48*time.Hour)
 
 	h.HTTPServer.ClearTOTPCache()
-	if cookie := completeAdminLogin(t, h, totpSecret); cookie == nil {
+	if completeAdminLogin(t, h, totpSecret) == nil {
 		t.Fatal("expected the exempt administrator to complete sign-in")
 	}
 

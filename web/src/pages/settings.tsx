@@ -81,7 +81,7 @@ function ConfirmActionModal({
   isPending,
   onCancel,
   onConfirm,
-}: {
+}: Readonly<{
   title: string
   body: string
   confirmLabel: string
@@ -89,7 +89,7 @@ function ConfirmActionModal({
   isPending: boolean
   onCancel: () => void
   onConfirm: () => void
-}) {
+}>) {
   return (
     <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
       <div className="bg-surface border border-border rounded-lg p-6 w-full max-w-sm">
@@ -595,6 +595,9 @@ function UsersTab() {
               const status = effectiveStatus(u)
               const disabledByUsername = u.disabled_by ? users.find(x => x.id === u.disabled_by)?.username : undefined
               const isExemptAdmin = !!u.dormancy_exempt && u.role === 'admin'
+              const disabledAtLabel = u.disabled_at ? formatDate(u.disabled_at) : ''
+              const disabledByLabel = disabledByUsername ? ` by ${disabledByUsername}` : ''
+              const disabledTitle = `Disabled ${disabledAtLabel}${disabledByLabel}`
               return (
               <tr key={u.id} className={`border-b border-border last:border-b-0 hover:bg-surface/50 ${status === 'disabled' ? 'opacity-60' : ''}`}>
                 <td className="px-4 py-2 text-text-primary">{u.username}</td>
@@ -639,7 +642,7 @@ function UsersTab() {
                     {status === 'disabled' && (
                       <span
                         className="text-xs px-2 py-0.5 rounded bg-elevated text-text-muted border border-border"
-                        title={`Disabled ${u.disabled_at ? formatDate(u.disabled_at) : ''}${disabledByUsername ? ` by ${disabledByUsername}` : ''}`}
+                        title={disabledTitle}
                       >
                         Disabled
                       </span>

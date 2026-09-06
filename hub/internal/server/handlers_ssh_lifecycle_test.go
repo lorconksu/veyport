@@ -69,6 +69,26 @@ func postSSHCertAsUser(t *testing.T, s *Server, userID string, publicKey string)
 	return rec
 }
 
+// assertSSHIssuanceRefused checks the refusal audit entry for one unusable-
+// account state: exactly one entry, naming the account state, marked as a
+// failure, and confirms no certificate was issued alongside the refusal.
+func assertSSHIssuanceRefused(t *testing.T, s *Server, admin *model.User, state sshLifecycleState) {
+	t.Helper()
+	entries := auditEntriesFor(t, s, admin.ID, model.AuditSSHCertIssueRefused)
+	if len(entries) != 1 {
+		t.Fatalf("expected one %s entry, got %d", model.AuditSSHCertIssueRefused, len(entries))
+	}
+	if entries[0].Detail == nil || !strings.Contains(*entries[0].Detail, state.detail) {
+		t.Fatalf("audit detail = %v, want it to name %q", entries[0].Detail, state.detail)
+	}
+	if entries[0].Outcome != model.AuditOutcomeFailure {
+		t.Fatalf("audit outcome = %q, want %q", entries[0].Outcome, model.AuditOutcomeFailure)
+	}
+	if got := countSSHAuditAction(t, s, model.AuditSSHCertIssued); got != 0 {
+		t.Fatalf("a refused request issued %d certificates", got)
+	}
+}
+
 // The handler refuses issuance with 403 and the canonical message, and records
 // the refusal as ssh.cert_issue_refused naming the account state.
 func TestSSHCertLifecycle_UnusableAccountRefused(t *testing.T) {
@@ -85,19 +105,7 @@ func TestSSHCertLifecycle_UnusableAccountRefused(t *testing.T) {
 			rec := postSSHCertAsUser(t, s, admin.ID, testSSHClientPublicKey(t))
 			assertRefused(t, rec, http.StatusForbidden, state.message, "certificate issuance")
 
-			entries := auditEntriesFor(t, s, admin.ID, model.AuditSSHCertIssueRefused)
-			if len(entries) != 1 {
-				t.Fatalf("expected one %s entry, got %d", model.AuditSSHCertIssueRefused, len(entries))
-			}
-			if entries[0].Detail == nil || !strings.Contains(*entries[0].Detail, state.detail) {
-				t.Fatalf("audit detail = %v, want it to name %q", entries[0].Detail, state.detail)
-			}
-			if entries[0].Outcome != model.AuditOutcomeFailure {
-				t.Fatalf("audit outcome = %q, want %q", entries[0].Outcome, model.AuditOutcomeFailure)
-			}
-			if got := countSSHAuditAction(t, s, model.AuditSSHCertIssued); got != 0 {
-				t.Fatalf("a refused request issued %d certificates", got)
-			}
+			assertSSHIssuanceRefused(t, s, admin, state)
 		})
 	}
 }

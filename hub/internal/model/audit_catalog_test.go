@@ -76,6 +76,36 @@ func TestAuditCatalog_NoDuplicateActions(t *testing.T) {
 // Management as successful administrator actions on a user resource. Without
 // them the audit-log filter UI would offer no way to find a disable or an
 // exemption change.
+// assertLifecycleCatalogEntry checks the shape every account-lifecycle
+// catalog entry must share: exactly one occurrence, the expected label, and
+// the fixed category/outcome/actor/resource fields common to all five
+// actions in TestAuditCatalog_AccountLifecycle.
+func assertLifecycleCatalogEntry(t *testing.T, entry AuditCatalogEntry, ok bool, count int, action, label string) {
+	t.Helper()
+	if !ok {
+		t.Errorf("AuditCatalog missing entry for action %q", action)
+		return
+	}
+	if count != 1 {
+		t.Errorf("action %q appears %d times, want 1", action, count)
+	}
+	if entry.Label != label {
+		t.Errorf("%s: expected label %q, got %q", action, label, entry.Label)
+	}
+	if entry.Category != auditCategoryUserManagement {
+		t.Errorf("%s: expected category %q, got %q", action, auditCategoryUserManagement, entry.Category)
+	}
+	if entry.Outcome != AuditOutcomeSuccess {
+		t.Errorf("%s: expected outcome %q, got %q", action, AuditOutcomeSuccess, entry.Outcome)
+	}
+	if entry.ActorType != AuditActorTypeUser {
+		t.Errorf("%s: expected actor type %q, got %q", action, AuditActorTypeUser, entry.ActorType)
+	}
+	if entry.ResourceType != "user" {
+		t.Errorf("%s: expected resource type %q, got %q", action, "user", entry.ResourceType)
+	}
+}
+
 func TestAuditCatalog_AccountLifecycle(t *testing.T) {
 	byAction := make(map[string]AuditCatalogEntry, len(AuditCatalog))
 	counts := make(map[string]int, len(AuditCatalog))
@@ -95,28 +125,7 @@ func TestAuditCatalog_AccountLifecycle(t *testing.T) {
 		{AuditUserDormancyExemptCleared, "Dormancy exemption removed"},
 	} {
 		entry, ok := byAction[tc.action]
-		if !ok {
-			t.Errorf("AuditCatalog missing entry for action %q", tc.action)
-			continue
-		}
-		if counts[tc.action] != 1 {
-			t.Errorf("action %q appears %d times, want 1", tc.action, counts[tc.action])
-		}
-		if entry.Label != tc.label {
-			t.Errorf("%s: expected label %q, got %q", tc.action, tc.label, entry.Label)
-		}
-		if entry.Category != auditCategoryUserManagement {
-			t.Errorf("%s: expected category %q, got %q", tc.action, auditCategoryUserManagement, entry.Category)
-		}
-		if entry.Outcome != AuditOutcomeSuccess {
-			t.Errorf("%s: expected outcome %q, got %q", tc.action, AuditOutcomeSuccess, entry.Outcome)
-		}
-		if entry.ActorType != AuditActorTypeUser {
-			t.Errorf("%s: expected actor type %q, got %q", tc.action, AuditActorTypeUser, entry.ActorType)
-		}
-		if entry.ResourceType != "user" {
-			t.Errorf("%s: expected resource type %q, got %q", tc.action, "user", entry.ResourceType)
-		}
+		assertLifecycleCatalogEntry(t, entry, ok, counts[tc.action], tc.action, tc.label)
 	}
 }
 

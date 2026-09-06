@@ -109,17 +109,58 @@ func errorBody(t *testing.T, rec *httptest.ResponseRecorder) string {
 	return body["error"]
 }
 
+// accountHelperCase is one status-drives-refusal scenario: how to arrange the
+// account, and the derived status/refusal/message/detail it must produce.
+type accountHelperCase struct {
+	name       string
+	arrange    func(t *testing.T, s *Server, clk *testClock, user *model.User)
+	wantStatus account.Status
+	wantRefuse bool
+	wantMsg    string
+	wantDetail string
+}
+
+// assertAccountHelperCase checks the derived status, refusal shape, and
+// accountAccessError contents against one status-drives-refusal test case, so
+// the table-driven test itself only has to arrange each scenario.
+func assertAccountHelperCase(t *testing.T, s *Server, user *model.User, gotStatus account.Status, c accountHelperCase) {
+	t.Helper()
+	if gotStatus != c.wantStatus {
+		t.Fatalf("accountStatus() = %q, want %q", gotStatus, c.wantStatus)
+	}
+	if got := accountRefuses(gotStatus); got != c.wantRefuse {
+		t.Fatalf("accountRefuses(%q) = %v, want %v", gotStatus, got, c.wantRefuse)
+	}
+	if got := accountRefusalDetail(gotStatus); got != c.wantDetail {
+		t.Fatalf("accountRefusalDetail(%q) = %q, want %q", gotStatus, got, c.wantDetail)
+	}
+
+	err := s.accountAccessError(user)
+	if !c.wantRefuse {
+		if err != nil {
+			t.Fatalf("accountAccessError() = %v, want nil for a usable account", err)
+		}
+		return
+	}
+	if err == nil {
+		t.Fatalf("accountAccessError() = nil, want a refusal for a %q account", gotStatus)
+	}
+	var accountErr *accountAccessError
+	if !errors.As(err, &accountErr) {
+		t.Fatalf("accountAccessError() = %T, want *accountAccessError", err)
+	}
+	if accountErr.Status != c.wantStatus {
+		t.Fatalf("carried status = %q, want %q", accountErr.Status, c.wantStatus)
+	}
+	if err.Error() != c.wantMsg {
+		t.Fatalf("Error() = %q, want %q", err.Error(), c.wantMsg)
+	}
+}
+
 // The four statuses the helper has to distinguish, each built from the columns
 // that produce it, with the refusal shape each one implies.
 func TestAccountHelpers_StatusDrivesRefusalAndMessage(t *testing.T) {
-	cases := []struct {
-		name       string
-		arrange    func(t *testing.T, s *Server, clk *testClock, user *model.User)
-		wantStatus account.Status
-		wantRefuse bool
-		wantMsg    string
-		wantDetail string
-	}{
+	cases := []accountHelperCase{
 		{
 			name:       "active",
 			arrange:    func(*testing.T, *Server, *testClock, *model.User) {},
@@ -203,36 +244,7 @@ func TestAccountHelpers_StatusDrivesRefusalAndMessage(t *testing.T) {
 			user = reloadUser(t, s, user.ID)
 
 			gotStatus := s.accountStatus(user)
-			if gotStatus != c.wantStatus {
-				t.Fatalf("accountStatus() = %q, want %q", gotStatus, c.wantStatus)
-			}
-			if got := accountRefuses(gotStatus); got != c.wantRefuse {
-				t.Fatalf("accountRefuses(%q) = %v, want %v", gotStatus, got, c.wantRefuse)
-			}
-			if got := accountRefusalDetail(gotStatus); got != c.wantDetail {
-				t.Fatalf("accountRefusalDetail(%q) = %q, want %q", gotStatus, got, c.wantDetail)
-			}
-
-			err := s.accountAccessError(user)
-			if !c.wantRefuse {
-				if err != nil {
-					t.Fatalf("accountAccessError() = %v, want nil for a usable account", err)
-				}
-				return
-			}
-			if err == nil {
-				t.Fatalf("accountAccessError() = nil, want a refusal for a %q account", gotStatus)
-			}
-			var accountErr *accountAccessError
-			if !errors.As(err, &accountErr) {
-				t.Fatalf("accountAccessError() = %T, want *accountAccessError", err)
-			}
-			if accountErr.Status != c.wantStatus {
-				t.Fatalf("carried status = %q, want %q", accountErr.Status, c.wantStatus)
-			}
-			if err.Error() != c.wantMsg {
-				t.Fatalf("Error() = %q, want %q", err.Error(), c.wantMsg)
-			}
+			assertAccountHelperCase(t, s, user, gotStatus, c)
 		})
 	}
 }
@@ -240,13 +252,48 @@ func TestAccountHelpers_StatusDrivesRefusalAndMessage(t *testing.T) {
 // refuseAccount answers with 403 and the canonical message, and records the
 // attempt as a login failure carrying the account-state detail — so the audit
 // trail distinguishes "refused because of the account" from a bad password.
+// refuseAccountCase is one refuseAccount scenario: how to arrange the
+// account, and the response message/audit detail it must produce.
+type refuseAccountCase struct {
+	name       string
+	arrange    func(t *testing.T, s *Server, clk *testClock, user *model.User)
+	wantMsg    string
+	wantDetail string
+}
+
+// assertRefuseAccountResponse checks the 403 body and the resulting audit
+// entry against one refuseAccount test case, and confirms the refusal never
+// moved the lockout counter.
+func assertRefuseAccountResponse(t *testing.T, s *Server, rec *httptest.ResponseRecorder, user *model.User, c refuseAccountCase) {
+	t.Helper()
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("status = %d, want 403: %s", rec.Code, rec.Body.String())
+	}
+	if got := errorBody(t, rec); got != c.wantMsg {
+		t.Fatalf("message = %q, want %q", got, c.wantMsg)
+	}
+
+	entries := auditEntriesFor(t, s, user.ID, model.AuditUserLoginFailed)
+	if len(entries) != 1 {
+		t.Fatalf("expected one %s entry, got %d", model.AuditUserLoginFailed, len(entries))
+	}
+	entry := entries[0]
+	if entry.Detail == nil || *entry.Detail != c.wantDetail {
+		t.Fatalf("audit detail = %v, want %q", entry.Detail, c.wantDetail)
+	}
+	if entry.Outcome != model.AuditOutcomeFailure {
+		t.Fatalf("audit outcome = %q, want %q", entry.Outcome, model.AuditOutcomeFailure)
+	}
+
+	// The attempt never reached a credential check, so it must not
+	// move the lockout counter — the same rule refuseLocked follows.
+	if after := reloadUser(t, s, user.ID); after.FailedLoginCount != 0 {
+		t.Fatalf("refusal moved the failure counter to %d, want 0", after.FailedLoginCount)
+	}
+}
+
 func TestAccountHelpers_RefuseAccountRespondsAndAudits(t *testing.T) {
-	cases := []struct {
-		name       string
-		arrange    func(t *testing.T, s *Server, clk *testClock, user *model.User)
-		wantMsg    string
-		wantDetail string
-	}{
+	cases := []refuseAccountCase{
 		{
 			name: "disabled",
 			arrange: func(t *testing.T, s *Server, clk *testClock, user *model.User) {
@@ -277,30 +324,7 @@ func TestAccountHelpers_RefuseAccountRespondsAndAudits(t *testing.T) {
 			rec := httptest.NewRecorder()
 			s.refuseAccount(rec, req, user, s.accountStatus(user))
 
-			if rec.Code != http.StatusForbidden {
-				t.Fatalf("status = %d, want 403: %s", rec.Code, rec.Body.String())
-			}
-			if got := errorBody(t, rec); got != c.wantMsg {
-				t.Fatalf("message = %q, want %q", got, c.wantMsg)
-			}
-
-			entries := auditEntriesFor(t, s, user.ID, model.AuditUserLoginFailed)
-			if len(entries) != 1 {
-				t.Fatalf("expected one %s entry, got %d", model.AuditUserLoginFailed, len(entries))
-			}
-			entry := entries[0]
-			if entry.Detail == nil || *entry.Detail != c.wantDetail {
-				t.Fatalf("audit detail = %v, want %q", entry.Detail, c.wantDetail)
-			}
-			if entry.Outcome != model.AuditOutcomeFailure {
-				t.Fatalf("audit outcome = %q, want %q", entry.Outcome, model.AuditOutcomeFailure)
-			}
-
-			// The attempt never reached a credential check, so it must not
-			// move the lockout counter — the same rule refuseLocked follows.
-			if after := reloadUser(t, s, user.ID); after.FailedLoginCount != 0 {
-				t.Fatalf("refusal moved the failure counter to %d, want 0", after.FailedLoginCount)
-			}
+			assertRefuseAccountResponse(t, s, rec, user, c)
 		})
 	}
 }

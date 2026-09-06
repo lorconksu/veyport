@@ -33,13 +33,13 @@ func (s *Server) handleListUsers(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleUpdateUserRole(w http.ResponseWriter, r *http.Request) {
 	targetID := r.PathValue("id")
 	if targetID == "" {
-		respondError(w, http.StatusBadRequest, "missing user id")
+		respondError(w, http.StatusBadRequest, errMissingUserID)
 		return
 	}
 
 	var req model.UpdateRoleRequest
 	if err := decodeJSON(r, &req); err != nil {
-		respondError(w, http.StatusBadRequest, "invalid request body")
+		respondError(w, http.StatusBadRequest, errInvalidRequestBody)
 		return
 	}
 
@@ -106,7 +106,7 @@ func (s *Server) handleUpdateUserRole(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleDeleteUser(w http.ResponseWriter, r *http.Request) {
 	targetID := r.PathValue("id")
 	if targetID == "" {
-		respondError(w, http.StatusBadRequest, "missing user id")
+		respondError(w, http.StatusBadRequest, errMissingUserID)
 		return
 	}
 
@@ -149,7 +149,7 @@ func (s *Server) handleDeleteUser(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleCreateUser(w http.ResponseWriter, r *http.Request) {
 	var req model.CreateUserRequest
 	if err := decodeJSON(r, &req); err != nil {
-		respondError(w, http.StatusBadRequest, "invalid request body")
+		respondError(w, http.StatusBadRequest, errInvalidRequestBody)
 		return
 	}
 
@@ -227,8 +227,6 @@ const (
 	selfDisableMessage        = "cannot disable your own account"
 	lastAdminMessage          = "cannot disable the last enabled administrator"
 	dormancyExemptRoleMessage = "dormancy exemption applies to administrator accounts only"
-	invalidBodyMessage        = "invalid request body"
-	missingUserIDMessage      = "missing user id"
 	detailRoleChanged         = "role changed"
 	resourceTypeUser          = "user"
 )
@@ -294,7 +292,7 @@ func (s *Server) respondUserWithStatus(w http.ResponseWriter, userID string) {
 func (s *Server) handleUpdateUserStatus(w http.ResponseWriter, r *http.Request) {
 	targetID := r.PathValue("id")
 	if targetID == "" {
-		respondError(w, http.StatusBadRequest, missingUserIDMessage)
+		respondError(w, http.StatusBadRequest, errMissingUserID)
 		return
 	}
 
@@ -305,7 +303,7 @@ func (s *Server) handleUpdateUserStatus(w http.ResponseWriter, r *http.Request) 
 		Disabled *bool `json:"disabled"`
 	}
 	if err := decodeJSON(r, &req); err != nil {
-		respondError(w, http.StatusBadRequest, invalidBodyMessage)
+		respondError(w, http.StatusBadRequest, errInvalidRequestBody)
 		return
 	}
 	if req.Disabled == nil {
@@ -387,7 +385,7 @@ func (s *Server) enableAccount(w http.ResponseWriter, r *http.Request, adminID, 
 func (s *Server) handleUnlockUser(w http.ResponseWriter, r *http.Request) {
 	targetID := r.PathValue("id")
 	if targetID == "" {
-		respondError(w, http.StatusBadRequest, missingUserIDMessage)
+		respondError(w, http.StatusBadRequest, errMissingUserID)
 		return
 	}
 
@@ -417,7 +415,7 @@ func (s *Server) handleUnlockUser(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleSetDormancyExempt(w http.ResponseWriter, r *http.Request) {
 	targetID := r.PathValue("id")
 	if targetID == "" {
-		respondError(w, http.StatusBadRequest, missingUserIDMessage)
+		respondError(w, http.StatusBadRequest, errMissingUserID)
 		return
 	}
 
@@ -425,7 +423,7 @@ func (s *Server) handleSetDormancyExempt(w http.ResponseWriter, r *http.Request)
 		Exempt *bool `json:"exempt"`
 	}
 	if err := decodeJSON(r, &req); err != nil {
-		respondError(w, http.StatusBadRequest, invalidBodyMessage)
+		respondError(w, http.StatusBadRequest, errInvalidRequestBody)
 		return
 	}
 	if req.Exempt == nil {

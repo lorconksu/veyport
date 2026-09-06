@@ -785,7 +785,7 @@ describe('SettingsPage', () => {
       })
 
       // Two locked rows (locked-user, sentinel-lock-user) → two Unlock buttons.
-      expect(screen.getAllByRole('button', { name: 'Unlock' }).length).toBe(2)
+      expect(screen.getAllByRole('button', { name: 'Unlock' })).toHaveLength(2)
 
       const activeRow = screen.getByText('viewer').closest('tr')!
       expect(within(activeRow).queryByRole('button', { name: 'Unlock' })).not.toBeInTheDocument()
@@ -1213,27 +1213,31 @@ describe('SettingsPage', () => {
       })
     })
 
-    it('clicking Enable opens a confirmation modal with the contract copy', async () => {
+    it.each([
+      {
+        buttonName: 'Enable',
+        username: 'disabled-user',
+        contractCopy: 'Enable disabled-user? Any lock and failure count are cleared.',
+      },
+      {
+        buttonName: 'Unlock',
+        username: 'locked-user',
+        contractCopy: 'Unlock locked-user? The lock and failure count are cleared.',
+      },
+      {
+        buttonName: 'Remove exemption',
+        username: 'exempt-admin',
+        contractCopy: 'Remove the dormancy exemption from exempt-admin?',
+      },
+    ])('clicking $buttonName opens a confirmation modal with the contract copy', async ({ buttonName, username, contractCopy }) => {
       mockApiRoutes({ '/users': [{ users: lifecycleUsers }] })
       renderPage()
       fireEvent.click(screen.getByRole('button', { name: 'Users' }))
-      const row = (await screen.findByText('disabled-user')).closest('tr')!
+      const row = (await screen.findByText(username)).closest('tr')!
 
-      fireEvent.click(within(row).getByRole('button', { name: 'Enable' }))
+      fireEvent.click(within(row).getByRole('button', { name: buttonName }))
       await waitFor(() => {
-        expect(screen.getByText('Enable disabled-user? Any lock and failure count are cleared.')).toBeInTheDocument()
-      })
-    })
-
-    it('clicking Unlock opens a confirmation modal with the contract copy', async () => {
-      mockApiRoutes({ '/users': [{ users: lifecycleUsers }] })
-      renderPage()
-      fireEvent.click(screen.getByRole('button', { name: 'Users' }))
-      const row = (await screen.findByText('locked-user')).closest('tr')!
-
-      fireEvent.click(within(row).getByRole('button', { name: 'Unlock' }))
-      await waitFor(() => {
-        expect(screen.getByText('Unlock locked-user? The lock and failure count are cleared.')).toBeInTheDocument()
+        expect(screen.getByText(contractCopy)).toBeInTheDocument()
       })
     })
 
@@ -1248,18 +1252,6 @@ describe('SettingsPage', () => {
         expect(screen.getByText(
           'Mark plain-admin as never dormant? Use this for the recovery administrator.',
         )).toBeInTheDocument()
-      })
-    })
-
-    it('clicking Remove exemption opens a confirmation modal with the contract copy', async () => {
-      mockApiRoutes({ '/users': [{ users: lifecycleUsers }] })
-      renderPage()
-      fireEvent.click(screen.getByRole('button', { name: 'Users' }))
-      const row = (await screen.findByText('exempt-admin')).closest('tr')!
-
-      fireEvent.click(within(row).getByRole('button', { name: 'Remove exemption' }))
-      await waitFor(() => {
-        expect(screen.getByText('Remove the dormancy exemption from exempt-admin?')).toBeInTheDocument()
       })
     })
 
