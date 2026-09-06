@@ -372,3 +372,100 @@ func TestRunMigrations_RecordsApplied(t *testing.T) {
 		}
 	}
 }
+
+// TestRunMigrations_SessionsTableAndIndexes verifies migration 023 creates
+// the sessions table with its two indexes.
+func TestRunMigrations_SessionsTableAndIndexes(t *testing.T) {
+	db := testDB(t)
+	if err := migrate.Run(db); err != nil {
+		t.Fatalf(testRunFmt, err)
+	}
+
+	var name string
+	if err := db.QueryRow("SELECT name FROM sqlite_master WHERE type='table' AND name='sessions'").Scan(&name); err != nil {
+		t.Fatalf("sessions table not found: %v", err)
+	}
+
+	wantIndexes := map[string]bool{
+		"idx_sessions_user_id":  false,
+		"idx_sessions_ended_at": false,
+	}
+	rows, err := db.Query("SELECT name FROM sqlite_master WHERE type='index' AND tbl_name='sessions'")
+	if err != nil {
+		t.Fatalf("query indexes: %v", err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var idxName string
+		if err := rows.Scan(&idxName); err != nil {
+			t.Fatalf("scan index: %v", err)
+		}
+		if _, ok := wantIndexes[idxName]; ok {
+			wantIndexes[idxName] = true
+		}
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatalf("iterate indexes: %v", err)
+	}
+	for idx, found := range wantIndexes {
+		if !found {
+			t.Fatalf("expected index %q on sessions table after migration 023", idx)
+		}
+	}
+}
+
+// TestRunMigrations_SessionsKindCheckConstraint verifies the sessions table
+// rejects any kind other than 'web' or 'cli'.
+func TestRunMigrations_SessionsKindCheckConstraint(t *testing.T) {
+	db := testDB(t)
+	if err := migrate.Run(db); err != nil {
+		t.Fatalf(testRunFmt, err)
+	}
+	seedLifecycleUser(t, db, "session-user-1", "session-user-1", "viewer", "2026-01-01 00:00:00", nil)
+
+	for _, kind := range []string{"web", "cli"} {
+		id := "sess-ok-" + kind
+		if _, err := db.Exec(
+			`INSERT INTO sessions (id, user_id, kind, created_at, last_seen_at) VALUES (?, ?, ?, '2026-01-01 00:00:00', '2026-01-01 00:00:00')`,
+			id, "session-user-1", kind,
+		); err != nil {
+			t.Fatalf("insert session with valid kind %q: %v", kind, err)
+		}
+	}
+
+	if _, err := db.Exec(
+		`INSERT INTO sessions (id, user_id, kind, created_at, last_seen_at) VALUES ('sess-bad', ?, 'ssh', '2026-01-01 00:00:00', '2026-01-01 00:00:00')`,
+		"session-user-1",
+	); err == nil {
+		t.Fatal("expected CHECK constraint to reject kind 'ssh'")
+	}
+}
+
+// TestRunMigrations_SessionsCascadeOnUserDelete verifies a user's sessions
+// are removed when the user row is deleted.
+func TestRunMigrations_SessionsCascadeOnUserDelete(t *testing.T) {
+	db := testDB(t)
+	execSQL(t, db, "PRAGMA foreign_keys=ON")
+	if err := migrate.Run(db); err != nil {
+		t.Fatalf(testRunFmt, err)
+	}
+	seedLifecycleUser(t, db, "session-user-2", "session-user-2", "viewer", "2026-01-01 00:00:00", nil)
+
+	if _, err := db.Exec(
+		`INSERT INTO sessions (id, user_id, kind, created_at, last_seen_at) VALUES ('sess-cascade', 'session-user-2', 'web', '2026-01-01 00:00:00', '2026-01-01 00:00:00')`,
+	); err != nil {
+		t.Fatalf("insert session: %v", err)
+	}
+
+	if _, err := db.Exec("DELETE FROM users WHERE id = 'session-user-2'"); err != nil {
+		t.Fatalf("delete user: %v", err)
+	}
+
+	var count int
+	if err := db.QueryRow("SELECT COUNT(*) FROM sessions WHERE id = 'sess-cascade'").Scan(&count); err != nil {
+		t.Fatalf("query sessions after user delete: %v", err)
+	}
+	if count != 0 {
+		t.Fatalf("expected session to be cascade-deleted, found %d rows", count)
+	}
+}

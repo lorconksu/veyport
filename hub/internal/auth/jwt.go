@@ -26,6 +26,10 @@ type Claims struct {
 	Role            string `json:"role"`
 	TokenType       string `json:"type"`
 	TokenGeneration int    `json:"gen,omitempty"`
+	// SessionID binds an interactive access/refresh token to a server-side
+	// session record. Empty on setup/TOTP tokens, on API tokens, and on
+	// tokens minted before server-side sessions existed.
+	SessionID string `json:"sid,omitempty"`
 }
 
 // No local TokenPair type — use model.TokenPair for JSON serialization.
@@ -45,6 +49,24 @@ func GenerateTokenPair(secret, userID, role string, tokenGen int) (accessToken, 
 	return accessToken, refreshToken, nil
 }
 
+// GenerateSessionTokenPair mints an access/refresh pair bound to a server-side
+// session: both tokens carry the same sid so a refresh rotation keeps the
+// binding. Use it for interactive sign-in; GenerateTokenPair remains for
+// callers that have no session record.
+func GenerateSessionTokenPair(secret, userID, role string, tokenGen int, sid string) (accessToken, refreshToken string, err error) {
+	accessToken, err = generateToken(secret, userID, role, TokenTypeAccess, AccessTokenExpiry, tokenGen, sid)
+	if err != nil {
+		return "", "", fmt.Errorf("generate access token: %w", err)
+	}
+
+	refreshToken, err = generateToken(secret, userID, role, TokenTypeRefresh, RefreshTokenExpiry, tokenGen, sid)
+	if err != nil {
+		return "", "", fmt.Errorf("generate refresh token: %w", err)
+	}
+
+	return accessToken, refreshToken, nil
+}
+
 func GenerateSetupToken(secret, userID, role string) (string, error) {
 	return GenerateTokenWithExpiry(secret, userID, role, TokenTypeSetup, SetupTokenExpiry)
 }
@@ -54,20 +76,29 @@ func GenerateTOTPToken(secret, userID, role string) (string, error) {
 }
 
 func GenerateTokenWithExpiry(secret, userID, role, tokenType string, expiry time.Duration, tokenGen ...int) (string, error) {
+	gen := 0
+	if len(tokenGen) > 0 {
+		gen = tokenGen[0]
+	}
+	return generateToken(secret, userID, role, tokenType, expiry, gen, "")
+}
+
+// generateToken is the single place tokens are built and signed. An empty sid
+// is omitted from the payload, so tokens without a session are byte-compatible
+// with what the hub minted before server-side sessions.
+func generateToken(secret, userID, role, tokenType string, expiry time.Duration, tokenGen int, sid string) (string, error) {
 	now := time.Now()
-	jti := uuid.NewString()
 	claims := Claims{
 		RegisteredClaims: jwt.RegisteredClaims{
-			ID:        jti,
+			ID:        uuid.NewString(),
 			Subject:   userID,
 			IssuedAt:  jwt.NewNumericDate(now),
 			ExpiresAt: jwt.NewNumericDate(now.Add(expiry)),
 		},
-		Role:      role,
-		TokenType: tokenType,
-	}
-	if len(tokenGen) > 0 {
-		claims.TokenGeneration = tokenGen[0]
+		Role:            role,
+		TokenType:       tokenType,
+		TokenGeneration: tokenGen,
+		SessionID:       sid,
 	}
 
 	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)

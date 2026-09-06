@@ -347,12 +347,34 @@ func (s *Server) disableAccount(w http.ResponseWriter, r *http.Request, adminID,
 		return
 	}
 
+	// A disabled account keeps nothing: its API tokens are revoked in the same
+	// transaction, and its sessions and open shells go here (feature 009,
+	// FR-008). The counts are audited alongside the token count so one entry
+	// says everything the disable took away.
+	endedSessions, closedShells := s.endDisabledUserSessions(r, adminID, targetID)
+
 	detail := lifecycleAuditDetail(struct {
 		RevokedAPITokens int `json:"revoked_api_tokens"`
-	}{RevokedAPITokens: revoked})
+		EndedSessions    int `json:"ended_sessions"`
+		ClosedShells     int `json:"closed_shells"`
+	}{RevokedAPITokens: revoked, EndedSessions: endedSessions, ClosedShells: closedShells})
 	s.auditLifecycle(r, adminID, targetID, model.AuditUserDisabled, &detail)
 
 	s.respondUserWithStatus(w, targetID)
+}
+
+// endDisabledUserSessions ends every session and shell of an account that has
+// just been disabled.
+//
+// A user whose row cannot be read back is still swept: the account was
+// disabled, and ending its sessions matters more than the display name the
+// audit helper would have used.
+func (s *Server) endDisabledUserSessions(r *http.Request, adminID, targetID string) (ended, shells int) {
+	target, err := s.store.GetUserByID(targetID)
+	if err != nil || target == nil {
+		target = &model.User{ID: targetID}
+	}
+	return s.endSessions(r, &adminID, target, nil, true, nil, model.SessionEndRevokedDisable)
 }
 
 // enableAccount re-enables an account, clearing any lock and failure count with
