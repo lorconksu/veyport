@@ -650,7 +650,7 @@ correctness: `{"error":"account disabled — contact an administrator"}` or
 | `POST /api/auth/login` (local and LDAP) | `403`, before the password is checked or any LDAP bind is attempted; the account's failure count is unchanged; audited `user.login_failed` with detail `account disabled`/`account dormant` |
 | `POST /api/auth/login/totp` | `403`, same messages, before the code is validated |
 | `POST /api/auth/refresh` | `401`, same messages |
-| Any request bearing an access token or an API token | `401`, same messages (a browser client redirects to `/login` on the next request) |
+| Any request bearing an access token or an API token | `401`. For a dormant account the body carries the same message. For a disabled account the credentials themselves are already dead — disabling bumps the token generation and revokes every API token — so those requests get the generic `invalid token`. A browser client redirects to `/login` on the next request either way |
 | `POST /api/ssh/certificates` | `401`, same messages (the access token is refused before the handler runs, like any other token-bearing request) |
 | SSH gateway shell | refused with banner `veyport: <same message>`, audited `ssh.session_refused` |
 
