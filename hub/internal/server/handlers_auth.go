@@ -15,8 +15,9 @@ import (
 )
 
 const (
-	errFailedToHashPassword = "failed to hash password"
-	errInvalidCredentials   = "invalid credentials"
+	errFailedToHashPassword  = "failed to hash password"
+	errInvalidCredentials    = "invalid credentials"
+	errFailedToCreateSession = "failed to create session"
 )
 
 func (s *Server) handleAuthStatus(w http.ResponseWriter, r *http.Request) {
@@ -327,7 +328,18 @@ func (s *Server) handleLoginTOTP(w http.ResponseWriter, r *http.Request) {
 	// Sign-in is complete: clear the failure streak and stamp the sign-in time.
 	s.recordLoginSuccess(user)
 
-	accessToken, refreshToken, err := auth.GenerateTokenPair(s.jwtSecret, user.ID, string(user.Role), user.TokenGeneration)
+	// The session record comes before the tokens: both tokens carry its id, so
+	// a sign-in that cannot record a session must not issue credentials bound
+	// to one that does not exist (009 FR-001, FR-002).
+	sess, err := s.newSession(r, user)
+	if err != nil {
+		respondError(w, http.StatusInternalServerError, errFailedToCreateSession)
+		return
+	}
+
+	accessToken, refreshToken, err := auth.GenerateSessionTokenPair(
+		s.jwtSecret, user.ID, string(user.Role), user.TokenGeneration, sess.ID,
+	)
 	if err != nil {
 		respondError(w, http.StatusInternalServerError, errFailedToGenerateTokens)
 		return
@@ -392,6 +404,16 @@ func (s *Server) handleRefresh(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// The session behind the refresh token has to be live: a refresh is a
+	// request like any other, so it is subject to the same ended/absolute/idle
+	// checks and counts as activity. A refresh token minted before this
+	// feature carries no session and is refused here, which is the one-time
+	// re-sign-in at upgrade (009 FR-002, FR-003, R10).
+	if sessionErr := s.sessionAccessError(claims); sessionErr != nil {
+		respondError(w, http.StatusUnauthorized, sessionErr.Error())
+		return
+	}
+
 	// Increment token generation to prevent reuse of this refresh token
 	newGen, err := s.store.IncrementTokenGeneration(user.ID)
 	if err != nil {
@@ -399,8 +421,12 @@ func (s *Server) handleRefresh(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Use user.Role from DB, not claims.Role from the old token
-	accessToken, refreshToken, err := auth.GenerateTokenPair(s.jwtSecret, user.ID, string(user.Role), newGen)
+	// Use user.Role from DB, not claims.Role from the old token. The rotation
+	// stays inside the same session and never touches its absolute expiry
+	// (009 FR-002).
+	accessToken, refreshToken, err := auth.GenerateSessionTokenPair(
+		s.jwtSecret, user.ID, string(user.Role), newGen, claims.SessionID,
+	)
 	if err != nil {
 		respondError(w, http.StatusInternalServerError, errFailedToGenerateTokens)
 		return
@@ -416,12 +442,34 @@ func (s *Server) handleRefresh(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleLogout(w http.ResponseWriter, r *http.Request) {
 	// Blacklist the access token if present
 	if tokenStr := readAccessToken(r); tokenStr != "" {
-		if claims, err := auth.ValidateToken(s.jwtSecret, tokenStr); err == nil && claims.ID != "" {
-			s.tokenBlacklist.Add(claims.ID, claims.ExpiresAt.Time)
+		if claims, err := auth.ValidateToken(s.jwtSecret, tokenStr); err == nil {
+			if claims.ID != "" {
+				s.tokenBlacklist.Add(claims.ID, claims.ExpiresAt.Time)
+			}
+			s.endSessionOnLogout(claims)
 		}
 	}
 	clearAuthCookies(w)
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// endSessionOnLogout ends the server-side session the signing-out client was
+// using, so its refresh token dies with it rather than outliving the sign-out
+// by the blacklist's access-token window (009 FR-011).
+//
+// A failure is swallowed: sign-out must succeed for the client whatever the
+// store says, and an already-ended or unknown session is the normal case when
+// a client signs out twice.
+func (s *Server) endSessionOnLogout(claims *auth.Claims) {
+	if claims.SessionID == "" {
+		return
+	}
+	userID := claims.Subject
+	if _, err := s.store.EndSession(
+		claims.SessionID, model.SessionEndLogout, &userID, s.now().UTC(),
+	); err != nil && !isSessionNotFound(err) {
+		log.Printf("warning: failed to end session %s on logout: %v", claims.SessionID, err)
+	}
 }
 
 func (s *Server) handleMe(w http.ResponseWriter, r *http.Request) {
@@ -599,8 +647,18 @@ func (s *Server) handleTOTPEnable(w http.ResponseWriter, r *http.Request) {
 	// stamps the sign-in time exactly like the code stage does.
 	s.recordLoginSuccess(user)
 
+	// A first sign-in completes here rather than at the code stage, so this is
+	// the other point that establishes a session (009 FR-001).
+	sess, err := s.newSession(r, user)
+	if err != nil {
+		respondError(w, http.StatusInternalServerError, errFailedToCreateSession)
+		return
+	}
+
 	// Generate full access tokens now that 2FA is enabled
-	accessToken, refreshToken, err := auth.GenerateTokenPair(s.jwtSecret, user.ID, string(user.Role), user.TokenGeneration)
+	accessToken, refreshToken, err := auth.GenerateSessionTokenPair(
+		s.jwtSecret, user.ID, string(user.Role), user.TokenGeneration, sess.ID,
+	)
 	if err != nil {
 		respondError(w, http.StatusInternalServerError, errFailedToGenerateTokens)
 		return

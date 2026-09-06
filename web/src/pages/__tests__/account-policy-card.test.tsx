@@ -16,6 +16,8 @@ const defaultHubConfig = {
   lockout_window_minutes: 15,
   lockout_duration_minutes: 30,
   dormant_days: 35,
+  session_idle_minutes: 15,
+  session_max_hours: 12,
 }
 
 function renderCard() {
@@ -48,6 +50,8 @@ describe('AccountPolicyCard', () => {
     expect(screen.getByLabelText('Lockout window (minutes)')).toHaveValue(15)
     expect(screen.getByLabelText('Lock duration (minutes)')).toHaveValue(30)
     expect(screen.getByLabelText('Dormant after (days)')).toHaveValue(35)
+    expect(screen.getByLabelText('Idle timeout (minutes)')).toHaveValue(15)
+    expect(screen.getByLabelText('Maximum session (hours)')).toHaveValue(12)
   })
 
   it('shows helper text under each field', async () => {
@@ -58,6 +62,8 @@ describe('AccountPolicyCard', () => {
     expect(screen.getByText('0 disables locking')).toBeInTheDocument()
     expect(screen.getByText('0 = no auto-unlock')).toBeInTheDocument()
     expect(screen.getByText('0 disables dormancy')).toBeInTheDocument()
+    expect(screen.getByText('0 disables the idle limit')).toBeInTheDocument()
+    expect(screen.getByText('0 disables the absolute limit')).toBeInTheDocument()
   })
 
   it('shows a field error and does not PUT when a value is negative', async () => {
@@ -88,7 +94,7 @@ describe('AccountPolicyCard', () => {
     expect(mockApiFetch).not.toHaveBeenCalledWith('/settings/hub', expect.objectContaining({ method: 'PUT' }))
   })
 
-  it('saves with exactly the four fields as integers and shows a success message', async () => {
+  it('saves with exactly the six fields as integers and shows a success message', async () => {
     mockApiFetch.mockResolvedValueOnce(defaultHubConfig) // GET
     mockApiFetch.mockResolvedValueOnce({ ...defaultHubConfig, dormant_days: 1 }) // PUT response
     renderCard()
@@ -105,6 +111,8 @@ describe('AccountPolicyCard', () => {
           lockout_window_minutes: 15,
           lockout_duration_minutes: 30,
           dormant_days: 1,
+          session_idle_minutes: 15,
+          session_max_hours: 12,
         }),
       })
     })
@@ -112,6 +120,20 @@ describe('AccountPolicyCard', () => {
     await waitFor(() => {
       expect(screen.getByText('Account policy saved.')).toBeInTheDocument()
     })
+  })
+
+  it('shows a field error and does not PUT when the idle-timeout value is negative', async () => {
+    mockApiFetch.mockResolvedValueOnce(defaultHubConfig)
+    renderCard()
+
+    await screen.findByLabelText('Idle timeout (minutes)')
+    fireEvent.change(screen.getByLabelText('Idle timeout (minutes)'), { target: { value: '-5' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }))
+
+    await waitFor(() => {
+      expect(screen.getByText('Must be a non-negative integer')).toBeInTheDocument()
+    })
+    expect(mockApiFetch).not.toHaveBeenCalledWith('/settings/hub', expect.objectContaining({ method: 'PUT' }))
   })
 
   it('shows an error banner when the API rejects the save', async () => {

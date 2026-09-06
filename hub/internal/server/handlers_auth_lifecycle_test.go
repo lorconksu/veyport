@@ -96,10 +96,10 @@ func newAuthLifecycleFixture(t *testing.T) *authLifecycleFixture {
 	f := &authLifecycleFixture{s: s, clk: clk, user: user}
 	f.totpSecret = enableTOTPForUser(t, s, user)
 
-	access, refresh, err := auth.GenerateTokenPair(s.jwtSecret, user.ID, string(user.Role), user.TokenGeneration)
-	if err != nil {
-		t.Fatalf("generate token pair: %v", err)
-	}
+	// Bound to a session, as a completed sign-in binds them: 009 refuses a
+	// token that carries none, and this fixture's whole point is that the
+	// credentials were valid before the account state changed.
+	access, refresh, _ := sessionTokenPair(t, s, user.ID)
 	f.accessToken, f.refreshToken = access, refresh
 	f.apiToken, f.apiTokenID = f.mintAPIToken(t, "automation")
 	return f

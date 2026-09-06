@@ -79,6 +79,54 @@ Admins configure directory integration in [[Settings]] under the **Directory** t
 
 ---
 
+## Staying Signed In
+
+Every completed sign-in - web or the `vey` CLI - creates a session on the hub, and that session
+has two limits, both administrator-configurable in **Settings → Users → Account policy**:
+
+- **Idle timeout** (default **15 minutes**) - if no request is made for this long, the session
+  expires. Normal use resets the clock on every request, so an idle limit only bites when you
+  genuinely stop using Veyport - walking away from an open dashboard tab is the common case,
+  since the dashboard itself polls in the background and can keep a tab alive as long as it's
+  open in a foreground-reachable browser.
+- **Maximum session** (default **12 hours**) - a session cannot be extended past this no matter
+  how active you are. It is set when you sign in and never moves, even across activity that would
+  otherwise reset the idle clock.
+
+Either limit can be turned off by an administrator (set to `0`), and each is enforced
+independently - reaching either one ends the session the same way.
+
+When a session expires or is ended - by either limit, by an administrator, or by using **Sign out
+other sessions** on the Profile tab (see [[Settings]]) - the next request is refused with **"session
+expired — sign in again"** (timed out) or **"session ended — sign in again"** (deliberately ended),
+and a browser is returned to this sign-in page. The `vey` CLI prints the same message and exits
+with its authentication-failure status; run `vey login` again.
+
+### Why was I signed out?
+
+- **You were idle past the timeout.** The session's idle clock (default 15 minutes) ran out.
+  Sign in again; if this happens too often for your workflow, ask an administrator whether the
+  idle timeout can reasonably be increased.
+- **You'd been signed in a long time.** The absolute session limit (default 12 hours) was
+  reached regardless of activity. Sign in again - there's nothing to configure on your end.
+- **An administrator ended your session.** Either one specific session (from the Sessions panel
+  on your account) or everything at once (Log out everywhere, or disabling your account). Sign in
+  again; if your account was disabled, see [[Troubleshooting]] instead.
+- **You signed yourself out elsewhere.** Using **Sign out other sessions** on your own Profile
+  tab ends every session except the one you used to click it.
+- **The hub was just upgraded to a release with this feature.** See the note below.
+
+See [[Settings]] for viewing and managing your own sessions, and [[Troubleshooting]] for more.
+
+### A note for anyone upgrading an existing hub
+
+The first time a hub is upgraded to a release with server-side session records, every session
+that existed before the upgrade is treated as invalid - there's no record for it to check against.
+Every user, web and CLI, is asked to sign in once after the upgrade. This is a one-time event, not
+a recurring inconvenience; sessions created after the upgrade behave exactly as described above.
+
+---
+
 ## Troubleshooting
 
 ### I forgot my password
@@ -114,5 +162,11 @@ See [[Troubleshooting]] for the difference between the per-IP rate limit and the
 ### I see "account disabled" or "account dormant"
 
 These are separate from a lock and do not clear on their own. See [[Troubleshooting]] for what each means and how an administrator restores access.
+
+### I was signed out unexpectedly / I see "session expired" or "session ended"
+
+See **Why was I signed out?** above for the possible causes (idle timeout, absolute session
+limit, an administrator ending your session, your own "Sign out other sessions", or a post-upgrade
+one-time re-sign-in), and [[Troubleshooting]] for more detail.
 
 For more login-related solutions, see [[Troubleshooting]].

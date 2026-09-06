@@ -23,6 +23,10 @@ const (
 	ctxUserRole  contextKey = "user_role"
 	ctxTokenType contextKey = "token_type"
 	ctxRequestID contextKey = "request_id"
+	// ctxSessionID carries the server-side session the request's access token
+	// is bound to (feature 009). Empty for API tokens and for the setup and
+	// one-time-code tokens, none of which have a session.
+	ctxSessionID contextKey = "session_id"
 )
 
 func UserIDFromContext(ctx context.Context) string {
@@ -45,6 +49,15 @@ func RequestIDFromContext(ctx context.Context) string {
 	return v
 }
 
+// SessionIDFromContext returns the server-side session id the request was
+// authenticated with, or the empty string when the credential carries none.
+// Handlers use it to mark the caller's own row in a session listing and to
+// refuse ending the session they are currently using.
+func SessionIDFromContext(ctx context.Context) string {
+	v, _ := ctx.Value(ctxSessionID).(string)
+	return v
+}
+
 // authMiddleware validates JWT from Authorization header and enforces token type.
 func (s *Server) authMiddleware(requiredType string, next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -54,7 +67,7 @@ func (s *Server) authMiddleware(requiredType string, next http.Handler) http.Han
 			return
 		}
 
-		userID, role, tokenType, err := s.authenticateRequestToken(tokenStr)
+		userID, role, tokenType, sessionID, err := s.authenticateRequestToken(tokenStr)
 		if err != nil {
 			// A credential that is itself valid but belongs to an account that
 			// may no longer use it gets the canonical account-state message
@@ -65,6 +78,14 @@ func (s *Server) authMiddleware(requiredType string, next http.Handler) http.Han
 			var accountErr *accountAccessError
 			if errors.As(err, &accountErr) {
 				respondError(w, http.StatusUnauthorized, accountErr.Error())
+				return
+			}
+			// Likewise for a credential whose server-side session is gone:
+			// the caller is told whether it timed out or was ended, which is
+			// what makes "why was I signed out" answerable (009 FR-005).
+			var sessionErr *sessionAccessError
+			if errors.As(err, &sessionErr) {
+				respondError(w, http.StatusUnauthorized, sessionErr.Error())
 				return
 			}
 			respondError(w, http.StatusUnauthorized, "invalid token")
@@ -79,47 +100,61 @@ func (s *Server) authMiddleware(requiredType string, next http.Handler) http.Han
 		ctx := context.WithValue(r.Context(), ctxUserID, userID)
 		ctx = context.WithValue(ctx, ctxUserRole, role)
 		ctx = context.WithValue(ctx, ctxTokenType, tokenType)
+		ctx = context.WithValue(ctx, ctxSessionID, sessionID)
 		next.ServeHTTP(w, r.WithContext(ctx))
 	})
 }
 
-func (s *Server) authenticateRequestToken(tokenStr string) (userID, role, tokenType string, err error) {
+// authenticateRequestToken resolves a bearer credential to its owner.
+//
+// The order of the checks on an access token is fixed and load-bearing:
+// blacklist, then token generation, then the account's lifecycle state (008),
+// then the server-side session (009). Session validation comes last because it
+// records activity as a side effect, and a request refused for any earlier
+// reason must leave no trace of activity behind.
+//
+// sessionID is the session the credential is bound to, empty for API tokens
+// and for the token types that have no session.
+func (s *Server) authenticateRequestToken(tokenStr string) (userID, role, tokenType, sessionID string, err error) {
 	claims, err := auth.ValidateToken(s.jwtSecret, tokenStr)
 	if err == nil {
 		if claims.ID != "" && s.tokenBlacklist != nil && s.tokenBlacklist.IsBlacklisted(claims.ID) {
-			return "", "", "", fmt.Errorf("token has been revoked")
+			return "", "", "", "", fmt.Errorf("token has been revoked")
 		}
 		if claims.TokenType == auth.TokenTypeAccess {
 			user, err := s.store.GetUserByID(claims.Subject)
 			if err != nil || claims.TokenGeneration != user.TokenGeneration {
-				return "", "", "", fmt.Errorf("token has been revoked")
+				return "", "", "", "", fmt.Errorf("token has been revoked")
 			}
 			if accountErr := s.accountAccessError(user); accountErr != nil {
-				return "", "", "", accountErr
+				return "", "", "", "", accountErr
+			}
+			if sessionErr := s.sessionAccessError(claims); sessionErr != nil {
+				return "", "", "", "", sessionErr
 			}
 		}
-		return claims.Subject, claims.Role, claims.TokenType, nil
+		return claims.Subject, claims.Role, claims.TokenType, claims.SessionID, nil
 	}
 
 	if !auth.LooksLikeAPIToken(tokenStr) {
-		return "", "", "", err
+		return "", "", "", "", err
 	}
 
 	apiToken, err := s.store.GetActiveAPITokenByHash(auth.HashAPIToken(tokenStr))
 	if err != nil {
-		return "", "", "", err
+		return "", "", "", "", err
 	}
 
 	user, err := s.store.GetUserByID(apiToken.UserID)
 	if err != nil {
-		return "", "", "", err
+		return "", "", "", "", err
 	}
 
 	// Checked before the token is stamped as used: a refused request must
 	// leave no trace of activity, or a disabled account's own rejected calls
 	// would keep it looking alive (008 FR-009, FR-012).
 	if accountErr := s.accountAccessError(user); accountErr != nil {
-		return "", "", "", accountErr
+		return "", "", "", "", accountErr
 	}
 
 	_ = s.store.UpdateAPITokenLastUsed(apiToken.ID, time.Now().UTC())
@@ -128,7 +163,7 @@ func (s *Server) authenticateRequestToken(tokenStr string) (userID, role, tokenT
 	// store throttles the write to at most one per user per minute, and a
 	// failure here must never fail an otherwise valid request.
 	_ = s.store.TouchUserActivity(user.ID, s.now())
-	return user.ID, string(user.Role), auth.TokenTypeAPIToken, nil
+	return user.ID, string(user.Role), auth.TokenTypeAPIToken, "", nil
 }
 
 func isAllowedTokenType(requiredType, tokenType string) bool {

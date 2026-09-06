@@ -56,6 +56,21 @@ const (
 	AuditUserDormancyExemptCleared = "user.dormancy_exempt_cleared"
 )
 
+// Session events (feature 009). A session is the server-side record of one
+// signed-in web or CLI client, so these three answer "when did this client
+// start, and what ended it" without inferring anything from token traffic.
+const (
+	// AuditSessionCreated is written when a completed sign-in establishes a
+	// session record.
+	AuditSessionCreated = "session.created"
+	// AuditSessionRevoked is written once per session that an administrator,
+	// the user themselves, a sign-out or an account disable actually ended.
+	AuditSessionRevoked = "session.revoked"
+	// AuditSessionExpired is written once, on first detection, when a session
+	// is refused because it passed its idle or absolute limit.
+	AuditSessionExpired = "session.expired"
+)
+
 const (
 	AuditServerCreated            = "server.created"
 	AuditServerUpdated            = "server.updated"

@@ -15,6 +15,8 @@ type hubConfigResponse struct {
 	LockoutWindowMinutes   int     `json:"lockout_window_minutes"`
 	LockoutDurationMinutes int     `json:"lockout_duration_minutes"`
 	DormantDays            int     `json:"dormant_days"`
+	SessionIdleMinutes     int     `json:"session_idle_minutes"`
+	SessionMaxHours        int     `json:"session_max_hours"`
 }
 
 type hubConfigRequest struct {
@@ -23,6 +25,8 @@ type hubConfigRequest struct {
 	LockoutWindowMinutes   *int    `json:"lockout_window_minutes"`
 	LockoutDurationMinutes *int    `json:"lockout_duration_minutes"`
 	DormantDays            *int    `json:"dormant_days"`
+	SessionIdleMinutes     *int    `json:"session_idle_minutes"`
+	SessionMaxHours        *int    `json:"session_max_hours"`
 }
 
 func (s *Server) handleGetHubConfig(w http.ResponseWriter, r *http.Request) {
@@ -45,6 +49,8 @@ func (s *Server) handleGetHubConfig(w http.ResponseWriter, r *http.Request) {
 	cfg.LockoutWindowMinutes = int(policy.Window.Minutes())
 	cfg.LockoutDurationMinutes = int(policy.Duration.Minutes())
 	cfg.DormantDays = policy.DormantDays
+	cfg.SessionIdleMinutes = int(policy.SessionIdle.Minutes())
+	cfg.SessionMaxHours = int(policy.SessionMax.Hours())
 
 	respondJSON(w, http.StatusOK, cfg)
 }
@@ -68,6 +74,8 @@ func lockoutConfigFields(req *hubConfigRequest) []lockoutConfigField {
 		{req.LockoutWindowMinutes, lockout.KeyWindowMinutes, "lockout_window_minutes must be a non-negative integer"},
 		{req.LockoutDurationMinutes, lockout.KeyDurationMinutes, "lockout_duration_minutes must be a non-negative integer"},
 		{req.DormantDays, lockout.KeyDormantDays, "dormant_days must be a non-negative integer"},
+		{req.SessionIdleMinutes, lockout.KeySessionIdleMinutes, "session_idle_minutes must be a non-negative integer"},
+		{req.SessionMaxHours, lockout.KeySessionMaxHours, "session_max_hours must be a non-negative integer"},
 	}
 }
 

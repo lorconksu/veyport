@@ -207,6 +207,12 @@ func TestHandleGetHubConfig_LockoutDefaults(t *testing.T) {
 	if got, want := resp["dormant_days"], float64(35); got != want {
 		t.Fatalf("expected dormant_days %v, got %v", want, got)
 	}
+	if got, want := resp["session_idle_minutes"], float64(15); got != want {
+		t.Fatalf("expected session_idle_minutes %v, got %v", want, got)
+	}
+	if got, want := resp["session_max_hours"], float64(12); got != want {
+		t.Fatalf("expected session_max_hours %v, got %v", want, got)
+	}
 }
 
 func TestUpdateHubConfig_DormantDays_PersistsAndLeavesRestUnchanged(t *testing.T) {
@@ -239,6 +245,36 @@ func TestUpdateHubConfig_DormantDays_PersistsAndLeavesRestUnchanged(t *testing.T
 	}
 	if got, want := resp["grpc_external_addr"], ""; got != want {
 		t.Fatalf("expected grpc_external_addr unchanged (%q), got %v", want, got)
+	}
+}
+
+func TestUpdateHubConfig_SessionFields_PersistAndLeaveRestUnchanged(t *testing.T) {
+	s := testServer(t)
+	token := registerAndGetAdminToken(t, s)
+
+	body := bytes.NewBufferString(`{"session_idle_minutes":1,"session_max_hours":1}`)
+	req := httptest.NewRequest("PUT", testHubSettingsPath, body)
+	req.Header.Set("Authorization", testBearerPrefix+token)
+	rec := httptest.NewRecorder()
+	s.routes().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf(testExpected200Body, rec.Code, rec.Body.String())
+	}
+
+	resp := getHubConfig(t, s, token)
+
+	if got, want := resp["session_idle_minutes"], float64(1); got != want {
+		t.Fatalf("expected session_idle_minutes %v, got %v", want, got)
+	}
+	if got, want := resp["session_max_hours"], float64(1); got != want {
+		t.Fatalf("expected session_max_hours %v, got %v", want, got)
+	}
+	if got, want := resp["lockout_threshold"], float64(5); got != want {
+		t.Fatalf("expected lockout_threshold to remain default %v, got %v", want, got)
+	}
+	if got, want := resp["dormant_days"], float64(35); got != want {
+		t.Fatalf("expected dormant_days to remain default %v, got %v", want, got)
 	}
 }
 
@@ -434,6 +470,16 @@ func TestUpdateHubConfig_NegativeLockoutFields(t *testing.T) {
 			name:        "duration",
 			body:        `{"lockout_duration_minutes":-1}`,
 			wantMessage: "lockout_duration_minutes must be a non-negative integer",
+		},
+		{
+			name:        "session idle minutes",
+			body:        `{"session_idle_minutes":-1}`,
+			wantMessage: "session_idle_minutes must be a non-negative integer",
+		},
+		{
+			name:        "session max hours",
+			body:        `{"session_max_hours":-1}`,
+			wantMessage: "session_max_hours must be a non-negative integer",
 		},
 	}
 

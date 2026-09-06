@@ -36,6 +36,8 @@ func TestDefaults(t *testing.T) {
 		Window:      15 * time.Minute,
 		Duration:    15 * time.Minute,
 		DormantDays: 35,
+		SessionIdle: 15 * time.Minute,
+		SessionMax:  12 * time.Hour,
 	}
 	if got != want {
 		t.Fatalf("Defaults() = %+v, want %+v", got, want)
@@ -54,6 +56,18 @@ func TestDefaults(t *testing.T) {
 	}
 	if got.DormantDays != 35 {
 		t.Errorf("Defaults().DormantDays = %d, want 35", got.DormantDays)
+	}
+	if lockout.DefaultSessionIdle != 15*time.Minute {
+		t.Errorf("DefaultSessionIdle = %v, want 15m", lockout.DefaultSessionIdle)
+	}
+	if lockout.DefaultSessionMax != 12*time.Hour {
+		t.Errorf("DefaultSessionMax = %v, want 12h", lockout.DefaultSessionMax)
+	}
+	if got.SessionIdle != 15*time.Minute {
+		t.Errorf("Defaults().SessionIdle = %v, want 15m", got.SessionIdle)
+	}
+	if got.SessionMax != 12*time.Hour {
+		t.Errorf("Defaults().SessionMax = %v, want 12h", got.SessionMax)
 	}
 	if err := got.Validate(); err != nil {
 		t.Errorf("Defaults().Validate() = %v, want nil", err)
@@ -82,6 +96,12 @@ func TestConfigKeys(t *testing.T) {
 	}
 	if lockout.KeyDormantDays != "account.dormant_days" {
 		t.Errorf("KeyDormantDays = %q", lockout.KeyDormantDays)
+	}
+	if lockout.KeySessionIdleMinutes != "account.session_idle_minutes" {
+		t.Errorf("KeySessionIdleMinutes = %q", lockout.KeySessionIdleMinutes)
+	}
+	if lockout.KeySessionMaxHours != "account.session_max_hours" {
+		t.Errorf("KeySessionMaxHours = %q", lockout.KeySessionMaxHours)
 	}
 }
 
@@ -376,35 +396,41 @@ func TestLoad(t *testing.T) {
 				lockout.KeyWindowMinutes:   "30",
 				lockout.KeyDurationMinutes: "1",
 			},
-			want: lockout.Policy{Threshold: 3, Window: 30 * time.Minute, Duration: time.Minute, DormantDays: defaults.DormantDays},
+			want: lockout.Policy{Threshold: 3, Window: 30 * time.Minute, Duration: time.Minute, DormantDays: defaults.DormantDays, SessionIdle: defaults.SessionIdle, SessionMax: defaults.SessionMax},
 		},
 		{
 			name: "zeros are honoured, not treated as unset",
 			config: map[string]string{
-				lockout.KeyThreshold:       "0",
-				lockout.KeyWindowMinutes:   "0",
-				lockout.KeyDurationMinutes: "0",
-				lockout.KeyDormantDays:     "0",
+				lockout.KeyThreshold:          "0",
+				lockout.KeyWindowMinutes:      "0",
+				lockout.KeyDurationMinutes:    "0",
+				lockout.KeyDormantDays:        "0",
+				lockout.KeySessionIdleMinutes: "0",
+				lockout.KeySessionMaxHours:    "0",
 			},
-			want: lockout.Policy{Threshold: 0, Window: 0, Duration: 0, DormantDays: 0},
+			want: lockout.Policy{Threshold: 0, Window: 0, Duration: 0, DormantDays: 0, SessionIdle: 0, SessionMax: 0},
 		},
 		{
 			name: "unparsable values fall back per key",
 			config: map[string]string{
-				lockout.KeyThreshold:       "abc",
-				lockout.KeyWindowMinutes:   "",
-				lockout.KeyDurationMinutes: "12.5",
-				lockout.KeyDormantDays:     "abc",
+				lockout.KeyThreshold:          "abc",
+				lockout.KeyWindowMinutes:      "",
+				lockout.KeyDurationMinutes:    "12.5",
+				lockout.KeyDormantDays:        "abc",
+				lockout.KeySessionIdleMinutes: "abc",
+				lockout.KeySessionMaxHours:    "abc",
 			},
 			want: defaults,
 		},
 		{
 			name: "negative values fall back per key",
 			config: map[string]string{
-				lockout.KeyThreshold:       "-1",
-				lockout.KeyWindowMinutes:   "-3",
-				lockout.KeyDurationMinutes: "-100",
-				lockout.KeyDormantDays:     "-1",
+				lockout.KeyThreshold:          "-1",
+				lockout.KeyWindowMinutes:      "-3",
+				lockout.KeyDurationMinutes:    "-100",
+				lockout.KeyDormantDays:        "-1",
+				lockout.KeySessionIdleMinutes: "-1",
+				lockout.KeySessionMaxHours:    "-1",
 			},
 			want: defaults,
 		},
@@ -413,19 +439,21 @@ func TestLoad(t *testing.T) {
 			config: map[string]string{
 				lockout.KeyThreshold:     "7",
 				lockout.KeyWindowMinutes: "abc",
-				// duration and dormant_days missing entirely
+				// duration, dormant_days and the session keys missing entirely
 			},
-			want: lockout.Policy{Threshold: 7, Window: defaults.Window, Duration: defaults.Duration, DormantDays: defaults.DormantDays},
+			want: lockout.Policy{Threshold: 7, Window: defaults.Window, Duration: defaults.Duration, DormantDays: defaults.DormantDays, SessionIdle: defaults.SessionIdle, SessionMax: defaults.SessionMax},
 		},
 		{
 			name: "surrounding whitespace is tolerated",
 			config: map[string]string{
-				lockout.KeyThreshold:       " 4 ",
-				lockout.KeyWindowMinutes:   "\t20\n",
-				lockout.KeyDurationMinutes: "2",
-				lockout.KeyDormantDays:     " 7 ",
+				lockout.KeyThreshold:          " 4 ",
+				lockout.KeyWindowMinutes:      "\t20\n",
+				lockout.KeyDurationMinutes:    "2",
+				lockout.KeyDormantDays:        " 7 ",
+				lockout.KeySessionIdleMinutes: " 1 ",
+				lockout.KeySessionMaxHours:    " 1 ",
 			},
-			want: lockout.Policy{Threshold: 4, Window: 20 * time.Minute, Duration: 2 * time.Minute, DormantDays: 7},
+			want: lockout.Policy{Threshold: 4, Window: 20 * time.Minute, Duration: 2 * time.Minute, DormantDays: 7, SessionIdle: time.Minute, SessionMax: time.Hour},
 		},
 		{
 			name: "dormant_days valid override is applied and other keys still honoured",
@@ -433,12 +461,12 @@ func TestLoad(t *testing.T) {
 				lockout.KeyThreshold:   "3",
 				lockout.KeyDormantDays: "7",
 			},
-			want: lockout.Policy{Threshold: 3, Window: defaults.Window, Duration: defaults.Duration, DormantDays: 7},
+			want: lockout.Policy{Threshold: 3, Window: defaults.Window, Duration: defaults.Duration, DormantDays: 7, SessionIdle: defaults.SessionIdle, SessionMax: defaults.SessionMax},
 		},
 		{
 			name:   "dormant_days zero disables dormancy, not treated as unset",
 			config: map[string]string{lockout.KeyDormantDays: "0"},
-			want:   lockout.Policy{Threshold: defaults.Threshold, Window: defaults.Window, Duration: defaults.Duration, DormantDays: 0},
+			want:   lockout.Policy{Threshold: defaults.Threshold, Window: defaults.Window, Duration: defaults.Duration, DormantDays: 0, SessionIdle: defaults.SessionIdle, SessionMax: defaults.SessionMax},
 		},
 		{
 			name:   "dormant_days unparsable falls back to default",
@@ -453,6 +481,52 @@ func TestLoad(t *testing.T) {
 		{
 			name:   "dormant_days missing (getter error) falls back to default",
 			config: map[string]string{},
+			want:   defaults,
+		},
+		{
+			name: "session_idle_minutes valid override is applied and other keys still honoured",
+			config: map[string]string{
+				lockout.KeyThreshold:          "3",
+				lockout.KeySessionIdleMinutes: "1",
+			},
+			want: lockout.Policy{Threshold: 3, Window: defaults.Window, Duration: defaults.Duration, DormantDays: defaults.DormantDays, SessionIdle: time.Minute, SessionMax: defaults.SessionMax},
+		},
+		{
+			name:   "session_idle_minutes zero disables idle expiry, not treated as unset",
+			config: map[string]string{lockout.KeySessionIdleMinutes: "0"},
+			want:   lockout.Policy{Threshold: defaults.Threshold, Window: defaults.Window, Duration: defaults.Duration, DormantDays: defaults.DormantDays, SessionIdle: 0, SessionMax: defaults.SessionMax},
+		},
+		{
+			name:   "session_idle_minutes unparsable falls back to default",
+			config: map[string]string{lockout.KeySessionIdleMinutes: "abc"},
+			want:   defaults,
+		},
+		{
+			name:   "session_idle_minutes negative falls back to default",
+			config: map[string]string{lockout.KeySessionIdleMinutes: "-1"},
+			want:   defaults,
+		},
+		{
+			name: "session_max_hours valid override is applied and other keys still honoured",
+			config: map[string]string{
+				lockout.KeyThreshold:       "3",
+				lockout.KeySessionMaxHours: "1",
+			},
+			want: lockout.Policy{Threshold: 3, Window: defaults.Window, Duration: defaults.Duration, DormantDays: defaults.DormantDays, SessionIdle: defaults.SessionIdle, SessionMax: time.Hour},
+		},
+		{
+			name:   "session_max_hours zero disables absolute expiry, not treated as unset",
+			config: map[string]string{lockout.KeySessionMaxHours: "0"},
+			want:   lockout.Policy{Threshold: defaults.Threshold, Window: defaults.Window, Duration: defaults.Duration, DormantDays: defaults.DormantDays, SessionIdle: defaults.SessionIdle, SessionMax: 0},
+		},
+		{
+			name:   "session_max_hours unparsable falls back to default",
+			config: map[string]string{lockout.KeySessionMaxHours: "abc"},
+			want:   defaults,
+		},
+		{
+			name:   "session_max_hours negative falls back to default",
+			config: map[string]string{lockout.KeySessionMaxHours: "-1"},
 			want:   defaults,
 		},
 	}
@@ -473,7 +547,7 @@ func TestLoadGetterErrorsEverywhere(t *testing.T) {
 	}
 }
 
-func TestLoadReadsExactlyTheFourKeys(t *testing.T) {
+func TestLoadReadsExactlyTheSixKeys(t *testing.T) {
 	var seen []string
 	get := func(key string) (string, error) {
 		seen = append(seen, key)
@@ -482,7 +556,10 @@ func TestLoadReadsExactlyTheFourKeys(t *testing.T) {
 	lockout.Load(get)
 
 	sort.Strings(seen)
-	want := []string{lockout.KeyDurationMinutes, lockout.KeyThreshold, lockout.KeyWindowMinutes, lockout.KeyDormantDays}
+	want := []string{
+		lockout.KeyDurationMinutes, lockout.KeyThreshold, lockout.KeyWindowMinutes, lockout.KeyDormantDays,
+		lockout.KeySessionIdleMinutes, lockout.KeySessionMaxHours,
+	}
 	sort.Strings(want)
 	if len(seen) != len(want) {
 		t.Fatalf("Load() read %v, want exactly %v", seen, want)
@@ -497,9 +574,15 @@ func TestLoadReadsExactlyTheFourKeys(t *testing.T) {
 func TestLoadResultIsAlwaysValid(t *testing.T) {
 	configs := []map[string]string{
 		{},
-		{lockout.KeyThreshold: "-5", lockout.KeyWindowMinutes: "-5", lockout.KeyDurationMinutes: "-5", lockout.KeyDormantDays: "-5"},
+		{
+			lockout.KeyThreshold: "-5", lockout.KeyWindowMinutes: "-5", lockout.KeyDurationMinutes: "-5", lockout.KeyDormantDays: "-5",
+			lockout.KeySessionIdleMinutes: "-5", lockout.KeySessionMaxHours: "-5",
+		},
 		{lockout.KeyThreshold: "nope"},
-		{lockout.KeyThreshold: "0", lockout.KeyWindowMinutes: "0", lockout.KeyDurationMinutes: "0", lockout.KeyDormantDays: "0"},
+		{
+			lockout.KeyThreshold: "0", lockout.KeyWindowMinutes: "0", lockout.KeyDurationMinutes: "0", lockout.KeyDormantDays: "0",
+			lockout.KeySessionIdleMinutes: "0", lockout.KeySessionMaxHours: "0",
+		},
 	}
 	for i, config := range configs {
 		if err := lockout.Load(mapGetter(config)).Validate(); err != nil {
@@ -544,6 +627,18 @@ func TestPolicyValidate(t *testing.T) {
 			policy:    lockout.Policy{Threshold: 5, Window: time.Minute, Duration: time.Minute, DormantDays: -1},
 			wantErr:   true,
 			wantField: "dormant_days",
+		},
+		{
+			name:      "negative session idle is rejected",
+			policy:    lockout.Policy{Threshold: 5, Window: time.Minute, Duration: time.Minute, SessionIdle: -time.Minute},
+			wantErr:   true,
+			wantField: "session_idle",
+		},
+		{
+			name:      "negative session max is rejected",
+			policy:    lockout.Policy{Threshold: 5, Window: time.Minute, Duration: time.Minute, SessionMax: -time.Hour},
+			wantErr:   true,
+			wantField: "session_max",
 		},
 	}
 

@@ -29,6 +29,7 @@
 15. [Re-Enrollment Endpoints](#re-enrollment-endpoints)
 16. [Terminal Endpoints](#terminal-endpoints)
 17. [SSH Gateway Endpoints](#ssh-gateway-endpoints)
+18. [Session Endpoints](#session-endpoints)
 
 ---
 
@@ -1937,7 +1938,9 @@ Get the Hub configuration (currently the gRPC external address and the account l
   "lockout_threshold": 5,
   "lockout_window_minutes": 15,
   "lockout_duration_minutes": 15,
-  "dormant_days": 35
+  "dormant_days": 35,
+  "session_idle_minutes": 15,
+  "session_max_hours": 12
 }
 ```
 
@@ -1949,6 +1952,8 @@ Get the Hub configuration (currently the gRPC external address and the account l
 | `lockout_window_minutes` | Effective window, in minutes, that failures count toward the threshold before it restarts at 1. Built-in default `15`. |
 | `lockout_duration_minutes` | Effective lock length in minutes. Built-in default `15`. `0` means a lock does not auto-expire. |
 | `dormant_days` | Effective number of days of inactivity (no interactive sign-in and no API-token use) after which an account is treated as dormant. Built-in default `35`. `0` disables dormancy entirely — no account is ever evaluated as dormant. |
+| `session_idle_minutes` | Effective idle timeout, in minutes, for server-side sessions (feature 009). Built-in default `15`. `0` disables the idle limit — sessions never expire from inactivity alone. |
+| `session_max_hours` | Effective absolute lifetime, in hours, for server-side sessions (feature 009). Built-in default `12`. `0` disables the absolute limit. Applies to sessions created after the change; an existing session keeps the lifetime it was issued with. |
 
 **cURL:**
 
@@ -1975,7 +1980,9 @@ Update the Hub configuration.
   "lockout_threshold": 3,
   "lockout_window_minutes": 15,
   "lockout_duration_minutes": 1,
-  "dormant_days": 30
+  "dormant_days": 30,
+  "session_idle_minutes": 1,
+  "session_max_hours": 1
 }
 ```
 
@@ -1983,6 +1990,7 @@ Update the Hub configuration.
 - All fields are optional. A field left out of the request body is unchanged.
 - `grpc_external_addr`, if present and non-empty, must match `^[a-zA-Z0-9._:\-\[\]]+$` (hostnames, IPs, and ports only -- no shell metacharacters). A present-but-empty string (`""`) clears the stored address; omitting the field entirely leaves it unchanged.
 - `lockout_threshold`, `lockout_window_minutes`, `lockout_duration_minutes`, `dormant_days` are each optional non-negative integers. `lockout_threshold: 0` disables locking (failures are still counted); `lockout_duration_minutes: 0` means a lock never auto-expires; `dormant_days: 0` disables dormancy. Changes apply to future evaluations only -- an account already locked keeps its original expiry, and an account already dormant stays dormant until an admin enables it, even if the policy is raised afterward.
+- `session_idle_minutes`, `session_max_hours` (feature 009) are each optional non-negative integers. `session_idle_minutes: 0` disables the idle limit; `session_max_hours: 0` disables the absolute limit. An idle change applies to every session's next evaluation immediately; an absolute-lifetime change applies only to sessions created afterward -- an existing session keeps the `expires_at` it was issued with.
 
 **Response (200):**
 
@@ -1996,6 +2004,7 @@ Update the Hub configuration.
 - `400` - Invalid gRPC address format
 - `400` - Invalid lockout field, field-specific message, e.g. `{"error":"lockout_threshold must be a non-negative integer"}`
 - `400` - `{"error":"dormant_days must be a non-negative integer"}`
+- `400` - `{"error":"session_idle_minutes must be a non-negative integer"}` / `{"error":"session_max_hours must be a non-negative integer"}`
 
 **cURL:**
 
@@ -2719,5 +2728,274 @@ Stable across Hub restarts and upgrades — the host key is never silently regen
 
 ```bash
 curl https://hub.example.com/api/ssh/host-key \
+  -H 'Authorization: Bearer <access_token>'
+```
+
+---
+
+## Session Endpoints
+
+Feature 009 gives every completed interactive sign-in (web browser or `vey` CLI) a server-side
+session record, so it can be listed, timed out, and ended precisely -- not just invalidated
+all-at-once via the token-generation bump described under **Session Invalidation on Password
+Change** in the engineering security model. API tokens (`adt_…`) are not sessions: they keep their
+own expiry and revocation (see endpoint 15's neighbours and [[CLI]]) and are unaffected by
+everything on this page.
+
+### Session validation
+
+Every request bearing an access token, and every `POST /api/auth/refresh`, re-validates the
+caller's session before anything else runs:
+
+| Condition | Response |
+|---|---|
+| No `sid` claim, or the session it names no longer exists (pre-upgrade credentials) | `401 {"error":"session expired — sign in again"}` |
+| Session ended (revoked by an admin, by the user, by logout, or by an account disable) | `401 {"error":"session ended — sign in again"}` |
+| Absolute lifetime reached | `401 {"error":"session expired — sign in again"}` (session marked `expired_absolute`, audited once on first detection) |
+| Idle limit exceeded | `401 {"error":"session expired — sign in again"}` (session marked `expired_idle`, audited once on first detection) |
+| None of the above | request proceeds; `last_seen_at` is bumped, at most once per minute per session |
+
+**Upgrade note:** a session that existed before this release has no session record, so its access
+and refresh tokens are refused with the `session expired` message the first time they're used
+after upgrading -- every user, web and CLI, signs in once more. There is no migration path for
+pre-upgrade sessions; see [[Troubleshooting]] ("everyone had to sign in again after upgrading").
+
+The idle and absolute limits are configured as `session_idle_minutes` and `session_max_hours` on
+the Account policy card alongside the 007/008 lockout and dormancy fields -- see endpoints 37/38
+above.
+
+### GET /api/auth/sessions
+
+List the caller's own sessions.
+
+| Property | Value |
+|---|---|
+| Auth | Access token (Bearer), interactive session only (an API token is refused) |
+
+**Response (200):**
+
+```json
+{
+  "sessions": [
+    {"id":"…","kind":"web","ip":"10.0.0.5","user_agent":"Mozilla/…","created_at":"…","last_seen_at":"…","expires_at":"…","idle_deadline_at":"…","current":true},
+    {"id":"…","kind":"cli","ip":"…","user_agent":"vey/2.0.37","created_at":"…","last_seen_at":"…","expires_at":"…","idle_deadline_at":"…","current":false},
+    {"id":"shell:srv-01:sess-9f2","kind":"ssh","server":"web-01","started_at":"…","last_activity_at":"…","current":false}
+  ]
+}
+```
+
+Only the caller's own rows; the row for the session making this call is marked `current: true`.
+There is no `include_ended` on the self-service view -- ended sessions are an admin-only history.
+Shell rows (`kind: "ssh"` or `"terminal"`) use the id `shell:<serverID>:<sessionID>` and carry
+`server`, `started_at`, `last_activity_at` in place of the web/CLI fields.
+
+**cURL:**
+
+```bash
+curl https://hub.example.com/api/auth/sessions \
+  -H 'Authorization: Bearer <access_token>'
+```
+
+---
+
+### DELETE /api/auth/sessions/{sid}
+
+End one of the caller's **other** sessions or shells.
+
+| Property | Value |
+|---|---|
+| Auth | Access token (Bearer), interactive session only |
+
+**Path Parameters:**
+- `sid` - Session id, or `shell:<serverID>:<sessionID>` for an open SSH or web-terminal shell
+
+**Response (200):**
+
+```json
+{"status": "ended"}
+```
+
+`{"status": "already_ended"}` when the session or shell was not live -- for example, a shell that
+closed on its own between listing and this call. Not an error either way.
+
+**Error Cases:**
+- `400` - `{"error":"cannot end the current session here — use logout"}` -- `sid` names the caller's own current session
+- `404` - the id does not belong to the caller
+
+Audit `session.revoked` (reason `revoked_self`), or `ssh.session_closed` (detail `reason=forced`)
+for a shell.
+
+**cURL:**
+
+```bash
+curl -X DELETE https://hub.example.com/api/auth/sessions/SESSION_ID \
+  -H 'Authorization: Bearer <access_token>'
+```
+
+---
+
+### POST /api/auth/sessions/sign-out-others
+
+End every one of the caller's sessions except the current one, and close every one of the
+caller's own open shells.
+
+| Property | Value |
+|---|---|
+| Auth | Access token (Bearer), interactive session only |
+
+**Response (200):**
+
+```json
+{"ended": 2, "shells_closed": 1}
+```
+
+Audit one `session.revoked` (reason `revoked_self`) per ended session and one
+`ssh.session_closed` (detail `reason=forced`) per closed shell.
+
+**cURL:**
+
+```bash
+curl -X POST https://hub.example.com/api/auth/sessions/sign-out-others \
+  -H 'Authorization: Bearer <access_token>'
+```
+
+---
+
+### POST /api/auth/logout
+
+Sign out the calling session. Unchanged request/response shape; feature 009 adds a side effect.
+
+| Property | Value |
+|---|---|
+| Auth | Access token (Bearer) -- cookie or header |
+
+**Response:** `204 No Content`.
+
+Clears the browser's auth cookies and blacklists the access token, exactly as before. **As of
+feature 009**, it also ends the caller's server-side session (audit `session.revoked`, reason
+`logout`) -- previously logout left any session record for the caller live, reachable only via the
+blunter token-generation bump. `vey logout` relies on this: the CLI's server-side session is now
+genuinely ended, not merely forgotten on disk (see [[CLI]]).
+
+**cURL:**
+
+```bash
+curl -X POST https://hub.example.com/api/auth/logout \
+  -H 'Authorization: Bearer <access_token>'
+```
+
+---
+
+### GET /api/users/{id}/sessions
+
+List a user's sessions.
+
+| Property | Value |
+|---|---|
+| Auth | Access token (Bearer), admin only |
+
+**Path Parameters:**
+- `id` - Target user UUID
+
+**Query Parameters:**
+- `include_ended` - When `true`, also return sessions ended in the last 30 days, each carrying `ended_at` and `end_reason`
+
+**Response (200):**
+
+```json
+{
+  "sessions": [
+    {"id":"…","kind":"web","ip":"10.0.0.5","user_agent":"Mozilla/…","created_at":"…","last_seen_at":"…","expires_at":"…","idle_deadline_at":"…","current":false},
+    {"id":"…","kind":"cli","ip":"…","user_agent":"vey/2.0.37","created_at":"…","last_seen_at":"…","expires_at":"…","idle_deadline_at":"…","current":false},
+    {"id":"shell:srv-01:sess-9f2","kind":"ssh","server":"web-01","started_at":"…","last_activity_at":"…","current":false}
+  ]
+}
+```
+
+Live rows first; a row is marked `current: true` only when it is the session the requesting admin
+is themselves using right now (i.e. the target user is the caller). With `include_ended=true`,
+ended rows from the last 30 days follow, each with `end_reason` one of `revoked_admin` |
+`revoked_self` | `revoked_disable` | `logout` | `expired_idle` | `expired_absolute`. Ended sessions
+older than 30 days are pruned and no longer appear here or anywhere else.
+
+**Error Cases:**
+- `404` - `{"error":"user not found"}`
+
+**cURL:**
+
+```bash
+curl https://hub.example.com/api/users/USER_UUID/sessions?include_ended=true \
+  -H 'Authorization: Bearer <access_token>'
+```
+
+---
+
+### DELETE /api/users/{id}/sessions/{sid}
+
+End one session, or one shell, belonging to a user.
+
+| Property | Value |
+|---|---|
+| Auth | Access token (Bearer), admin only |
+
+**Path Parameters:**
+- `id` - Target user UUID
+- `sid` - Session id, or `shell:<serverID>:<sessionID>`
+
+**Response (200):**
+
+```json
+{"status": "ended"}
+```
+
+`{"status": "already_ended"}` when it was not live -- concurrent revocation by two admins is
+idempotent this way, with exactly one audit event for the actual revocation.
+
+**Error Cases:**
+- `404` - `{"error":"user not found"}`, or the session/shell id does not belong to that user
+
+An administrator ending their own current session through this endpoint is allowed -- they are
+signed out like anyone else; see [[Settings]]. Audit `session.revoked` (reason `revoked_admin`,
+Target = the session's owner) or `ssh.session_closed` (detail `reason=forced`) for a shell.
+
+**cURL:**
+
+```bash
+curl -X DELETE https://hub.example.com/api/users/USER_UUID/sessions/SESSION_ID \
+  -H 'Authorization: Bearer <access_token>'
+```
+
+---
+
+### DELETE /api/users/{id}/sessions
+
+End every live session of a user and close every one of their open shells -- "Log out
+everywhere."
+
+| Property | Value |
+|---|---|
+| Auth | Access token (Bearer), admin only |
+
+**Path Parameters:**
+- `id` - Target user UUID
+
+**Response (200):**
+
+```json
+{"ended": 3, "shells_closed": 1}
+```
+
+**Error Cases:**
+- `404` - `{"error":"user not found"}`
+
+One `session.revoked` (reason `revoked_admin`) per session ended, and one `ssh.session_closed`
+(detail `reason=forced`) per shell closed. The same server-side helper backs 008's `PUT
+/api/users/{id}/status {"disabled":true}`, which calls it with reason `revoked_disable` instead --
+disabling an account now also ends every session and closes every shell it has open.
+
+**cURL:**
+
+```bash
+curl -X DELETE https://hub.example.com/api/users/USER_UUID/sessions \
   -H 'Authorization: Bearer <access_token>'
 ```

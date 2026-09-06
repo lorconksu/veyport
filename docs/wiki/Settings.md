@@ -33,6 +33,30 @@ In the **Change Password** section:
 
 You will remain logged in on the current device after changing your password. All other existing sessions (on other devices) are immediately invalidated and those users will need to log in again.
 
+### Your Sessions
+
+The **Your sessions** card lists every server-side session you currently hold: which browser or
+CLI it is, its source address, when it started, and when it was last seen, plus any SSH shells
+you have open (with the target server). The row for the session you're using right now is marked
+**This session**.
+
+- Click **Sign out** on any other row to end just that session or shell - a confirmation dialog
+  appears first.
+- Click **Sign out other sessions** to end everything except the session you're using right now
+  (all other web sessions, CLI sessions, and your own open SSH shells) - useful after using a
+  shared machine or forgetting to sign out somewhere. Confirm to proceed.
+- If this is your only active session, the card shows "This is your only active session." instead
+  of a **Sign out other sessions** button.
+
+A signed-out browser session is returned to the sign-in page on its next request; a signed-out CLI
+session shows the hub's message on its next command; a closed SSH shell receives an explanatory
+message and exits. Every action here is audited as self-initiated (reason `revoked_self`). See
+`GET /api/auth/sessions`, `DELETE /api/auth/sessions/{sid}`, and `POST
+/api/auth/sessions/sign-out-others` in [[API Reference]].
+
+Idle and absolute session limits apply the same way to your own sessions as to anyone else's - see
+**Account Policy** below and [[Logging In]].
+
 ---
 
 ## Users Tab (Admin Only)
@@ -61,10 +85,11 @@ the actions that apply to its current state, each behind a confirmation dialog:
 
 | Action | Shown when | What it does |
 |---|---|---|
-| **Disable** | account is not disabled | Immediately turns the account off: any open web session is refused on its next request, every API token the account holds is revoked, sign-in and SSH certificate issuance are refused, and an open SSH shell is refused on its next command. The row switches to **Disabled**. |
+| **Disable** | account is not disabled | Immediately turns the account off: every one of the account's web and CLI sessions is ended and any open SSH shell is closed within seconds (feature 009 - same effect as **Log out everywhere** in **Sessions** below), every API token the account holds is revoked, and sign-in and SSH certificate issuance are refused. The row switches to **Disabled**. |
 | **Enable** | account is disabled | Turns the account back on: clears any lock and the failure count, restarts the dormancy clock, and lets the account sign in again. Its API tokens stay revoked - the user must mint new ones. |
 | **Unlock** | account is locked | Clears the lock and the consecutive-failure count immediately, without waiting for the lock to expire. Restarts the dormancy clock. |
 | **Exempt from dormancy** / **Remove exemption** | account's role is Admin | Marks (or unmarks) the account as "never dormant" - see **Dormant accounts** below. Only administrator accounts can carry the exemption; it has no effect on locking or disabling. |
+| **Sessions** | always (every row, including your own) | Opens the **Sessions** panel for that account - see **Sessions** below. |
 
 Two guards apply to Disable, enforced by the server as well as the UI: you cannot disable your
 own account, and you cannot disable the last remaining enabled administrator - an administrator
@@ -76,9 +101,32 @@ LDAP-backed (directory) accounts are governed identically to local accounts: an 
 disable, enable, unlock, or exempt them, and a later directory sync cannot re-enable, unlock, or
 clear the dormancy state of an account the hub has acted on.
 
+### Sessions
+
+Clicking **Sessions** on a row opens **"Sessions — &lt;username&gt;"**, a table of every
+server-side session that account currently holds: kind (Web, CLI, SSH shell, Web terminal),
+source address, when it started, when it was last seen, and the target server for a shell. If the
+row belongs to your own account, your current session carries a **This session** tag.
+
+- Each row offers **Log out** (web/CLI sessions) or **Terminate** (SSH/web-terminal shells),
+  behind a confirmation dialog. The affected browser is sent to the sign-in page on its next
+  request; a CLI session gets the hub's message on its next command; a shell receives an
+  explanatory message and closes within seconds.
+- The footer's **Log out everywhere** button ends every one of that account's web and CLI
+  sessions and closes every one of its open SSH shells in one action, after confirming "Log out
+  &lt;username&gt; everywhere? All web and CLI sessions end now and any open SSH shells are
+  closed."
+- An account with nothing open shows "No active sessions."
+
+Disabling an account (above) does the equivalent of Log out everywhere automatically, as one of
+its side effects. Every action here is audited with the acting administrator, the target account,
+the session, and the reason (see [[Audit Logs]]). Underlying endpoints: `GET
+/api/users/{id}/sessions`, `DELETE /api/users/{id}/sessions/{sid}`, `DELETE
+/api/users/{id}/sessions` in [[API Reference]].
+
 ### Account Policy
 
-An "Account policy" card above the table lets administrators read and edit four values in one
+An "Account policy" card above the table lets administrators read and edit six values in one
 place, replacing the API-only configuration from the previous release:
 
 | Field | Default | `0` means |
@@ -87,12 +135,20 @@ place, replacing the API-only configuration from the previous release:
 | Lockout window (minutes) | 15 | - (not zero-able; the window a failure counts toward the threshold) |
 | Lock duration (minutes) | 15 | A lock never expires on its own - only an admin's **Unlock** or **Enable** clears it |
 | Dormant after (days) | 35 | Dormancy is disabled entirely - no account is ever evaluated as dormant |
+| Idle timeout (minutes) | 15 | The idle limit is disabled - a session never times out from inactivity alone |
+| Maximum session (hours) | 12 | The absolute limit is disabled - a session can run indefinitely as long as it stays active |
 
 The card shows the effective values on load, validates each field as a non-negative integer with
 an inline error on a bad entry (nothing is saved until every field is valid), and confirms with
 "Account policy saved." on success. See `PUT /api/settings/hub` in [[API Reference]] for the
 underlying fields (`lockout_threshold`, `lockout_window_minutes`, `lockout_duration_minutes`,
-`dormant_days`).
+`dormant_days`, `session_idle_minutes`, `session_max_hours`).
+
+**Idle timeout** and **maximum session** (feature 009) govern every server-side session - see
+[[Logging In]] for what a user actually sees when one expires. An idle-timeout change takes effect
+on every session's very next check; a maximum-session change only affects sessions created after
+the save - a session already running keeps the absolute expiry it was issued with, even if the
+policy is later lowered or raised.
 
 ### Dormant Accounts
 
@@ -124,9 +180,10 @@ automatically.
 Directory (LDAP) accounts are subject to dormancy exactly like local accounts, including the
 exemption if one is assigned to an LDAP-backed admin.
 
-Note: open SSH sessions established before an account went dormant or was disabled are not cut
-off in this release - only new shells and new certificate requests are refused. A future release
-adds a session registry that can also close sessions already in progress.
+Note: as of feature 009, disabling an account also closes any SSH shells it already has open (see
+**Sessions** above) - new shells, new certificate requests, and existing sign-in attempts were
+already refused before that. Going dormant on its own does not close open shells; a dormant
+account's existing sessions and shells keep working until they time out or an admin acts on them.
 
 ### Creating a New User
 

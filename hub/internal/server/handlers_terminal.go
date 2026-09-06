@@ -67,7 +67,12 @@ func (s *Server) handleCreateTerminalSession(w http.ResponseWriter, r *http.Requ
 		return
 	}
 	sessionID := uuid.NewString()
-	if _, created := s.terminalSessions.Register(serverID, sessionID, userID, executionUser); !created {
+	// The shell is tied to the session that opened it, so revoking that
+	// session closes the terminal with it (feature 009, FR-010).
+	_, created := s.terminalSessions.Register(serverID, sessionID, userID, executionUser,
+		grpcserver.WithKind(grpcserver.TerminalKindWeb),
+		grpcserver.WithSessionID(SessionIDFromContext(r.Context())))
+	if !created {
 		respondError(w, http.StatusConflict, "terminal session already exists")
 		return
 	}
@@ -161,7 +166,10 @@ func (s *Server) handleTerminalStream(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusOK)
 	flusher.Flush()
 
-	defer s.closeTerminalSession(r, serverID, sessionID)
+	// A forced exit means the hub closed the shell under the person using it;
+	// the agent still has it running, so the teardown has to say so.
+	forced := false
+	defer func() { s.closeTerminalSession(r, serverID, sessionID, forced) }()
 
 	for {
 		select {
@@ -171,6 +179,7 @@ func (s *Server) handleTerminalStream(w http.ResponseWriter, r *http.Request) {
 			if !ok {
 				return
 			}
+			forced = forced || event.Forced
 			switch event.Type {
 			case grpcserver.TerminalEventData:
 				fmt.Fprintf(w, "data: %s\n\n", base64.StdEncoding.EncodeToString(event.Data))
@@ -304,7 +313,7 @@ func (s *Server) handleCloseTerminalSession(w http.ResponseWriter, r *http.Reque
 	if _, ok := s.requireTerminalSession(w, r, serverID, sessionID); !ok {
 		return
 	}
-	s.closeTerminalSession(r, serverID, sessionID)
+	s.closeTerminalSession(r, serverID, sessionID, false)
 	w.WriteHeader(http.StatusNoContent)
 }
 
@@ -431,7 +440,13 @@ func (s *Server) requireTerminalSession(w http.ResponseWriter, r *http.Request, 
 	return info, true
 }
 
-func (s *Server) closeTerminalSession(r *http.Request, serverID, sessionID string) {
+// closeTerminalSession tears a terminal down on both sides and audits it.
+//
+// forced marks a shell the hub closed (a revoked session, a disabled account,
+// an administrator ending it): the registry entry is closed before the stream
+// notices, so "already closed" no longer implies the agent knows — its shell
+// is still running and must be told to stop.
+func (s *Server) closeTerminalSession(r *http.Request, serverID, sessionID string, forced bool) {
 	if s.terminalSessions == nil {
 		return
 	}
@@ -441,7 +456,7 @@ func (s *Server) closeTerminalSession(r *http.Request, serverID, sessionID strin
 	}
 	// Suppress the TerminalClose gRPC send when the agent already reported
 	// its exit via End() — the session is already dead on the agent side.
-	if !alreadyClosed && s.connMgr != nil {
+	if (!alreadyClosed || forced) && s.connMgr != nil {
 		_ = s.connMgr.SendToAgent(serverID, &pb.HubMessage{
 			Payload: &pb.HubMessage_TerminalClose{
 				TerminalClose: &pb.TerminalClose{
@@ -454,8 +469,11 @@ func (s *Server) closeTerminalSession(r *http.Request, serverID, sessionID strin
 	userID := UserIDFromContext(r.Context())
 	ip := clientIP(r)
 	detail := terminalSessionIDDetailPrefix + sessionID
-	if alreadyClosed {
+	if alreadyClosed && !forced {
 		detail += " agent_initiated"
+	}
+	if forced {
+		detail += " reason=forced"
 	}
 	s.auditLogRequest(r, model.AuditEntry{
 		UserID:    &userID,

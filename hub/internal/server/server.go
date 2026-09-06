@@ -66,10 +66,32 @@ type Server struct {
 	userCA     *userca.UserCA
 	sshHostKey ssh.Signer
 	sshConfig  sshconfig.Config
-	// now is the server's clock. It defaults to the real UTC clock and exists
-	// so account-lockout tests can advance time deterministically without
-	// sleeping; override it in tests with SetClock.
-	now func() time.Time
+	// nowFn is the server's clock. It defaults to the real UTC clock and
+	// exists so account-lockout tests can advance time deterministically
+	// without sleeping; override it in tests with SetClock. Access goes
+	// through the now() method and nowMu: the session pruner's background
+	// goroutine (session_prune.go) reads the clock concurrently with any
+	// test that calls SetClock after construction, since New starts that
+	// goroutine immediately.
+	nowMu sync.RWMutex
+	nowFn func() time.Time
+	// sessionPruneStop, sessionPruneStopOnce and sessionPruneWG coordinate the
+	// background goroutine started by startSessionPruner (see
+	// session_prune.go), which periodically removes ended session rows older
+	// than the retention window (FR-013).
+	sessionPruneStop     chan struct{}
+	sessionPruneStopOnce *sync.Once
+	sessionPruneWG       sync.WaitGroup
+}
+
+// now returns the current time via the server's clock (real UTC time by
+// default, overridable in tests via SetClock). Guarded by nowMu so the
+// session pruner's background goroutine can read it safely while a test
+// calls SetClock concurrently.
+func (s *Server) now() time.Time {
+	s.nowMu.RLock()
+	defer s.nowMu.RUnlock()
+	return s.nowFn()
 }
 
 type Config struct {
@@ -129,7 +151,7 @@ func New(cfg Config) *Server {
 		userCA:            cfg.UserCA,
 		sshHostKey:        cfg.SSHHostKey,
 		sshConfig:         cfg.SSHConfig,
-		now:               func() time.Time { return time.Now().UTC() },
+		nowFn:             func() time.Time { return time.Now().UTC() },
 	}
 
 	s.installAuditObservers()
@@ -145,6 +167,8 @@ func New(cfg Config) *Server {
 		IdleTimeout:       60 * time.Second,
 		MaxHeaderBytes:    1 << 20,
 	}
+
+	s.startSessionPruner(sessionPruneInterval, sessionPruneRetention)
 
 	return s
 }
@@ -193,6 +217,7 @@ func (s *Server) Start() error {
 }
 
 func (s *Server) Shutdown(ctx context.Context) error {
+	s.stopSessionPruner()
 	return s.httpServer.Shutdown(ctx)
 }
 
@@ -206,7 +231,9 @@ func (s *Server) ClearTOTPCache() {
 // to advance time deterministically (e.g. to observe a lockout window elapse
 // or a lock expire) without sleeping.
 func (s *Server) SetClock(now func() time.Time) {
-	s.now = now
+	s.nowMu.Lock()
+	defer s.nowMu.Unlock()
+	s.nowFn = now
 }
 
 // DecryptTOTPSecret decrypts an encrypted TOTP secret (with "enc:" prefix).

@@ -776,3 +776,118 @@ func TestMapTransportErr_CertificateBranches(t *testing.T) {
 		})
 	}
 }
+
+// --- User-Agent (009): every request identifies itself so the hub can
+// record a session's kind as "cli" (contracts/ui-cli.md CLI table: "all
+// requests | send User-Agent: vey/<version>") -----------------------------
+
+func TestNewRequest_SendsDefaultUserAgent(t *testing.T) {
+	var got string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		got = r.Header.Get("User-Agent")
+		w.WriteHeader(http.StatusOK)
+		json.NewEncoder(w).Encode(map[string]string{})
+	}))
+	defer srv.Close()
+
+	c := newTestClient(srv, "")
+	if err := c.Get(context.Background(), "/api/auth/me", nil, &Me{}); err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if got != "vey/dev" {
+		t.Errorf("User-Agent = %q, want the default %q", got, "vey/dev")
+	}
+}
+
+func TestNewRequest_UserAgentReflectsInjectedVersion(t *testing.T) {
+	prev := UserAgent
+	UserAgent = "vey/2.0.37"
+	defer func() { UserAgent = prev }()
+
+	var got string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		got = r.Header.Get("User-Agent")
+		w.WriteHeader(http.StatusOK)
+		json.NewEncoder(w).Encode(map[string]string{})
+	}))
+	defer srv.Close()
+
+	c := newTestClient(srv, "")
+	if err := c.Get(context.Background(), "/api/auth/me", nil, &Me{}); err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if got != "vey/2.0.37" {
+		t.Errorf("User-Agent = %q, want %q", got, "vey/2.0.37")
+	}
+}
+
+func TestNewRequest_UserAgentSentOnEveryVerb(t *testing.T) {
+	prev := UserAgent
+	UserAgent = "vey/1.0.0"
+	defer func() { UserAgent = prev }()
+
+	var gotGet, gotPost string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.Method {
+		case http.MethodGet:
+			gotGet = r.Header.Get("User-Agent")
+		case http.MethodPost:
+			gotPost = r.Header.Get("User-Agent")
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		json.NewEncoder(w).Encode(map[string]string{})
+	}))
+	defer srv.Close()
+
+	c := newTestClient(srv, "")
+	if err := c.Get(context.Background(), "/api/auth/me", nil, &Me{}); err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if err := c.Post(context.Background(), "/api/auth/logout", nil, nil); err != nil {
+		t.Fatalf("Post: %v", err)
+	}
+	if gotGet != "vey/1.0.0" || gotPost != "vey/1.0.0" {
+		t.Errorf("User-Agent get=%q post=%q, want both %q", gotGet, gotPost, "vey/1.0.0")
+	}
+}
+
+// --- Session expiry/end (009): the hub's exact 401 messages map to
+// ExitAuth verbatim (contracts/ui-cli.md: "any command on an ended/expired
+// session | exit 3, hub message verbatim") --------------------------------
+
+func TestUnauthorized_SessionExpired_MapsToExitAuthVerbatim(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusUnauthorized)
+		json.NewEncoder(w).Encode(map[string]string{"error": "session expired — sign in again"})
+	}))
+	defer srv.Close()
+
+	c := newTestClient(srv, "tok")
+	err := c.Get(context.Background(), "/api/auth/me", nil, &Me{})
+	if code := codeOf(t, err); code != cmdutil.ExitAuth {
+		t.Errorf("exit code = %d, want %d (ExitAuth)", code, cmdutil.ExitAuth)
+	}
+	if err.Error() != "session expired — sign in again" {
+		t.Errorf("error message = %q, want the hub's message verbatim", err.Error())
+	}
+}
+
+func TestUnauthorized_SessionEnded_MapsToExitAuthVerbatim(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusUnauthorized)
+		json.NewEncoder(w).Encode(map[string]string{"error": "session ended — sign in again"})
+	}))
+	defer srv.Close()
+
+	c := newTestClient(srv, "tok")
+	err := c.Get(context.Background(), "/api/auth/me", nil, &Me{})
+	if code := codeOf(t, err); code != cmdutil.ExitAuth {
+		t.Errorf("exit code = %d, want %d (ExitAuth)", code, cmdutil.ExitAuth)
+	}
+	if err.Error() != "session ended — sign in again" {
+		t.Errorf("error message = %q, want the hub's message verbatim", err.Error())
+	}
+}

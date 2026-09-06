@@ -143,3 +143,68 @@ func TestAuditCatalog_LastUpdatedCoversAccountLifecycle(t *testing.T) {
 			AuditCatalogLastUpdated, minDate.Format(time.RFC3339))
 	}
 }
+
+// TestAuditCatalog_Sessions verifies the three session events (feature 009)
+// are present exactly once each, filed under Authentication. Their shapes
+// differ deliberately: creation and revocation are things a person did, while
+// an expiry is the hub refusing a request on its own, so it is a system action
+// with a failure outcome. Without these entries the audit-log filter UI would
+// offer no way to find a sign-in's session or a forced sign-out.
+func TestAuditCatalog_Sessions(t *testing.T) {
+	byAction := make(map[string]AuditCatalogEntry, len(AuditCatalog))
+	counts := make(map[string]int, len(AuditCatalog))
+	for _, entry := range AuditCatalog {
+		byAction[entry.Action] = entry
+		counts[entry.Action]++
+	}
+
+	for _, tc := range []struct {
+		action    string
+		label     string
+		outcome   string
+		actorType string
+	}{
+		{AuditSessionCreated, "Session created", AuditOutcomeSuccess, AuditActorTypeUser},
+		{AuditSessionRevoked, "Session revoked", AuditOutcomeSuccess, AuditActorTypeUser},
+		{AuditSessionExpired, "Session expired", AuditOutcomeFailure, AuditActorTypeSystem},
+	} {
+		entry, ok := byAction[tc.action]
+		if !ok {
+			t.Errorf("AuditCatalog missing entry for action %q", tc.action)
+			continue
+		}
+		if counts[tc.action] != 1 {
+			t.Errorf("action %q appears %d times, want 1", tc.action, counts[tc.action])
+		}
+		if entry.Label != tc.label {
+			t.Errorf("%s: expected label %q, got %q", tc.action, tc.label, entry.Label)
+		}
+		if entry.Category != "Authentication" {
+			t.Errorf("%s: expected category %q, got %q", tc.action, "Authentication", entry.Category)
+		}
+		if entry.Outcome != tc.outcome {
+			t.Errorf("%s: expected outcome %q, got %q", tc.action, tc.outcome, entry.Outcome)
+		}
+		if entry.ActorType != tc.actorType {
+			t.Errorf("%s: expected actor type %q, got %q", tc.action, tc.actorType, entry.ActorType)
+		}
+		if entry.ResourceType != auditResourceSession {
+			t.Errorf("%s: expected resource type %q, got %q", tc.action, auditResourceSession, entry.ResourceType)
+		}
+	}
+}
+
+// TestAuditCatalog_LastUpdatedCoversSessions pins the catalog stamp to the
+// session-records bump, so a later feature that adds actions without moving
+// the date fails here.
+func TestAuditCatalog_LastUpdatedCoversSessions(t *testing.T) {
+	parsed, err := time.Parse(time.RFC3339, AuditCatalogLastUpdated)
+	if err != nil {
+		t.Fatalf("AuditCatalogLastUpdated %q is not valid RFC3339: %v", AuditCatalogLastUpdated, err)
+	}
+	minDate := time.Date(2026, 9, 6, 12, 0, 0, 0, time.UTC)
+	if parsed.Before(minDate) {
+		t.Errorf("AuditCatalogLastUpdated %q is before the session-records bump %s",
+			AuditCatalogLastUpdated, minDate.Format(time.RFC3339))
+	}
+}
