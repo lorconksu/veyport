@@ -46,6 +46,14 @@ const (
 	AuditUserRoleUpdated           = "user.role_updated"
 	AuditUserDeleted               = "user.deleted"
 	AuditUserLocked                = "user.locked"
+	// Account-lifecycle events (feature 008). Each is written by the acting
+	// administrator against the target account, so the trail answers "who
+	// changed this account's access, and when" without joining anything.
+	AuditUserDisabled              = "user.disabled"
+	AuditUserEnabled               = "user.enabled"
+	AuditUserUnlocked              = "user.unlocked"
+	AuditUserDormancyExemptSet     = "user.dormancy_exempt_set"
+	AuditUserDormancyExemptCleared = "user.dormancy_exempt_cleared"
 )
 
 const (

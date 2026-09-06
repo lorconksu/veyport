@@ -14,6 +14,7 @@ type hubConfigResponse struct {
 	LockoutThreshold       int     `json:"lockout_threshold"`
 	LockoutWindowMinutes   int     `json:"lockout_window_minutes"`
 	LockoutDurationMinutes int     `json:"lockout_duration_minutes"`
+	DormantDays            int     `json:"dormant_days"`
 }
 
 type hubConfigRequest struct {
@@ -21,6 +22,7 @@ type hubConfigRequest struct {
 	LockoutThreshold       *int    `json:"lockout_threshold"`
 	LockoutWindowMinutes   *int    `json:"lockout_window_minutes"`
 	LockoutDurationMinutes *int    `json:"lockout_duration_minutes"`
+	DormantDays            *int    `json:"dormant_days"`
 }
 
 func (s *Server) handleGetHubConfig(w http.ResponseWriter, r *http.Request) {
@@ -42,6 +44,7 @@ func (s *Server) handleGetHubConfig(w http.ResponseWriter, r *http.Request) {
 	cfg.LockoutThreshold = policy.Threshold
 	cfg.LockoutWindowMinutes = int(policy.Window.Minutes())
 	cfg.LockoutDurationMinutes = int(policy.Duration.Minutes())
+	cfg.DormantDays = policy.DormantDays
 
 	respondJSON(w, http.StatusOK, cfg)
 }
@@ -75,6 +78,10 @@ func (s *Server) handleUpdateHubConfig(w http.ResponseWriter, r *http.Request) {
 		respondError(w, http.StatusBadRequest, "lockout_duration_minutes must be a non-negative integer")
 		return
 	}
+	if req.DormantDays != nil && *req.DormantDays < 0 {
+		respondError(w, http.StatusBadRequest, "dormant_days must be a non-negative integer")
+		return
+	}
 
 	if req.GRPCExternalAddr != nil {
 		if err := s.store.SetConfig("grpc_external_addr", *req.GRPCExternalAddr); err != nil {
@@ -97,6 +104,12 @@ func (s *Server) handleUpdateHubConfig(w http.ResponseWriter, r *http.Request) {
 	}
 	if req.LockoutDurationMinutes != nil {
 		if err := s.store.SetConfig(lockout.KeyDurationMinutes, strconv.Itoa(*req.LockoutDurationMinutes)); err != nil {
+			respondError(w, http.StatusInternalServerError, "failed to save hub config")
+			return
+		}
+	}
+	if req.DormantDays != nil {
+		if err := s.store.SetConfig(lockout.KeyDormantDays, strconv.Itoa(*req.DormantDays)); err != nil {
 			respondError(w, http.StatusInternalServerError, "failed to save hub config")
 			return
 		}

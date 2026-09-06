@@ -28,6 +28,9 @@ const (
 	KeyWindowMinutes = "account.lockout_window_minutes"
 	// KeyDurationMinutes is the lock duration, in whole minutes.
 	KeyDurationMinutes = "account.lockout_duration_minutes"
+	// KeyDormantDays is the number of days of inactivity after which an
+	// account is considered dormant.
+	KeyDormantDays = "account.dormant_days"
 )
 
 // Built-in policy values used whenever a key is unset or unusable.
@@ -38,6 +41,8 @@ const (
 	DefaultWindow = 15 * time.Minute
 	// DefaultDuration is the built-in lock duration.
 	DefaultDuration = 15 * time.Minute
+	// DefaultDormantDays is the built-in dormancy threshold, in days.
+	DefaultDormantDays = 35
 )
 
 // NoAutoUnlock is the far-future expiry stamped on an account when the policy
@@ -65,18 +70,22 @@ type Policy struct {
 	Window time.Duration
 	// Duration is how long a lock lasts; 0 means no automatic unlock.
 	Duration time.Duration
+	// DormantDays is how many days of inactivity mark an account dormant;
+	// 0 disables dormancy enforcement entirely.
+	DormantDays int
 }
 
 // Defaults returns the built-in policy used when nothing is configured.
 func Defaults() Policy {
 	return Policy{
-		Threshold: DefaultThreshold,
-		Window:    DefaultWindow,
-		Duration:  DefaultDuration,
+		Threshold:   DefaultThreshold,
+		Window:      DefaultWindow,
+		Duration:    DefaultDuration,
+		DormantDays: DefaultDormantDays,
 	}
 }
 
-// Load reads the three policy keys through get and returns the effective
+// Load reads the four policy keys through get and returns the effective
 // policy. It is total: it never panics and never returns an error. Each key is
 // resolved independently, so one unusable value cannot discard the others.
 //
@@ -85,6 +94,8 @@ func Defaults() Policy {
 // negative number. This mirrors the tolerance of the store's
 // getConfigIntDefault helper, with surrounding whitespace additionally trimmed.
 // Window and Duration are stored as whole minutes and converted here.
+// DormantDays is stored and read as a whole number of days; 0 is honoured
+// (dormancy disabled), not treated as unset.
 //
 // The returned Policy always satisfies Validate.
 func Load(get func(key string) (string, error)) Policy {
@@ -92,6 +103,7 @@ func Load(get func(key string) (string, error)) Policy {
 	p.Threshold = loadInt(get, KeyThreshold, DefaultThreshold)
 	p.Window = time.Duration(loadInt(get, KeyWindowMinutes, int(DefaultWindow/time.Minute))) * time.Minute
 	p.Duration = time.Duration(loadInt(get, KeyDurationMinutes, int(DefaultDuration/time.Minute))) * time.Minute
+	p.DormantDays = loadInt(get, KeyDormantDays, DefaultDormantDays)
 	return p
 }
 
@@ -121,6 +133,9 @@ func (p Policy) Validate() error {
 	}
 	if p.Duration < 0 {
 		return fmt.Errorf("%w: duration must be >= 0, got %s", ErrInvalidPolicy, p.Duration)
+	}
+	if p.DormantDays < 0 {
+		return fmt.Errorf("%w: dormant_days must be >= 0, got %d", ErrInvalidPolicy, p.DormantDays)
 	}
 	return nil
 }

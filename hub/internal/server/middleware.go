@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log"
 	"net"
@@ -55,6 +56,17 @@ func (s *Server) authMiddleware(requiredType string, next http.Handler) http.Han
 
 		userID, role, tokenType, err := s.authenticateRequestToken(tokenStr)
 		if err != nil {
+			// A credential that is itself valid but belongs to an account that
+			// may no longer use it gets the canonical account-state message
+			// instead of the generic one, so an operator whose account was
+			// disabled or went dormant is told why (008 FR-009). The web app
+			// treats the 401 exactly as it treats any other, attempting a
+			// refresh that also fails and then returning to the sign-in page.
+			var accountErr *accountAccessError
+			if errors.As(err, &accountErr) {
+				respondError(w, http.StatusUnauthorized, accountErr.Error())
+				return
+			}
 			respondError(w, http.StatusUnauthorized, "invalid token")
 			return
 		}
@@ -82,6 +94,9 @@ func (s *Server) authenticateRequestToken(tokenStr string) (userID, role, tokenT
 			if err != nil || claims.TokenGeneration != user.TokenGeneration {
 				return "", "", "", fmt.Errorf("token has been revoked")
 			}
+			if accountErr := s.accountAccessError(user); accountErr != nil {
+				return "", "", "", accountErr
+			}
 		}
 		return claims.Subject, claims.Role, claims.TokenType, nil
 	}
@@ -100,7 +115,19 @@ func (s *Server) authenticateRequestToken(tokenStr string) (userID, role, tokenT
 		return "", "", "", err
 	}
 
+	// Checked before the token is stamped as used: a refused request must
+	// leave no trace of activity, or a disabled account's own rejected calls
+	// would keep it looking alive (008 FR-009, FR-012).
+	if accountErr := s.accountAccessError(user); accountErr != nil {
+		return "", "", "", accountErr
+	}
+
 	_ = s.store.UpdateAPITokenLastUsed(apiToken.ID, time.Now().UTC())
+	// API-token traffic counts as activity, so an automation account that never
+	// signs in interactively does not drift into dormancy (008 FR-012, R3). The
+	// store throttles the write to at most one per user per minute, and a
+	// failure here must never fail an otherwise valid request.
+	_ = s.store.TouchUserActivity(user.ID, s.now())
 	return user.ID, string(user.Role), auth.TokenTypeAPIToken, nil
 }
 

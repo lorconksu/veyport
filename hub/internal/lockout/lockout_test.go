@@ -32,9 +32,10 @@ func mapGetter(m map[string]string) func(string) (string, error) {
 func TestDefaults(t *testing.T) {
 	got := lockout.Defaults()
 	want := lockout.Policy{
-		Threshold: 5,
-		Window:    15 * time.Minute,
-		Duration:  15 * time.Minute,
+		Threshold:   5,
+		Window:      15 * time.Minute,
+		Duration:    15 * time.Minute,
+		DormantDays: 35,
 	}
 	if got != want {
 		t.Fatalf("Defaults() = %+v, want %+v", got, want)
@@ -47,6 +48,12 @@ func TestDefaults(t *testing.T) {
 	}
 	if lockout.DefaultDuration != 15*time.Minute {
 		t.Errorf("DefaultDuration = %v, want 15m", lockout.DefaultDuration)
+	}
+	if lockout.DefaultDormantDays != 35 {
+		t.Errorf("DefaultDormantDays = %d, want 35", lockout.DefaultDormantDays)
+	}
+	if got.DormantDays != 35 {
+		t.Errorf("Defaults().DormantDays = %d, want 35", got.DormantDays)
 	}
 	if err := got.Validate(); err != nil {
 		t.Errorf("Defaults().Validate() = %v, want nil", err)
@@ -72,6 +79,9 @@ func TestConfigKeys(t *testing.T) {
 	}
 	if lockout.KeyDurationMinutes != "account.lockout_duration_minutes" {
 		t.Errorf("KeyDurationMinutes = %q", lockout.KeyDurationMinutes)
+	}
+	if lockout.KeyDormantDays != "account.dormant_days" {
+		t.Errorf("KeyDormantDays = %q", lockout.KeyDormantDays)
 	}
 }
 
@@ -366,7 +376,7 @@ func TestLoad(t *testing.T) {
 				lockout.KeyWindowMinutes:   "30",
 				lockout.KeyDurationMinutes: "1",
 			},
-			want: lockout.Policy{Threshold: 3, Window: 30 * time.Minute, Duration: time.Minute},
+			want: lockout.Policy{Threshold: 3, Window: 30 * time.Minute, Duration: time.Minute, DormantDays: defaults.DormantDays},
 		},
 		{
 			name: "zeros are honoured, not treated as unset",
@@ -374,8 +384,9 @@ func TestLoad(t *testing.T) {
 				lockout.KeyThreshold:       "0",
 				lockout.KeyWindowMinutes:   "0",
 				lockout.KeyDurationMinutes: "0",
+				lockout.KeyDormantDays:     "0",
 			},
-			want: lockout.Policy{Threshold: 0, Window: 0, Duration: 0},
+			want: lockout.Policy{Threshold: 0, Window: 0, Duration: 0, DormantDays: 0},
 		},
 		{
 			name: "unparsable values fall back per key",
@@ -383,6 +394,7 @@ func TestLoad(t *testing.T) {
 				lockout.KeyThreshold:       "abc",
 				lockout.KeyWindowMinutes:   "",
 				lockout.KeyDurationMinutes: "12.5",
+				lockout.KeyDormantDays:     "abc",
 			},
 			want: defaults,
 		},
@@ -392,6 +404,7 @@ func TestLoad(t *testing.T) {
 				lockout.KeyThreshold:       "-1",
 				lockout.KeyWindowMinutes:   "-3",
 				lockout.KeyDurationMinutes: "-100",
+				lockout.KeyDormantDays:     "-1",
 			},
 			want: defaults,
 		},
@@ -400,9 +413,9 @@ func TestLoad(t *testing.T) {
 			config: map[string]string{
 				lockout.KeyThreshold:     "7",
 				lockout.KeyWindowMinutes: "abc",
-				// duration missing entirely
+				// duration and dormant_days missing entirely
 			},
-			want: lockout.Policy{Threshold: 7, Window: defaults.Window, Duration: defaults.Duration},
+			want: lockout.Policy{Threshold: 7, Window: defaults.Window, Duration: defaults.Duration, DormantDays: defaults.DormantDays},
 		},
 		{
 			name: "surrounding whitespace is tolerated",
@@ -410,8 +423,37 @@ func TestLoad(t *testing.T) {
 				lockout.KeyThreshold:       " 4 ",
 				lockout.KeyWindowMinutes:   "\t20\n",
 				lockout.KeyDurationMinutes: "2",
+				lockout.KeyDormantDays:     " 7 ",
 			},
-			want: lockout.Policy{Threshold: 4, Window: 20 * time.Minute, Duration: 2 * time.Minute},
+			want: lockout.Policy{Threshold: 4, Window: 20 * time.Minute, Duration: 2 * time.Minute, DormantDays: 7},
+		},
+		{
+			name: "dormant_days valid override is applied and other keys still honoured",
+			config: map[string]string{
+				lockout.KeyThreshold:   "3",
+				lockout.KeyDormantDays: "7",
+			},
+			want: lockout.Policy{Threshold: 3, Window: defaults.Window, Duration: defaults.Duration, DormantDays: 7},
+		},
+		{
+			name:   "dormant_days zero disables dormancy, not treated as unset",
+			config: map[string]string{lockout.KeyDormantDays: "0"},
+			want:   lockout.Policy{Threshold: defaults.Threshold, Window: defaults.Window, Duration: defaults.Duration, DormantDays: 0},
+		},
+		{
+			name:   "dormant_days unparsable falls back to default",
+			config: map[string]string{lockout.KeyDormantDays: "abc"},
+			want:   defaults,
+		},
+		{
+			name:   "dormant_days negative falls back to default",
+			config: map[string]string{lockout.KeyDormantDays: "-1"},
+			want:   defaults,
+		},
+		{
+			name:   "dormant_days missing (getter error) falls back to default",
+			config: map[string]string{},
+			want:   defaults,
 		},
 	}
 
@@ -431,7 +473,7 @@ func TestLoadGetterErrorsEverywhere(t *testing.T) {
 	}
 }
 
-func TestLoadReadsExactlyTheThreeKeys(t *testing.T) {
+func TestLoadReadsExactlyTheFourKeys(t *testing.T) {
 	var seen []string
 	get := func(key string) (string, error) {
 		seen = append(seen, key)
@@ -440,7 +482,7 @@ func TestLoadReadsExactlyTheThreeKeys(t *testing.T) {
 	lockout.Load(get)
 
 	sort.Strings(seen)
-	want := []string{lockout.KeyDurationMinutes, lockout.KeyThreshold, lockout.KeyWindowMinutes}
+	want := []string{lockout.KeyDurationMinutes, lockout.KeyThreshold, lockout.KeyWindowMinutes, lockout.KeyDormantDays}
 	sort.Strings(want)
 	if len(seen) != len(want) {
 		t.Fatalf("Load() read %v, want exactly %v", seen, want)
@@ -455,9 +497,9 @@ func TestLoadReadsExactlyTheThreeKeys(t *testing.T) {
 func TestLoadResultIsAlwaysValid(t *testing.T) {
 	configs := []map[string]string{
 		{},
-		{lockout.KeyThreshold: "-5", lockout.KeyWindowMinutes: "-5", lockout.KeyDurationMinutes: "-5"},
+		{lockout.KeyThreshold: "-5", lockout.KeyWindowMinutes: "-5", lockout.KeyDurationMinutes: "-5", lockout.KeyDormantDays: "-5"},
 		{lockout.KeyThreshold: "nope"},
-		{lockout.KeyThreshold: "0", lockout.KeyWindowMinutes: "0", lockout.KeyDurationMinutes: "0"},
+		{lockout.KeyThreshold: "0", lockout.KeyWindowMinutes: "0", lockout.KeyDurationMinutes: "0", lockout.KeyDormantDays: "0"},
 	}
 	for i, config := range configs {
 		if err := lockout.Load(mapGetter(config)).Validate(); err != nil {
@@ -496,6 +538,12 @@ func TestPolicyValidate(t *testing.T) {
 			policy:    lockout.Policy{Threshold: 5, Window: time.Minute, Duration: -time.Minute},
 			wantErr:   true,
 			wantField: "duration",
+		},
+		{
+			name:      "negative dormant days is rejected",
+			policy:    lockout.Policy{Threshold: 5, Window: time.Minute, Duration: time.Minute, DormantDays: -1},
+			wantErr:   true,
+			wantField: "dormant_days",
 		},
 	}
 

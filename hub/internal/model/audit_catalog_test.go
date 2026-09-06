@@ -70,3 +70,67 @@ func TestAuditCatalog_NoDuplicateActions(t *testing.T) {
 		t.Errorf("expected %q to appear exactly once in AuditCatalog, got %d", AuditUserLocked, seen[AuditUserLocked])
 	}
 }
+
+// TestAuditCatalog_AccountLifecycle verifies the five account-lifecycle actions
+// added by feature 008 are present exactly once each, filed under User
+// Management as successful administrator actions on a user resource. Without
+// them the audit-log filter UI would offer no way to find a disable or an
+// exemption change.
+func TestAuditCatalog_AccountLifecycle(t *testing.T) {
+	byAction := make(map[string]AuditCatalogEntry, len(AuditCatalog))
+	counts := make(map[string]int, len(AuditCatalog))
+	for _, entry := range AuditCatalog {
+		byAction[entry.Action] = entry
+		counts[entry.Action]++
+	}
+
+	for _, tc := range []struct {
+		action string
+		label  string
+	}{
+		{AuditUserDisabled, "Account disabled"},
+		{AuditUserEnabled, "Account enabled"},
+		{AuditUserUnlocked, "Account unlocked"},
+		{AuditUserDormancyExemptSet, "Dormancy exemption granted"},
+		{AuditUserDormancyExemptCleared, "Dormancy exemption removed"},
+	} {
+		entry, ok := byAction[tc.action]
+		if !ok {
+			t.Errorf("AuditCatalog missing entry for action %q", tc.action)
+			continue
+		}
+		if counts[tc.action] != 1 {
+			t.Errorf("action %q appears %d times, want 1", tc.action, counts[tc.action])
+		}
+		if entry.Label != tc.label {
+			t.Errorf("%s: expected label %q, got %q", tc.action, tc.label, entry.Label)
+		}
+		if entry.Category != auditCategoryUserManagement {
+			t.Errorf("%s: expected category %q, got %q", tc.action, auditCategoryUserManagement, entry.Category)
+		}
+		if entry.Outcome != AuditOutcomeSuccess {
+			t.Errorf("%s: expected outcome %q, got %q", tc.action, AuditOutcomeSuccess, entry.Outcome)
+		}
+		if entry.ActorType != AuditActorTypeUser {
+			t.Errorf("%s: expected actor type %q, got %q", tc.action, AuditActorTypeUser, entry.ActorType)
+		}
+		if entry.ResourceType != "user" {
+			t.Errorf("%s: expected resource type %q, got %q", tc.action, "user", entry.ResourceType)
+		}
+	}
+}
+
+// TestAuditCatalog_LastUpdatedCoversAccountLifecycle pins the catalog stamp to
+// the account-lifecycle bump, so a later feature that adds actions without
+// moving the date fails here.
+func TestAuditCatalog_LastUpdatedCoversAccountLifecycle(t *testing.T) {
+	parsed, err := time.Parse(time.RFC3339, AuditCatalogLastUpdated)
+	if err != nil {
+		t.Fatalf("AuditCatalogLastUpdated %q is not valid RFC3339: %v", AuditCatalogLastUpdated, err)
+	}
+	minDate := time.Date(2026, 9, 6, 0, 0, 0, 0, time.UTC)
+	if parsed.Before(minDate) {
+		t.Errorf("AuditCatalogLastUpdated %q is before the account-lifecycle bump %s",
+			AuditCatalogLastUpdated, minDate.Format(time.RFC3339))
+	}
+}

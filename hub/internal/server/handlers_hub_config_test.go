@@ -204,6 +204,64 @@ func TestHandleGetHubConfig_LockoutDefaults(t *testing.T) {
 	if got, want := resp["lockout_duration_minutes"], float64(15); got != want {
 		t.Fatalf("expected lockout_duration_minutes %v, got %v", want, got)
 	}
+	if got, want := resp["dormant_days"], float64(35); got != want {
+		t.Fatalf("expected dormant_days %v, got %v", want, got)
+	}
+}
+
+func TestUpdateHubConfig_DormantDays_PersistsAndLeavesRestUnchanged(t *testing.T) {
+	s := testServer(t)
+	token := registerAndGetAdminToken(t, s)
+
+	body := bytes.NewBufferString(`{"dormant_days":1}`)
+	req := httptest.NewRequest("PUT", testHubSettingsPath, body)
+	req.Header.Set("Authorization", testBearerPrefix+token)
+	rec := httptest.NewRecorder()
+	s.routes().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf(testExpected200Body, rec.Code, rec.Body.String())
+	}
+
+	resp := getHubConfig(t, s, token)
+
+	if got, want := resp["dormant_days"], float64(1); got != want {
+		t.Fatalf("expected dormant_days %v, got %v", want, got)
+	}
+	if got, want := resp["lockout_threshold"], float64(5); got != want {
+		t.Fatalf("expected lockout_threshold to remain default %v, got %v", want, got)
+	}
+	if got, want := resp["lockout_window_minutes"], float64(15); got != want {
+		t.Fatalf("expected lockout_window_minutes to remain default %v, got %v", want, got)
+	}
+	if got, want := resp["lockout_duration_minutes"], float64(15); got != want {
+		t.Fatalf("expected lockout_duration_minutes to remain default %v, got %v", want, got)
+	}
+	if got, want := resp["grpc_external_addr"], ""; got != want {
+		t.Fatalf("expected grpc_external_addr unchanged (%q), got %v", want, got)
+	}
+}
+
+func TestUpdateHubConfig_NegativeDormantDays(t *testing.T) {
+	s := testServer(t)
+	token := registerAndGetAdminToken(t, s)
+
+	req := httptest.NewRequest("PUT", testHubSettingsPath, bytes.NewBufferString(`{"dormant_days":-1}`))
+	req.Header.Set("Authorization", testBearerPrefix+token)
+	rec := httptest.NewRecorder()
+	s.routes().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d: %s", rec.Code, rec.Body.String())
+	}
+
+	var resp map[string]string
+	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
+		t.Fatalf(testDecodeRespErr, err)
+	}
+	if want := "dormant_days must be a non-negative integer"; resp["error"] != want {
+		t.Fatalf("expected error %q, got %q", want, resp["error"])
+	}
 }
 
 func TestUpdateHubConfig_LockoutPartial_PersistsAndLeavesRestUnchanged(t *testing.T) {

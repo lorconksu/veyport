@@ -48,8 +48,16 @@ type User struct {
 	LastFailedLoginAt     *time.Time   `json:"last_failed_login_at,omitempty"`
 	LastLoginAt           *time.Time   `json:"last_login_at,omitempty"`
 	LockedUntil           *time.Time   `json:"locked_until,omitempty"`
-	CreatedAt             time.Time    `json:"created_at"`
-	UpdatedAt             time.Time    `json:"updated_at"`
+	DisabledAt            *time.Time   `json:"disabled_at,omitempty"`
+	DisabledBy            *string      `json:"disabled_by,omitempty"`
+	ReactivatedAt         *time.Time   `json:"reactivated_at,omitempty"`
+	DormancyExempt        bool         `json:"dormancy_exempt"`
+	LastActivityAt        *time.Time   `json:"last_activity_at,omitempty"`
+	// Status is derived (not stored) — active|locked|disabled|dormant — and
+	// populated by handlers that already hold the policy and current time.
+	Status    string    `json:"status,omitempty"`
+	CreatedAt time.Time `json:"created_at"`
+	UpdatedAt time.Time `json:"updated_at"`
 }
 
 type UpdateAvatarRequest struct {
@@ -99,6 +107,14 @@ type ChangePasswordRequest struct {
 
 type UpdateRoleRequest struct {
 	Role Role `json:"role"`
+}
+
+type UpdateUserStatusRequest struct {
+	Disabled bool `json:"disabled"`
+}
+
+type SetDormancyExemptRequest struct {
+	Exempt bool `json:"exempt"`
 }
 
 type TokenPair struct {

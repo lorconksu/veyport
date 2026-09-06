@@ -76,12 +76,17 @@ func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// The account created here is the hub's first administrator. It is marked
+	// exempt from dormancy so a hub always keeps one administrative account
+	// that inactivity can never lock its owner out of (008 FR-013); migration
+	// 022 marks the earliest existing admin for hubs that predate this.
 	user := &model.User{
-		ID:           uuid.NewString(),
-		Username:     req.Username,
-		Email:        req.Email,
-		PasswordHash: hash,
-		Role:         model.RoleAdmin,
+		ID:             uuid.NewString(),
+		Username:       req.Username,
+		Email:          req.Email,
+		PasswordHash:   hash,
+		Role:           model.RoleAdmin,
+		DormancyExempt: true,
 	}
 
 	if err := s.store.CreateUser(user); err != nil {
@@ -134,6 +139,15 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// A disabled or dormant account is refused ahead of everything else,
+	// including the lock check and the directory branch (008 FR-009, R4): the
+	// account cannot sign in at all, so no credential work is warranted and no
+	// lock state should accrue on its behalf.
+	if st := s.accountStatus(user); accountRefuses(st) {
+		s.refuseAccount(w, r, user, st)
+		return
+	}
+
 	// The lock is checked before any credential work — before the directory
 	// branch and before the password compare — so a locked account can never
 	// reveal whether the supplied password was right (spec FR-005, SC-002).
@@ -165,6 +179,15 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleUnknownUserLogin(w http.ResponseWriter, r *http.Request, req model.LoginRequest) {
 	if ldapUser, ldapErr := s.authenticateLDAPLogin(r.Context(), req.Username, req.Password); ldapErr == nil {
+		// The username matched no hub account, but the directory resolved to
+		// one — the upsert matches on the directory's stable identifier, so it
+		// can return an existing shadow account under a name this hub does not
+		// index it by. Checking here keeps that route from becoming the one way
+		// into a disabled or dormant account (008 FR-009).
+		if st := s.accountStatus(ldapUser); accountRefuses(st) {
+			s.refuseAccount(w, r, ldapUser, st)
+			return
+		}
 		s.respondAfterPrimaryLogin(w, ldapUser)
 		return
 	}
@@ -176,7 +199,13 @@ func (s *Server) handleUnknownUserLogin(w http.ResponseWriter, r *http.Request, 
 
 func (s *Server) handleLDAPUserLogin(w http.ResponseWriter, r *http.Request, req model.LoginRequest, user *model.User) {
 	// Re-checked here as well as in handleLogin: no directory is contacted on
-	// behalf of a locked account, whatever route reaches this branch (FR-005).
+	// behalf of an unusable or locked account, whatever route reaches this
+	// branch (007 FR-005, 008 FR-009). Without this the hub could be turned
+	// into a credential-stuffing proxy for accounts it has already refused.
+	if st := s.accountStatus(user); accountRefuses(st) {
+		s.refuseAccount(w, r, user, st)
+		return
+	}
 	if lockout.IsLocked(user.LockedUntil, s.now()) {
 		s.refuseLocked(w, r, user)
 		return
@@ -263,6 +292,14 @@ func (s *Server) handleLoginTOTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// An account disabled or gone dormant between the two stages is refused
+	// here too: a token minted by the password stage must not outlive the
+	// account's usability (008 FR-009).
+	if st := s.accountStatus(user); accountRefuses(st) {
+		s.refuseAccount(w, r, user, st)
+		return
+	}
+
 	// An account that locked between the two stages is refused here too, before
 	// the stored secret is decrypted or the code is evaluated (FR-005).
 	if lockout.IsLocked(user.LockedUntil, s.now()) {
@@ -340,6 +377,15 @@ func (s *Server) handleRefresh(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// A refresh token issued before the account was disabled or went dormant
+	// must not mint a new pair. The generation bump performed by a disable
+	// would catch this one too, but dormancy bumps nothing, so the check has to
+	// stand on the account's live status (008 FR-009).
+	if err := s.accountAccessError(user); err != nil {
+		respondError(w, http.StatusUnauthorized, err.Error())
+		return
+	}
+
 	// Validate token generation matches DB (detect revoked/outdated refresh tokens)
 	if claims.TokenGeneration != user.TokenGeneration {
 		respondError(w, http.StatusUnauthorized, "token has been revoked")
@@ -385,6 +431,9 @@ func (s *Server) handleMe(w http.ResponseWriter, r *http.Request) {
 		respondError(w, http.StatusNotFound, errUserNotFound)
 		return
 	}
+	// Status is derived rather than stored, so it is computed at the moment of
+	// the response (008 R7).
+	user.Status = string(s.accountStatus(user))
 	respondJSON(w, http.StatusOK, user)
 }
 
