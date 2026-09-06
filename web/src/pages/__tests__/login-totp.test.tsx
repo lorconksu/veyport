@@ -154,6 +154,34 @@ describe('LoginTOTPPage', () => {
     })
   })
 
+  it('autofilling the full code into the first box fills all inputs and submits', async () => {
+    const authResponse = {
+      access_token: 'acc',
+      refresh_token: 'ref',
+      user: { id: '1', username: 'admin', email: 'a@b.com', role: 'admin', totp_enabled: true, avatar: null, created_at: '', updated_at: '' },
+    }
+    mockApiFetch.mockResolvedValueOnce(authResponse)
+    renderPage()
+
+    // Simulates a password manager (1Password) writing the whole code into the
+    // first box as a single change event, rather than one keystroke per box.
+    const inputs = screen.getAllByRole('textbox')
+    fireEvent.change(inputs[0], { target: { value: '123456' } })
+
+    inputs.forEach((input, i) => {
+      expect((input as HTMLInputElement).value).toBe(String(i + 1))
+    })
+
+    await waitFor(() => {
+      expect(mockApiFetch).toHaveBeenCalledWith(
+        '/auth/login/totp',
+        expect.objectContaining({ body: JSON.stringify({ totp_token: 'test-totp-token', code: '123456' }) }),
+      )
+      expect(mockLogin).toHaveBeenCalledWith(authResponse.user)
+      expect(mockNavigate).toHaveBeenCalledWith('/')
+    })
+  })
+
   it('onClick handler on Verify button calls submitCode (line 65)', async () => {
     // When totpToken is present and digits are filled, the button onClick triggers submitCode
     const authResponse = {
