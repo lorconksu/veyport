@@ -99,6 +99,8 @@ func (s *Store) RecordLoginFailure(userID string, now time.Time, p lockout.Polic
 // RecordLoginSuccess clears the failure streak and any lock on a successful
 // sign-in and stamps the last-login time. last_failed_login_at is deliberately
 // left in place: it is failure history for administrators, not counter state.
+// It also stamps last_activity_at, since a completed sign-in is activity for
+// the dormancy clock (internal/account).
 //
 // A single UPDATE is enough here — there is no read-modify-write to protect,
 // and clearing is idempotent.
@@ -106,9 +108,10 @@ func (s *Store) RecordLoginSuccess(userID string, now time.Time) error {
 	stamp := now.UTC().Format(sqliteTimeFormat)
 	result, err := s.db.Exec(
 		`UPDATE users
-		 SET failed_login_count = 0, last_login_at = ?, locked_until = NULL, updated_at = ?
+		 SET failed_login_count = 0, last_login_at = ?, locked_until = NULL,
+		     last_activity_at = ?, updated_at = ?
 		 WHERE id = ?`,
-		stamp, stamp, userID,
+		stamp, stamp, stamp, userID,
 	)
 	if err != nil {
 		return fmt.Errorf("record login success: %w", err)

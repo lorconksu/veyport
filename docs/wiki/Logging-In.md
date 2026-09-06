@@ -18,8 +18,17 @@ If the username or password is wrong, you will see an error message. After 5 fai
 
 Separately, after too many consecutive failed attempts against the same account (the default is
 5), Veyport locks that account and the page shows **"account temporarily locked — try again
-later"**. Wait for the lock to lift - by default 15 minutes - then try again. A correct password
-does not bypass an active lock.
+later"**. Wait for the lock to lift - by default 15 minutes - or ask an administrator to unlock
+it, then try again. A correct password does not bypass an active lock.
+
+Two other messages can appear here instead of the usual wrong-password error, both before your
+password is even checked:
+
+- **"account disabled — contact an administrator"** - an administrator has turned this account
+  off. Only an administrator can turn it back on.
+- **"account dormant — contact an administrator"** - the account has gone unused (no sign-in and
+  no API-token use) for longer than the hub's dormancy policy. An administrator can restore it
+  with **Enable**.
 
 ---
 
@@ -100,6 +109,10 @@ Contact whoever manages the Veyport server. They will need to run the CLI break-
 
 ### I see "account temporarily locked"
 
-See [[Troubleshooting]] for the difference between the per-IP rate limit and the per-account lock, and how long each takes to clear.
+See [[Troubleshooting]] for the difference between the per-IP rate limit and the per-account lock, and how long each takes to clear - or ask an administrator to unlock the account immediately.
+
+### I see "account disabled" or "account dormant"
+
+These are separate from a lock and do not clear on their own. See [[Troubleshooting]] for what each means and how an administrator restores access.
 
 For more login-related solutions, see [[Troubleshooting]].

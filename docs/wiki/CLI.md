@@ -238,7 +238,7 @@ A REST-driven `vey terminal` command mirroring the browser's SSE-based terminal 
 | `0` | Success |
 | `1` | Unexpected/generic error |
 | `2` | Usage error (bad flags/arguments, ambiguous server name, malformed API token) |
-| `3` | Authentication failure (not signed in, expired/invalid credentials, refresh exhausted, account locked) |
+| `3` | Authentication failure (not signed in, expired/invalid credentials, refresh exhausted, account locked/disabled/dormant) |
 | `4` | Permission denied (`403` with otherwise-valid auth) |
 | `5` | Not found (unknown server or path) |
 | `6` | Connectivity failure (dial/TLS/timeout, or a stream that dropped unexpectedly) |
@@ -249,6 +249,14 @@ Exit codes are stable and intended for scripting: distinguish "re-authenticate" 
 A `423` response from the Hub during `vey login` (the account is temporarily locked after too
 many failed attempts) maps to exit code `3`, with the Hub's message printed verbatim to stderr,
 e.g. `account temporarily locked — try again later`.
+
+A `403` from the Hub during `vey login` whose message is an account-state refusal (`account
+disabled — contact an administrator` or `account dormant — contact an administrator`) also maps
+to exit code `3`, message printed verbatim - these are authentication failures, not permission
+refusals, even though the Hub uses status `403` rather than `401` for them. Any other `403` keeps
+exit code `4`. If your account is disabled while `vey` already holds a session, `vey status`
+reports `Reachable: false` with exit code `3`, the same as any other revoked session - see [[API
+Reference]] for the enforcement matrix behind this.
 
 ## TLS
 

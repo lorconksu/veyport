@@ -45,6 +45,12 @@ func (s *Server) routes() http.Handler {
 	mux.Handle("POST /api/users", loggingMiddleware(s.authMiddleware(auth.TokenTypeAccess, s.adminOnly(http.HandlerFunc(s.handleCreateUser)))))
 	mux.Handle("PUT /api/users/{id}/role", loggingMiddleware(s.authMiddleware(auth.TokenTypeAccess, s.adminOnly(http.HandlerFunc(s.handleUpdateUserRole)))))
 	mux.Handle("DELETE /api/users/{id}", loggingMiddleware(s.authMiddleware(auth.TokenTypeAccess, s.adminOnly(http.HandlerFunc(s.handleDeleteUser)))))
+	// Account lifecycle (008): administrator-only, and deliberately not
+	// step-up protected — an administrator locked out of a colleague's account
+	// must be able to act with the session they already hold.
+	mux.Handle("PUT /api/users/{id}/status", loggingMiddleware(s.authMiddleware(auth.TokenTypeAccess, s.adminOnly(http.HandlerFunc(s.handleUpdateUserStatus)))))
+	mux.Handle("POST /api/users/{id}/unlock", loggingMiddleware(s.authMiddleware(auth.TokenTypeAccess, s.adminOnly(http.HandlerFunc(s.handleUnlockUser)))))
+	mux.Handle("PUT /api/users/{id}/dormancy-exemption", loggingMiddleware(s.authMiddleware(auth.TokenTypeAccess, s.adminOnly(http.HandlerFunc(s.handleSetDormancyExempt)))))
 	mux.Handle("GET /api/audit-logs", loggingMiddleware(s.authMiddleware(auth.TokenTypeAccess, s.auditAccessOnly(http.HandlerFunc(s.handleListAuditLogs)))))
 	mux.Handle("GET /api/audit-logs/catalog", loggingMiddleware(s.authMiddleware(auth.TokenTypeAccess, s.auditAccessOnly(http.HandlerFunc(s.handleAuditCatalog)))))
 	mux.Handle("GET /api/audit-logs/health", loggingMiddleware(s.authMiddleware(auth.TokenTypeAccess, s.auditAccessOnly(http.HandlerFunc(s.handleAuditHealth)))))

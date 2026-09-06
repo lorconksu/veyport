@@ -107,10 +107,22 @@ Actions follow a `resource.action` naming pattern.
 | `user.role_updated` | An admin changed a user's role |
 | `user.deleted` | An admin deleted a user account |
 | `user.locked` | An account was locked after too many consecutive failed sign-in attempts (system actor; detail includes the failure threshold, source IP, and lock expiry) |
+| `user.disabled` | An admin disabled a user account (detail includes the number of API tokens revoked as a side effect) |
+| `user.enabled` | An admin re-enabled a disabled user account |
+| `user.unlocked` | An admin cleared a locked account's lock and failure count before it expired on its own (detail `was_locked` records whether the account was actually locked at the time) |
+| `user.dormancy_exempt_set` | An admin marked an administrator account "never dormant" |
+| `user.dormancy_exempt_cleared` | An admin removed the dormancy exemption from an administrator account, or it was removed automatically because the account's role changed away from admin (detail `role changed` in that case) |
 
 When a sign-in attempt is refused because the account is currently locked, it produces a
 `user.login_failed` entry with detail `account locked` and a failure outcome, rather than the
-usual wrong-password detail. This entry does not change the account's failure count.
+usual wrong-password detail. This entry does not change the account's failure count. The same
+pattern covers the two other account-lifecycle refusals introduced in feature 008: a disabled or
+dormant account refused at sign-in produces `user.login_failed` with detail `account disabled` or
+`account dormant`, again as a failure outcome that does not touch the failure count. The
+equivalent refusals at the SSH gateway are `ssh.cert_issue_refused` (certificate issuance) and
+`ssh.session_refused` (an established certificate, but the shell itself refused), both carrying
+the same `account disabled` / `account dormant` reason - see [[SSH Gateway]] and [[API
+Reference]].
 
 ### Server actions
 

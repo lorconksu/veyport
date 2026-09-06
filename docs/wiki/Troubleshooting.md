@@ -38,10 +38,39 @@ and a correct password does not bypass it.
 
 - Wait for the lock to expire (15 minutes by default), then sign in normally.
 - Administrators can see whether an account is locked, and its unlock time, in **Settings → Users**
-  (see [[Settings]]). There is no manual unlock action in this release — administrator unlock ships
-  in a future release.
+  (see [[Settings]]), and can clear the lock immediately with the **Unlock** action instead of
+  waiting it out.
 - If your account is directory-backed (LDAP) and your directory enforces its own lockout policy,
   you may need to wait out both locks — Veyport's lock and the directory's are independent.
+
+### I see "account disabled"
+
+An administrator has turned your account off — usually an offboarding, a suspected compromise, or
+a contractor whose engagement ended. Sign-in, existing browser sessions, API tokens, SSH
+certificate issuance, and SSH gateway shells are all refused with **"account disabled — contact an
+administrator"** until an administrator uses **Enable** on your row in **Settings → Users** (see
+[[Settings]]). There is nothing you can do yourself to clear this — waiting does not help, and
+neither does a correct password.
+
+### I see "account dormant"
+
+Your account has gone unused — no interactive sign-in and no API-token use — for longer than the
+hub's dormancy policy (35 days by default), so Veyport treats it as dormant until reviewed. This is
+not a punishment or a suspicion of compromise; it is the same inactivity control most compliance
+frameworks require. An administrator can restore access with **Enable** in **Settings → Users**
+(see [[Settings]]), which also restarts your activity clock. If you expect to go unused for a long
+stretch on purpose (a break, a long-lived automation account whose token nobody has touched
+recently), ask an administrator to note the account or, for a recovery administrator specifically,
+consider the dormancy exemption described next.
+
+### Our only administrator hasn't signed in for weeks
+
+By default, the very first administrator account ever created on this hub carries a "never
+dormant" exemption, so it cannot lock everyone out simply by going quiet — it stays **Active**
+indefinitely and always shows the **"Never dormant"** marker in the user list. If that
+administrator has since left or you would rather a different account be the recovery path, have
+any administrator assign the exemption to another admin account in **Settings → Users** using
+**Exempt from dormancy** (see [[Settings]]); only administrator accounts can carry it.
 
 ### I'm the only admin and lost my authenticator
 

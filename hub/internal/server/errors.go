@@ -8,4 +8,5 @@ const (
 	errServerNotFound         = "server not found"
 	errFailedToGenerateToken  = "failed to generate token"
 	errFailedToGenerateTokens = "failed to generate tokens"
+	errMissingUserID          = "missing user id"
 )
