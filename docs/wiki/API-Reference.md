@@ -274,6 +274,7 @@ Authenticate with username and password.
 
 **Error Cases:**
 - `401` - Invalid credentials
+- `403` - Account disabled or dormant: `{"error":"account disabled — contact an administrator"}` / `{"error":"account dormant — contact an administrator"}`. Returned before the password is checked or any LDAP bind is attempted; see [Account State Enforcement](#account-state-enforcement).
 - `423` - Account temporarily locked: `{"error":"account temporarily locked — try again later"}`. Returned before the password is checked or any LDAP bind is attempted, and does not change the account's failure count.
 
 **cURL:**
@@ -325,6 +326,7 @@ On success, the Hub also sets `veyport_access`, `veyport_refresh`, and `veyport_
 
 **Error Cases:**
 - `401` - Invalid or expired TOTP token, invalid TOTP code, user not found
+- `403` - Account disabled or dormant, same messages as login, returned before the code is validated; see [Account State Enforcement](#account-state-enforcement).
 - `423` - Account temporarily locked: `{"error":"account temporarily locked — try again later"}`. Returned before the code is validated. A wrong code counts as a failure exactly like a wrong password; a correct code resets the failure count and clears the lock.
 
 **cURL:**
@@ -364,6 +366,7 @@ On success, the Hub rotates the refresh token and sets new `veyport_access`, `ve
 
 **Error Cases:**
 - `401` - Invalid or expired refresh token
+- `401` - Account disabled or dormant, same messages as login; see [Account State Enforcement](#account-state-enforcement)
 
 **cURL:**
 
@@ -480,12 +483,22 @@ Get the current authenticated user's profile.
   "totp_enabled": true,
   "avatar": "data:image/png;base64,...",
   "created_at": "2025-01-01T00:00:00Z",
-  "updated_at": "2025-01-01T00:00:00Z"
+  "updated_at": "2025-01-01T00:00:00Z",
+  "failed_login_count": 0,
+  "last_login_at": "2026-09-04T22:10:33Z",
+  "status": "active",
+  "dormancy_exempt": false,
+  "last_activity_at": "2026-09-04T22:10:33Z"
 }
 ```
 
+Same fields (and same meaning) as `GET /api/users` above: `failed_login_count`,
+`last_failed_login_at`, `last_login_at`, `locked_until`, `status`, `disabled_at`, `disabled_by`,
+`reactivated_at`, `dormancy_exempt`, `last_activity_at` — always about the caller's own account.
+
 **Error Cases:**
 - `404` - User not found
+- `401` - Account disabled or dormant; see [Account State Enforcement](#account-state-enforcement)
 
 **cURL:**
 
@@ -625,6 +638,28 @@ curl - X POST https://hub.example.com/api/auth/totp/disable \
 
 ---
 
+### Account State Enforcement
+
+A disabled or dormant account (see the User Management section below) is refused everywhere it
+could otherwise act, with a state-specific message that reveals nothing about credential
+correctness: `{"error":"account disabled — contact an administrator"}` or
+`{"error":"account dormant — contact an administrator"}`.
+
+| Path | Response |
+|---|---|
+| `POST /api/auth/login` (local and LDAP) | `403`, before the password is checked or any LDAP bind is attempted; the account's failure count is unchanged; audited `user.login_failed` with detail `account disabled`/`account dormant` |
+| `POST /api/auth/login/totp` | `403`, same messages, before the code is validated |
+| `POST /api/auth/refresh` | `401`, same messages |
+| Any request bearing an access token or an API token | `401`, same messages (a browser client redirects to `/login` on the next request) |
+| `POST /api/ssh/certificates` | `401`, same messages (the access token is refused before the handler runs, like any other token-bearing request) |
+| SSH gateway shell | refused with banner `veyport: <same message>`, audited `ssh.session_refused` |
+
+Precedence at sign-in is disabled > dormant > locked (`423`, see above) > credential check. A
+locked account (007) is still refused only at the two sign-in stages above — it is not checked on
+refresh, token-bearing requests, or the SSH endpoints.
+
+---
+
 ## User Management Endpoints
 
 All user management endpoints require **admin** role.
@@ -656,7 +691,13 @@ List all users.
       "failed_login_count": 2,
       "last_failed_login_at": "2026-09-05T10:41:07Z",
       "last_login_at": "2026-09-04T22:10:33Z",
-      "locked_until": "2026-09-05T10:56:07Z"
+      "locked_until": "2026-09-05T10:56:07Z",
+      "status": "dormant",
+      "disabled_at": null,
+      "disabled_by": null,
+      "reactivated_at": "2026-08-01T09:00:00Z",
+      "dormancy_exempt": false,
+      "last_activity_at": "2026-07-20T17:12:41Z"
     }
   ]
 }
@@ -668,8 +709,14 @@ List all users.
 | `last_failed_login_at` | RFC 3339 UTC timestamp of the most recent failure. Absent if the account has never failed a login. |
 | `last_login_at` | RFC 3339 UTC timestamp of the most recent successful sign-in. Absent if the account has never signed in. |
 | `locked_until` | RFC 3339 UTC timestamp of lock expiry. Absent when not locked. May be in the past (a stale lock the next attempt will clear). `9999-12-31T00:00:00Z` means the lock has no automatic expiry. |
+| `status` | Derived, computed at read time from the account lifecycle fields and the current policy. One of `active`, `locked`, `disabled`, `dormant`, with precedence `disabled > dormant > locked > active`. Always present. |
+| `disabled_at` | RFC 3339 UTC timestamp of the most recent admin disable. Absent when enabled. |
+| `disabled_by` | User id of the admin who disabled the account (informational). Absent when enabled. |
+| `reactivated_at` | RFC 3339 UTC timestamp of the most recent admin enable or unlock. Absent if never enabled or unlocked by an admin. Feeds the dormancy clock alongside sign-in and API-token activity. |
+| `dormancy_exempt` | `true` if the account (an administrator account) is marked "never dormant." Always present; meaningful only on admin accounts. |
+| `last_activity_at` | RFC 3339 UTC timestamp of the most recent interactive sign-in or API-token use (see the "Dormant accounts" note in [[Settings]]). Absent if the account has never been used. |
 
-The same four fields appear on `GET /api/auth/me` and in the `user` object returned by login -- a
+The same fields appear on `GET /api/auth/me` and in the `user` object returned by login -- a
 non-admin only ever sees their own values there.
 
 **cURL:**
@@ -780,6 +827,9 @@ Update a user's role.
 - `400` - Invalid role or attempting to change own role
 - `404` - User not found
 
+Changing an exempt administrator to a non-admin role clears `dormancy_exempt` in the same request
+and writes audit event `user.dormancy_exempt_cleared` with detail `role changed`.
+
 **cURL:**
 
 ```bash
@@ -787,6 +837,136 @@ curl - X PUT https://hub.example.com/api/users/USER_UUID/role \
   - H 'Authorization: Bearer <access_token>' \
   - H 'Content-Type: application/json' \
   - d '{"role":"admin"}'
+```
+
+---
+
+### PUT /api/users/{id}/status
+
+Disable or enable a user account (feature 008). See [Account State Enforcement](#account-state-enforcement) for where a disabled/dormant account is refused.
+
+| Property | Value |
+|---|---|
+| Auth | Access token (Bearer), admin only |
+
+**Path Parameters:**
+- `id` - Target user UUID
+
+**Request Body:**
+
+```json
+{
+  "disabled": true
+}
+```
+
+**Response (200), disabling:**
+
+```json
+{
+  "user": {
+    "id": "uuid",
+    "status": "disabled",
+    "disabled_at": "2026-09-06T10:00:00Z",
+    "disabled_by": "b2c1...",
+    "...": "…other user fields"
+  }
+}
+```
+
+**Response (200), enabling** (`{"disabled": false}`): the user object with `status: "active"` (or
+`"locked"`/`"dormant"` if still applicable) and `reactivated_at` set to now.
+
+**Error Cases:**
+- `400` - `{"error":"cannot disable your own account"}` — target is the caller
+- `404` - `{"error":"user not found"}`
+- `409` - `{"error":"cannot disable the last enabled administrator"}` — target is the only remaining account with role `admin` and no `disabled_at`
+
+Disabling an already-disabled account (or enabling an already-enabled one) returns 200 with the
+unchanged user — idempotent, but still audited.
+
+**Side effects of disabling:** `token_generation` is bumped, so the account's existing web
+sessions and refresh tokens are rejected on their next use; **all** of the account's API tokens
+are revoked (not merely suspended — new ones must be minted after re-enable); audit
+`user.disabled` with detail `{"revoked_api_tokens":N}`. **Side effects of enabling:**
+`locked_until` and `failed_login_count` are cleared, `reactivated_at` is set to now (which also
+restarts the dormancy clock), audit `user.enabled`.
+
+**cURL:**
+
+```bash
+curl - X PUT https://hub.example.com/api/users/USER_UUID/status \
+  - H 'Authorization: Bearer <access_token>' \
+  - H 'Content-Type: application/json' \
+  - d '{"disabled":true}'
+```
+
+---
+
+### POST /api/users/{id}/unlock
+
+Clear a locked account's lock and consecutive-failure count (feature 008).
+
+| Property | Value |
+|---|---|
+| Auth | Access token (Bearer), admin only |
+
+**Path Parameters:**
+- `id` - Target user UUID
+
+**Response (200):** the user object, `status` no longer `locked` and `failed_login_count: 0`.
+Idempotent on an account that is not currently locked (still 200, still audited).
+
+**Error Cases:**
+- `404` - `{"error":"user not found"}`
+
+Audit `user.unlocked` with detail `{"was_locked":true|false}`.
+
+**cURL:**
+
+```bash
+curl - X POST https://hub.example.com/api/users/USER_UUID/unlock \
+  - H 'Authorization: Bearer <access_token>'
+```
+
+---
+
+### PUT /api/users/{id}/dormancy-exemption
+
+Assign or remove the "never dormant" exemption on an administrator account (feature 008).
+
+| Property | Value |
+|---|---|
+| Auth | Access token (Bearer), admin only |
+
+**Path Parameters:**
+- `id` - Target user UUID
+
+**Request Body:**
+
+```json
+{
+  "exempt": true
+}
+```
+
+**Response (200):** the user object with the updated `dormancy_exempt` value.
+
+**Error Cases:**
+- `400` - `{"error":"dormancy exemption applies to administrator accounts only"}` — target's role is not `admin`
+- `404` - `{"error":"user not found"}`
+
+Audit `user.dormancy_exempt_set` when `exempt: true`, `user.dormancy_exempt_cleared` when
+`exempt: false`. The exemption is also cleared automatically (same audit action, detail
+`role changed`) when an exempt account's role is changed away from admin — see endpoint 14 above.
+
+**cURL:**
+
+```bash
+curl - X PUT https://hub.example.com/api/users/USER_UUID/dormancy-exemption \
+  - H 'Authorization: Bearer <access_token>' \
+  - H 'Content-Type: application/json' \
+  - d '{"exempt":true}'
 ```
 
 ---
@@ -1742,7 +1922,7 @@ curl - X DELETE https://hub.example.com/api/servers/SERVER_UUID/self-unregister
 
 ### 37. GET /api/settings/hub
 
-Get the Hub configuration (currently the gRPC external address and the account lockout policy).
+Get the Hub configuration (currently the gRPC external address and the account lockout/dormancy policy).
 
 | Property | Value |
 |---|---|
@@ -1756,7 +1936,8 @@ Get the Hub configuration (currently the gRPC external address and the account l
   "jwt_secret_rotated_at": "2026-06-12T04:10:00Z",
   "lockout_threshold": 5,
   "lockout_window_minutes": 15,
-  "lockout_duration_minutes": 15
+  "lockout_duration_minutes": 15,
+  "dormant_days": 35
 }
 ```
 
@@ -1767,6 +1948,7 @@ Get the Hub configuration (currently the gRPC external address and the account l
 | `lockout_threshold` | Effective consecutive-failure count that locks an account. Built-in default `5` when unset. |
 | `lockout_window_minutes` | Effective window, in minutes, that failures count toward the threshold before it restarts at 1. Built-in default `15`. |
 | `lockout_duration_minutes` | Effective lock length in minutes. Built-in default `15`. `0` means a lock does not auto-expire. |
+| `dormant_days` | Effective number of days of inactivity (no interactive sign-in and no API-token use) after which an account is treated as dormant. Built-in default `35`. `0` disables dormancy entirely — no account is ever evaluated as dormant. |
 
 **cURL:**
 
@@ -1792,14 +1974,15 @@ Update the Hub configuration.
   "grpc_external_addr": "veyport.example.com:9443",
   "lockout_threshold": 3,
   "lockout_window_minutes": 15,
-  "lockout_duration_minutes": 1
+  "lockout_duration_minutes": 1,
+  "dormant_days": 30
 }
 ```
 
 **Validation:**
 - All fields are optional. A field left out of the request body is unchanged.
 - `grpc_external_addr`, if present and non-empty, must match `^[a-zA-Z0-9._:\-\[\]]+$` (hostnames, IPs, and ports only -- no shell metacharacters). A present-but-empty string (`""`) clears the stored address; omitting the field entirely leaves it unchanged.
-- `lockout_threshold`, `lockout_window_minutes`, `lockout_duration_minutes` are each optional non-negative integers. `lockout_threshold: 0` disables locking (failures are still counted); `lockout_duration_minutes: 0` means a lock never auto-expires. Changes apply to future attempts only -- an account already locked keeps its original expiry.
+- `lockout_threshold`, `lockout_window_minutes`, `lockout_duration_minutes`, `dormant_days` are each optional non-negative integers. `lockout_threshold: 0` disables locking (failures are still counted); `lockout_duration_minutes: 0` means a lock never auto-expires; `dormant_days: 0` disables dormancy. Changes apply to future evaluations only -- an account already locked keeps its original expiry, and an account already dormant stays dormant until an admin enables it, even if the policy is raised afterward.
 
 **Response (200):**
 
@@ -1812,6 +1995,7 @@ Update the Hub configuration.
 **Error Cases:**
 - `400` - Invalid gRPC address format
 - `400` - Invalid lockout field, field-specific message, e.g. `{"error":"lockout_threshold must be a non-negative integer"}`
+- `400` - `{"error":"dormant_days must be a non-negative integer"}`
 
 **cURL:**
 
@@ -2490,6 +2674,7 @@ Issue a short-lived SSH user certificate for the caller's own identity, for use 
 - `400` - Invalid or unsupported public key, or an existing certificate submitted as the subject key
 - `401` - No or invalid access token
 - `403` - `{"error":"interactive login required"}` — the credential is an API token, not an interactive session (audited `ssh.cert_issue_refused`)
+- `403` - Account disabled or dormant, same messages as login (audited `ssh.cert_issue_refused`); see [Account State Enforcement](#account-state-enforcement)
 - `429` - Rate limit exceeded
 - `503` - SSH gateway disabled by configuration, or its key material is unavailable
 
