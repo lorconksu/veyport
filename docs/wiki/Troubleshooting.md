@@ -72,6 +72,44 @@ administrator has since left or you would rather a different account be the reco
 any administrator assign the exemption to another admin account in **Settings → Users** using
 **Exempt from dormancy** (see [[Settings]]); only administrator accounts can carry it.
 
+### I was signed out unexpectedly
+
+As of feature 009, every sign-in creates a server-side session with two independent limits (both
+configurable in **Settings → Users → Account policy**, see [[Settings]]):
+
+- **Idle timeout** (default **15 minutes**) - no request was made for that long. Ordinary use
+  resets this clock, so it only fires when you actually stop using Veyport.
+- **Maximum session** (default **12 hours**) - the session's absolute lifetime, set at sign-in and
+  never extended, regardless of activity.
+
+Either one ends the session the same way: the next request gets **"session expired — sign in
+again"**, and a browser lands back on the sign-in page. Two other causes produce the same
+"signed out" experience but a different message, **"session ended — sign in again"**: an
+administrator ended your session (one specific session, or "Log out everywhere" - see
+**Sessions** in [[Settings]]), or you yourself used **Sign out other sessions** on your Profile tab
+from a different session. If your account was disabled rather than a session simply ending, see
+"I see 'account disabled'" above instead. `vey` reports the same messages verbatim and exits with
+its authentication-failure status (`3`) - run `vey login` again either way.
+
+### Everyone had to sign in again after upgrading
+
+The first time a hub is upgraded to a release with server-side session records (feature 009 and
+later), every session that existed before the upgrade has no server-side record to validate
+against, so it is refused - **"session expired — sign in again"** for browsers, the same message
+and exit code `3` for `vey`. This is expected and one-time: every user, web and CLI, signs in once
+more after that specific upgrade, and normal session behaviour applies from then on. There is
+nothing to configure or recover - just sign in again.
+
+### An open dashboard tab never seems to go idle
+
+The Fleet Dashboard polls the Hub in the background roughly every 10 seconds, and each request
+counts as activity, so a tab left open and visible can outlast the idle timeout indefinitely. This
+is a known, documented limitation, not a bug: the **absolute session limit** (default 12 hours)
+still applies regardless, so a tab open longer than that is eventually signed out anyway. Client-
+side "the user actually walked away" detection (mouse/keyboard inactivity in the browser itself)
+is out of scope for this release. If you need a tab to genuinely time out sooner, close it, or
+ask an administrator to lower the maximum session limit.
+
 ### I'm the only admin and lost my authenticator
 
 Someone with shell access to the Veyport server must run the CLI break-glass command:

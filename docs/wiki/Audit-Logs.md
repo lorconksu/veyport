@@ -112,6 +112,9 @@ Actions follow a `resource.action` naming pattern.
 | `user.unlocked` | An admin cleared a locked account's lock and failure count before it expired on its own (detail `was_locked` records whether the account was actually locked at the time) |
 | `user.dormancy_exempt_set` | An admin marked an administrator account "never dormant" |
 | `user.dormancy_exempt_cleared` | An admin removed the dormancy exemption from an administrator account, or it was removed automatically because the account's role changed away from admin (detail `role changed` in that case) |
+| `session.created` | A web or CLI sign-in completed and a server-side session record was created (detail includes the session id and kind) |
+| `session.revoked` | A session (or an SSH/web-terminal shell) was ended before it expired on its own - detail `reason` is one of `revoked_admin` (an admin ended it), `revoked_self` (the owner ended it themselves), `revoked_disable` (a side effect of disabling the account), or `logout` (the owner signed out normally) |
+| `session.expired` | A session's next use was refused because a limit was reached - detail `reason` is `idle` or `absolute` (system actor; recorded once, on first detection, not on every subsequent refused attempt) |
 
 When a sign-in attempt is refused because the account is currently locked, it produces a
 `user.login_failed` entry with detail `account locked` and a failure outcome, rather than the
@@ -164,6 +167,16 @@ Reference]].
 |--------|--------------|
 | `terminal.opened` | A user opened a browser terminal session on a server |
 | `terminal.closed` | A browser terminal session ended or was cleaned up |
+
+### SSH Gateway actions
+
+| Action | What it means |
+|--------|--------------|
+| `ssh.cert_issued` | A user's `vey ssh-cert` request produced a signed SSH certificate |
+| `ssh.cert_issue_refused` | Certificate issuance was refused (account disabled/dormant, or an API token attempted an interactive-only route) |
+| `ssh.session_opened` | An SSH gateway shell was established |
+| `ssh.session_closed` | An SSH gateway shell ended - normally (the user disconnected) or, as of feature 009, with detail `reason=forced` when an administrator ended it directly, ended it via **Log out everywhere**, ended it via the user's own **Sign out other sessions**, or disabled the account (see [[Settings]] and [[SSH Gateway]]) |
+| `ssh.session_refused` | An established certificate connected, but the shell itself was refused (account disabled/dormant, or no terminal permission) |
 
 ### API token actions
 
