@@ -23,8 +23,22 @@ var ErrSessionNotFound = errors.New("session not found")
 const sessionColumns = `id, user_id, kind, ip, user_agent, created_at,
 	last_seen_at, expires_at, ended_at, end_reason, ended_by`
 
-// selectSessions is the SELECT head every session read starts from.
-const selectSessions = "SELECT " + sessionColumns + " FROM sessions"
+// The session queries are assembled from sessionColumns at compile time and
+// named here so the Query calls take a constant, not an expression (go:S2077
+// otherwise reads the concatenation as dynamic SQL).
+const (
+	selectSessions = "SELECT " + sessionColumns + " FROM sessions"
+
+	querySessionByID = selectSessions + " WHERE id = ?"
+
+	queryLiveUserSessions = selectSessions + `
+		 WHERE user_id = ? AND ended_at IS NULL
+		 ORDER BY last_seen_at DESC, created_at DESC, id`
+
+	queryEndedUserSessionsSince = selectSessions + `
+		 WHERE user_id = ? AND ended_at IS NOT NULL AND ended_at >= ?
+		 ORDER BY ended_at DESC, id`
+)
 
 // scanSession reads one session row from a *sql.Row or *sql.Rows.
 func scanSession(row interface{ Scan(...interface{}) error }) (*model.Session, error) {
@@ -88,9 +102,7 @@ func (s *Store) CreateSession(sess *model.Session) error {
 // GetSession reads one session by id, returning ErrSessionNotFound when there
 // is no such row.
 func (s *Store) GetSession(id string) (*model.Session, error) {
-	sess, err := scanSession(s.db.QueryRow(
-		selectSessions+" WHERE id = ?", id,
-	))
+	sess, err := scanSession(s.db.QueryRow(querySessionByID, id))
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, ErrSessionNotFound
 	}
@@ -109,12 +121,7 @@ func (s *Store) GetSession(id string) (*model.Session, error) {
 // The two sections are read as two queries because they are ordered on
 // different columns.
 func (s *Store) ListUserSessions(userID string, includeEnded bool, since time.Time) ([]model.Session, error) {
-	sessions, err := s.querySessions(
-		selectSessions+`
-		 WHERE user_id = ? AND ended_at IS NULL
-		 ORDER BY last_seen_at DESC, created_at DESC, id`,
-		userID,
-	)
+	sessions, err := s.querySessions(queryLiveUserSessions, userID)
 	if err != nil {
 		return nil, err
 	}
@@ -123,9 +130,7 @@ func (s *Store) ListUserSessions(userID string, includeEnded bool, since time.Ti
 	}
 
 	ended, err := s.querySessions(
-		selectSessions+`
-		 WHERE user_id = ? AND ended_at IS NOT NULL AND ended_at >= ?
-		 ORDER BY ended_at DESC, id`,
+		queryEndedUserSessionsSince,
 		userID, since.UTC().Format(sqliteTimeFormat),
 	)
 	if err != nil {
