@@ -158,7 +158,8 @@ func TestHandleRefresh_ValidToken(t *testing.T) {
 	_ = registerAndGetAdminToken(t, s)
 
 	user, _ := s.store.GetUserByUsername("admin")
-	_, refreshToken, _ := auth.GenerateTokenPair(s.jwtSecret, user.ID, string(user.Role), user.TokenGeneration)
+	// Bound to a session: a refresh token without one is refused now (009).
+	_, refreshToken, _ := sessionTokenPair(t, s, user.ID)
 
 	body, _ := json.Marshal(model.RefreshRequest{RefreshToken: refreshToken})
 	req := httptest.NewRequest("POST", testRefreshPath, bytes.NewReader(body))

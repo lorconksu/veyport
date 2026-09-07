@@ -11,6 +11,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/wyiu/veyport/hub/internal/auth"
+	"github.com/wyiu/veyport/hub/internal/grpcserver"
 	"github.com/wyiu/veyport/hub/internal/model"
 	pb "github.com/wyiu/veyport/proto/veyport/v1"
 )
@@ -457,5 +458,37 @@ func TestHandleCloseTerminalSession(t *testing.T) {
 	}
 	if !foundClose {
 		t.Fatal("expected terminal close message")
+	}
+}
+
+// A web terminal is registered against the session that opened it and as a web
+// shell, which is what lets the sessions list show it and per-session
+// revocation close it (T014, FR-010).
+func TestHandleCreateTerminalSession_RegistersKindAndSession(t *testing.T) {
+	s, adminToken, serverID := testServerWithAgent(t)
+	sid := sidOf(t, s, adminToken)
+	if sid == "" {
+		t.Fatal("the admin token carries no session id")
+	}
+
+	sessionID := createTerminalSessionForTest(t, s, adminToken, serverID)
+	info, ok := s.terminalSessions.Get(serverID, sessionID)
+	if !ok {
+		t.Fatal("the terminal session was not registered")
+	}
+	if info.Kind != grpcserver.TerminalKindWeb {
+		t.Errorf("kind = %q, want %q", info.Kind, grpcserver.TerminalKindWeb)
+	}
+	if info.SID != sid {
+		t.Errorf("sid = %q, want the calling session %q", info.SID, sid)
+	}
+
+	// Ending the session that opened it closes the terminal with it.
+	if closed := s.terminalSessions.EndBySession(sid, shellExitCode, shellMsgAdminRevoked); closed != 1 {
+		t.Fatalf("EndBySession closed %d terminals, want 1", closed)
+	}
+	after, ok := s.terminalSessions.Get(serverID, sessionID)
+	if !ok || !after.Closed {
+		t.Fatalf("the terminal is still live after its session was revoked: %+v", after)
 	}
 }

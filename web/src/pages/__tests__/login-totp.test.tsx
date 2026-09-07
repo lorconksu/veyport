@@ -105,6 +105,22 @@ describe('LoginTOTPPage', () => {
     })
   })
 
+  it('shows the 423 locked message verbatim', async () => {
+    mockApiFetch.mockRejectedValueOnce(new Error('account temporarily locked — try again later'))
+    renderPage()
+
+    const inputs = screen.getAllByRole('textbox')
+    inputs.forEach((input, i) => {
+      fireEvent.change(input, { target: { value: String(i + 1) } })
+    })
+
+    fireEvent.click(screen.getByRole('button', { name: /verify/i }))
+
+    await waitFor(() => {
+      expect(screen.getByText('account temporarily locked — try again later')).toBeInTheDocument()
+    })
+  })
+
   it('shows error and resets digits on failure', async () => {
     mockApiFetch.mockRejectedValueOnce(new Error('Invalid code'))
     renderPage()
@@ -135,6 +151,34 @@ describe('LoginTOTPPage', () => {
 
     await waitFor(() => {
       expect(screen.getByText('Verification failed')).toBeInTheDocument()
+    })
+  })
+
+  it('autofilling the full code into the first box fills all inputs and submits', async () => {
+    const authResponse = {
+      access_token: 'acc',
+      refresh_token: 'ref',
+      user: { id: '1', username: 'admin', email: 'a@b.com', role: 'admin', totp_enabled: true, avatar: null, created_at: '', updated_at: '' },
+    }
+    mockApiFetch.mockResolvedValueOnce(authResponse)
+    renderPage()
+
+    // Simulates a password manager (1Password) writing the whole code into the
+    // first box as a single change event, rather than one keystroke per box.
+    const inputs = screen.getAllByRole('textbox')
+    fireEvent.change(inputs[0], { target: { value: '123456' } })
+
+    inputs.forEach((input, i) => {
+      expect((input as HTMLInputElement).value).toBe(String(i + 1))
+    })
+
+    await waitFor(() => {
+      expect(mockApiFetch).toHaveBeenCalledWith(
+        '/auth/login/totp',
+        expect.objectContaining({ body: JSON.stringify({ totp_token: 'test-totp-token', code: '123456' }) }),
+      )
+      expect(mockLogin).toHaveBeenCalledWith(authResponse.user)
+      expect(mockNavigate).toHaveBeenCalledWith('/')
     })
   })
 

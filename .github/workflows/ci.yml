@@ -121,7 +121,7 @@ jobs:
       - name: Run smoke tests
         run: bash tests/smoke/smoke_test.sh
         env:
-          BUILD_ARGS: "--build-arg NODE_IMAGE=node:25-slim --build-arg GO_IMAGE=golang:1.26.5-bookworm"
+          BUILD_ARGS: "--build-arg NODE_IMAGE=node:25-slim --build-arg GO_IMAGE=golang:1.26.6-bookworm"
 
   e2e:
     needs: test
@@ -146,7 +146,7 @@ jobs:
           password: ${{ secrets.DOCKERHUB_TOKEN }}
 
       - name: Build Docker image
-        run: docker build --build-arg NODE_IMAGE=node:25-slim --build-arg GO_IMAGE=golang:1.26.5-bookworm -t veyport-e2e:test .
+        run: docker build --build-arg NODE_IMAGE=node:25-slim --build-arg GO_IMAGE=golang:1.26.6-bookworm -t veyport-e2e:test .
 
       - name: Run E2E tests
         run: cd tests/e2e && E2E_IMAGE=veyport-e2e:test npx playwright test

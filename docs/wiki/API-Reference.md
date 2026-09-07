@@ -29,6 +29,7 @@
 15. [Re-Enrollment Endpoints](#re-enrollment-endpoints)
 16. [Terminal Endpoints](#terminal-endpoints)
 17. [SSH Gateway Endpoints](#ssh-gateway-endpoints)
+18. [Session Endpoints](#session-endpoints)
 
 ---
 
@@ -274,6 +275,8 @@ Authenticate with username and password.
 
 **Error Cases:**
 - `401` - Invalid credentials
+- `403` - Account disabled or dormant: `{"error":"account disabled — contact an administrator"}` / `{"error":"account dormant — contact an administrator"}`. Returned before the password is checked or any LDAP bind is attempted; see [Account State Enforcement](#account-state-enforcement).
+- `423` - Account temporarily locked: `{"error":"account temporarily locked — try again later"}`. Returned before the password is checked or any LDAP bind is attempted, and does not change the account's failure count.
 
 **cURL:**
 
@@ -324,6 +327,8 @@ On success, the Hub also sets `veyport_access`, `veyport_refresh`, and `veyport_
 
 **Error Cases:**
 - `401` - Invalid or expired TOTP token, invalid TOTP code, user not found
+- `403` - Account disabled or dormant, same messages as login, returned before the code is validated; see [Account State Enforcement](#account-state-enforcement).
+- `423` - Account temporarily locked: `{"error":"account temporarily locked — try again later"}`. Returned before the code is validated. A wrong code counts as a failure exactly like a wrong password; a correct code resets the failure count and clears the lock.
 
 **cURL:**
 
@@ -362,6 +367,7 @@ On success, the Hub rotates the refresh token and sets new `veyport_access`, `ve
 
 **Error Cases:**
 - `401` - Invalid or expired refresh token
+- `401` - Account disabled or dormant, same messages as login; see [Account State Enforcement](#account-state-enforcement)
 
 **cURL:**
 
@@ -441,7 +447,7 @@ Verify and enable TOTP by providing a valid code. For users created with a tempo
 }
 ```
 
-On success, the Hub also sets `veyport_access`, `veyport_refresh`, and `veyport_csrf` cookies for browser clients.
+On success, the Hub also sets `veyport_access`, `veyport_refresh`, and `veyport_csrf` cookies for browser clients. This also counts as a successful sign-in: the account's failure count resets and `last_login_at` is stamped, same as a normal login.
 
 **Error Cases:**
 - `401` - Invalid TOTP code
@@ -478,12 +484,22 @@ Get the current authenticated user's profile.
   "totp_enabled": true,
   "avatar": "data:image/png;base64,...",
   "created_at": "2025-01-01T00:00:00Z",
-  "updated_at": "2025-01-01T00:00:00Z"
+  "updated_at": "2025-01-01T00:00:00Z",
+  "failed_login_count": 0,
+  "last_login_at": "2026-09-04T22:10:33Z",
+  "status": "active",
+  "dormancy_exempt": false,
+  "last_activity_at": "2026-09-04T22:10:33Z"
 }
 ```
 
+Same fields (and same meaning) as `GET /api/users` above: `failed_login_count`,
+`last_failed_login_at`, `last_login_at`, `locked_until`, `status`, `disabled_at`, `disabled_by`,
+`reactivated_at`, `dormancy_exempt`, `last_activity_at` — always about the caller's own account.
+
 **Error Cases:**
 - `404` - User not found
+- `401` - Account disabled or dormant; see [Account State Enforcement](#account-state-enforcement)
 
 **cURL:**
 
@@ -623,6 +639,28 @@ curl - X POST https://hub.example.com/api/auth/totp/disable \
 
 ---
 
+### Account State Enforcement
+
+A disabled or dormant account (see the User Management section below) is refused everywhere it
+could otherwise act, with a state-specific message that reveals nothing about credential
+correctness: `{"error":"account disabled — contact an administrator"}` or
+`{"error":"account dormant — contact an administrator"}`.
+
+| Path | Response |
+|---|---|
+| `POST /api/auth/login` (local and LDAP) | `403`, before the password is checked or any LDAP bind is attempted; the account's failure count is unchanged; audited `user.login_failed` with detail `account disabled`/`account dormant` |
+| `POST /api/auth/login/totp` | `403`, same messages, before the code is validated |
+| `POST /api/auth/refresh` | `401`, same messages |
+| Any request bearing an access token or an API token | `401`. For a dormant account the body carries the same message. For a disabled account the credentials themselves are already dead — disabling bumps the token generation and revokes every API token — so those requests get the generic `invalid token`. A browser client redirects to `/login` on the next request either way |
+| `POST /api/ssh/certificates` | `401`, same messages (the access token is refused before the handler runs, like any other token-bearing request) |
+| SSH gateway shell | refused with banner `veyport: <same message>`, audited `ssh.session_refused` |
+
+Precedence at sign-in is disabled > dormant > locked (`423`, see above) > credential check. A
+locked account (007) is still refused only at the two sign-in stages above — it is not checked on
+refresh, token-bearing requests, or the SSH endpoints.
+
+---
+
 ## User Management Endpoints
 
 All user management endpoints require **admin** role.
@@ -650,11 +688,37 @@ List all users.
       "totp_enabled": true,
       "avatar": null,
       "created_at": "2025-01-01T00:00:00Z",
-      "updated_at": "2025-01-01T00:00:00Z"
+      "updated_at": "2025-01-01T00:00:00Z",
+      "failed_login_count": 2,
+      "last_failed_login_at": "2026-09-05T10:41:07Z",
+      "last_login_at": "2026-09-04T22:10:33Z",
+      "locked_until": "2026-09-05T10:56:07Z",
+      "status": "dormant",
+      "disabled_at": null,
+      "disabled_by": null,
+      "reactivated_at": "2026-08-01T09:00:00Z",
+      "dormancy_exempt": false,
+      "last_activity_at": "2026-07-20T17:12:41Z"
     }
   ]
 }
 ```
+
+| Field | Notes |
+|---|---|
+| `failed_login_count` | Consecutive credential failures since the last success or window reset. Always present. |
+| `last_failed_login_at` | RFC 3339 UTC timestamp of the most recent failure. Absent if the account has never failed a login. |
+| `last_login_at` | RFC 3339 UTC timestamp of the most recent successful sign-in. Absent if the account has never signed in. |
+| `locked_until` | RFC 3339 UTC timestamp of lock expiry. Absent when not locked. May be in the past (a stale lock the next attempt will clear). `9999-12-31T00:00:00Z` means the lock has no automatic expiry. |
+| `status` | Derived, computed at read time from the account lifecycle fields and the current policy. One of `active`, `locked`, `disabled`, `dormant`, with precedence `disabled > dormant > locked > active`. Always present. |
+| `disabled_at` | RFC 3339 UTC timestamp of the most recent admin disable. Absent when enabled. |
+| `disabled_by` | User id of the admin who disabled the account (informational). Absent when enabled. |
+| `reactivated_at` | RFC 3339 UTC timestamp of the most recent admin enable or unlock. Absent if never enabled or unlocked by an admin. Feeds the dormancy clock alongside sign-in and API-token activity. |
+| `dormancy_exempt` | `true` if the account (an administrator account) is marked "never dormant." Always present; meaningful only on admin accounts. |
+| `last_activity_at` | RFC 3339 UTC timestamp of the most recent interactive sign-in or API-token use (see the "Dormant accounts" note in [[Settings]]). Absent if the account has never been used. |
+
+The same fields appear on `GET /api/auth/me` and in the `user` object returned by login -- a
+non-admin only ever sees their own values there.
 
 **cURL:**
 
@@ -764,6 +828,9 @@ Update a user's role.
 - `400` - Invalid role or attempting to change own role
 - `404` - User not found
 
+Changing an exempt administrator to a non-admin role clears `dormancy_exempt` in the same request
+and writes audit event `user.dormancy_exempt_cleared` with detail `role changed`.
+
 **cURL:**
 
 ```bash
@@ -771,6 +838,136 @@ curl - X PUT https://hub.example.com/api/users/USER_UUID/role \
   - H 'Authorization: Bearer <access_token>' \
   - H 'Content-Type: application/json' \
   - d '{"role":"admin"}'
+```
+
+---
+
+### PUT /api/users/{id}/status
+
+Disable or enable a user account (feature 008). See [Account State Enforcement](#account-state-enforcement) for where a disabled/dormant account is refused.
+
+| Property | Value |
+|---|---|
+| Auth | Access token (Bearer), admin only |
+
+**Path Parameters:**
+- `id` - Target user UUID
+
+**Request Body:**
+
+```json
+{
+  "disabled": true
+}
+```
+
+**Response (200), disabling:**
+
+```json
+{
+  "user": {
+    "id": "uuid",
+    "status": "disabled",
+    "disabled_at": "2026-09-06T10:00:00Z",
+    "disabled_by": "b2c1...",
+    "...": "…other user fields"
+  }
+}
+```
+
+**Response (200), enabling** (`{"disabled": false}`): the user object with `status: "active"` (or
+`"locked"`/`"dormant"` if still applicable) and `reactivated_at` set to now.
+
+**Error Cases:**
+- `400` - `{"error":"cannot disable your own account"}` — target is the caller
+- `404` - `{"error":"user not found"}`
+- `409` - `{"error":"cannot disable the last enabled administrator"}` — target is the only remaining account with role `admin` and no `disabled_at`
+
+Disabling an already-disabled account (or enabling an already-enabled one) returns 200 with the
+unchanged user — idempotent, but still audited.
+
+**Side effects of disabling:** `token_generation` is bumped, so the account's existing web
+sessions and refresh tokens are rejected on their next use; **all** of the account's API tokens
+are revoked (not merely suspended — new ones must be minted after re-enable); audit
+`user.disabled` with detail `{"revoked_api_tokens":N}`. **Side effects of enabling:**
+`locked_until` and `failed_login_count` are cleared, `reactivated_at` is set to now (which also
+restarts the dormancy clock), audit `user.enabled`.
+
+**cURL:**
+
+```bash
+curl - X PUT https://hub.example.com/api/users/USER_UUID/status \
+  - H 'Authorization: Bearer <access_token>' \
+  - H 'Content-Type: application/json' \
+  - d '{"disabled":true}'
+```
+
+---
+
+### POST /api/users/{id}/unlock
+
+Clear a locked account's lock and consecutive-failure count (feature 008).
+
+| Property | Value |
+|---|---|
+| Auth | Access token (Bearer), admin only |
+
+**Path Parameters:**
+- `id` - Target user UUID
+
+**Response (200):** the user object, `status` no longer `locked` and `failed_login_count: 0`.
+Idempotent on an account that is not currently locked (still 200, still audited).
+
+**Error Cases:**
+- `404` - `{"error":"user not found"}`
+
+Audit `user.unlocked` with detail `{"was_locked":true|false}`.
+
+**cURL:**
+
+```bash
+curl - X POST https://hub.example.com/api/users/USER_UUID/unlock \
+  - H 'Authorization: Bearer <access_token>'
+```
+
+---
+
+### PUT /api/users/{id}/dormancy-exemption
+
+Assign or remove the "never dormant" exemption on an administrator account (feature 008).
+
+| Property | Value |
+|---|---|
+| Auth | Access token (Bearer), admin only |
+
+**Path Parameters:**
+- `id` - Target user UUID
+
+**Request Body:**
+
+```json
+{
+  "exempt": true
+}
+```
+
+**Response (200):** the user object with the updated `dormancy_exempt` value.
+
+**Error Cases:**
+- `400` - `{"error":"dormancy exemption applies to administrator accounts only"}` — target's role is not `admin`
+- `404` - `{"error":"user not found"}`
+
+Audit `user.dormancy_exempt_set` when `exempt: true`, `user.dormancy_exempt_cleared` when
+`exempt: false`. The exemption is also cleared automatically (same audit action, detail
+`role changed`) when an exempt account's role is changed away from admin — see endpoint 14 above.
+
+**cURL:**
+
+```bash
+curl - X PUT https://hub.example.com/api/users/USER_UUID/dormancy-exemption \
+  - H 'Authorization: Bearer <access_token>' \
+  - H 'Content-Type: application/json' \
+  - d '{"exempt":true}'
 ```
 
 ---
@@ -1750,7 +1947,7 @@ curl - X DELETE https://hub.example.com/api/servers/SERVER_UUID/self-unregister
 
 ### 37. GET /api/settings/hub
 
-Get the Hub configuration (currently the gRPC external address).
+Get the Hub configuration (currently the gRPC external address and the account lockout/dormancy policy).
 
 | Property | Value |
 |---|---|
@@ -1761,7 +1958,13 @@ Get the Hub configuration (currently the gRPC external address).
 ```json
 {
   "grpc_external_addr": "veyport.example.com:9443",
-  "jwt_secret_rotated_at": "2026-06-12T04:10:00Z"
+  "jwt_secret_rotated_at": "2026-06-12T04:10:00Z",
+  "lockout_threshold": 5,
+  "lockout_window_minutes": 15,
+  "lockout_duration_minutes": 15,
+  "dormant_days": 35,
+  "session_idle_minutes": 15,
+  "session_max_hours": 12
 }
 ```
 
@@ -1769,6 +1972,12 @@ Get the Hub configuration (currently the gRPC external address).
 |---|---|
 | `grpc_external_addr` | Configured external gRPC address |
 | `jwt_secret_rotated_at` | RFC 3339 UTC timestamp of the last `admin rotate-jwt-secret` run. `null` until the secret has been rotated at least once. Read-only — ignored on PUT. |
+| `lockout_threshold` | Effective consecutive-failure count that locks an account. Built-in default `5` when unset. |
+| `lockout_window_minutes` | Effective window, in minutes, that failures count toward the threshold before it restarts at 1. Built-in default `15`. |
+| `lockout_duration_minutes` | Effective lock length in minutes. Built-in default `15`. `0` means a lock does not auto-expire. |
+| `dormant_days` | Effective number of days of inactivity (no interactive sign-in and no API-token use) after which an account is treated as dormant. Built-in default `35`. `0` disables dormancy entirely — no account is ever evaluated as dormant. |
+| `session_idle_minutes` | Effective idle timeout, in minutes, for server-side sessions (feature 009). Built-in default `15`. `0` disables the idle limit — sessions never expire from inactivity alone. |
+| `session_max_hours` | Effective absolute lifetime, in hours, for server-side sessions (feature 009). Built-in default `12`. `0` disables the absolute limit. Applies to sessions created after the change; an existing session keeps the lifetime it was issued with. |
 
 **cURL:**
 
@@ -1791,12 +2000,21 @@ Update the Hub configuration.
 
 ```json
 {
-  "grpc_external_addr": "veyport.example.com:9443"
+  "grpc_external_addr": "veyport.example.com:9443",
+  "lockout_threshold": 3,
+  "lockout_window_minutes": 15,
+  "lockout_duration_minutes": 1,
+  "dormant_days": 30,
+  "session_idle_minutes": 1,
+  "session_max_hours": 1
 }
 ```
 
 **Validation:**
-- `grpc_external_addr` must match `^[a-zA-Z0-9._:\-\[\]]+$` (hostnames, IPs, and ports only -- no shell metacharacters)
+- All fields are optional. A field left out of the request body is unchanged.
+- `grpc_external_addr`, if present and non-empty, must match `^[a-zA-Z0-9._:\-\[\]]+$` (hostnames, IPs, and ports only -- no shell metacharacters). A present-but-empty string (`""`) clears the stored address; omitting the field entirely leaves it unchanged.
+- `lockout_threshold`, `lockout_window_minutes`, `lockout_duration_minutes`, `dormant_days` are each optional non-negative integers. `lockout_threshold: 0` disables locking (failures are still counted); `lockout_duration_minutes: 0` means a lock never auto-expires; `dormant_days: 0` disables dormancy. Changes apply to future evaluations only -- an account already locked keeps its original expiry, and an account already dormant stays dormant until an admin enables it, even if the policy is raised afterward.
+- `session_idle_minutes`, `session_max_hours` (feature 009) are each optional non-negative integers. `session_idle_minutes: 0` disables the idle limit; `session_max_hours: 0` disables the absolute limit. An idle change applies to every session's next evaluation immediately; an absolute-lifetime change applies only to sessions created afterward -- an existing session keeps the `expires_at` it was issued with.
 
 **Response (200):**
 
@@ -1808,6 +2026,9 @@ Update the Hub configuration.
 
 **Error Cases:**
 - `400` - Invalid gRPC address format
+- `400` - Invalid lockout field, field-specific message, e.g. `{"error":"lockout_threshold must be a non-negative integer"}`
+- `400` - `{"error":"dormant_days must be a non-negative integer"}`
+- `400` - `{"error":"session_idle_minutes must be a non-negative integer"}` / `{"error":"session_max_hours must be a non-negative integer"}`
 
 **cURL:**
 
@@ -2486,6 +2707,7 @@ Issue a short-lived SSH user certificate for the caller's own identity, for use 
 - `400` - Invalid or unsupported public key, or an existing certificate submitted as the subject key
 - `401` - No or invalid access token
 - `403` - `{"error":"interactive login required"}` — the credential is an API token, not an interactive session (audited `ssh.cert_issue_refused`)
+- `403` - Account disabled or dormant, same messages as login (audited `ssh.cert_issue_refused`); see [Account State Enforcement](#account-state-enforcement)
 - `429` - Rate limit exceeded
 - `503` - SSH gateway disabled by configuration, or its key material is unavailable
 
@@ -2530,5 +2752,274 @@ Stable across Hub restarts and upgrades — the host key is never silently regen
 
 ```bash
 curl https://hub.example.com/api/ssh/host-key \
+  -H 'Authorization: Bearer <access_token>'
+```
+
+---
+
+## Session Endpoints
+
+Feature 009 gives every completed interactive sign-in (web browser or `vey` CLI) a server-side
+session record, so it can be listed, timed out, and ended precisely -- not just invalidated
+all-at-once via the token-generation bump described under **Session Invalidation on Password
+Change** in the engineering security model. API tokens (`adt_…`) are not sessions: they keep their
+own expiry and revocation (see endpoint 15's neighbours and [[CLI]]) and are unaffected by
+everything on this page.
+
+### Session validation
+
+Every request bearing an access token, and every `POST /api/auth/refresh`, re-validates the
+caller's session before anything else runs:
+
+| Condition | Response |
+|---|---|
+| No `sid` claim, or the session it names no longer exists (pre-upgrade credentials) | `401 {"error":"session expired — sign in again"}` |
+| Session ended (revoked by an admin, by the user, by logout, or by an account disable) | `401 {"error":"session ended — sign in again"}` |
+| Absolute lifetime reached | `401 {"error":"session expired — sign in again"}` (session marked `expired_absolute`, audited once on first detection) |
+| Idle limit exceeded | `401 {"error":"session expired — sign in again"}` (session marked `expired_idle`, audited once on first detection) |
+| None of the above | request proceeds; `last_seen_at` is bumped, at most once per minute per session |
+
+**Upgrade note:** a session that existed before this release has no session record, so its access
+and refresh tokens are refused with the `session expired` message the first time they're used
+after upgrading -- every user, web and CLI, signs in once more. There is no migration path for
+pre-upgrade sessions; see [[Troubleshooting]] ("everyone had to sign in again after upgrading").
+
+The idle and absolute limits are configured as `session_idle_minutes` and `session_max_hours` on
+the Account policy card alongside the 007/008 lockout and dormancy fields -- see endpoints 37/38
+above.
+
+### GET /api/auth/sessions
+
+List the caller's own sessions.
+
+| Property | Value |
+|---|---|
+| Auth | Access token (Bearer), interactive session only (an API token is refused) |
+
+**Response (200):**
+
+```json
+{
+  "sessions": [
+    {"id":"…","kind":"web","ip":"10.0.0.5","user_agent":"Mozilla/…","created_at":"…","last_seen_at":"…","expires_at":"…","idle_deadline_at":"…","current":true},
+    {"id":"…","kind":"cli","ip":"…","user_agent":"vey/2.0.37","created_at":"…","last_seen_at":"…","expires_at":"…","idle_deadline_at":"…","current":false},
+    {"id":"shell:srv-01:sess-9f2","kind":"ssh","server":"web-01","started_at":"…","last_activity_at":"…","current":false}
+  ]
+}
+```
+
+Only the caller's own rows; the row for the session making this call is marked `current: true`.
+There is no `include_ended` on the self-service view -- ended sessions are an admin-only history.
+Shell rows (`kind: "ssh"` or `"terminal"`) use the id `shell:<serverID>:<sessionID>` and carry
+`server`, `started_at`, `last_activity_at` in place of the web/CLI fields.
+
+**cURL:**
+
+```bash
+curl https://hub.example.com/api/auth/sessions \
+  -H 'Authorization: Bearer <access_token>'
+```
+
+---
+
+### DELETE /api/auth/sessions/{sid}
+
+End one of the caller's **other** sessions or shells.
+
+| Property | Value |
+|---|---|
+| Auth | Access token (Bearer), interactive session only |
+
+**Path Parameters:**
+- `sid` - Session id, or `shell:<serverID>:<sessionID>` for an open SSH or web-terminal shell
+
+**Response (200):**
+
+```json
+{"status": "ended"}
+```
+
+`{"status": "already_ended"}` when the session or shell was not live -- for example, a shell that
+closed on its own between listing and this call. Not an error either way.
+
+**Error Cases:**
+- `400` - `{"error":"cannot end the current session here — use logout"}` -- `sid` names the caller's own current session
+- `404` - the id does not belong to the caller
+
+Audit `session.revoked` (reason `revoked_self`), or `ssh.session_closed` (detail `reason=forced`)
+for a shell.
+
+**cURL:**
+
+```bash
+curl -X DELETE https://hub.example.com/api/auth/sessions/SESSION_ID \
+  -H 'Authorization: Bearer <access_token>'
+```
+
+---
+
+### POST /api/auth/sessions/sign-out-others
+
+End every one of the caller's sessions except the current one, and close every one of the
+caller's own open shells.
+
+| Property | Value |
+|---|---|
+| Auth | Access token (Bearer), interactive session only |
+
+**Response (200):**
+
+```json
+{"ended": 2, "shells_closed": 1}
+```
+
+Audit one `session.revoked` (reason `revoked_self`) per ended session and one
+`ssh.session_closed` (detail `reason=forced`) per closed shell.
+
+**cURL:**
+
+```bash
+curl -X POST https://hub.example.com/api/auth/sessions/sign-out-others \
+  -H 'Authorization: Bearer <access_token>'
+```
+
+---
+
+### POST /api/auth/logout
+
+Sign out the calling session. Unchanged request/response shape; feature 009 adds a side effect.
+
+| Property | Value |
+|---|---|
+| Auth | Access token (Bearer) -- cookie or header |
+
+**Response:** `204 No Content`.
+
+Clears the browser's auth cookies and blacklists the access token, exactly as before. **As of
+feature 009**, it also ends the caller's server-side session (audit `session.revoked`, reason
+`logout`) -- previously logout left any session record for the caller live, reachable only via the
+blunter token-generation bump. `vey logout` relies on this: the CLI's server-side session is now
+genuinely ended, not merely forgotten on disk (see [[CLI]]).
+
+**cURL:**
+
+```bash
+curl -X POST https://hub.example.com/api/auth/logout \
+  -H 'Authorization: Bearer <access_token>'
+```
+
+---
+
+### GET /api/users/{id}/sessions
+
+List a user's sessions.
+
+| Property | Value |
+|---|---|
+| Auth | Access token (Bearer), admin only |
+
+**Path Parameters:**
+- `id` - Target user UUID
+
+**Query Parameters:**
+- `include_ended` - When `true`, also return sessions ended in the last 30 days, each carrying `ended_at` and `end_reason`
+
+**Response (200):**
+
+```json
+{
+  "sessions": [
+    {"id":"…","kind":"web","ip":"10.0.0.5","user_agent":"Mozilla/…","created_at":"…","last_seen_at":"…","expires_at":"…","idle_deadline_at":"…","current":false},
+    {"id":"…","kind":"cli","ip":"…","user_agent":"vey/2.0.37","created_at":"…","last_seen_at":"…","expires_at":"…","idle_deadline_at":"…","current":false},
+    {"id":"shell:srv-01:sess-9f2","kind":"ssh","server":"web-01","started_at":"…","last_activity_at":"…","current":false}
+  ]
+}
+```
+
+Live rows first; a row is marked `current: true` only when it is the session the requesting admin
+is themselves using right now (i.e. the target user is the caller). With `include_ended=true`,
+ended rows from the last 30 days follow, each with `end_reason` one of `revoked_admin` |
+`revoked_self` | `revoked_disable` | `logout` | `expired_idle` | `expired_absolute`. Ended sessions
+older than 30 days are pruned and no longer appear here or anywhere else.
+
+**Error Cases:**
+- `404` - `{"error":"user not found"}`
+
+**cURL:**
+
+```bash
+curl https://hub.example.com/api/users/USER_UUID/sessions?include_ended=true \
+  -H 'Authorization: Bearer <access_token>'
+```
+
+---
+
+### DELETE /api/users/{id}/sessions/{sid}
+
+End one session, or one shell, belonging to a user.
+
+| Property | Value |
+|---|---|
+| Auth | Access token (Bearer), admin only |
+
+**Path Parameters:**
+- `id` - Target user UUID
+- `sid` - Session id, or `shell:<serverID>:<sessionID>`
+
+**Response (200):**
+
+```json
+{"status": "ended"}
+```
+
+`{"status": "already_ended"}` when it was not live -- concurrent revocation by two admins is
+idempotent this way, with exactly one audit event for the actual revocation.
+
+**Error Cases:**
+- `404` - `{"error":"user not found"}`, or the session/shell id does not belong to that user
+
+An administrator ending their own current session through this endpoint is allowed -- they are
+signed out like anyone else; see [[Settings]]. Audit `session.revoked` (reason `revoked_admin`,
+Target = the session's owner) or `ssh.session_closed` (detail `reason=forced`) for a shell.
+
+**cURL:**
+
+```bash
+curl -X DELETE https://hub.example.com/api/users/USER_UUID/sessions/SESSION_ID \
+  -H 'Authorization: Bearer <access_token>'
+```
+
+---
+
+### DELETE /api/users/{id}/sessions
+
+End every live session of a user and close every one of their open shells -- "Log out
+everywhere."
+
+| Property | Value |
+|---|---|
+| Auth | Access token (Bearer), admin only |
+
+**Path Parameters:**
+- `id` - Target user UUID
+
+**Response (200):**
+
+```json
+{"ended": 3, "shells_closed": 1}
+```
+
+**Error Cases:**
+- `404` - `{"error":"user not found"}`
+
+One `session.revoked` (reason `revoked_admin`) per session ended, and one `ssh.session_closed`
+(detail `reason=forced`) per shell closed. The same server-side helper backs 008's `PUT
+/api/users/{id}/status {"disabled":true}`, which calls it with reason `revoked_disable` instead --
+disabling an account now also ends every session and closes every shell it has open.
+
+**cURL:**
+
+```bash
+curl -X DELETE https://hub.example.com/api/users/USER_UUID/sessions \
   -H 'Authorization: Bearer <access_token>'
 ```

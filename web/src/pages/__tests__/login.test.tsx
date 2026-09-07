@@ -128,6 +128,22 @@ describe('LoginPage', () => {
     })
   })
 
+  it('shows the 423 locked message verbatim and does not navigate to /login/totp', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce(
+      mockFetchResponse({ error: 'account temporarily locked — try again later' }, 423)
+    )
+    renderPage()
+
+    fireEvent.change(screen.getByPlaceholderText('username'), { target: { value: 'admin' } })
+    fireEvent.change(screen.getByPlaceholderText('password'), { target: { value: 'wrong' } })
+    fireEvent.submit(screen.getByRole('button', { name: /sign in/i }).closest('form')!)
+
+    await waitFor(() => {
+      expect(screen.getByText('account temporarily locked — try again later')).toBeInTheDocument()
+    })
+    expect(mockNavigate).not.toHaveBeenCalledWith('/login/totp', expect.anything())
+  })
+
   it('shows generic error when fetch throws', async () => {
     vi.spyOn(globalThis, 'fetch').mockRejectedValueOnce(new Error('Network error'))
     renderPage()

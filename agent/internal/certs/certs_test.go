@@ -137,7 +137,7 @@ func TestTLSConfigReturnsNilForExpiredCert(t *testing.T) {
 		t.Fatalf(testStoreCertFmt, err)
 	}
 
-	if tlsCfg := s.TLSConfig(); tlsCfg != nil {
+	if s.TLSConfig() != nil {
 		t.Fatal("TLSConfig() should return nil for an expired client certificate")
 	}
 }

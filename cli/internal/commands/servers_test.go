@@ -424,12 +424,12 @@ func TestServersGet_SearchCallError(t *testing.T) {
 // the other `servers get` tests, so this closure otherwise goes untested.
 func TestServersGet_PrintServer_AllFieldsHuman(t *testing.T) {
 	mux, srv, configDir := seedForServers(t, "tok-1")
-	hostname, ip, os_, agentVersion, lastSeen := "web-1.example.com", "10.0.0.5", "linux", "1.2.3", "2026-01-01T00:00:00Z"
+	hostname, ip, osName, agentVersion, lastSeen := "web-1.example.com", "10.0.0.5", "linux", "1.2.3", "2026-01-01T00:00:00Z"
 	mux.HandleFunc("GET /api/servers/{id}", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(api.Server{
 			ID: "s1", Name: "web-1", Status: "online",
-			Hostname: &hostname, IPAddress: &ip, OS: &os_,
+			Hostname: &hostname, IPAddress: &ip, OS: &osName,
 			AgentVersion: &agentVersion, Labels: "prod,web", LastSeenAt: &lastSeen,
 		})
 	})

@@ -11,6 +11,10 @@ import (
 	"github.com/wyiu/veyport/hub/internal/model"
 )
 
+// configKeyLDAPBindPassword names the stored LDAP bind password config entry
+// (go:S1192).
+const configKeyLDAPBindPassword = "ldap.bind_password"
+
 type ldapConfigResponse struct {
 	Enabled             bool     `json:"enabled"`
 	URL                 string   `json:"url"`
@@ -66,7 +70,7 @@ func (s *Server) handleGetLDAPConfig(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	mappings := s.loadLDAPGroupMappings()
-	bindPassword, bindPasswordSet, err := s.store.LookupConfig("ldap.bind_password")
+	bindPassword, bindPasswordSet, err := s.store.LookupConfig(configKeyLDAPBindPassword)
 	if err != nil {
 		respondError(w, http.StatusInternalServerError, "failed to load LDAP bind password state")
 		return
@@ -296,13 +300,13 @@ func ldapConfigStoreValues(req ldapConfigRequest, storageKey string) (map[string
 		"ldap.terminal_groups":          ldapGroupListStoreValue(req.TerminalGroups),
 	}
 	if req.ClearBindPassword {
-		configs["ldap.bind_password"] = ""
+		configs[configKeyLDAPBindPassword] = ""
 	} else if req.BindPassword != "" && req.BindPassword != redactedValue {
 		encrypted, err := encryptConfigSecret(storageKey, req.BindPassword)
 		if err != nil {
 			return nil, err
 		}
-		configs["ldap.bind_password"] = encrypted
+		configs[configKeyLDAPBindPassword] = encrypted
 	}
 	return configs, nil
 }

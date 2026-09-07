@@ -19,12 +19,96 @@ Veyport does not have a "forgot password" email flow. Ask an admin to delete you
 
 ### I'm locked out after too many attempts
 
-Veyport enforces separate auth rate limits per IP address:
+There are two independent controls that can produce a "too many attempts" style block. Check
+which one applies:
+
+**Per-IP rate limits.** Veyport enforces separate auth rate limits per IP address:
 
 - Login and registration: 10 attempts per minute
 - TOTP verification: 3 attempts per minute
 
-Wait one minute and try again. These limits are IP-based, not per-account.
+Wait one minute and try again. These limits are IP-based, not per-account, so they clear whether
+or not you used the right credentials.
+
+**Per-account lockout.** Separately, after 5 consecutive failed sign-in attempts against the same
+account within a 15-minute window (the default policy), that account locks for 15 minutes. Both
+wrong passwords and wrong 2FA codes count toward the same limit. The error message is **"account
+temporarily locked — try again later"**, shown in place of the usual invalid-credentials message,
+and a correct password does not bypass it.
+
+- Wait for the lock to expire (15 minutes by default), then sign in normally.
+- Administrators can see whether an account is locked, and its unlock time, in **Settings → Users**
+  (see [[Settings]]), and can clear the lock immediately with the **Unlock** action instead of
+  waiting it out.
+- If your account is directory-backed (LDAP) and your directory enforces its own lockout policy,
+  you may need to wait out both locks — Veyport's lock and the directory's are independent.
+
+### I see "account disabled"
+
+An administrator has turned your account off — usually an offboarding, a suspected compromise, or
+a contractor whose engagement ended. Sign-in, existing browser sessions, API tokens, SSH
+certificate issuance, and SSH gateway shells are all refused with **"account disabled — contact an
+administrator"** until an administrator uses **Enable** on your row in **Settings → Users** (see
+[[Settings]]). There is nothing you can do yourself to clear this — waiting does not help, and
+neither does a correct password.
+
+### I see "account dormant"
+
+Your account has gone unused — no interactive sign-in and no API-token use — for longer than the
+hub's dormancy policy (35 days by default), so Veyport treats it as dormant until reviewed. This is
+not a punishment or a suspicion of compromise; it is the same inactivity control most compliance
+frameworks require. An administrator can restore access with **Enable** in **Settings → Users**
+(see [[Settings]]), which also restarts your activity clock. If you expect to go unused for a long
+stretch on purpose (a break, a long-lived automation account whose token nobody has touched
+recently), ask an administrator to note the account or, for a recovery administrator specifically,
+consider the dormancy exemption described next.
+
+### Our only administrator hasn't signed in for weeks
+
+By default, the very first administrator account ever created on this hub carries a "never
+dormant" exemption, so it cannot lock everyone out simply by going quiet — it stays **Active**
+indefinitely and always shows the **"Never dormant"** marker in the user list. If that
+administrator has since left or you would rather a different account be the recovery path, have
+any administrator assign the exemption to another admin account in **Settings → Users** using
+**Exempt from dormancy** (see [[Settings]]); only administrator accounts can carry it.
+
+### I was signed out unexpectedly
+
+As of feature 009, every sign-in creates a server-side session with two independent limits (both
+configurable in **Settings → Users → Account policy**, see [[Settings]]):
+
+- **Idle timeout** (default **15 minutes**) - no request was made for that long. Ordinary use
+  resets this clock, so it only fires when you actually stop using Veyport.
+- **Maximum session** (default **12 hours**) - the session's absolute lifetime, set at sign-in and
+  never extended, regardless of activity.
+
+Either one ends the session the same way: the next request gets **"session expired — sign in
+again"**, and a browser lands back on the sign-in page. Two other causes produce the same
+"signed out" experience but a different message, **"session ended — sign in again"**: an
+administrator ended your session (one specific session, or "Log out everywhere" - see
+**Sessions** in [[Settings]]), or you yourself used **Sign out other sessions** on your Profile tab
+from a different session. If your account was disabled rather than a session simply ending, see
+"I see 'account disabled'" above instead. `vey` reports the same messages verbatim and exits with
+its authentication-failure status (`3`) - run `vey login` again either way.
+
+### Everyone had to sign in again after upgrading
+
+The first time a hub is upgraded to a release with server-side session records (feature 009 and
+later), every session that existed before the upgrade has no server-side record to validate
+against, so it is refused - **"session expired — sign in again"** for browsers, the same message
+and exit code `3` for `vey`. This is expected and one-time: every user, web and CLI, signs in once
+more after that specific upgrade, and normal session behaviour applies from then on. There is
+nothing to configure or recover - just sign in again.
+
+### An open dashboard tab never seems to go idle
+
+The Fleet Dashboard polls the Hub in the background roughly every 10 seconds, and each request
+counts as activity, so a tab left open and visible can outlast the idle timeout indefinitely. This
+is a known, documented limitation, not a bug: the **absolute session limit** (default 12 hours)
+still applies regardless, so a tab open longer than that is eventually signed out anyway. Client-
+side "the user actually walked away" detection (mouse/keyboard inactivity in the browser itself)
+is out of scope for this release. If you need a tab to genuinely time out sooner, close it, or
+ask an administrator to lower the maximum session limit.
 
 ### I'm the only admin and lost my authenticator
 

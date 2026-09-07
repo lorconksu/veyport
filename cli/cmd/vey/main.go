@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 
+	"github.com/wyiu/veyport/cli/internal/api"
 	"github.com/wyiu/veyport/cli/internal/cmdutil"
 	"github.com/wyiu/veyport/cli/internal/commands"
 	"github.com/wyiu/veyport/cli/internal/config"
@@ -46,6 +47,7 @@ Commands:
 `
 
 func main() {
+	api.UserAgent = "vey/" + version
 	os.Exit(run(os.Args[1:]))
 }
 

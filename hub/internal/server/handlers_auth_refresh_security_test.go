@@ -77,11 +77,9 @@ func TestRefresh_DemotedUser_GetsCurrentRole(t *testing.T) {
 	json.NewDecoder(createRec.Body).Decode(&createResp)
 	userID := createResp.User.ID
 
-	// Generate a refresh token with admin role
-	_, refreshToken, err := auth.GenerateTokenPair(s.jwtSecret, userID, string(model.RoleAdmin), 0)
-	if err != nil {
-		t.Fatalf("generate token pair: %v", err)
-	}
+	// Generate a refresh token with admin role, bound to a session the way a
+	// real sign-in binds it (009: an unbound refresh token is refused).
+	_, refreshToken, _ := sessionTokenPair(t, s, userID)
 
 	// Demote user to viewer via the store
 	if err := s.store.UpdateUserRole(userID, model.RoleViewer); err != nil {

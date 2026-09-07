@@ -23,8 +23,9 @@
 7. [Certificate lifetime and re-issuance](#certificate-lifetime-and-re-issuance)
 8. [Not supported in this release](#not-supported-in-this-release)
 9. [Exit codes](#exit-codes)
-10. [Troubleshooting](#troubleshooting)
-11. [Hub configuration](#hub-configuration)
+10. [Sessions and administrator termination](#sessions-and-administrator-termination)
+11. [Troubleshooting](#troubleshooting)
+12. [Hub configuration](#hub-configuration)
 
 ---
 
@@ -196,6 +197,31 @@ If you need any of these, use the existing [[Server Detail]] file browser/log ta
 | `7` | Rate-limited (`429`) on certificate issuance |
 | *(varies)* | `vey ssh` propagates whatever exit status your native `ssh` client returns once a session is actually open |
 
+## Sessions and administrator termination
+
+As of feature 009, an open SSH gateway shell shows up alongside web and CLI sessions in the
+Sessions views described in [[Settings]]: your own shells appear in "Your sessions" on the
+Profile tab, and an admin sees any user's open shells (kind **SSH shell**, with the target server,
+when it started, and when it was last active) in that user's **Sessions** panel on the Users tab.
+
+An administrator can terminate a shell directly from that panel, and two broader actions close it
+along with everything else: **Log out everywhere** (admin) and **Sign out other sessions** (the
+shell's own owner). Disabling the account also closes it. In every case the shell closes within a
+few seconds and the client sees an explanatory message on stderr before the connection ends:
+
+```
+veyport: session ended by an administrator
+```
+
+(or `veyport: account disabled`, `veyport: signed out everywhere`, depending on why), followed by
+exit status `1`. This is audited as `ssh.session_closed` with detail `reason=forced` - see
+[[Audit Logs]].
+
+**Shells are not subject to the idle or absolute session timers** that apply to web and CLI
+sessions (see [[Logging In]]). A long-running shell is bounded only by its certificate's ~12-hour
+lifetime (above) and by explicit termination as described here - it does not go idle on its own
+and does not expire at a fixed wall-clock time the way a web session does.
+
 ## Troubleshooting
 
 | Symptom | Likely cause | Fix |
@@ -222,4 +248,4 @@ An invalid or unparseable stored value falls back to the next level (DB → flag
 
 ---
 
-*Related: [[CLI]] for the full `vey` command reference and exit-code taxonomy, [[API Reference]] for the `/api/ssh/*` endpoint contracts, [[Server Detail]] for the browser-based terminal alternative, [[Audit Logs]] for reviewing `ssh.*` events.*
+*Related: [[CLI]] for the full `vey` command reference and exit-code taxonomy, [[API Reference]] for the `/api/ssh/*` and session endpoint contracts, [[Server Detail]] for the browser-based terminal alternative, [[Settings]] for viewing and terminating sessions and shells, [[Audit Logs]] for reviewing `ssh.*` events.*

@@ -84,7 +84,7 @@ describe('ReEnrollApproval', () => {
     expect(screen.getByText(/enter.*totp|authenticator code/i)).toBeInTheDocument()
     // TOTP digit inputs should now be visible (6 inputs)
     const inputs = screen.getAllByRole('textbox')
-    expect(inputs.length).toBe(6)
+    expect(inputs).toHaveLength(6)
   })
 
   it('calls denyReEnroll when Deny is clicked', async () => {

@@ -16,8 +16,12 @@ describe('avatar', () => {
   })
 
   describe('getAvatarColor', () => {
-    it('returns a color from AVATAR_COLORS for a given username', () => {
-      const color = getAvatarColor('admin')
+    it.each([
+      { description: 'a given username', username: 'admin' },
+      { description: 'an empty username without throwing', username: '' },
+      { description: 'a unicode username without throwing', username: '用户名' },
+    ])('returns a color from AVATAR_COLORS for $description', ({ username }) => {
+      const color = getAvatarColor(username)
       expect(AVATAR_COLORS).toContain(color)
     })
 
@@ -46,15 +50,6 @@ describe('avatar', () => {
       expect(AVATAR_COLORS).toContain(result)
     })
 
-    it('handles empty username without throwing', () => {
-      const color = getAvatarColor('')
-      expect(AVATAR_COLORS).toContain(color)
-    })
-
-    it('handles unicode username without throwing', () => {
-      const color = getAvatarColor('用户名')
-      expect(AVATAR_COLORS).toContain(color)
-    })
   })
 
   describe('setAvatarColor', () => {

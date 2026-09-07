@@ -114,11 +114,15 @@ describe('DashboardPage', () => {
     })
   })
 
-  it('shows singular "server" when count is 1', async () => {
-    mockApiFetch.mockResolvedValue({ servers: [mockServers[0]], total: 1 })
+  it.each([
+    { description: 'singular "server" when count is 1', servers: [mockServers[0]], text: '1 server' },
+    { description: 'Pending agent status for pending servers', servers: [mockServers[2]], text: 'Pending agent' },
+    { description: 'hostname / ip for servers', servers: [mockServers[0]], text: 'web1 / 1.2.3.4' },
+  ])('shows $description', async ({ servers, text }) => {
+    mockApiFetch.mockResolvedValue({ servers, total: 1 })
     renderPage()
     await waitFor(() => {
-      expect(screen.getByText('1 server')).toBeInTheDocument()
+      expect(screen.getByText(text)).toBeInTheDocument()
     })
   })
 
@@ -252,22 +256,6 @@ describe('DashboardPage', () => {
     mockApiFetch.mockResolvedValue({ servers: [mockServers[0]], total: 1 })
     fireEvent.change(screen.getByPlaceholderText('Search servers...'), { target: { value: 'web' } })
     await waitFor(() => expect(mockApiFetch).toHaveBeenCalled())
-  })
-
-  it('shows Pending agent status for pending servers', async () => {
-    mockApiFetch.mockResolvedValue({ servers: [mockServers[2]], total: 1 })
-    renderPage()
-    await waitFor(() => {
-      expect(screen.getByText('Pending agent')).toBeInTheDocument()
-    })
-  })
-
-  it('shows hostname / ip for servers', async () => {
-    mockApiFetch.mockResolvedValue({ servers: [mockServers[0]], total: 1 })
-    renderPage()
-    await waitFor(() => {
-      expect(screen.getByText('web1 / 1.2.3.4')).toBeInTheDocument()
-    })
   })
 
   it('shows — when hostname and ip are null', async () => {

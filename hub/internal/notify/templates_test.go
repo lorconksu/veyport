@@ -43,6 +43,15 @@ func TestRenderEmail_AllEventTypes(t *testing.T) {
 			context:   map[string]string{"username": "dave"},
 		},
 		{
+			eventType: model.NotifyAccountLocked,
+			context: map[string]string{
+				"username":     "alice",
+				"ip":           "10.0.0.9",
+				"locked_until": "2026-09-05 10:56:07 UTC",
+				"timestamp":    "2026-09-05 10:41:07 UTC",
+			},
+		},
+		{
 			eventType: model.NotifyFileUploaded,
 			context:   map[string]string{"filename": "report.pdf", "server_name": "files-01", "username": "eve"},
 		},
@@ -94,6 +103,45 @@ func TestRenderEmail_MultiPlaceholder(t *testing.T) {
 	}
 	if !strings.Contains(body, "10.0.0.1") {
 		t.Errorf("expected body to contain IP '10.0.0.1', got: %q", body)
+	}
+}
+
+// TestRenderEmail_AccountLocked verifies the exact subject and the presence
+// of username, IP, and lock-expiry time in the body for the account-lockout
+// notification.
+func TestRenderEmail_AccountLocked(t *testing.T) {
+	subject, body := RenderEmail(model.NotifyAccountLocked, map[string]string{
+		"username":     "alice",
+		"ip":           "10.0.0.9",
+		"locked_until": "2026-09-05 10:56:07 UTC",
+		"timestamp":    "2026-09-05 10:41:07 UTC",
+	})
+
+	wantSubject := "[Veyport] Account Locked: alice"
+	if subject != wantSubject {
+		t.Errorf("expected subject %q, got %q", wantSubject, subject)
+	}
+	for _, want := range []string{"alice", "10.0.0.9", "2026-09-05 10:56:07 UTC", "2026-09-05 10:41:07 UTC"} {
+		if !strings.Contains(body, want) {
+			t.Errorf("expected body to contain %q, got: %q", want, body)
+		}
+	}
+}
+
+// TestRenderEmail_AccountLocked_NoExpiry documents that the {{key}}
+// substitution mechanism has no conditionals: when a lock has no expiry to
+// report, the CALLER must pass the already-formatted phrase as the
+// "locked_until" value rather than an empty string.
+func TestRenderEmail_AccountLocked_NoExpiry(t *testing.T) {
+	_, body := RenderEmail(model.NotifyAccountLocked, map[string]string{
+		"username":     "alice",
+		"ip":           "10.0.0.9",
+		"locked_until": "until an administrator intervenes",
+		"timestamp":    "2026-09-05 10:41:07 UTC",
+	})
+
+	if !strings.Contains(body, "until an administrator intervenes") {
+		t.Errorf("expected body to contain the indefinite-lock phrase when the caller supplies it, got: %q", body)
 	}
 }
 
