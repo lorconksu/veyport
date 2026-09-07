@@ -15,6 +15,8 @@ import { DirectoryTab } from '@/pages/settings-directory-tab'
 import { AccountPolicyCard } from '@/pages/account-policy-card'
 import { ConfirmActionModal } from '@/pages/confirm-action-modal'
 import { SessionsModal, SessionsTable } from '@/pages/sessions-modal'
+import { isShell } from '@/lib/sessions'
+import { firstMutationError, mutationErrorMessage } from '@/lib/mutation'
 
 /** u.status when present; otherwise derives from `locked_until` (007 fallback, still exercised by pre-008 fixtures). */
 function effectiveStatus(u: User): AccountStatus {
@@ -68,21 +70,9 @@ function confirmCopyFor(type: ConfirmActionType, username: string): ConfirmCopy 
   }
 }
 
-function firstMutationError(...muts: { isError: boolean; error: unknown }[]): string | null {
-  for (const m of muts) {
-    if (m.isError) return m.error instanceof Error ? m.error.message : 'Request failed'
-  }
-  return null
-}
-
-function mutationErrorMessage(mutation: { isError: boolean; error: unknown }, fallback: string): string | null {
-  if (!mutation.isError) return null
-  return mutation.error instanceof Error ? mutation.error.message : fallback
-}
-
 function rowActionLabel(s: Session): string | null {
   if (s.current) return null
-  return s.kind === 'ssh' || s.kind === 'terminal' ? 'Terminate' : 'Sign out'
+  return isShell(s) ? 'Terminate' : 'Sign out'
 }
 
 function roleBadgeTone(role: Role): string {

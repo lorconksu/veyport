@@ -10,8 +10,9 @@ import (
 	"github.com/wyiu/veyport/hub"
 )
 
-// headerContentType names the Content-Type header once for this file's
-// three hand-set responses (binary, checksum, install script) — go:S1192.
+// headerContentType names the Content-Type header once for the package's
+// hand-set responses (binary, checksum and install-script routes here and
+// in handlers_servers.go) — go:S1192.
 const headerContentType = "Content-Type"
 
 // cliAllowedOS and cliAllowedArch define the platform matrix the `vey` CLI is

@@ -130,10 +130,10 @@ func TestHandleRegister_ValidToken(t *testing.T) {
 		ID: "s1", Name: "test", Status: "pending", Labels: "{}",
 		RegistrationToken: &tokenHash, TokenExpiresAt: &expiresAt,
 	})
-	serverID, clientCert, caCert, _, err := h.handleRegister(registerRequest{
-		rawToken: "", hostname: "host1", ip: testIPAddr, os: "Linux", agentVersion: "0.1.0",
-		csr: testRegistrationCSR(t),
-	})
+	serverID, clientCert, caCert, _, err := h.handleRegister(&pb.RegisterAgent{
+		Token: "", Hostname: "host1", Os: "Linux", AgentVersion: "0.1.0",
+		Csr: testRegistrationCSR(t),
+	}, testIPAddr)
 	if err != nil {
 		t.Fatalf("register: %v", err)
 	}
@@ -151,10 +151,10 @@ func TestHandleRegister_ValidToken(t *testing.T) {
 
 func TestHandleRegister_InvalidToken(t *testing.T) {
 	h, _ := testHandler(t)
-	_, _, _, _, err := h.handleRegister(registerRequest{
-		rawToken: "totally-fake", hostname: "host1", ip: testIPAddr, os: "Linux", agentVersion: "0.1.0",
-		csr: testRegistrationCSR(t),
-	})
+	_, _, _, _, err := h.handleRegister(&pb.RegisterAgent{
+		Token: "totally-fake", Hostname: "host1", Os: "Linux", AgentVersion: "0.1.0",
+		Csr: testRegistrationCSR(t),
+	}, testIPAddr)
 	if err == nil {
 		t.Fatal("expected error for invalid token")
 	}
@@ -240,10 +240,10 @@ func TestHandleRegister_ExpiredToken(t *testing.T) {
 		ID: "s1", Name: "test", Status: "pending", Labels: "{}",
 		RegistrationToken: &tokenHash, TokenExpiresAt: &expiresAt,
 	})
-	_, _, _, _, err := h.handleRegister(registerRequest{
-		rawToken: "", hostname: "host1", ip: testIPAddr, os: "Linux", agentVersion: "0.1.0",
-		csr: testRegistrationCSR(t),
-	})
+	_, _, _, _, err := h.handleRegister(&pb.RegisterAgent{
+		Token: "", Hostname: "host1", Os: "Linux", AgentVersion: "0.1.0",
+		Csr: testRegistrationCSR(t),
+	}, testIPAddr)
 	if err == nil {
 		t.Fatal("expected error for expired token")
 	}

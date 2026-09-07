@@ -1,6 +1,7 @@
 package server
 
 import (
+	"bytes"
 	"crypto/sha256"
 	"fmt"
 	"log"
@@ -398,10 +399,22 @@ func (s *Server) handleInstallScript(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// isValidAgentPlatform reports whether os/arch names an agent build the hub
-// ships: linux only, amd64 or arm64.
+// agentAllowedOS and agentAllowedArch define the platform matrix the agent
+// binary is built for: linux only, amd64 or arm64 (the CLI allowlist in
+// handlers_install.go additionally permits darwin).
+var agentAllowedOS = map[string]bool{
+	"linux": true,
+}
+
+var agentAllowedArch = map[string]bool{
+	"amd64": true,
+	"arm64": true,
+}
+
+// isValidAgentPlatform reports whether os/arch are in the agent's supported
+// allowlist ({linux} x {amd64,arm64}).
 func isValidAgentPlatform(osName, arch string) bool {
-	return osName == "linux" && (arch == "amd64" || arch == "arm64")
+	return isValidBinaryPlatform(osName, arch, agentAllowedOS, agentAllowedArch)
 }
 
 func (s *Server) handleAgentBinary(w http.ResponseWriter, r *http.Request) {
@@ -448,7 +461,7 @@ func (s *Server) serveChecksumFile(w http.ResponseWriter, filename, logPrefix st
 		return
 	}
 	w.Header().Set(headerContentType, "text/plain")
-	if _, err := w.Write([]byte(strings.TrimSpace(string(data)))); err != nil {
+	if _, err := w.Write(bytes.TrimSpace(data)); err != nil {
 		log.Printf("%s: %v", logPrefix, err)
 	}
 }

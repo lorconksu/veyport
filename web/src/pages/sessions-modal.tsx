@@ -2,6 +2,8 @@ import { useState } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { apiFetch } from '@/lib/api'
 import { formatRelative } from '@/lib/time'
+import { mutationErrorMessage } from '@/lib/mutation'
+import { isShell } from '@/lib/sessions'
 import type { EndedCountResponse, Session, SessionKind, SessionListResponse } from '@/types/api'
 import { ConfirmActionModal } from '@/pages/confirm-action-modal'
 
@@ -10,10 +12,6 @@ const KIND_LABELS: Record<SessionKind, string> = {
   cli: 'CLI',
   ssh: 'SSH shell',
   terminal: 'Web terminal',
-}
-
-function isShell(session: Session): boolean {
-  return session.kind === 'ssh' || session.kind === 'terminal'
 }
 
 function startedAt(session: Session): string | undefined {
@@ -223,15 +221,9 @@ export function SessionsModal({
     setRowConfirm({ session, label: rowActionLabel(session) ?? 'Log out' })
   }
 
-  const errorMessage = (() => {
-    if (endOneMutation.isError) {
-      return endOneMutation.error instanceof Error ? endOneMutation.error.message : 'Failed to end session'
-    }
-    if (endAllMutation.isError) {
-      return endAllMutation.error instanceof Error ? endAllMutation.error.message : 'Failed to end sessions'
-    }
-    return null
-  })()
+  const errorMessage =
+    mutationErrorMessage(endOneMutation, 'Failed to end session') ??
+    mutationErrorMessage(endAllMutation, 'Failed to end sessions')
 
   const emptyText = mode === 'admin' ? 'No active sessions.' : 'This is your only active session.'
   const showTable = sessions.length > 0 && !onlyCurrentSession

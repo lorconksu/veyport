@@ -891,7 +891,11 @@ func (c *Client) registerOrHandshake(stream pb.AgentService_ConnectClient) (bool
 // and stores any mTLS certificates provided in the ack.
 func (c *Client) sendRegister(stream pb.AgentService_ConnectClient) (bool, error) {
 	csrDER := c.generateCSRForRegistration()
-	priv, pubBytes, fingerprint := c.generateNodeKeyForRegistration()
+	priv, pubBytes := c.generateNodeKeyForRegistration()
+	// enroll_fingerprint is the DMI product UUID: a hardware identity, not
+	// derived from the node key. The hub stores it and compares it on
+	// re-enroll to flag a hardware change.
+	fingerprint := nodekey.Fingerprint()
 	transportPubBytes := c.ensureTransportKeypair()
 
 	ack, err := c.sendRegisterAndRecvAck(stream, csrDER, pubBytes, fingerprint, transportPubBytes)
@@ -904,26 +908,22 @@ func (c *Client) sendRegister(stream pb.AgentService_ConnectClient) (bool, error
 }
 
 // generateNodeKeyForRegistration generates a fresh Ed25519 node keypair for
-// this enrollment. On failure it logs a warning and returns a nil priv;
-// registration proceeds without a node key in that case. fingerprint is
-// always returned, since it reflects any existing persisted node key.
-func (c *Client) generateNodeKeyForRegistration() (priv, pubBytes []byte, fingerprint string) {
+// this enrollment. On failure it logs a warning and returns nil for both
+// values; registration proceeds without a node key in that case.
+func (c *Client) generateNodeKeyForRegistration() (priv, pubBytes []byte) {
 	generated, pubB64, err := nodekey.Generate()
 	if err != nil {
 		log.Printf("warning: failed to generate node key for registration: %v", err)
-		return nil, nil, nodekey.Fingerprint()
+		return nil, nil
 	}
-	priv = generated
-	fingerprint = nodekey.Fingerprint()
 
 	// Decode pubB64 back to raw bytes to send as node_pubkey.
 	pub, decErr := nodekey.DecodePub(pubB64)
 	if decErr != nil {
 		log.Printf("warning: failed to decode node pubkey: %v", decErr)
-		return nil, nil, fingerprint
+		return nil, nil
 	}
-	pubBytes = []byte(pub)
-	return priv, pubBytes, fingerprint
+	return generated, []byte(pub)
 }
 
 // ensureTransportKeypair generates and persists a new X25519 transport

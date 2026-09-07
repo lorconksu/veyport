@@ -373,25 +373,13 @@ func (s *Store) ListUsers() ([]model.User, error) {
 // scanLifecycleColumns parses the five account-lifecycle columns (shared by
 // scanUser and scanUserRow) into the destination user.
 func scanLifecycleColumns(u *model.User, disabledAt, disabledBy, reactivatedAt, lastActivityAt sql.NullString) {
-	if disabledAt.Valid {
-		if parsed, err := time.Parse(sqliteTimeFormat, disabledAt.String); err == nil {
-			u.DisabledAt = &parsed
-		}
-	}
+	u.DisabledAt = parseSQLiteTime(disabledAt)
 	if disabledBy.Valid {
 		by := disabledBy.String
 		u.DisabledBy = &by
 	}
-	if reactivatedAt.Valid {
-		if parsed, err := time.Parse(sqliteTimeFormat, reactivatedAt.String); err == nil {
-			u.ReactivatedAt = &parsed
-		}
-	}
-	if lastActivityAt.Valid {
-		if parsed, err := time.Parse(sqliteTimeFormat, lastActivityAt.String); err == nil {
-			u.LastActivityAt = &parsed
-		}
-	}
+	u.ReactivatedAt = parseSQLiteTime(reactivatedAt)
+	u.LastActivityAt = parseSQLiteTime(lastActivityAt)
 }
 
 func (s *Store) scanUser(row *sql.Row) (*model.User, error) {
@@ -442,31 +430,11 @@ func (s *Store) scanUserRow(rows *sql.Rows) (*model.User, error) {
 	}
 	u.CreatedAt, _ = time.Parse(sqliteTimeFormat, createdAt)
 	u.UpdatedAt, _ = time.Parse(sqliteTimeFormat, updatedAt)
-	if lastFailedLoginAt.Valid {
-		if parsed, err := time.Parse(sqliteTimeFormat, lastFailedLoginAt.String); err == nil {
-			u.LastFailedLoginAt = &parsed
-		}
-	}
-	if lastLoginAt.Valid {
-		if parsed, err := time.Parse(sqliteTimeFormat, lastLoginAt.String); err == nil {
-			u.LastLoginAt = &parsed
-		}
-	}
-	if lockedUntil.Valid {
-		if parsed, err := time.Parse(sqliteTimeFormat, lockedUntil.String); err == nil {
-			u.LockedUntil = &parsed
-		}
-	}
-	if ldapLastSyncAt.Valid {
-		if parsed, err := time.Parse(sqliteTimeFormat, ldapLastSyncAt.String); err == nil {
-			u.LDAPLastSyncAt = &parsed
-		}
-	}
-	if tempPasswordExpiresAt.Valid {
-		if parsed, err := time.Parse(sqliteTimeFormat, tempPasswordExpiresAt.String); err == nil {
-			u.TempPasswordExpiresAt = &parsed
-		}
-	}
+	u.LastFailedLoginAt = parseSQLiteTime(lastFailedLoginAt)
+	u.LastLoginAt = parseSQLiteTime(lastLoginAt)
+	u.LockedUntil = parseSQLiteTime(lockedUntil)
+	u.LDAPLastSyncAt = parseSQLiteTime(ldapLastSyncAt)
+	u.TempPasswordExpiresAt = parseSQLiteTime(tempPasswordExpiresAt)
 	scanLifecycleColumns(&u, disabledAt, disabledBy, reactivatedAt, lastActivityAt)
 	return &u, nil
 }
