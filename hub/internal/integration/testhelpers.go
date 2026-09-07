@@ -85,9 +85,8 @@ func StartHarness(t *testing.T) *TestHarness {
 	logSessions := grpcserver.NewLogSessions()
 	grpcCAPin := fmt.Sprintf("%x", sha256.Sum256(caCert.Raw))
 
-	// Find two free TCP ports
-	grpcPort := freePort(t)
-	httpPort := freePort(t)
+	// Find two distinct free TCP ports
+	grpcPort, httpPort := freePortPair(t)
 
 	grpcAddr := fmt.Sprintf("127.0.0.1:%d", grpcPort)
 	httpAddr := fmt.Sprintf("127.0.0.1:%d", httpPort)
@@ -329,7 +328,8 @@ func (h *TestHarness) HTTPPut(t *testing.T, path string, body interface{}, token
 	return h.httpRequestWithBody(t, "PUT", path, body, token)
 }
 
-// freePort returns a free TCP port on localhost.
+// freePort returns a free TCP port on localhost. Callers that need more
+// than one port should use freePortPair so the ports are guaranteed distinct.
 func freePort(t *testing.T) int {
 	t.Helper()
 	l, err := net.Listen("tcp", "127.0.0.1:0")
@@ -339,6 +339,25 @@ func freePort(t *testing.T) int {
 	port := l.Addr().(*net.TCPAddr).Port
 	l.Close()
 	return port
+}
+
+// freePortPair returns two distinct free TCP ports on localhost. Both
+// listeners stay open until both ports are known: binding :0, closing, and
+// binding :0 again can hand back the same port, which surfaced in CI as the
+// hub's gRPC and HTTP servers fighting over one address.
+func freePortPair(t *testing.T) (int, int) {
+	t.Helper()
+	first, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("find free port: %v", err)
+	}
+	defer first.Close()
+	second, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("find free port: %v", err)
+	}
+	defer second.Close()
+	return first.Addr().(*net.TCPAddr).Port, second.Addr().(*net.TCPAddr).Port
 }
 
 // waitForPort polls a TCP address until it accepts connections or the timeout expires.
