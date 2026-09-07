@@ -23,6 +23,16 @@ import (
 // malicious server sending an unbounded body.
 const maxErrorBodyBytes = 64 * 1024
 
+// UserAgent is sent as the User-Agent header on every request this package
+// makes. The hub uses the "vey/" prefix to record a session's kind as "cli"
+// rather than "web" (specs/009-session-records/contracts/ui-cli.md: "all
+// requests | send User-Agent: vey/<version> so the hub records kind cli").
+// cli/cmd/vey/main.go overwrites this at startup with "vey/" + the build's
+// stamped version; it defaults to "vey/dev" here so every other caller
+// (tests, any code that imports this package directly) still sends a
+// well-formed header without needing to call anything first.
+var UserAgent = "vey/dev"
+
 // Client is a minimal REST client for the hub's /api surface. It injects
 // Authorization: Bearer on every request when a token is set, uses the
 // default (OS-trust-store) TLS verification with no skip-verify or custom-CA
@@ -161,6 +171,7 @@ func (c *Client) newRequest(ctx context.Context, method, path string, query url.
 		req.Header.Set("Content-Type", "application/json")
 	}
 	req.Header.Set("Accept", "application/json")
+	req.Header.Set("User-Agent", UserAgent)
 	if c.Token != "" {
 		req.Header.Set("Authorization", "Bearer "+c.Token)
 	}
@@ -187,7 +198,16 @@ func mapStatusErr(resp *http.Response) error {
 	switch resp.StatusCode {
 	case http.StatusUnauthorized:
 		return cmdutil.NewAuthError(errors.New(msg))
+	case http.StatusLocked:
+		return cmdutil.NewAuthError(errors.New(msg))
 	case http.StatusForbidden:
+		// A disabled/dormant account (008) is an auth-state problem, not a
+		// permission denial — map it to ExitAuth (like 401/423) so scripts
+		// distinguish "sign in as someone else / contact an admin" from an
+		// ordinary role-based 403 (contracts/ui-cli.md CLI table).
+		if strings.HasPrefix(msg, "account disabled") || strings.HasPrefix(msg, "account dormant") {
+			return cmdutil.NewAuthError(errors.New(msg))
+		}
 		return cmdutil.NewForbiddenError(errors.New(msg))
 	case http.StatusNotFound:
 		return cmdutil.NewNotFoundError(errors.New(msg))

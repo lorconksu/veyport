@@ -630,7 +630,7 @@ streamClosed:
 	time.Sleep(100 * time.Millisecond)
 
 	// Assert: connMgr must NOT have the unknown server registered.
-	if conn := h.ConnMgr.GetConn(victimID); conn != nil {
+	if h.ConnMgr.GetConn(victimID) != nil {
 		t.Fatalf("SECURITY: connMgr has %q registered — unauthenticated hijack succeeded", victimID)
 	}
 	t.Logf("connMgr.GetConn(%q) == nil — no registration occurred (correct)", victimID)
@@ -756,8 +756,8 @@ func openTransportKEK(transportPrivBytes, ephemeralPubBytes, encryptedKek []byte
 // Extract: prk = HMAC-SHA256(salt, ikm)   (salt=zeros if nil)
 // Expand:  T(1) = HMAC-SHA256(prk, ""||info||0x01); output = T(1)[:keyLen]
 func hkdfSHA256(ikm, salt, info []byte, keyLen int) []byte {
-	import_hmac_sha256 := func(key, data []byte) []byte {
-		import_hmac := func(key, data []byte) []byte {
+	hmacSHA256 := func(key, data []byte) []byte {
+		hmacDigest := func(key, data []byte) []byte {
 			blockSize := 64
 			if len(key) > blockSize {
 				h := sha256.New()
@@ -781,17 +781,17 @@ func hkdfSHA256(ikm, salt, info []byte, keyLen int) []byte {
 			outer.Write(innerSum)
 			return outer.Sum(nil)
 		}
-		return import_hmac(key, data)
+		return hmacDigest(key, data)
 	}
 
 	// Extract
 	if salt == nil {
 		salt = make([]byte, sha256.Size)
 	}
-	prk := import_hmac_sha256(salt, ikm)
+	prk := hmacSHA256(salt, ikm)
 
 	// Expand: single block (T(1)) — sufficient for 32-byte output
 	t1Input := append(info, 0x01)
-	t1 := import_hmac_sha256(prk, t1Input)
+	t1 := hmacSHA256(prk, t1Input)
 	return t1[:keyLen]
 }

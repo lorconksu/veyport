@@ -137,10 +137,14 @@ describe('AuditLogsPage', () => {
     })
   })
 
-  it('shows "System" for entries with null user_id', async () => {
+  it.each([
+    { description: 'entries with null user_id', text: 'System' },
+    { description: 'the target value when present', text: 'web-prod-1' },
+    { description: 'the ip address when present', text: '1.2.3.4' },
+  ])('shows "$text" for $description', async ({ text }) => {
     renderPage()
     await waitFor(() => {
-      expect(screen.getByText('System')).toBeInTheDocument()
+      expect(screen.getByText(text)).toBeInTheDocument()
     })
   })
 
@@ -216,20 +220,6 @@ describe('AuditLogsPage', () => {
     renderPage()
     await waitFor(() => {
       expect(screen.getByRole('button', { name: 'Next' })).toBeDisabled()
-    })
-  })
-
-  it('shows target value when present', async () => {
-    renderPage()
-    await waitFor(() => {
-      expect(screen.getByText('web-prod-1')).toBeInTheDocument()
-    })
-  })
-
-  it('shows ip address when present', async () => {
-    renderPage()
-    await waitFor(() => {
-      expect(screen.getByText('1.2.3.4')).toBeInTheDocument()
     })
   })
 

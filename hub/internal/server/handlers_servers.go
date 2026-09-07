@@ -1,6 +1,7 @@
 package server
 
 import (
+	"bytes"
 	"crypto/sha256"
 	"fmt"
 	"log"
@@ -392,47 +393,76 @@ func (s *Server) handleInstallScript(w http.ResponseWriter, r *http.Request) {
 		respondError(w, http.StatusNotFound, "install script not available")
 		return
 	}
-	w.Header().Set("Content-Type", "text/x-shellscript; charset=utf-8")
+	w.Header().Set(headerContentType, "text/x-shellscript; charset=utf-8")
 	if _, err := w.Write(hub.InstallScript); err != nil {
 		log.Printf("install script write failed: %v", err)
 	}
 }
 
+// agentAllowedOS and agentAllowedArch define the platform matrix the agent
+// binary is built for: linux only, amd64 or arm64 (the CLI allowlist in
+// handlers_install.go additionally permits darwin).
+var agentAllowedOS = map[string]bool{
+	"linux": true,
+}
+
+var agentAllowedArch = map[string]bool{
+	"amd64": true,
+	"arm64": true,
+}
+
+// isValidAgentPlatform reports whether os/arch are in the agent's supported
+// allowlist ({linux} x {amd64,arm64}).
+func isValidAgentPlatform(osName, arch string) bool {
+	return isValidBinaryPlatform(osName, arch, agentAllowedOS, agentAllowedArch)
+}
+
 func (s *Server) handleAgentBinary(w http.ResponseWriter, r *http.Request) {
 	osName := r.PathValue("os")
 	arch := r.PathValue("arch")
-	if osName != "linux" || (arch != "amd64" && arch != "arm64") {
+	if !isValidAgentPlatform(osName, arch) {
 		respondError(w, http.StatusNotFound, "unsupported platform")
 		return
 	}
-	filename := fmt.Sprintf("veyport-agent-%s-%s", osName, arch)
-	binaryPath := filepath.Join(s.agentBinDir, filename)
-	if _, err := os.Stat(binaryPath); os.IsNotExist(err) {
-		respondError(w, http.StatusNotFound, "agent binary not found")
-		return
-	}
-	w.Header().Set("Content-Type", "application/octet-stream")
-	w.Header().Set("Content-Disposition", fmt.Sprintf(`attachment; filename="%s"`, filename))
-	http.ServeFile(w, r, binaryPath)
+	s.serveBinaryFile(w, r, fmt.Sprintf("veyport-agent-%s-%s", osName, arch), "agent binary not found")
 }
 
 func (s *Server) handleAgentBinaryChecksum(w http.ResponseWriter, r *http.Request) {
 	osName := r.PathValue("os")
 	arch := r.PathValue("arch")
-	if osName != "linux" || (arch != "amd64" && arch != "arm64") {
+	if !isValidAgentPlatform(osName, arch) {
 		respondError(w, http.StatusNotFound, "unsupported platform")
 		return
 	}
-	filename := fmt.Sprintf("veyport-agent-%s-%s.sha256", osName, arch)
-	checksumPath := filepath.Join(s.agentBinDir, filename)
-	data, err := os.ReadFile(checksumPath)
+	s.serveChecksumFile(w, fmt.Sprintf("veyport-agent-%s-%s.sha256", osName, arch), "checksum write failed")
+}
+
+// serveBinaryFile streams filename from agentBinDir as an attachment, or
+// answers 404 with notFoundMsg when it has not been built. Shared by the
+// agent and CLI download routes.
+func (s *Server) serveBinaryFile(w http.ResponseWriter, r *http.Request, filename, notFoundMsg string) {
+	binaryPath := filepath.Join(s.agentBinDir, filename)
+	if _, err := os.Stat(binaryPath); os.IsNotExist(err) {
+		respondError(w, http.StatusNotFound, notFoundMsg)
+		return
+	}
+	w.Header().Set(headerContentType, "application/octet-stream")
+	w.Header().Set("Content-Disposition", fmt.Sprintf(`attachment; filename="%s"`, filename))
+	http.ServeFile(w, r, binaryPath)
+}
+
+// serveChecksumFile writes the trimmed contents of the named .sha256 file from
+// agentBinDir as text/plain, or 404 when it is absent. logPrefix labels a
+// failed write in the log. Shared by the agent and CLI checksum routes.
+func (s *Server) serveChecksumFile(w http.ResponseWriter, filename, logPrefix string) {
+	data, err := os.ReadFile(filepath.Join(s.agentBinDir, filename))
 	if err != nil {
 		respondError(w, http.StatusNotFound, "checksum not found")
 		return
 	}
-	w.Header().Set("Content-Type", "text/plain")
-	if _, err := w.Write([]byte(strings.TrimSpace(string(data)))); err != nil {
-		log.Printf("checksum write failed: %v", err)
+	w.Header().Set(headerContentType, "text/plain")
+	if _, err := w.Write(bytes.TrimSpace(data)); err != nil {
+		log.Printf("%s: %v", logPrefix, err)
 	}
 }
 

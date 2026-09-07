@@ -14,7 +14,10 @@ const configInitialSetupComplete = "initial_setup_completed"
 
 const userSelectColumns = `id, username, email, password_hash, role, auth_provider, external_id,
         ldap_dn, ldap_username, ldap_last_sync_at, terminal_access, totp_secret, totp_enabled,
-        token_generation, avatar, must_change_password, temp_password_expires_at, created_at, updated_at`
+        token_generation, avatar, must_change_password, temp_password_expires_at,
+        failed_login_count, last_failed_login_at, last_login_at, locked_until,
+        disabled_at, disabled_by, reactivated_at, dormancy_exempt, last_activity_at,
+        created_at, updated_at`
 
 func (s *Store) CreateUser(u *model.User) error {
 	if u.AuthProvider == "" {
@@ -27,13 +30,13 @@ func (s *Store) CreateUser(u *model.User) error {
 		`INSERT INTO users (
 			id, username, email, password_hash, role, auth_provider, external_id,
 			ldap_dn, ldap_username, ldap_last_sync_at, terminal_access, totp_secret, totp_enabled,
-			avatar, token_generation, must_change_password, temp_password_expires_at
+			avatar, token_generation, must_change_password, temp_password_expires_at, dormancy_exempt
 		)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		u.ID, u.Username, u.Email, u.PasswordHash, u.Role, u.AuthProvider, u.ExternalID,
 		u.LDAPDN, u.LDAPUsername, sqliteTimePtr(u.LDAPLastSyncAt), u.TerminalAccess,
 		u.TOTPSecret, u.TOTPEnabled, u.Avatar, u.TokenGeneration, u.MustChangePassword,
-		sqliteTimePtr(u.TempPasswordExpiresAt),
+		sqliteTimePtr(u.TempPasswordExpiresAt), u.DormancyExempt,
 	)
 	if err != nil {
 		return fmt.Errorf("create user: %w", err)
@@ -266,10 +269,17 @@ func (s *Store) DeleteUser(userID string) error {
 	return tx.Commit()
 }
 
+// UpdateUserRole changes a user's role. Dormancy exemption is only
+// meaningful on admins, so it is cleared whenever the new role is not admin
+// (a role change back to admin does not restore a previously cleared
+// exemption — an administrator must re-grant it explicitly).
 func (s *Store) UpdateUserRole(userID string, role model.Role) error {
 	result, err := s.db.Exec(
-		"UPDATE users SET role = ?, updated_at = datetime('now') WHERE id = ?",
-		role, userID,
+		`UPDATE users
+		 SET role = ?, dormancy_exempt = CASE WHEN ? = 'admin' THEN dormancy_exempt ELSE 0 END,
+		     updated_at = datetime('now')
+		 WHERE id = ?`,
+		role, role, userID,
 	)
 	if err != nil {
 		return fmt.Errorf("update role: %w", err)
@@ -360,14 +370,31 @@ func (s *Store) ListUsers() ([]model.User, error) {
 	return users, rows.Err()
 }
 
+// scanLifecycleColumns parses the five account-lifecycle columns (shared by
+// scanUser and scanUserRow) into the destination user.
+func scanLifecycleColumns(u *model.User, disabledAt, disabledBy, reactivatedAt, lastActivityAt sql.NullString) {
+	u.DisabledAt = parseSQLiteTime(disabledAt)
+	if disabledBy.Valid {
+		by := disabledBy.String
+		u.DisabledBy = &by
+	}
+	u.ReactivatedAt = parseSQLiteTime(reactivatedAt)
+	u.LastActivityAt = parseSQLiteTime(lastActivityAt)
+}
+
 func (s *Store) scanUser(row *sql.Row) (*model.User, error) {
 	var u model.User
 	var createdAt, updatedAt string
 	var ldapLastSyncAt, tempPasswordExpiresAt sql.NullString
+	var lastFailedLoginAt, lastLoginAt, lockedUntil sql.NullString
+	var disabledAt, disabledBy, reactivatedAt, lastActivityAt sql.NullString
 	err := row.Scan(&u.ID, &u.Username, &u.Email, &u.PasswordHash, &u.Role,
 		&u.AuthProvider, &u.ExternalID, &u.LDAPDN, &u.LDAPUsername, &ldapLastSyncAt,
 		&u.TerminalAccess, &u.TOTPSecret, &u.TOTPEnabled, &u.TokenGeneration, &u.Avatar,
-		&u.MustChangePassword, &tempPasswordExpiresAt, &createdAt, &updatedAt)
+		&u.MustChangePassword, &tempPasswordExpiresAt,
+		&u.FailedLoginCount, &lastFailedLoginAt, &lastLoginAt, &lockedUntil,
+		&disabledAt, &disabledBy, &reactivatedAt, &u.DormancyExempt, &lastActivityAt,
+		&createdAt, &updatedAt)
 	if err == sql.ErrNoRows {
 		return nil, fmt.Errorf(errUserNotFound)
 	}
@@ -376,16 +403,12 @@ func (s *Store) scanUser(row *sql.Row) (*model.User, error) {
 	}
 	u.CreatedAt, _ = time.Parse(sqliteTimeFormat, createdAt)
 	u.UpdatedAt, _ = time.Parse(sqliteTimeFormat, updatedAt)
-	if ldapLastSyncAt.Valid {
-		if parsed, err := time.Parse(sqliteTimeFormat, ldapLastSyncAt.String); err == nil {
-			u.LDAPLastSyncAt = &parsed
-		}
-	}
-	if tempPasswordExpiresAt.Valid {
-		if parsed, err := time.Parse(sqliteTimeFormat, tempPasswordExpiresAt.String); err == nil {
-			u.TempPasswordExpiresAt = &parsed
-		}
-	}
+	u.LDAPLastSyncAt = parseSQLiteTime(ldapLastSyncAt)
+	u.TempPasswordExpiresAt = parseSQLiteTime(tempPasswordExpiresAt)
+	u.LastFailedLoginAt = parseSQLiteTime(lastFailedLoginAt)
+	u.LastLoginAt = parseSQLiteTime(lastLoginAt)
+	u.LockedUntil = parseSQLiteTime(lockedUntil)
+	scanLifecycleColumns(&u, disabledAt, disabledBy, reactivatedAt, lastActivityAt)
 	return &u, nil
 }
 
@@ -393,24 +416,25 @@ func (s *Store) scanUserRow(rows *sql.Rows) (*model.User, error) {
 	var u model.User
 	var createdAt, updatedAt string
 	var ldapLastSyncAt, tempPasswordExpiresAt sql.NullString
+	var lastFailedLoginAt, lastLoginAt, lockedUntil sql.NullString
+	var disabledAt, disabledBy, reactivatedAt, lastActivityAt sql.NullString
 	err := rows.Scan(&u.ID, &u.Username, &u.Email, &u.PasswordHash, &u.Role,
 		&u.AuthProvider, &u.ExternalID, &u.LDAPDN, &u.LDAPUsername, &ldapLastSyncAt,
 		&u.TerminalAccess, &u.TOTPSecret, &u.TOTPEnabled, &u.TokenGeneration, &u.Avatar,
-		&u.MustChangePassword, &tempPasswordExpiresAt, &createdAt, &updatedAt)
+		&u.MustChangePassword, &tempPasswordExpiresAt,
+		&u.FailedLoginCount, &lastFailedLoginAt, &lastLoginAt, &lockedUntil,
+		&disabledAt, &disabledBy, &reactivatedAt, &u.DormancyExempt, &lastActivityAt,
+		&createdAt, &updatedAt)
 	if err != nil {
 		return nil, fmt.Errorf("scan user row: %w", err)
 	}
 	u.CreatedAt, _ = time.Parse(sqliteTimeFormat, createdAt)
 	u.UpdatedAt, _ = time.Parse(sqliteTimeFormat, updatedAt)
-	if ldapLastSyncAt.Valid {
-		if parsed, err := time.Parse(sqliteTimeFormat, ldapLastSyncAt.String); err == nil {
-			u.LDAPLastSyncAt = &parsed
-		}
-	}
-	if tempPasswordExpiresAt.Valid {
-		if parsed, err := time.Parse(sqliteTimeFormat, tempPasswordExpiresAt.String); err == nil {
-			u.TempPasswordExpiresAt = &parsed
-		}
-	}
+	u.LastFailedLoginAt = parseSQLiteTime(lastFailedLoginAt)
+	u.LastLoginAt = parseSQLiteTime(lastLoginAt)
+	u.LockedUntil = parseSQLiteTime(lockedUntil)
+	u.LDAPLastSyncAt = parseSQLiteTime(ldapLastSyncAt)
+	u.TempPasswordExpiresAt = parseSQLiteTime(tempPasswordExpiresAt)
+	scanLifecycleColumns(&u, disabledAt, disabledBy, reactivatedAt, lastActivityAt)
 	return &u, nil
 }

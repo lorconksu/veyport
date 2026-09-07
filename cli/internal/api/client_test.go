@@ -107,6 +107,28 @@ func TestLogin_BadCredentials401(t *testing.T) {
 	}
 }
 
+func TestLogin_AccountLocked423(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusLocked)
+		json.NewEncoder(w).Encode(map[string]string{"error": "account temporarily locked — try again later"})
+	}))
+	defer srv.Close()
+
+	c := newTestClient(srv, "")
+	err := c.Post(context.Background(), "/api/auth/login", map[string]string{"username": "x", "password": "y"}, nil)
+	if code := codeOf(t, err); code != cmdutil.ExitAuth {
+		t.Errorf("exit code = %d, want %d (ExitAuth)", code, cmdutil.ExitAuth)
+	}
+	if err.Error() != "account temporarily locked — try again later" {
+		t.Errorf("error message = %q, want the hub's message verbatim", err.Error())
+	}
+	var coded *cmdutil.CodedError
+	if !errors.As(err, &coded) {
+		t.Fatalf("err is not a *cmdutil.CodedError: %T", err)
+	}
+}
+
 func TestLogin_RateLimited429(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
@@ -292,6 +314,67 @@ func TestFiles_Forbidden403(t *testing.T) {
 	err := c.Get(context.Background(), "/api/servers/srv1/files", nil, &FileListing{})
 	if code := codeOf(t, err); code != cmdutil.ExitForbidden {
 		t.Errorf("exit code = %d, want %d (ExitForbidden)", code, cmdutil.ExitForbidden)
+	}
+}
+
+// --- Account lifecycle (008): disabled/dormant accounts map to ExitAuth,
+// distinct from an ordinary 403 permission denial (ExitForbidden) ---------
+
+func TestForbidden_AccountDisabled_MapsToExitAuth(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusForbidden)
+		json.NewEncoder(w).Encode(map[string]string{"error": "account disabled — contact an administrator"})
+	}))
+	defer srv.Close()
+
+	c := newTestClient(srv, "tok")
+	err := c.Get(context.Background(), "/api/servers/srv1/files", nil, &FileListing{})
+	if code := codeOf(t, err); code != cmdutil.ExitAuth {
+		t.Errorf("exit code = %d, want %d (ExitAuth)", code, cmdutil.ExitAuth)
+	}
+	if err.Error() != "account disabled — contact an administrator" {
+		t.Errorf("error message = %q, want the hub's message verbatim", err.Error())
+	}
+}
+
+func TestForbidden_AccountDormant_MapsToExitAuth(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusForbidden)
+		json.NewEncoder(w).Encode(map[string]string{"error": "account dormant — contact an administrator"})
+	}))
+	defer srv.Close()
+
+	c := newTestClient(srv, "tok")
+	err := c.Get(context.Background(), "/api/servers/srv1/files", nil, &FileListing{})
+	if code := codeOf(t, err); code != cmdutil.ExitAuth {
+		t.Errorf("exit code = %d, want %d (ExitAuth)", code, cmdutil.ExitAuth)
+	}
+	if err.Error() != "account dormant — contact an administrator" {
+		t.Errorf("error message = %q, want the hub's message verbatim", err.Error())
+	}
+}
+
+// TestForbidden_PermissionDenied_StillExitForbidden guards against
+// over-matching: an ordinary permission 403 (any message not starting with
+// "account disabled"/"account dormant") must keep mapping to ExitForbidden,
+// unchanged from TestFiles_Forbidden403 above.
+func TestForbidden_PermissionDenied_StillExitForbidden(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusForbidden)
+		json.NewEncoder(w).Encode(map[string]string{"error": "permission denied"})
+	}))
+	defer srv.Close()
+
+	c := newTestClient(srv, "tok")
+	err := c.Get(context.Background(), "/api/servers/srv1/files", nil, &FileListing{})
+	if code := codeOf(t, err); code != cmdutil.ExitForbidden {
+		t.Errorf("exit code = %d, want %d (ExitForbidden)", code, cmdutil.ExitForbidden)
+	}
+	if err.Error() != "permission denied" {
+		t.Errorf("error message = %q, want %q", err.Error(), "permission denied")
 	}
 }
 
@@ -691,5 +774,120 @@ func TestMapTransportErr_CertificateBranches(t *testing.T) {
 				t.Errorf("error message %q does not point at OS trust-store installation", msg)
 			}
 		})
+	}
+}
+
+// --- User-Agent (009): every request identifies itself so the hub can
+// record a session's kind as "cli" (contracts/ui-cli.md CLI table: "all
+// requests | send User-Agent: vey/<version>") -----------------------------
+
+func TestNewRequest_SendsDefaultUserAgent(t *testing.T) {
+	var got string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		got = r.Header.Get("User-Agent")
+		w.WriteHeader(http.StatusOK)
+		json.NewEncoder(w).Encode(map[string]string{})
+	}))
+	defer srv.Close()
+
+	c := newTestClient(srv, "")
+	if err := c.Get(context.Background(), "/api/auth/me", nil, &Me{}); err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if got != "vey/dev" {
+		t.Errorf("User-Agent = %q, want the default %q", got, "vey/dev")
+	}
+}
+
+func TestNewRequest_UserAgentReflectsInjectedVersion(t *testing.T) {
+	prev := UserAgent
+	UserAgent = "vey/2.0.37"
+	defer func() { UserAgent = prev }()
+
+	var got string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		got = r.Header.Get("User-Agent")
+		w.WriteHeader(http.StatusOK)
+		json.NewEncoder(w).Encode(map[string]string{})
+	}))
+	defer srv.Close()
+
+	c := newTestClient(srv, "")
+	if err := c.Get(context.Background(), "/api/auth/me", nil, &Me{}); err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if got != "vey/2.0.37" {
+		t.Errorf("User-Agent = %q, want %q", got, "vey/2.0.37")
+	}
+}
+
+func TestNewRequest_UserAgentSentOnEveryVerb(t *testing.T) {
+	prev := UserAgent
+	UserAgent = "vey/1.0.0"
+	defer func() { UserAgent = prev }()
+
+	var gotGet, gotPost string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.Method {
+		case http.MethodGet:
+			gotGet = r.Header.Get("User-Agent")
+		case http.MethodPost:
+			gotPost = r.Header.Get("User-Agent")
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		json.NewEncoder(w).Encode(map[string]string{})
+	}))
+	defer srv.Close()
+
+	c := newTestClient(srv, "")
+	if err := c.Get(context.Background(), "/api/auth/me", nil, &Me{}); err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if err := c.Post(context.Background(), "/api/auth/logout", nil, nil); err != nil {
+		t.Fatalf("Post: %v", err)
+	}
+	if gotGet != "vey/1.0.0" || gotPost != "vey/1.0.0" {
+		t.Errorf("User-Agent get=%q post=%q, want both %q", gotGet, gotPost, "vey/1.0.0")
+	}
+}
+
+// --- Session expiry/end (009): the hub's exact 401 messages map to
+// ExitAuth verbatim (contracts/ui-cli.md: "any command on an ended/expired
+// session | exit 3, hub message verbatim") --------------------------------
+
+func TestUnauthorized_SessionExpired_MapsToExitAuthVerbatim(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusUnauthorized)
+		json.NewEncoder(w).Encode(map[string]string{"error": "session expired — sign in again"})
+	}))
+	defer srv.Close()
+
+	c := newTestClient(srv, "tok")
+	err := c.Get(context.Background(), "/api/auth/me", nil, &Me{})
+	if code := codeOf(t, err); code != cmdutil.ExitAuth {
+		t.Errorf("exit code = %d, want %d (ExitAuth)", code, cmdutil.ExitAuth)
+	}
+	if err.Error() != "session expired — sign in again" {
+		t.Errorf("error message = %q, want the hub's message verbatim", err.Error())
+	}
+}
+
+func TestUnauthorized_SessionEnded_MapsToExitAuthVerbatim(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusUnauthorized)
+		json.NewEncoder(w).Encode(map[string]string{"error": "session ended — sign in again"})
+	}))
+	defer srv.Close()
+
+	c := newTestClient(srv, "tok")
+	err := c.Get(context.Background(), "/api/auth/me", nil, &Me{})
+	if code := codeOf(t, err); code != cmdutil.ExitAuth {
+		t.Errorf("exit code = %d, want %d (ExitAuth)", code, cmdutil.ExitAuth)
+	}
+	if err.Error() != "session ended — sign in again" {
+		t.Errorf("error message = %q, want the hub's message verbatim", err.Error())
 	}
 }

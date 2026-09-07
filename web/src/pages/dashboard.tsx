@@ -1,12 +1,13 @@
 import { useState, useEffect } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { Link } from 'react-router-dom'
-import { Plus, Trash2, X, Search } from 'lucide-react'
+import { Plus, Trash2, X, Search, Terminal } from 'lucide-react'
 import { apiFetch } from '@/lib/api'
 import { relativeTime } from '@/lib/time'
 import { statusDot } from '@/lib/server-utils'
 import { useAuth } from '@/hooks/use-auth'
 import { AddServerModal } from '@/pages/add-server-modal'
+import { InstallCliModal } from '@/pages/install-cli-modal'
 import { useAllServers } from '@/hooks/use-servers'
 import type { ServerListResponse } from '@/types/api'
 
@@ -45,6 +46,7 @@ export function DashboardPage() {
   const [debouncedSearchTerm, setDebouncedSearchTerm] = useState('')
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set())
   const [showAddModal, setShowAddModal] = useState(false)
+  const [showInstallCliModal, setShowInstallCliModal] = useState(false)
 
   // Debounce search term by 300ms to avoid API call on every keystroke
   useEffect(() => {
@@ -136,16 +138,26 @@ export function DashboardPage() {
           <h2 className="text-lg font-semibold text-text-primary">Fleet Dashboard</h2>
           <p className="text-text-muted text-sm">{total} server{total === 1 ? '' : 's'}</p>
         </div>
-        {isAdmin && (
+        <div className="flex items-center gap-2">
           <button
             type="button"
-            onClick={() => setShowAddModal(true)}
-            className="flex items-center gap-2 px-3 py-1.5 bg-accent hover:bg-accent-hover text-white text-sm rounded transition-colors"
+            onClick={() => setShowInstallCliModal(true)}
+            className="flex items-center gap-2 px-3 py-1.5 bg-elevated hover:bg-border text-text-primary text-sm rounded transition-colors"
           >
-            <Plus className="w-4 h-4" />
-            Add Server
+            <Terminal className="w-4 h-4" />
+            Install CLI
           </button>
-        )}
+          {isAdmin && (
+            <button
+              type="button"
+              onClick={() => setShowAddModal(true)}
+              className="flex items-center gap-2 px-3 py-1.5 bg-accent hover:bg-accent-hover text-white text-sm rounded transition-colors"
+            >
+              <Plus className="w-4 h-4" />
+              Add Server
+            </button>
+          )}
+        </div>
       </div>
 
       {/* Filters */}
@@ -295,6 +307,9 @@ export function DashboardPage() {
 
       {/* Add Server Modal */}
       {showAddModal && <AddServerModal onClose={() => setShowAddModal(false)} />}
+
+      {/* Install CLI Modal */}
+      {showInstallCliModal && <InstallCliModal onClose={() => setShowInstallCliModal(false)} />}
     </div>
   )
 }

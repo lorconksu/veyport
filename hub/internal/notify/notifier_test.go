@@ -327,6 +327,15 @@ func TestEnqueueJob_MainQueue(t *testing.T) {
 	}
 }
 
+// TestSecurityEvents_AccountLocked verifies the account-lockout notification
+// is registered as security-critical so it is never silently dropped when the
+// main queue is full.
+func TestSecurityEvents_AccountLocked(t *testing.T) {
+	if !securityEvents[model.NotifyAccountLocked] {
+		t.Errorf("expected %q to be in securityEvents", model.NotifyAccountLocked)
+	}
+}
+
 // TestEnqueueJob_PriorityQueueFallback verifies security events fall back to priority queue.
 func TestEnqueueJob_PriorityQueueFallback(t *testing.T) {
 	st := testStoreAndUser(t)

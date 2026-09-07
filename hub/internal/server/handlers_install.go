@@ -1,13 +1,19 @@
 package server
 
 import (
+	"bytes"
 	"fmt"
 	"log"
 	"net/http"
-	"os"
-	"path/filepath"
-	"strings"
+	"text/template"
+
+	"github.com/wyiu/veyport/hub"
 )
+
+// headerContentType names the Content-Type header once for the package's
+// hand-set responses (binary, checksum and install-script routes here and
+// in handlers_servers.go) — go:S1192.
+const headerContentType = "Content-Type"
 
 // cliAllowedOS and cliAllowedArch define the platform matrix the `vey` CLI is
 // built for (specs/004-cli-connector/contracts/rest-api.md, Distribution
@@ -50,15 +56,7 @@ func (s *Server) handleCLIBinary(w http.ResponseWriter, r *http.Request) {
 		respondError(w, http.StatusNotFound, "unsupported platform")
 		return
 	}
-	filename := fmt.Sprintf("vey-%s-%s", osName, arch)
-	binaryPath := filepath.Join(s.agentBinDir, filename)
-	if _, err := os.Stat(binaryPath); os.IsNotExist(err) {
-		respondError(w, http.StatusNotFound, "cli binary not found")
-		return
-	}
-	w.Header().Set("Content-Type", "application/octet-stream")
-	w.Header().Set("Content-Disposition", fmt.Sprintf(`attachment; filename="%s"`, filename))
-	http.ServeFile(w, r, binaryPath)
+	s.serveBinaryFile(w, r, fmt.Sprintf("vey-%s-%s", osName, arch), "cli binary not found")
 }
 
 // handleInstall3rdSegmentDispatch handles the 4-path-segment "/install/{a}/{b}/{c}"
@@ -105,15 +103,38 @@ func (s *Server) handleCLIBinaryChecksum(w http.ResponseWriter, r *http.Request)
 		respondError(w, http.StatusNotFound, "unsupported platform")
 		return
 	}
-	filename := fmt.Sprintf("vey-%s-%s.sha256", osName, arch)
-	checksumPath := filepath.Join(s.agentBinDir, filename)
-	data, err := os.ReadFile(checksumPath)
+	s.serveChecksumFile(w, fmt.Sprintf("vey-%s-%s.sha256", osName, arch), "cli checksum write failed")
+}
+
+// installCLIScriptTemplate is parsed at init via template.Must: the script
+// is an embedded asset, so a parse failure is a build defect that should
+// fail startup loudly, not a runtime condition to limp past per-request.
+var installCLIScriptTemplate = template.Must(
+	template.New("install-cli.sh").Parse(string(hub.InstallCLIScript)))
+
+// handleInstallCLIScript serves the templated `vey` CLI install one-liner at
+// GET /install/cli.sh (specs/006-cli-install-script/proposal.md). Unlike the
+// static agent installer (install.sh), this script is rendered through
+// text/template so the hub injects its own public base URL and the
+// one-liner needs zero arguments: `curl -fsSL <hub>/install/cli.sh | sh`.
+// Rendered into a buffer first so a template error never ships a partial
+// script with a 200 status.
+func (s *Server) handleInstallCLIScript(w http.ResponseWriter, r *http.Request) {
+	baseURL, err := s.resolvePublicBaseURL(r)
 	if err != nil {
-		respondError(w, http.StatusNotFound, "checksum not found")
+		respondError(w, http.StatusInternalServerError, "public hub address is not configured")
 		return
 	}
-	w.Header().Set("Content-Type", "text/plain")
-	if _, err := w.Write([]byte(strings.TrimSpace(string(data)))); err != nil {
-		log.Printf("cli checksum write failed: %v", err)
+
+	var buf bytes.Buffer
+	if err := installCLIScriptTemplate.Execute(&buf, struct{ BaseURL string }{BaseURL: baseURL}); err != nil {
+		log.Printf("install-cli.sh template execute failed: %v", err)
+		respondError(w, http.StatusInternalServerError, "install script is not available")
+		return
+	}
+
+	w.Header().Set(headerContentType, "text/x-shellscript; charset=utf-8")
+	if _, err := w.Write(buf.Bytes()); err != nil {
+		log.Printf("install-cli.sh write failed: %v", err)
 	}
 }

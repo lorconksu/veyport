@@ -1,5 +1,6 @@
-import { Page } from '@playwright/test'
+import { APIRequestContext, Page, request as apiRequest } from '@playwright/test'
 import { authenticator } from 'otplib'
+import { execSync } from 'child_process'
 import fs from 'fs'
 import path from 'path'
 
@@ -107,4 +108,70 @@ export async function loginViaAPI(page: Page, baseURL: string) {
 
   // Now navigate to the app — auth cookies are set, so auth will succeed
   await page.goto(baseURL + '/')
+}
+
+/**
+ * Build an APIRequestContext authenticated as the admin with a Bearer access
+ * token. Bearer requests are exempt from the double-submit CSRF check, so this
+ * context can issue mutating admin calls (PUT /api/settings/hub, POST/DELETE
+ * /api/users) without juggling the veyport_csrf cookie.
+ *
+ * Costs one POST /api/auth/login and one POST /api/auth/login/totp against the
+ * per-IP limiters (10/min and 3/min respectively).
+ */
+export async function adminApiContext(baseURL: string): Promise<APIRequestContext> {
+  const { totpSecret } = loadState()
+
+  const anon = await apiRequest.newContext({ baseURL })
+  try {
+    const loginResp = await anon.post('/api/auth/login', {
+      data: { username: 'admin', password: 'E2eTestPass!2026' },
+    })
+    if (!loginResp.ok()) {
+      throw new Error(`password login failed: ${loginResp.status()} ${await loginResp.text()}`)
+    }
+    const { totp_token: totpToken } = await loginResp.json() as { totp_token: string }
+
+    const code = await waitForFreshTOTPCode(totpSecret)
+    const totpResp = await anon.post('/api/auth/login/totp', {
+      data: { totp_token: totpToken, code },
+    })
+    markTOTPCodeUsed(code)
+    if (!totpResp.ok()) {
+      throw new Error(`totp login failed: ${totpResp.status()} ${await totpResp.text()}`)
+    }
+    const { access_token: accessToken } = await totpResp.json() as { access_token: string }
+
+    return await apiRequest.newContext({
+      baseURL,
+      extraHTTPHeaders: { Authorization: `Bearer ${accessToken}` },
+    })
+  } finally {
+    await anon.dispose()
+  }
+}
+
+/**
+ * Mint an API token for `username` by running the hub's admin CLI inside the
+ * running e2e container, and return the raw token.
+ *
+ * The token is only printed once, on the `Token: adt_…` line of the command's
+ * output — everything else (id, prefix, expiry) is metadata. Used by
+ * 07-account-lifecycle.spec.ts to prove that disabling an account revokes its
+ * API tokens as well as its browser sessions.
+ */
+export async function mintApiToken(username: string, name = 'e2e'): Promise<string> {
+  const container = process.env.E2E_CONTAINER || 'veyport-e2e'
+  const output = execSync(
+    `docker exec ${container} /app/veyport admin create-api-token --db /data/veyport.db --username ${username} --name ${name}`,
+    { encoding: 'utf-8' },
+  )
+  // Match the "Token:" line specifically — the command also prints a
+  // "Prefix:" line holding the first 16 characters of the same token, and a
+  // bare /adt_.../ search would pick up that truncated value instead.
+  const match = output.match(/^Token:\s*(adt_[0-9a-f]+)\s*$/m)
+  if (!match) {
+    throw new Error(`could not parse an API token out of admin CLI output:\n${output}`)
+  }
+  return match[1]
 }

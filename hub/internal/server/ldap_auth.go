@@ -147,7 +147,7 @@ func (s *Server) loadLDAPConfig() (LDAPConfig, error) {
 	cfg.Enabled = s.configBool("ldap.enabled")
 	cfg.URL = s.configString("ldap.url")
 	cfg.BindDN = s.configString("ldap.bind_dn")
-	cfg.BindPassword = s.configString("ldap.bind_password")
+	cfg.BindPassword = s.configString(configKeyLDAPBindPassword)
 	if cfg.BindPassword != "" {
 		if !strings.HasPrefix(cfg.BindPassword, "enc:") {
 			log.Printf("warning: LDAP bind password is stored in plaintext (no enc: prefix); rotate via the admin UI to re-encrypt at rest")

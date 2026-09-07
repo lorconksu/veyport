@@ -23,6 +23,15 @@ vi.mock('@/pages/add-server-modal', () => ({
   ),
 }))
 
+// Stub InstallCliModal to simplify
+vi.mock('@/pages/install-cli-modal', () => ({
+  InstallCliModal: ({ onClose }: { onClose: () => void }) => (
+    <div data-testid="install-cli-modal">
+      <button onClick={onClose}>Close Install CLI Modal</button>
+    </div>
+  ),
+}))
+
 import { apiFetch } from '@/lib/api'
 const mockApiFetch = apiFetch as ReturnType<typeof vi.fn>
 
@@ -105,11 +114,15 @@ describe('DashboardPage', () => {
     })
   })
 
-  it('shows singular "server" when count is 1', async () => {
-    mockApiFetch.mockResolvedValue({ servers: [mockServers[0]], total: 1 })
+  it.each([
+    { description: 'singular "server" when count is 1', servers: [mockServers[0]], text: '1 server' },
+    { description: 'Pending agent status for pending servers', servers: [mockServers[2]], text: 'Pending agent' },
+    { description: 'hostname / ip for servers', servers: [mockServers[0]], text: 'web1 / 1.2.3.4' },
+  ])('shows $description', async ({ servers, text }) => {
+    mockApiFetch.mockResolvedValue({ servers, total: 1 })
     renderPage()
     await waitFor(() => {
-      expect(screen.getByText('1 server')).toBeInTheDocument()
+      expect(screen.getByText(text)).toBeInTheDocument()
     })
   })
 
@@ -168,6 +181,42 @@ describe('DashboardPage', () => {
     })
   })
 
+  it('shows Install CLI button for admin', async () => {
+    mockApiFetch.mockResolvedValue({ servers: mockServers, total: 3 })
+    renderPage()
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: /install cli/i })).toBeInTheDocument()
+    })
+  })
+
+  it('shows Install CLI button for non-admin (viewer)', async () => {
+    mockUseAuth.mockReturnValue({
+      user: { id: '2', username: 'viewer', role: 'viewer', email: 'v@b.com', avatar: null, totp_enabled: true, created_at: '', updated_at: '' },
+    })
+    mockApiFetch.mockResolvedValue({ servers: mockServers, total: 3 })
+    renderPage()
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: /install cli/i })).toBeInTheDocument()
+    })
+  })
+
+  it('opens Install CLI modal when button clicked, and closes it', async () => {
+    mockUseAuth.mockReturnValue({
+      user: { id: '2', username: 'viewer', role: 'viewer', email: 'v@b.com', avatar: null, totp_enabled: true, created_at: '', updated_at: '' },
+    })
+    mockApiFetch.mockResolvedValue({ servers: mockServers, total: 3 })
+    renderPage()
+    expect(await screen.findByRole('button', { name: /install cli/i })).toBeInTheDocument()
+
+    fireEvent.click(screen.getByRole('button', { name: /install cli/i }))
+    expect(await screen.findByTestId('install-cli-modal')).toBeInTheDocument()
+
+    fireEvent.click(screen.getByText('Close Install CLI Modal'))
+    await waitFor(() => {
+      expect(screen.queryByTestId('install-cli-modal')).not.toBeInTheDocument()
+    })
+  })
+
   it('status filter buttons render', async () => {
     mockApiFetch.mockResolvedValue({ servers: mockServers, total: 3 })
     renderPage()
@@ -207,22 +256,6 @@ describe('DashboardPage', () => {
     mockApiFetch.mockResolvedValue({ servers: [mockServers[0]], total: 1 })
     fireEvent.change(screen.getByPlaceholderText('Search servers...'), { target: { value: 'web' } })
     await waitFor(() => expect(mockApiFetch).toHaveBeenCalled())
-  })
-
-  it('shows Pending agent status for pending servers', async () => {
-    mockApiFetch.mockResolvedValue({ servers: [mockServers[2]], total: 1 })
-    renderPage()
-    await waitFor(() => {
-      expect(screen.getByText('Pending agent')).toBeInTheDocument()
-    })
-  })
-
-  it('shows hostname / ip for servers', async () => {
-    mockApiFetch.mockResolvedValue({ servers: [mockServers[0]], total: 1 })
-    renderPage()
-    await waitFor(() => {
-      expect(screen.getByText('web1 / 1.2.3.4')).toBeInTheDocument()
-    })
   })
 
   it('shows — when hostname and ip are null', async () => {

@@ -30,11 +30,52 @@ describe('useTOTPDigits hook', () => {
     expect(result.current.digits[0]).toBe('')
   })
 
-  it('handleDigitChange only keeps the last character of multi-char input', () => {
+  it('handleDigitChange distributes a full autofilled code across all boxes from index 0', () => {
     const onComplete = vi.fn()
     const { result } = renderHook(() => useTOTPDigits(onComplete))
-    act(() => result.current.handleDigitChange(0, '23'))
-    expect(result.current.digits[0]).toBe('3')
+    const mockFocus5 = vi.fn()
+    act(() => {
+      result.current.inputRefs.current[5] = { focus: mockFocus5 } as unknown as HTMLInputElement
+      result.current.handleDigitChange(0, '123456')
+    })
+    expect(result.current.digits).toEqual(['1', '2', '3', '4', '5', '6'])
+    expect(mockFocus5).toHaveBeenCalled()
+    expect(onComplete).toHaveBeenCalledTimes(1)
+    expect(onComplete).toHaveBeenCalledWith('123456')
+  })
+
+  it('handleDigitChange distributes a partial multi-digit value from a middle index', () => {
+    const onComplete = vi.fn()
+    const { result } = renderHook(() => useTOTPDigits(onComplete))
+    const mockFocus4 = vi.fn()
+    act(() => {
+      result.current.inputRefs.current[4] = { focus: mockFocus4 } as unknown as HTMLInputElement
+      result.current.handleDigitChange(2, '34')
+    })
+    expect(result.current.digits[2]).toBe('3')
+    expect(result.current.digits[3]).toBe('4')
+    expect(mockFocus4).toHaveBeenCalled()
+    expect(onComplete).not.toHaveBeenCalled()
+  })
+
+  it('handleDigitChange ignores a multi-char value that contains non-digits', () => {
+    const onComplete = vi.fn()
+    const { result } = renderHook(() => useTOTPDigits(onComplete))
+    act(() => result.current.handleDigitChange(0, '12ab3'))
+    expect(result.current.digits).toEqual(['', '', '', '', '', ''])
+    expect(onComplete).not.toHaveBeenCalled()
+  })
+
+  it('handleDigitChange still handles a single typed character normally', () => {
+    const onComplete = vi.fn()
+    const { result } = renderHook(() => useTOTPDigits(onComplete))
+    const mockFocus1 = vi.fn()
+    act(() => {
+      result.current.inputRefs.current[1] = { focus: mockFocus1 } as unknown as HTMLInputElement
+      result.current.handleDigitChange(0, '7')
+    })
+    expect(result.current.digits[0]).toBe('7')
+    expect(mockFocus1).toHaveBeenCalled()
   })
 
   it('calls onComplete when all digits are filled via paste', () => {
@@ -223,5 +264,23 @@ describe('TOTPDigitInput component', () => {
       clipboardData: { getData: () => '123456' },
     })
     expect(handlePaste).toHaveBeenCalled()
+  })
+
+  it('marks the first box as autocomplete one-time-code and the rest as off', () => {
+    render(<TOTPDigitInput {...defaultProps} />)
+    const inputs = screen.getAllByRole('textbox')
+    expect(inputs[0]).toHaveAttribute('autocomplete', 'one-time-code')
+    for (let i = 1; i < 6; i++) {
+      expect(inputs[i]).toHaveAttribute('autocomplete', 'off')
+    }
+  })
+
+  it('allows up to 6 characters in the first box (for autofill) but only 1 in the rest', () => {
+    render(<TOTPDigitInput {...defaultProps} />)
+    const inputs = screen.getAllByRole('textbox')
+    expect(inputs[0]).toHaveAttribute('maxlength', '6')
+    for (let i = 1; i < 6; i++) {
+      expect(inputs[i]).toHaveAttribute('maxlength', '1')
+    }
   })
 })

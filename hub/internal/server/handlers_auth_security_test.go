@@ -18,7 +18,7 @@ func TestRefreshToken_RotatesGeneration(t *testing.T) {
 	_ = registerAndGetAdminToken(t, s)
 
 	user, _ := s.store.GetUserByUsername("admin")
-	_, refreshToken, _ := auth.GenerateTokenPair(s.jwtSecret, user.ID, string(user.Role), user.TokenGeneration)
+	_, refreshToken, _ := sessionTokenPair(t, s, user.ID)
 
 	// First refresh should succeed
 	body, _ := json.Marshal(model.RefreshRequest{RefreshToken: refreshToken})
@@ -46,7 +46,7 @@ func TestRefreshToken_NewTokenWorks(t *testing.T) {
 	_ = registerAndGetAdminToken(t, s)
 
 	user, _ := s.store.GetUserByUsername("admin")
-	_, refreshToken, _ := auth.GenerateTokenPair(s.jwtSecret, user.ID, string(user.Role), user.TokenGeneration)
+	_, refreshToken, _ := sessionTokenPair(t, s, user.ID)
 
 	// First refresh
 	body, _ := json.Marshal(model.RefreshRequest{RefreshToken: refreshToken})
@@ -156,9 +156,10 @@ func TestLogout_DifferentToken_StillValid(t *testing.T) {
 	s := testServer(t)
 	accessToken := registerAndGetAdminToken(t, s)
 
-	// Generate a second token pair for the same user
+	// Generate a second token pair for the same user, in its own session —
+	// signing out of one session must not touch the other (009 FR-009).
 	user, _ := s.store.GetUserByUsername("admin")
-	accessToken2, _, _ := auth.GenerateTokenPair(s.jwtSecret, user.ID, string(user.Role), user.TokenGeneration)
+	accessToken2, _, _ := sessionTokenPair(t, s, user.ID)
 
 	// Logout with the first token
 	logoutReq := httptest.NewRequest("POST", testLogoutPath, nil)

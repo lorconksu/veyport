@@ -297,53 +297,84 @@ func (c *Client) reEnroll(ctx context.Context) error {
 		return fmt.Errorf("send re-enroll request: %w", err)
 	}
 
-	// Block reading the stream for hub response.
+	return c.runReEnrollRecvLoop(stream)
+}
+
+// runReEnrollRecvLoop blocks reading the re-enroll stream for the hub's
+// response, dispatching each message until the re-enrollment completes,
+// is denied, or an error occurs.
+func (c *Client) runReEnrollRecvLoop(stream pb.AgentService_ConnectClient) error {
 	for {
 		msg, err := stream.Recv()
 		if err != nil {
 			return fmt.Errorf("recv re-enroll response: %w", err)
 		}
 
-		switch p := msg.Payload.(type) {
-		case *pb.HubMessage_ReenrollApproved:
-			proof, err := c.handleReEnrollApproved(p.ReenrollApproved)
-			if err != nil {
-				return fmt.Errorf("handle re-enroll approved: %w", err)
-			}
-			if err := stream.Send(&pb.AgentMessage{
-				Payload: &pb.AgentMessage_ReenrollProof{
-					ReenrollProof: proof,
-				},
-			}); err != nil {
-				return fmt.Errorf("send re-enroll proof: %w", err)
-			}
-			log.Printf("re-enroll proof sent; waiting for new certificate")
-
-		case *pb.HubMessage_CertRenewResponse:
-			// Hub delivers the re-issued cert via CertRenewResponse format.
-			// Store the cert and return; Run() will loop back to connectAndStream
-			// which dials with the fresh cert via certStore.TLSConfig() — no
-			// explicit reconnectCh signal needed here.
-			resp := p.CertRenewResponse
-			if resp.Error != "" {
-				return fmt.Errorf("re-enroll cert response error: %s", resp.Error)
-			}
-			if len(resp.ClientCert) == 0 || len(resp.CaCert) == 0 {
-				return fmt.Errorf("re-enroll CertRenewResponse missing cert material")
-			}
-			if err := c.certStore.StoreCert(resp.ClientCert, resp.CaCert); err != nil {
-				return fmt.Errorf("store re-enrolled cert (renew format): %w", err)
-			}
-			log.Printf("re-enrollment complete (via CertRenewResponse); reconnecting")
+		done, err := c.handleReEnrollStreamMessage(stream, msg.Payload)
+		if err != nil {
+			return err
+		}
+		if done {
 			return nil
-
-		case *pb.HubMessage_ReenrollDenied:
-			return fmt.Errorf("re-enrollment denied: %s", p.ReenrollDenied.Reason)
-
-		default:
-			log.Printf("re-enroll: unexpected hub message %T — continuing to wait", p)
 		}
 	}
+}
+
+// handleReEnrollStreamMessage processes one message received on the
+// re-enroll stream. It returns done=true once the hub has delivered a
+// re-issued certificate.
+func (c *Client) handleReEnrollStreamMessage(stream pb.AgentService_ConnectClient, payload interface{}) (bool, error) {
+	switch p := payload.(type) {
+	case *pb.HubMessage_ReenrollApproved:
+		return false, c.sendReEnrollProof(stream, p.ReenrollApproved)
+
+	case *pb.HubMessage_CertRenewResponse:
+		// Hub delivers the re-issued cert via CertRenewResponse format.
+		return c.storeReEnrolledCert(p.CertRenewResponse)
+
+	case *pb.HubMessage_ReenrollDenied:
+		return false, fmt.Errorf("re-enrollment denied: %s", p.ReenrollDenied.Reason)
+
+	default:
+		log.Printf("re-enroll: unexpected hub message %T — continuing to wait", p)
+		return false, nil
+	}
+}
+
+// sendReEnrollProof signs the hub's re-enroll approval and sends the
+// resulting proof back on the stream.
+func (c *Client) sendReEnrollProof(stream pb.AgentService_ConnectClient, approved *pb.ReEnrollApproved) error {
+	proof, err := c.handleReEnrollApproved(approved)
+	if err != nil {
+		return fmt.Errorf("handle re-enroll approved: %w", err)
+	}
+	if err := stream.Send(&pb.AgentMessage{
+		Payload: &pb.AgentMessage_ReenrollProof{
+			ReenrollProof: proof,
+		},
+	}); err != nil {
+		return fmt.Errorf("send re-enroll proof: %w", err)
+	}
+	log.Printf("re-enroll proof sent; waiting for new certificate")
+	return nil
+}
+
+// storeReEnrolledCert persists the hub's re-issued certificate delivered via
+// CertRenewResponse format and reports completion. Run() will loop back to
+// connectAndStream which dials with the fresh cert via certStore.TLSConfig()
+// — no explicit reconnectCh signal needed here.
+func (c *Client) storeReEnrolledCert(resp *pb.CertRenewResponse) (bool, error) {
+	if resp.Error != "" {
+		return false, fmt.Errorf("re-enroll cert response error: %s", resp.Error)
+	}
+	if len(resp.ClientCert) == 0 || len(resp.CaCert) == 0 {
+		return false, fmt.Errorf("re-enroll CertRenewResponse missing cert material")
+	}
+	if err := c.certStore.StoreCert(resp.ClientCert, resp.CaCert); err != nil {
+		return false, fmt.Errorf("store re-enrolled cert (renew format): %w", err)
+	}
+	log.Printf("re-enrollment complete (via CertRenewResponse); reconnecting")
+	return true, nil
 }
 
 // isPathAllowed checks whether path falls under one of the allowed prefixes.
@@ -860,56 +891,83 @@ func (c *Client) registerOrHandshake(stream pb.AgentService_ConnectClient) (bool
 // and stores any mTLS certificates provided in the ack.
 func (c *Client) sendRegister(stream pb.AgentService_ConnectClient) (bool, error) {
 	csrDER := c.generateCSRForRegistration()
+	priv, pubBytes := c.generateNodeKeyForRegistration()
+	// enroll_fingerprint is the DMI product UUID: a hardware identity, not
+	// derived from the node key. The hub stores it and compares it on
+	// re-enroll to flag a hardware change.
+	fingerprint := nodekey.Fingerprint()
+	transportPubBytes := c.ensureTransportKeypair()
 
-	// Generate a fresh Ed25519 node keypair for this enrollment.
-	priv, pubB64, err := nodekey.Generate()
+	ack, err := c.sendRegisterAndRecvAck(stream, csrDER, pubBytes, fingerprint, transportPubBytes)
+	if err != nil {
+		return false, err
+	}
+
+	c.finishRegistration(ack, priv)
+	return true, nil
+}
+
+// generateNodeKeyForRegistration generates a fresh Ed25519 node keypair for
+// this enrollment. On failure it logs a warning and returns nil for both
+// values; registration proceeds without a node key in that case.
+func (c *Client) generateNodeKeyForRegistration() (priv, pubBytes []byte) {
+	generated, pubB64, err := nodekey.Generate()
 	if err != nil {
 		log.Printf("warning: failed to generate node key for registration: %v", err)
-		priv = nil
-	}
-	var pubBytes []byte
-	fingerprint := nodekey.Fingerprint()
-	if priv != nil {
-		// Decode pubB64 back to raw bytes to send as node_pubkey.
-		pub, decErr := nodekey.DecodePub(pubB64)
-		if decErr != nil {
-			log.Printf("warning: failed to decode node pubkey: %v", decErr)
-			priv = nil
-		} else {
-			pubBytes = []byte(pub)
-		}
+		return nil, nil
 	}
 
-	// Generate or reuse the X25519 transport keypair for KEK-encrypted re-enrollment.
-	// The transport private key is stored unsealed (it must be usable without the KEK).
-	var transportPubBytes []byte
+	// Decode pubB64 back to raw bytes to send as node_pubkey.
+	pub, decErr := nodekey.DecodePub(pubB64)
+	if decErr != nil {
+		log.Printf("warning: failed to decode node pubkey: %v", decErr)
+		return nil, nil
+	}
+	return generated, []byte(pub)
+}
+
+// ensureTransportKeypair generates and persists a new X25519 transport
+// keypair if one is not already available, or derives the public key from
+// the existing private key otherwise. The transport private key is stored
+// unsealed (it must be usable without the KEK).
+func (c *Client) ensureTransportKeypair() []byte {
 	if len(c.transportPrivBytes) != 32 {
-		tPriv, tPub, genErr := nodekey.GenerateTransport()
-		if genErr != nil {
-			log.Printf("warning: failed to generate transport key: %v", genErr)
-		} else {
-			if mkErr := os.MkdirAll(c.certDir, 0700); mkErr != nil {
-				log.Printf("warning: failed to create certDir for transport key: %v", mkErr)
-			} else {
-				keyPath := filepath.Join(c.certDir, "node_transport.key")
-				if writeErr := os.WriteFile(keyPath, []byte(hex.EncodeToString(tPriv)), 0600); writeErr != nil {
-					log.Printf("warning: failed to write node_transport.key: %v", writeErr)
-				} else {
-					c.transportPrivBytes = tPriv
-					transportPubBytes = tPub
-					log.Printf("transport keypair generated and persisted")
-				}
-			}
-		}
-	} else {
-		// Derive public key from existing private key.
-		if tPrivKey, parseErr := ecdh.X25519().NewPrivateKey(c.transportPrivBytes); parseErr == nil {
-			transportPubBytes = tPrivKey.PublicKey().Bytes()
-		} else {
-			log.Printf("warning: failed to derive transport public key: %v", parseErr)
-		}
+		return c.generateAndPersistTransportKeypair()
 	}
+	// Derive public key from existing private key.
+	tPrivKey, parseErr := ecdh.X25519().NewPrivateKey(c.transportPrivBytes)
+	if parseErr != nil {
+		log.Printf("warning: failed to derive transport public key: %v", parseErr)
+		return nil
+	}
+	return tPrivKey.PublicKey().Bytes()
+}
 
+// generateAndPersistTransportKeypair generates a new X25519 transport
+// keypair, persists the private key to certDir, and returns the public key.
+func (c *Client) generateAndPersistTransportKeypair() []byte {
+	tPriv, tPub, genErr := nodekey.GenerateTransport()
+	if genErr != nil {
+		log.Printf("warning: failed to generate transport key: %v", genErr)
+		return nil
+	}
+	if mkErr := os.MkdirAll(c.certDir, 0700); mkErr != nil {
+		log.Printf("warning: failed to create certDir for transport key: %v", mkErr)
+		return nil
+	}
+	keyPath := filepath.Join(c.certDir, "node_transport.key")
+	if writeErr := os.WriteFile(keyPath, []byte(hex.EncodeToString(tPriv)), 0600); writeErr != nil {
+		log.Printf("warning: failed to write node_transport.key: %v", writeErr)
+		return nil
+	}
+	c.transportPrivBytes = tPriv
+	log.Printf("transport keypair generated and persisted")
+	return tPub
+}
+
+// sendRegisterAndRecvAck sends the RegisterAgent message and waits for the
+// hub's RegisterAck, validating that registration succeeded.
+func (c *Client) sendRegisterAndRecvAck(stream pb.AgentService_ConnectClient, csrDER, pubBytes []byte, fingerprint string, transportPubBytes []byte) (*pb.RegisterAck, error) {
 	if err := stream.Send(&pb.AgentMessage{
 		Payload: &pb.AgentMessage_Register{
 			Register: &pb.RegisterAgent{
@@ -925,20 +983,27 @@ func (c *Client) sendRegister(stream pb.AgentService_ConnectClient) (bool, error
 			},
 		},
 	}); err != nil {
-		return false, fmt.Errorf("send register: %w", err)
+		return nil, fmt.Errorf("send register: %w", err)
 	}
 
 	msg, err := stream.Recv()
 	if err != nil {
-		return false, fmt.Errorf("recv register ack: %w", err)
+		return nil, fmt.Errorf("recv register ack: %w", err)
 	}
 	ack := msg.GetRegisterAck()
 	if ack == nil {
-		return false, fmt.Errorf("expected RegisterAck, got %T", msg.Payload)
+		return nil, fmt.Errorf("expected RegisterAck, got %T", msg.Payload)
 	}
 	if !ack.Success {
-		return false, fmt.Errorf("registration rejected: %s", ack.Error)
+		return nil, fmt.Errorf("registration rejected: %s", ack.Error)
 	}
+	return ack, nil
+}
+
+// finishRegistration records the assigned server ID, seals and persists the
+// node key (zeroizing it afterward), stores any mTLS certificates from the
+// ack, and notifies the onRegistered callback.
+func (c *Client) finishRegistration(ack *pb.RegisterAck, priv []byte) {
 	c.serverID = ack.ServerId
 	log.Printf("registered successfully: server_id=%s", c.serverID)
 
@@ -957,7 +1022,6 @@ func (c *Client) sendRegister(stream pb.AgentService_ConnectClient) (bool, error
 	if c.onRegistered != nil {
 		c.onRegistered(c.serverID)
 	}
-	return true, nil
 }
 
 // generateCSRForRegistration generates a CSR with a placeholder CN.

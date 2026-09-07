@@ -10,6 +10,16 @@ import (
 	"github.com/wyiu/veyport/hub/internal/model"
 )
 
+const (
+	// errFailedToListPendingReEnroll is logged/returned whenever the pending
+	// re-enrollment list cannot be loaded (go:S1192).
+	errFailedToListPendingReEnroll = "failed to list pending re-enrollments"
+
+	// errNoPendingReEnrollForServer answers a request that names a server with
+	// no pending re-enrollment (go:S1192).
+	errNoPendingReEnrollForServer = "no pending re-enrollment for this server"
+)
+
 // reEnrollApproveRequest is the body for POST /api/servers/{id}/reenroll/approve.
 type reEnrollApproveRequest struct {
 	RequestID string `json:"request_id"`
@@ -45,24 +55,7 @@ func (s *Server) handleReEnrollApprove(w http.ResponseWriter, r *http.Request) {
 	adminID := UserIDFromContext(r.Context())
 
 	// Step-up: verify the approving admin's own TOTP code.
-	admin, err := s.store.GetUserByID(adminID)
-	if err != nil {
-		respondError(w, http.StatusInternalServerError, "failed to load admin user")
-		return
-	}
-
-	adminTOTPSecret := admin.TOTPSecret
-	if adminTOTPSecret != nil && strings.HasPrefix(*adminTOTPSecret, "enc:") {
-		decrypted, err := s.decryptTOTPSecret(*adminTOTPSecret)
-		if err != nil {
-			respondError(w, http.StatusInternalServerError, "failed to decrypt admin TOTP secret")
-			return
-		}
-		adminTOTPSecret = &decrypted
-	}
-
-	if adminTOTPSecret == nil || !auth.ValidateTOTPWithReplay(s.totpCache, adminID, *adminTOTPSecret, req.TOTPCode) {
-		respondError(w, http.StatusUnauthorized, "invalid TOTP code")
+	if !s.verifyAdminStepUpTOTP(w, adminID, req.TOTPCode) {
 		return
 	}
 
@@ -72,24 +65,7 @@ func (s *Server) handleReEnrollApprove(w http.ResponseWriter, r *http.Request) {
 		respondError(w, http.StatusBadRequest, "request_id is required")
 		return
 	}
-	pendingList, err := s.store.ListPendingReEnroll()
-	if err != nil {
-		respondError(w, http.StatusInternalServerError, "failed to list pending re-enrollments")
-		return
-	}
-	var currentPendingID string
-	for _, pr := range pendingList {
-		if pr.ServerID == serverID {
-			currentPendingID = pr.ID
-			break
-		}
-	}
-	if currentPendingID == "" {
-		respondError(w, http.StatusNotFound, "no pending re-enrollment for this server")
-		return
-	}
-	if req.RequestID != currentPendingID {
-		respondError(w, http.StatusConflict, "request_id does not match the current pending request; it may have been superseded")
+	if !s.requireCurrentPendingReEnroll(w, serverID, req.RequestID) {
 		return
 	}
 
@@ -103,7 +79,7 @@ func (s *Server) handleReEnrollApprove(w http.ResponseWriter, r *http.Request) {
 		// Map common errors to appropriate HTTP status codes.
 		switch {
 		case err.Error() == "no pending re-enroll for server":
-			respondError(w, http.StatusNotFound, "no pending re-enrollment for this server")
+			respondError(w, http.StatusNotFound, errNoPendingReEnrollForServer)
 		case strings.Contains(err.Error(), "timed out"):
 			respondError(w, http.StatusGatewayTimeout, "timed out waiting for agent proof")
 		default:
@@ -124,6 +100,61 @@ func (s *Server) handleReEnrollApprove(w http.ResponseWriter, r *http.Request) {
 	})
 
 	respondJSON(w, http.StatusOK, map[string]string{"status": "approved"})
+}
+
+// verifyAdminStepUpTOTP validates code against the acting admin's own TOTP
+// secret (step-up auth for privileged re-enrollment decisions). It writes the
+// 500/401 response itself and reports whether the caller may proceed.
+func (s *Server) verifyAdminStepUpTOTP(w http.ResponseWriter, adminID, code string) bool {
+	admin, err := s.store.GetUserByID(adminID)
+	if err != nil {
+		respondError(w, http.StatusInternalServerError, "failed to load admin user")
+		return false
+	}
+
+	adminTOTPSecret := admin.TOTPSecret
+	if adminTOTPSecret != nil && strings.HasPrefix(*adminTOTPSecret, "enc:") {
+		decrypted, err := s.decryptTOTPSecret(*adminTOTPSecret)
+		if err != nil {
+			respondError(w, http.StatusInternalServerError, "failed to decrypt admin TOTP secret")
+			return false
+		}
+		adminTOTPSecret = &decrypted
+	}
+
+	if adminTOTPSecret == nil || !auth.ValidateTOTPWithReplay(s.totpCache, adminID, *adminTOTPSecret, code) {
+		respondError(w, http.StatusUnauthorized, "invalid TOTP code")
+		return false
+	}
+	return true
+}
+
+// requireCurrentPendingReEnroll checks that requestID names the current
+// pending re-enrollment for serverID, so a stale or superseded request can be
+// neither approved nor denied. It writes the 500/404/409 response itself and
+// reports whether the caller may proceed.
+func (s *Server) requireCurrentPendingReEnroll(w http.ResponseWriter, serverID, requestID string) bool {
+	pendingList, err := s.store.ListPendingReEnroll()
+	if err != nil {
+		respondError(w, http.StatusInternalServerError, errFailedToListPendingReEnroll)
+		return false
+	}
+	var currentPendingID string
+	for _, pr := range pendingList {
+		if pr.ServerID == serverID {
+			currentPendingID = pr.ID
+			break
+		}
+	}
+	if currentPendingID == "" {
+		respondError(w, http.StatusNotFound, errNoPendingReEnrollForServer)
+		return false
+	}
+	if requestID != currentPendingID {
+		respondError(w, http.StatusConflict, "request_id does not match the current pending request; it may have been superseded")
+		return false
+	}
+	return true
 }
 
 // handleReEnrollDeny handles POST /api/servers/{id}/reenroll/deny.
@@ -150,24 +181,7 @@ func (s *Server) handleReEnrollDeny(w http.ResponseWriter, r *http.Request) {
 	// Validate that request_id corresponds to the current pending re-enroll request
 	// for this server — mirrors the approve handler to prevent denying a stale or
 	// superseded request.
-	pendingList, err := s.store.ListPendingReEnroll()
-	if err != nil {
-		respondError(w, http.StatusInternalServerError, "failed to list pending re-enrollments")
-		return
-	}
-	var currentPendingID string
-	for _, pr := range pendingList {
-		if pr.ServerID == serverID {
-			currentPendingID = pr.ID
-			break
-		}
-	}
-	if currentPendingID == "" {
-		respondError(w, http.StatusNotFound, "no pending re-enrollment for this server")
-		return
-	}
-	if req.RequestID != currentPendingID {
-		respondError(w, http.StatusConflict, "request_id does not match the current pending request; it may have been superseded")
+	if !s.requireCurrentPendingReEnroll(w, serverID, req.RequestID) {
 		return
 	}
 
@@ -193,7 +207,7 @@ func (s *Server) handleReEnrollDeny(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleListPendingReEnroll(w http.ResponseWriter, r *http.Request) {
 	reqs, err := s.store.ListPendingReEnroll()
 	if err != nil {
-		respondError(w, http.StatusInternalServerError, "failed to list pending re-enrollments")
+		respondError(w, http.StatusInternalServerError, errFailedToListPendingReEnroll)
 		return
 	}
 	if reqs == nil {

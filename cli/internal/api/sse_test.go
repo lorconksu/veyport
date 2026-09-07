@@ -565,7 +565,7 @@ func TestStreamSSE_AlreadyCancelledContextIsContextError(t *testing.T) {
 	if errors.Is(err, ErrStreamEnded) {
 		t.Error("cancellation must not be reported as a clean server-side end")
 	}
-	if code := cmdutil.Code(err); code == cmdutil.ExitConn {
+	if cmdutil.Code(err) == cmdutil.ExitConn {
 		t.Error("cancellation must not be pre-classified as a connectivity failure")
 	}
 	if called {

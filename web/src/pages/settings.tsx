@@ -6,11 +6,74 @@ import { useAuth } from '@/hooks/use-auth'
 import { apiFetch } from '@/lib/api'
 import { getAvatarColor, setAvatarColor as persistAvatarColor, AVATAR_COLORS } from '@/lib/avatar'
 import { validatePassword } from '@/lib/password'
-import type { ChangePasswordRequest, User, Role, TOTPDisableRequest } from '@/types/api'
+import { formatRelative, isFuture, isNoAutoUnlock } from '@/lib/time'
+import type { ChangePasswordRequest, User, Role, TOTPDisableRequest, AccountStatus, Session, SessionListResponse, EndedCountResponse } from '@/types/api'
 import { CreateUserModal } from '@/pages/create-user-modal'
 import { NotificationsTab } from '@/pages/settings-notifications-tab'
 import { PreferencesTab } from '@/pages/settings-preferences-tab'
 import { DirectoryTab } from '@/pages/settings-directory-tab'
+import { AccountPolicyCard } from '@/pages/account-policy-card'
+import { ConfirmActionModal } from '@/pages/confirm-action-modal'
+import { SessionsModal, SessionsTable } from '@/pages/sessions-modal'
+import { isShell } from '@/lib/sessions'
+import { firstMutationError, mutationErrorMessage } from '@/lib/mutation'
+
+/** u.status when present; otherwise derives from `locked_until` (007 fallback, still exercised by pre-008 fixtures). */
+function effectiveStatus(u: User): AccountStatus {
+  if (u.status) return u.status
+  if (u.locked_until && isFuture(u.locked_until)) return 'locked'
+  return 'active'
+}
+
+type ConfirmActionType = 'disable' | 'enable' | 'unlock' | 'exempt' | 'unexempt'
+
+interface ConfirmCopy {
+  title: string
+  body: string
+  confirmLabel: string
+  danger?: boolean
+}
+
+function confirmCopyFor(type: ConfirmActionType, username: string): ConfirmCopy {
+  switch (type) {
+    case 'disable':
+      return {
+        title: 'Disable User',
+        body: `Disable ${username}? Their sessions end on their next request and all their API tokens are revoked. You can enable the account again later.`,
+        confirmLabel: 'Disable',
+        danger: true,
+      }
+    case 'enable':
+      return {
+        title: 'Enable User',
+        body: `Enable ${username}? Any lock and failure count are cleared.`,
+        confirmLabel: 'Enable',
+      }
+    case 'unlock':
+      return {
+        title: 'Unlock User',
+        body: `Unlock ${username}? The lock and failure count are cleared.`,
+        confirmLabel: 'Unlock',
+      }
+    case 'exempt':
+      return {
+        title: 'Dormancy Exemption',
+        body: `Mark ${username} as never dormant? Use this for the recovery administrator.`,
+        confirmLabel: 'Exempt',
+      }
+    case 'unexempt':
+      return {
+        title: 'Dormancy Exemption',
+        body: `Remove the dormancy exemption from ${username}?`,
+        confirmLabel: 'Remove exemption',
+      }
+  }
+}
+
+function rowActionLabel(s: Session): string | null {
+  if (s.current) return null
+  return isShell(s) ? 'Terminate' : 'Sign out'
+}
 
 function roleBadgeTone(role: Role): string {
   switch (role) {
@@ -32,6 +95,96 @@ function roleLabel(role: Role): string {
     default:
       return 'Viewer'
   }
+}
+
+function YourSessionsCard() {
+  const queryClient = useQueryClient()
+  const [confirmSignOutOthers, setConfirmSignOutOthers] = useState(false)
+  const [pendingId, setPendingId] = useState<string | null>(null)
+
+  const { data, isLoading, isError } = useQuery({
+    queryKey: ['my-sessions'],
+    queryFn: () => apiFetch<SessionListResponse>('/auth/sessions'),
+  })
+
+  const invalidate = () => {
+    queryClient.invalidateQueries({ queryKey: ['my-sessions'] })
+    queryClient.invalidateQueries({ queryKey: ['users'] })
+  }
+
+  const endOneMutation = useMutation({
+    mutationFn: (session: Session) =>
+      apiFetch<{ status: string }>(`/auth/sessions/${session.id}`, { method: 'DELETE' }),
+    onSuccess: () => { invalidate(); setPendingId(null) },
+    onError: () => setPendingId(null),
+  })
+
+  const signOutOthersMutation = useMutation({
+    mutationFn: () => apiFetch<EndedCountResponse>('/auth/sessions/sign-out-others', { method: 'POST' }),
+    onSuccess: () => {
+      invalidate()
+      setConfirmSignOutOthers(false)
+    },
+  })
+
+  const sessions = data?.sessions ?? []
+  const onlyCurrentSession = sessions.length <= 1
+  const errorMessage =
+    mutationErrorMessage(endOneMutation, 'Failed to end session') ??
+    mutationErrorMessage(signOutOthersMutation, 'Failed to sign out other sessions')
+
+  return (
+    <div>
+      <h3 className="text-sm font-semibold text-text-primary mb-3">Your sessions</h3>
+      <div className="bg-surface border border-border rounded p-4">
+        {errorMessage && (
+          <div className="bg-status-error/10 border border-status-error/20 text-status-error text-xs rounded px-3 py-2 mb-3">
+            {errorMessage}
+          </div>
+        )}
+        {isLoading && <div className="text-text-muted text-sm py-2 text-center">Loading...</div>}
+        {!isLoading && isError && (
+          <div className="bg-status-error/10 border border-status-error/20 text-status-error text-xs rounded px-3 py-2">
+            Failed to load sessions.
+          </div>
+        )}
+        {!isLoading && !isError && onlyCurrentSession && (
+          <div className="text-text-muted text-sm py-2 text-center">This is your only active session.</div>
+        )}
+        {!isLoading && !isError && !onlyCurrentSession && (
+          <SessionsTable
+            sessions={sessions}
+            rowActionLabel={rowActionLabel}
+            onRowAction={s => { endOneMutation.reset(); setPendingId(s.id); endOneMutation.mutate(s) }}
+            pendingId={pendingId}
+          />
+        )}
+        {!isLoading && !isError && !onlyCurrentSession && (
+          <div className="mt-3 flex justify-end">
+            <button
+              type="button"
+              onClick={() => { signOutOthersMutation.reset(); setConfirmSignOutOthers(true) }}
+              className="text-xs text-status-error hover:text-status-error/80 font-semibold transition-colors"
+            >
+              Sign out other sessions
+            </button>
+          </div>
+        )}
+      </div>
+
+      {confirmSignOutOthers && (
+        <ConfirmActionModal
+          title="Sign out other sessions"
+          body="Sign out all other sessions? They end now and any open SSH shells are closed."
+          confirmLabel="Sign out"
+          danger
+          isPending={signOutOthersMutation.isPending}
+          onCancel={() => setConfirmSignOutOthers(false)}
+          onConfirm={() => signOutOthersMutation.mutate()}
+        />
+      )}
+    </div>
+  )
 }
 
 function ProfileTab() {
@@ -286,6 +439,8 @@ function ProfileTab() {
           </button>
         </form>
       </div>
+
+      <YourSessionsCard />
     </div>
   )
 }
@@ -298,6 +453,8 @@ function UsersTab() {
   const [adminTotpCode, setAdminTotpCode] = useState('')
   const [deleteUserId, setDeleteUserId] = useState<string | null>(null)
   const [deleteUsername, setDeleteUsername] = useState('')
+  const [confirmAction, setConfirmAction] = useState<{ type: ConfirmActionType; user: User } | null>(null)
+  const [sessionsUser, setSessionsUser] = useState<User | null>(null)
 
   const { data: usersData, isLoading } = useQuery({
     queryKey: ['users'],
@@ -339,6 +496,79 @@ function UsersTab() {
     },
   })
 
+  const statusMutation = useMutation({
+    mutationFn: ({ userId, disabled }: { userId: string; disabled: boolean }) =>
+      apiFetch<{ user: User }>(`/users/${userId}/status`, {
+        method: 'PUT',
+        body: JSON.stringify({ disabled }),
+      }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['users'] })
+      setConfirmAction(null)
+    },
+    onError: () => {
+      setConfirmAction(null)
+    },
+  })
+
+  const unlockMutation = useMutation({
+    mutationFn: (userId: string) =>
+      apiFetch<{ user: User }>(`/users/${userId}/unlock`, { method: 'POST' }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['users'] })
+      setConfirmAction(null)
+    },
+    onError: () => {
+      setConfirmAction(null)
+    },
+  })
+
+  const exemptMutation = useMutation({
+    mutationFn: ({ userId, exempt }: { userId: string; exempt: boolean }) =>
+      apiFetch<{ user: User }>(`/users/${userId}/dormancy-exemption`, {
+        method: 'PUT',
+        body: JSON.stringify({ exempt }),
+      }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['users'] })
+      setConfirmAction(null)
+    },
+    onError: () => {
+      setConfirmAction(null)
+    },
+  })
+
+  const openConfirm = (type: ConfirmActionType, user: User) => {
+    statusMutation.reset()
+    unlockMutation.reset()
+    exemptMutation.reset()
+    setConfirmAction({ type, user })
+  }
+
+  const handleConfirmAction = () => {
+    if (!confirmAction) return
+    const { type, user } = confirmAction
+    switch (type) {
+      case 'disable':
+        statusMutation.mutate({ userId: user.id, disabled: true })
+        break
+      case 'enable':
+        statusMutation.mutate({ userId: user.id, disabled: false })
+        break
+      case 'unlock':
+        unlockMutation.mutate(user.id)
+        break
+      case 'exempt':
+        exemptMutation.mutate({ userId: user.id, exempt: true })
+        break
+      case 'unexempt':
+        exemptMutation.mutate({ userId: user.id, exempt: false })
+        break
+    }
+  }
+
+  const actionBannerError = firstMutationError(updateRoleMutation, statusMutation, unlockMutation, exemptMutation)
+
   const handleDisableTotp = (e: React.SyntheticEvent<HTMLFormElement>) => {
     e.preventDefault()
     if (!disableTotpUserId) return
@@ -359,6 +589,15 @@ function UsersTab() {
     return date.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })
   }
 
+  // Exact local date-time for the "Last login" cell's title attribute.
+  const formatDateTime = (iso: string) => new Date(iso).toLocaleString()
+
+  const lockedUntilLabel = (lockedUntil: string) => {
+    if (isNoAutoUnlock(lockedUntil)) return 'Locked (no auto-unlock)'
+    const hh = new Date(lockedUntil).toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: false })
+    return `Locked until ${hh}`
+  }
+
   return (
     <div>
       <div className="flex items-center justify-between mb-4">
@@ -372,9 +611,11 @@ function UsersTab() {
         </button>
       </div>
 
-      {updateRoleMutation.isError && (
+      <AccountPolicyCard />
+
+      {actionBannerError && (
         <div className="bg-status-error/10 border border-status-error/20 text-status-error text-xs rounded px-3 py-2 mb-3">
-          {updateRoleMutation.error instanceof Error ? updateRoleMutation.error.message : 'Failed to update role'}
+          {actionBannerError}
         </div>
       )}
 
@@ -386,19 +627,28 @@ function UsersTab() {
               <th className="text-left px-4 py-2 text-text-muted font-medium text-xs uppercase tracking-wider">Email</th>
               <th className="text-left px-4 py-2 text-text-muted font-medium text-xs uppercase tracking-wider">Role</th>
               <th className="text-left px-4 py-2 text-text-muted font-medium text-xs uppercase tracking-wider">2FA</th>
+              <th className="text-left px-4 py-2 text-text-muted font-medium text-xs uppercase tracking-wider">Last login</th>
+              <th className="text-left px-4 py-2 text-text-muted font-medium text-xs uppercase tracking-wider">Status</th>
               <th className="text-left px-4 py-2 text-text-muted font-medium text-xs uppercase tracking-wider">Created</th>
               <th className="text-left px-4 py-2 text-text-muted font-medium text-xs uppercase tracking-wider">Actions</th>
             </tr>
           </thead>
           <tbody>
             {isLoading && (
-              <tr><td colSpan={6} className="px-4 py-8 text-center text-text-muted">Loading...</td></tr>
+              <tr><td colSpan={8} className="px-4 py-8 text-center text-text-muted">Loading...</td></tr>
             )}
             {!isLoading && (!users || users.length === 0) && (
-              <tr><td colSpan={6} className="px-4 py-8 text-center text-text-muted">No users found.</td></tr>
+              <tr><td colSpan={8} className="px-4 py-8 text-center text-text-muted">No users found.</td></tr>
             )}
-            {!isLoading && users && users.length > 0 && users.map(u => (
-              <tr key={u.id} className="border-b border-border last:border-b-0 hover:bg-surface/50">
+            {!isLoading && users && users.length > 0 && users.map(u => {
+              const status = effectiveStatus(u)
+              const disabledByUsername = u.disabled_by ? users.find(x => x.id === u.disabled_by)?.username : undefined
+              const isExemptAdmin = !!u.dormancy_exempt && u.role === 'admin'
+              const disabledAtLabel = u.disabled_at ? formatDate(u.disabled_at) : ''
+              const disabledByLabel = disabledByUsername ? ` by ${disabledByUsername}` : ''
+              const disabledTitle = `Disabled ${disabledAtLabel}${disabledByLabel}`
+              return (
+              <tr key={u.id} className={`border-b border-border last:border-b-0 hover:bg-surface/50 ${status === 'disabled' ? 'opacity-60' : ''}`}>
                 <td className="px-4 py-2 text-text-primary">{u.username}</td>
                 <td className="px-4 py-2 text-text-secondary">{u.email}</td>
                 <td className="px-4 py-2">
@@ -427,9 +677,58 @@ function UsersTab() {
                     <span className="text-xs text-status-warning">Not set up</span>
                   )}
                 </td>
+                <td className="px-4 py-2 text-xs">
+                  {u.last_login_at ? (
+                    <span className="text-text-secondary" title={formatDateTime(u.last_login_at)}>
+                      {formatRelative(u.last_login_at)}
+                    </span>
+                  ) : (
+                    <span className="text-text-muted">Never</span>
+                  )}
+                </td>
+                <td className="px-4 py-2 text-xs">
+                  <div className="flex items-center gap-1.5">
+                    {status === 'disabled' && (
+                      <span
+                        className="text-xs px-2 py-0.5 rounded bg-elevated text-text-muted border border-border"
+                        title={disabledTitle}
+                      >
+                        Disabled
+                      </span>
+                    )}
+                    {status === 'dormant' && (
+                      <span
+                        className="text-xs px-2 py-0.5 rounded bg-status-warning/20 text-status-warning"
+                        title={`Last activity ${u.last_activity_at ? formatRelative(u.last_activity_at) : 'never'}`}
+                      >
+                        Dormant
+                      </span>
+                    )}
+                    {status === 'locked' && u.locked_until && (
+                      <span className="text-status-warning" title={`${u.failed_login_count ?? 0} failed attempts`}>
+                        {lockedUntilLabel(u.locked_until)}
+                      </span>
+                    )}
+                    {status === 'active' && (
+                      <span className="text-text-muted">Active</span>
+                    )}
+                    {isExemptAdmin && (
+                      <span className="text-text-faint text-[10px]" title="Exempt from dormancy">
+                        Never dormant
+                      </span>
+                    )}
+                  </div>
+                </td>
                 <td className="px-4 py-2 text-text-muted text-xs">{formatDate(u.created_at)}</td>
                 <td className="px-4 py-2">
-                  <div className="flex items-center gap-3">
+                  <div className="flex items-center gap-3 flex-wrap">
+                    <button
+                      type="button"
+                      onClick={() => setSessionsUser(u)}
+                      className="text-xs text-text-secondary hover:text-text-primary transition-colors"
+                    >
+                      Sessions
+                    </button>
                     {u.id !== currentUser?.id && u.totp_enabled && (
                       <button
                         type="button"
@@ -437,6 +736,42 @@ function UsersTab() {
                         className="text-xs text-status-warning hover:text-status-error transition-colors"
                       >
                         Disable 2FA
+                      </button>
+                    )}
+                    {u.id !== currentUser?.id && status === 'locked' && (
+                      <button
+                        type="button"
+                        onClick={() => openConfirm('unlock', u)}
+                        className="text-xs text-text-secondary hover:text-text-primary transition-colors"
+                      >
+                        Unlock
+                      </button>
+                    )}
+                    {u.id !== currentUser?.id && status !== 'disabled' && (
+                      <button
+                        type="button"
+                        onClick={() => openConfirm('disable', u)}
+                        className="text-xs text-status-warning hover:text-status-error transition-colors"
+                      >
+                        Disable
+                      </button>
+                    )}
+                    {u.id !== currentUser?.id && status === 'disabled' && (
+                      <button
+                        type="button"
+                        onClick={() => openConfirm('enable', u)}
+                        className="text-xs text-status-online transition-colors"
+                      >
+                        Enable
+                      </button>
+                    )}
+                    {u.id !== currentUser?.id && u.role === 'admin' && (
+                      <button
+                        type="button"
+                        onClick={() => openConfirm(isExemptAdmin ? 'unexempt' : 'exempt', u)}
+                        className="text-xs text-text-muted hover:text-text-primary transition-colors"
+                      >
+                        {isExemptAdmin ? 'Remove exemption' : 'Exempt from dormancy'}
                       </button>
                     )}
                     {u.id !== currentUser?.id && (
@@ -451,7 +786,8 @@ function UsersTab() {
                   </div>
                 </td>
               </tr>
-            ))}
+              )
+            })}
           </tbody>
         </table>
       </div>
@@ -544,6 +880,32 @@ function UsersTab() {
             </div>
           </div>
         </div>
+      )}
+
+      {/* Disable / Enable / Unlock / Dormancy exemption Confirmation Modal */}
+      {confirmAction && (() => {
+        const copy = confirmCopyFor(confirmAction.type, confirmAction.user.username)
+        return (
+          <ConfirmActionModal
+            title={copy.title}
+            body={copy.body}
+            confirmLabel={copy.confirmLabel}
+            danger={copy.danger}
+            isPending={statusMutation.isPending || unlockMutation.isPending || exemptMutation.isPending}
+            onCancel={() => setConfirmAction(null)}
+            onConfirm={handleConfirmAction}
+          />
+        )
+      })()}
+
+      {/* Sessions modal (admin) */}
+      {sessionsUser && (
+        <SessionsModal
+          mode="admin"
+          userId={sessionsUser.id}
+          username={sessionsUser.username}
+          onClose={() => setSessionsUser(null)}
+        />
       )}
     </div>
   )
