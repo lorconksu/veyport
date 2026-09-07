@@ -173,24 +173,33 @@ func TestAuditCatalog_Sessions(t *testing.T) {
 			t.Errorf("AuditCatalog missing entry for action %q", tc.action)
 			continue
 		}
-		if counts[tc.action] != 1 {
-			t.Errorf("action %q appears %d times, want 1", tc.action, counts[tc.action])
-		}
-		if entry.Label != tc.label {
-			t.Errorf("%s: expected label %q, got %q", tc.action, tc.label, entry.Label)
-		}
-		if entry.Category != "Authentication" {
-			t.Errorf("%s: expected category %q, got %q", tc.action, "Authentication", entry.Category)
-		}
-		if entry.Outcome != tc.outcome {
-			t.Errorf("%s: expected outcome %q, got %q", tc.action, tc.outcome, entry.Outcome)
-		}
-		if entry.ActorType != tc.actorType {
-			t.Errorf("%s: expected actor type %q, got %q", tc.action, tc.actorType, entry.ActorType)
-		}
-		if entry.ResourceType != auditResourceSession {
-			t.Errorf("%s: expected resource type %q, got %q", tc.action, auditResourceSession, entry.ResourceType)
-		}
+		assertSessionCatalogEntry(t, entry, counts[tc.action], tc.action, tc.label, tc.outcome, tc.actorType)
+	}
+}
+
+// assertSessionCatalogEntry checks entry against the shared session-catalog
+// invariants: exactly one entry per action, the expected label/outcome/actor
+// type, the fixed "Authentication" category, and the shared session resource
+// type.
+func assertSessionCatalogEntry(t *testing.T, entry AuditCatalogEntry, count int, action, label, outcome, actorType string) {
+	t.Helper()
+	if count != 1 {
+		t.Errorf("action %q appears %d times, want 1", action, count)
+	}
+	if entry.Label != label {
+		t.Errorf("%s: expected label %q, got %q", action, label, entry.Label)
+	}
+	if entry.Category != "Authentication" {
+		t.Errorf("%s: expected category %q, got %q", action, "Authentication", entry.Category)
+	}
+	if entry.Outcome != outcome {
+		t.Errorf("%s: expected outcome %q, got %q", action, outcome, entry.Outcome)
+	}
+	if entry.ActorType != actorType {
+		t.Errorf("%s: expected actor type %q, got %q", action, actorType, entry.ActorType)
+	}
+	if entry.ResourceType != auditResourceSession {
+		t.Errorf("%s: expected resource type %q, got %q", action, auditResourceSession, entry.ResourceType)
 	}
 }
 

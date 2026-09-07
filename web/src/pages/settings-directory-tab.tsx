@@ -94,7 +94,7 @@ export function DirectoryTab() {
   )
 }
 
-function DirectoryForm({ initialConfig }: { initialConfig: LDAPConfig }) {
+function DirectoryForm({ initialConfig }: Readonly<{ initialConfig: LDAPConfig }>) {
   const queryClient = useQueryClient()
   const [form, setForm] = useState<LDAPForm>(() => configToForm(initialConfig))
   const [saveSuccess, setSaveSuccess] = useState('')
@@ -338,13 +338,13 @@ function TextInput({
   value,
   onChange,
   placeholder,
-}: {
+}: Readonly<{
   id: string
   label: string
   value: string
   onChange: (value: string) => void
   placeholder: string
-}) {
+}>) {
   return (
     <div>
       <label htmlFor={id} className="block text-xs text-text-muted mb-1">{label}</label>

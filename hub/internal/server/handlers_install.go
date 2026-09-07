@@ -5,16 +5,14 @@ import (
 	"fmt"
 	"log"
 	"net/http"
-	"os"
-	"path/filepath"
-	"strings"
 	"text/template"
 
 	"github.com/wyiu/veyport/hub"
 )
 
-// headerContentType names the Content-Type header once for this file's
-// three hand-set responses (binary, checksum, install script) — go:S1192.
+// headerContentType names the Content-Type header once for the package's
+// hand-set responses (binary, checksum and install-script routes here and
+// in handlers_servers.go) — go:S1192.
 const headerContentType = "Content-Type"
 
 // cliAllowedOS and cliAllowedArch define the platform matrix the `vey` CLI is
@@ -58,15 +56,7 @@ func (s *Server) handleCLIBinary(w http.ResponseWriter, r *http.Request) {
 		respondError(w, http.StatusNotFound, "unsupported platform")
 		return
 	}
-	filename := fmt.Sprintf("vey-%s-%s", osName, arch)
-	binaryPath := filepath.Join(s.agentBinDir, filename)
-	if _, err := os.Stat(binaryPath); os.IsNotExist(err) {
-		respondError(w, http.StatusNotFound, "cli binary not found")
-		return
-	}
-	w.Header().Set(headerContentType, "application/octet-stream")
-	w.Header().Set("Content-Disposition", fmt.Sprintf(`attachment; filename="%s"`, filename))
-	http.ServeFile(w, r, binaryPath)
+	s.serveBinaryFile(w, r, fmt.Sprintf("vey-%s-%s", osName, arch), "cli binary not found")
 }
 
 // handleInstall3rdSegmentDispatch handles the 4-path-segment "/install/{a}/{b}/{c}"
@@ -113,17 +103,7 @@ func (s *Server) handleCLIBinaryChecksum(w http.ResponseWriter, r *http.Request)
 		respondError(w, http.StatusNotFound, "unsupported platform")
 		return
 	}
-	filename := fmt.Sprintf("vey-%s-%s.sha256", osName, arch)
-	checksumPath := filepath.Join(s.agentBinDir, filename)
-	data, err := os.ReadFile(checksumPath)
-	if err != nil {
-		respondError(w, http.StatusNotFound, "checksum not found")
-		return
-	}
-	w.Header().Set(headerContentType, "text/plain")
-	if _, err := w.Write([]byte(strings.TrimSpace(string(data)))); err != nil {
-		log.Printf("cli checksum write failed: %v", err)
-	}
+	s.serveChecksumFile(w, fmt.Sprintf("vey-%s-%s.sha256", osName, arch), "cli checksum write failed")
 }
 
 // installCLIScriptTemplate is parsed at init via template.Must: the script

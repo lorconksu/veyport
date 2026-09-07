@@ -28,6 +28,9 @@ const (
 	bearerPrefix  = "Bearer "
 	cookieAccess  = "veyport_access"
 	cookieRefresh = "veyport_refresh"
+	// totpSetupPath is the TOTP enrollment endpoint used while bootstrapping
+	// admin accounts in the test harness.
+	totpSetupPath = "/api/auth/totp/setup"
 )
 
 // TestHarness holds all components for an in-process hub integration test.
@@ -82,9 +85,8 @@ func StartHarness(t *testing.T) *TestHarness {
 	logSessions := grpcserver.NewLogSessions()
 	grpcCAPin := fmt.Sprintf("%x", sha256.Sum256(caCert.Raw))
 
-	// Find two free TCP ports
-	grpcPort := freePort(t)
-	httpPort := freePort(t)
+	// Find two distinct free TCP ports
+	grpcPort, httpPort := freePortPair(t)
 
 	grpcAddr := fmt.Sprintf("127.0.0.1:%d", grpcPort)
 	httpAddr := fmt.Sprintf("127.0.0.1:%d", httpPort)
@@ -173,65 +175,12 @@ func StartHarness(t *testing.T) *TestHarness {
 }
 
 // SetupAdmin registers the first admin user, completes TOTP setup, and returns
-// an access token.
+// an access token. It is SetupAdminWithTOTP without the secret, for callers
+// that never need to generate further codes.
 func (h *TestHarness) SetupAdmin(t *testing.T) string {
 	t.Helper()
-
-	baseURL := fmt.Sprintf("http://%s", h.HTTPAddr)
-
-	// Register first user (admin)
-	regBody := map[string]string{
-		"username": "admin",
-		"email":    "admin@test.com",
-		"password": "TestPassword123!",
-	}
-	resp := h.HTTPPost(t, "/api/auth/register", regBody, "")
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(resp.Body)
-		t.Fatalf("register admin: status=%d body=%s", resp.StatusCode, body)
-	}
-
-	var regResp struct {
-		SetupToken string `json:"setup_token"`
-	}
-	json.NewDecoder(resp.Body).Decode(&regResp)
-
-	// TOTP setup
-	setupResp := h.HTTPPost(t, "/api/auth/totp/setup", nil, regResp.SetupToken)
-	defer setupResp.Body.Close()
-	if setupResp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(setupResp.Body)
-		t.Fatalf("totp setup: status=%d body=%s url=%s", setupResp.StatusCode, body, baseURL+"/api/auth/totp/setup")
-	}
-
-	var totpResp model.TOTPSetupResponse
-	json.NewDecoder(setupResp.Body).Decode(&totpResp)
-
-	// Generate valid TOTP code and enable
-	code, err := auth.GenerateValidCode(totpResp.Secret)
-	if err != nil {
-		t.Fatalf("generate TOTP code: %v", err)
-	}
-
-	enableResp := h.HTTPPost(t, "/api/auth/totp/enable", model.TOTPEnableRequest{Code: code}, regResp.SetupToken)
-	defer enableResp.Body.Close()
-	if enableResp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(enableResp.Body)
-		t.Fatalf("totp enable: status=%d body=%s", enableResp.StatusCode, body)
-	}
-
-	var authResp model.AuthResponse
-	json.NewDecoder(enableResp.Body).Decode(&authResp)
-
-	for _, cookie := range enableResp.Cookies() {
-		if cookie.Name == cookieAccess && cookie.Value != "" {
-			return cookie.Value
-		}
-	}
-
-	t.Fatal("SetupAdmin: got empty access token cookie")
-	return ""
+	accessToken, _ := h.SetupAdminWithTOTP(t)
+	return accessToken
 }
 
 // SetupAdminWithTOTP is like SetupAdmin but also returns the raw (plaintext) TOTP
@@ -261,11 +210,11 @@ func (h *TestHarness) SetupAdminWithTOTP(t *testing.T) (accessToken, totpSecret 
 	json.NewDecoder(resp.Body).Decode(&regResp)
 
 	// TOTP setup — capture the plaintext secret before it gets encrypted in the store
-	setupResp := h.HTTPPost(t, "/api/auth/totp/setup", nil, regResp.SetupToken)
+	setupResp := h.HTTPPost(t, totpSetupPath, nil, regResp.SetupToken)
 	defer setupResp.Body.Close()
 	if setupResp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(setupResp.Body)
-		t.Fatalf("totp setup: status=%d body=%s url=%s", setupResp.StatusCode, body, baseURL+"/api/auth/totp/setup")
+		t.Fatalf("totp setup: status=%d body=%s url=%s", setupResp.StatusCode, body, baseURL+totpSetupPath)
 	}
 
 	var totpSetupResp model.TOTPSetupResponse
@@ -379,16 +328,40 @@ func (h *TestHarness) HTTPPut(t *testing.T, path string, body interface{}, token
 	return h.httpRequestWithBody(t, "PUT", path, body, token)
 }
 
-// freePort returns a free TCP port on localhost.
-func freePort(t *testing.T) int {
+// listenLoopback opens a probe listener on an ephemeral localhost port.
+func listenLoopback(t *testing.T) net.Listener {
 	t.Helper()
 	l, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatalf("find free port: %v", err)
 	}
-	port := l.Addr().(*net.TCPAddr).Port
+	return l
+}
+
+func listenerPort(l net.Listener) int {
+	return l.Addr().(*net.TCPAddr).Port
+}
+
+// freePort returns a free TCP port on localhost. Callers that need more
+// than one port should use freePortPair so the ports are guaranteed distinct.
+func freePort(t *testing.T) int {
+	t.Helper()
+	l := listenLoopback(t)
 	l.Close()
-	return port
+	return listenerPort(l)
+}
+
+// freePortPair returns two distinct free TCP ports on localhost. Both
+// listeners stay open until both ports are known: binding :0, closing, and
+// binding :0 again can hand back the same port, which surfaced in CI as the
+// hub's gRPC and HTTP servers fighting over one address.
+func freePortPair(t *testing.T) (int, int) {
+	t.Helper()
+	first := listenLoopback(t)
+	defer first.Close()
+	second := listenLoopback(t)
+	defer second.Close()
+	return listenerPort(first), listenerPort(second)
 }
 
 // waitForPort polls a TCP address until it accepts connections or the timeout expires.

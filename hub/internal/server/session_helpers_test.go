@@ -192,6 +192,15 @@ func TestNewSession_RecordsRowAndAudits(t *testing.T) {
 		t.Fatalf("newSession: %v", err)
 	}
 
+	assertNewSessionRow(t, s, sess, user, clk)
+	assertNewSessionAudit(t, s, sess, user)
+}
+
+// assertNewSessionRow checks the session row persisted by newSession: user,
+// kind, IP, user agent, timestamps, and that it starts out live.
+func assertNewSessionRow(t *testing.T, s *Server, sess *model.Session, user *model.User, clk *testClock) {
+	t.Helper()
+
 	stored := reloadSession(t, s, sess.ID)
 	if stored.UserID != user.ID {
 		t.Fatalf("user id = %q, want %q", stored.UserID, user.ID)
@@ -214,6 +223,12 @@ func TestNewSession_RecordsRowAndAudits(t *testing.T) {
 	if stored.EndedAt != nil {
 		t.Fatalf("a new session must be live, got ended at %s", stored.EndedAt)
 	}
+}
+
+// assertNewSessionAudit checks the auth.session_created audit entry newSession
+// records: outcome/actor, target, resource type, and the session detail blob.
+func assertNewSessionAudit(t *testing.T, s *Server, sess *model.Session, user *model.User) {
+	t.Helper()
 
 	entries := auditEntriesFor(t, s, user.ID, model.AuditSessionCreated)
 	if len(entries) != 1 {

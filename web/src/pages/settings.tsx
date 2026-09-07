@@ -15,6 +15,8 @@ import { DirectoryTab } from '@/pages/settings-directory-tab'
 import { AccountPolicyCard } from '@/pages/account-policy-card'
 import { ConfirmActionModal } from '@/pages/confirm-action-modal'
 import { SessionsModal, SessionsTable } from '@/pages/sessions-modal'
+import { isShell } from '@/lib/sessions'
+import { firstMutationError, mutationErrorMessage } from '@/lib/mutation'
 
 /** u.status when present; otherwise derives from `locked_until` (007 fallback, still exercised by pre-008 fixtures). */
 function effectiveStatus(u: User): AccountStatus {
@@ -68,11 +70,9 @@ function confirmCopyFor(type: ConfirmActionType, username: string): ConfirmCopy 
   }
 }
 
-function firstMutationError(...muts: { isError: boolean; error: unknown }[]): string | null {
-  for (const m of muts) {
-    if (m.isError) return m.error instanceof Error ? m.error.message : 'Request failed'
-  }
-  return null
+function rowActionLabel(s: Session): string | null {
+  if (s.current) return null
+  return isShell(s) ? 'Terminate' : 'Sign out'
 }
 
 function roleBadgeTone(role: Role): string {
@@ -129,11 +129,9 @@ function YourSessionsCard() {
 
   const sessions = data?.sessions ?? []
   const onlyCurrentSession = sessions.length <= 1
-  const errorMessage = endOneMutation.isError
-    ? (endOneMutation.error instanceof Error ? endOneMutation.error.message : 'Failed to end session')
-    : signOutOthersMutation.isError
-      ? (signOutOthersMutation.error instanceof Error ? signOutOthersMutation.error.message : 'Failed to sign out other sessions')
-      : null
+  const errorMessage =
+    mutationErrorMessage(endOneMutation, 'Failed to end session') ??
+    mutationErrorMessage(signOutOthersMutation, 'Failed to sign out other sessions')
 
   return (
     <div>
@@ -156,7 +154,7 @@ function YourSessionsCard() {
         {!isLoading && !isError && !onlyCurrentSession && (
           <SessionsTable
             sessions={sessions}
-            rowActionLabel={s => (s.current ? null : (s.kind === 'ssh' || s.kind === 'terminal' ? 'Terminate' : 'Sign out'))}
+            rowActionLabel={rowActionLabel}
             onRowAction={s => { endOneMutation.reset(); setPendingId(s.id); endOneMutation.mutate(s) }}
             pendingId={pendingId}
           />

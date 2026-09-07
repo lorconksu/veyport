@@ -66,26 +66,16 @@ describe('AccountPolicyCard', () => {
     expect(screen.getByText('0 disables the absolute limit')).toBeInTheDocument()
   })
 
-  it('shows a field error and does not PUT when a value is negative', async () => {
+  it.each([
+    { label: 'Lockout threshold (failures)', value: '-1', description: 'a negative value' },
+    { label: 'Dormant after (days)', value: '1.5', description: 'a non-integer value' },
+    { label: 'Idle timeout (minutes)', value: '-5', description: 'a negative idle-timeout value' },
+  ])('shows a field error and does not PUT when $label has $description', async ({ label, value }) => {
     mockApiFetch.mockResolvedValueOnce(defaultHubConfig)
     renderCard()
 
-    await screen.findByLabelText('Lockout threshold (failures)')
-    fireEvent.change(screen.getByLabelText('Lockout threshold (failures)'), { target: { value: '-1' } })
-    fireEvent.click(screen.getByRole('button', { name: 'Save' }))
-
-    await waitFor(() => {
-      expect(screen.getByText('Must be a non-negative integer')).toBeInTheDocument()
-    })
-    expect(mockApiFetch).not.toHaveBeenCalledWith('/settings/hub', expect.objectContaining({ method: 'PUT' }))
-  })
-
-  it('shows a field error and does not PUT when a value is non-integer', async () => {
-    mockApiFetch.mockResolvedValueOnce(defaultHubConfig)
-    renderCard()
-
-    await screen.findByLabelText('Dormant after (days)')
-    fireEvent.change(screen.getByLabelText('Dormant after (days)'), { target: { value: '1.5' } })
+    await screen.findByLabelText(label)
+    fireEvent.change(screen.getByLabelText(label), { target: { value } })
     fireEvent.click(screen.getByRole('button', { name: 'Save' }))
 
     await waitFor(() => {
@@ -120,20 +110,6 @@ describe('AccountPolicyCard', () => {
     await waitFor(() => {
       expect(screen.getByText('Account policy saved.')).toBeInTheDocument()
     })
-  })
-
-  it('shows a field error and does not PUT when the idle-timeout value is negative', async () => {
-    mockApiFetch.mockResolvedValueOnce(defaultHubConfig)
-    renderCard()
-
-    await screen.findByLabelText('Idle timeout (minutes)')
-    fireEvent.change(screen.getByLabelText('Idle timeout (minutes)'), { target: { value: '-5' } })
-    fireEvent.click(screen.getByRole('button', { name: 'Save' }))
-
-    await waitFor(() => {
-      expect(screen.getByText('Must be a non-negative integer')).toBeInTheDocument()
-    })
-    expect(mockApiFetch).not.toHaveBeenCalledWith('/settings/hub', expect.objectContaining({ method: 'PUT' }))
   })
 
   it('shows an error banner when the API rejects the save', async () => {

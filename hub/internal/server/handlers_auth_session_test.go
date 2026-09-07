@@ -108,55 +108,68 @@ func assertUnauthorized(t *testing.T, rec *httptest.ResponseRecorder, want, labe
 	}
 }
 
+// loginTOTPSessionCase is one table entry for TestSession_LoginTOTPCreatesSession.
+type loginTOTPSessionCase struct {
+	name      string
+	userAgent string
+	wantKind  string
+}
+
 // (a) A completed code stage records the session, binds both tokens to it and
 // audits its creation. The client's own announcement decides the kind.
 func TestSession_LoginTOTPCreatesSession(t *testing.T) {
-	for _, tc := range []struct {
-		name      string
-		userAgent string
-		wantKind  string
-	}{
+	for _, tc := range []loginTOTPSessionCase{
 		{"browser", sessionTestUserAgent, model.SessionKindWeb},
 		{"cli", sessionTestCLIAgent, model.SessionKindCLI},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			s, clk := sessionServer(t)
-			setSessionPolicy(t, s, 15, 12)
-			user := newLocalUser(t, s, "signin", lockoutTestPassword)
-			secret := enableTOTPForUser(t, s, user)
-
-			accessToken, refreshToken, sid := signInWith(t, s, user, secret, tc.userAgent)
-			if sid == "" {
-				t.Fatal("the access token carries no session id")
-			}
-			if got := sidOf(t, s, refreshToken); got != sid {
-				t.Fatalf("refresh token bound to %q, want %q", got, sid)
-			}
-
-			stored := reloadSession(t, s, sid)
-			if stored.UserID != user.ID || stored.Kind != tc.wantKind {
-				t.Fatalf("session = user %q kind %q, want %q/%q",
-					stored.UserID, stored.Kind, user.ID, tc.wantKind)
-			}
-			if stored.IP != "198.51.100.4" {
-				t.Fatalf("ip = %q, want the client's address", stored.IP)
-			}
-			if stored.ExpiresAt == nil || !stored.ExpiresAt.Equal(clk.now().Add(12*time.Hour)) {
-				t.Fatalf("expires at = %v, want %s", stored.ExpiresAt, clk.now().Add(12*time.Hour))
-			}
-
-			entries := auditEntriesFor(t, s, user.ID, model.AuditSessionCreated)
-			if len(entries) != 1 {
-				t.Fatalf("expected one %s entry, got %d", model.AuditSessionCreated, len(entries))
-			}
-			if detail := decodeSessionDetail(t, entries[0]); detail.SessionID != sid {
-				t.Fatalf("audit names session %q, want %q", detail.SessionID, sid)
-			}
-
-			if rec := authedGet(t, s, testMePath, accessToken); rec.Code != http.StatusOK {
-				t.Fatalf("the freshly issued token was refused: %d: %s", rec.Code, rec.Body.String())
-			}
+			assertLoginTOTPCreatesSession(t, tc)
 		})
+	}
+}
+
+// assertLoginTOTPCreatesSession drives one TestSession_LoginTOTPCreatesSession
+// case: signs a user in with the case's user agent and checks the persisted
+// session row, its creation audit entry, and that the issued access token
+// authenticates.
+func assertLoginTOTPCreatesSession(t *testing.T, tc loginTOTPSessionCase) {
+	t.Helper()
+
+	s, clk := sessionServer(t)
+	setSessionPolicy(t, s, 15, 12)
+	user := newLocalUser(t, s, "signin", lockoutTestPassword)
+	secret := enableTOTPForUser(t, s, user)
+
+	accessToken, refreshToken, sid := signInWith(t, s, user, secret, tc.userAgent)
+	if sid == "" {
+		t.Fatal("the access token carries no session id")
+	}
+	if got := sidOf(t, s, refreshToken); got != sid {
+		t.Fatalf("refresh token bound to %q, want %q", got, sid)
+	}
+
+	stored := reloadSession(t, s, sid)
+	if stored.UserID != user.ID || stored.Kind != tc.wantKind {
+		t.Fatalf("session = user %q kind %q, want %q/%q",
+			stored.UserID, stored.Kind, user.ID, tc.wantKind)
+	}
+	if stored.IP != "198.51.100.4" {
+		t.Fatalf("ip = %q, want the client's address", stored.IP)
+	}
+	if stored.ExpiresAt == nil || !stored.ExpiresAt.Equal(clk.now().Add(12*time.Hour)) {
+		t.Fatalf("expires at = %v, want %s", stored.ExpiresAt, clk.now().Add(12*time.Hour))
+	}
+
+	entries := auditEntriesFor(t, s, user.ID, model.AuditSessionCreated)
+	if len(entries) != 1 {
+		t.Fatalf("expected one %s entry, got %d", model.AuditSessionCreated, len(entries))
+	}
+	if detail := decodeSessionDetail(t, entries[0]); detail.SessionID != sid {
+		t.Fatalf("audit names session %q, want %q", detail.SessionID, sid)
+	}
+
+	if rec := authedGet(t, s, testMePath, accessToken); rec.Code != http.StatusOK {
+		t.Fatalf("the freshly issued token was refused: %d: %s", rec.Code, rec.Body.String())
 	}
 }
 

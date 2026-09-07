@@ -1620,6 +1620,27 @@ describe('SettingsPage', () => {
       })
     })
 
+    it.each([
+      { description: 'the Error message when ending a session rejects with an Error', rejection: new Error('session already gone'), text: 'session already gone' },
+      { description: 'the fallback text when ending a session rejects with a non-Error', rejection: rejectWith('boom'), text: 'Failed to end session' },
+    ])('shows $description', async ({ rejection, text }) => {
+      mockApiRoutes({
+        '/auth/sessions': [
+          {
+            sessions: [
+              { id: 'cur', kind: 'web', ip: '10.0.0.1', current: true },
+              { id: 'other', kind: 'cli', ip: '10.0.0.2', current: false },
+            ],
+          },
+        ],
+        '/auth/sessions/other': [rejection],
+      })
+      renderPage()
+      fireEvent.click(await screen.findByRole('button', { name: 'Sign out' }))
+
+      expect(await screen.findByText(text)).toBeInTheDocument()
+    })
+
     it('shows an error banner when the sessions list fails to load', async () => {
       mockApiRoutes({
         '/auth/sessions': [new Error('failed to fetch sessions')],
