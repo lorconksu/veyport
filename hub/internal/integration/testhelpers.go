@@ -328,17 +328,27 @@ func (h *TestHarness) HTTPPut(t *testing.T, path string, body interface{}, token
 	return h.httpRequestWithBody(t, "PUT", path, body, token)
 }
 
-// freePort returns a free TCP port on localhost. Callers that need more
-// than one port should use freePortPair so the ports are guaranteed distinct.
-func freePort(t *testing.T) int {
+// listenLoopback opens a probe listener on an ephemeral localhost port.
+func listenLoopback(t *testing.T) net.Listener {
 	t.Helper()
 	l, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatalf("find free port: %v", err)
 	}
-	port := l.Addr().(*net.TCPAddr).Port
+	return l
+}
+
+func listenerPort(l net.Listener) int {
+	return l.Addr().(*net.TCPAddr).Port
+}
+
+// freePort returns a free TCP port on localhost. Callers that need more
+// than one port should use freePortPair so the ports are guaranteed distinct.
+func freePort(t *testing.T) int {
+	t.Helper()
+	l := listenLoopback(t)
 	l.Close()
-	return port
+	return listenerPort(l)
 }
 
 // freePortPair returns two distinct free TCP ports on localhost. Both
@@ -347,17 +357,11 @@ func freePort(t *testing.T) int {
 // hub's gRPC and HTTP servers fighting over one address.
 func freePortPair(t *testing.T) (int, int) {
 	t.Helper()
-	first, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatalf("find free port: %v", err)
-	}
+	first := listenLoopback(t)
 	defer first.Close()
-	second, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatalf("find free port: %v", err)
-	}
+	second := listenLoopback(t)
 	defer second.Close()
-	return first.Addr().(*net.TCPAddr).Port, second.Addr().(*net.TCPAddr).Port
+	return listenerPort(first), listenerPort(second)
 }
 
 // waitForPort polls a TCP address until it accepts connections or the timeout expires.
