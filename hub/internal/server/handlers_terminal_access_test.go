@@ -6,7 +6,6 @@ import (
 	"testing"
 
 	"github.com/google/uuid"
-	"github.com/wyiu/veyport/hub/internal/auth"
 	"github.com/wyiu/veyport/hub/internal/model"
 )
 
@@ -30,10 +29,7 @@ func createLDAPViewerToken(t *testing.T, s *Server, username string, terminalAcc
 		t.Fatalf("create ldap user: %v", err)
 	}
 
-	accessToken, _, err := auth.GenerateTokenPair(s.jwtSecret, user.ID, string(user.Role), user.TokenGeneration)
-	if err != nil {
-		t.Fatalf("generate token: %v", err)
-	}
+	accessToken, _, _ := sessionTokenPair(t, s, user.ID)
 	return user.ID, accessToken
 }
 

@@ -12,7 +12,6 @@ import (
 	"github.com/wyiu/veyport/hub/internal/model"
 )
 
-
 // mockReEnrollReleaser is a test double for ReEnrollReleaser.
 type mockReEnrollReleaser struct {
 	called   bool

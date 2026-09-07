@@ -12,6 +12,7 @@ import (
 
 	"golang.org/x/crypto/ssh"
 
+	"github.com/wyiu/veyport/hub/internal/account"
 	"github.com/wyiu/veyport/hub/internal/auth"
 	"github.com/wyiu/veyport/hub/internal/model"
 )
@@ -88,6 +89,16 @@ func (s *Server) handleIssueSSHCertificate(w http.ResponseWriter, r *http.Reques
 	user, err := s.store.GetUserByID(userID)
 	if err != nil {
 		respondError(w, http.StatusNotFound, errUserNotFound)
+		return
+	}
+
+	// A disabled or dormant account gets no new certificate: issuance is the
+	// one moment the hub can shorten the window in which a still-valid
+	// credential outlives the account's usability (008 FR-009).
+	if st := s.accountStatus(user); accountRefuses(st) {
+		msg, _ := account.Refusal(st)
+		s.auditSSHCertRefused(r, userID, accountRefusalDetail(st))
+		respondError(w, http.StatusForbidden, msg)
 		return
 	}
 

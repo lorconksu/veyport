@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"strings"
 	"sync"
 	"time"
 
@@ -29,6 +30,15 @@ const (
 
 	// sessionIDDetailPrefix matches the web terminal's audit detail format.
 	sessionIDDetailPrefix = "session_id="
+
+	// clientMessagePrefix identifies the gateway on every line it writes to a
+	// client's stderr.
+	clientMessagePrefix = "veyport: "
+
+	// forcedCloseDetail marks the audit entry of a session the hub closed —
+	// a revoked session, a disabled account, an administrator ending one
+	// shell — rather than one that ended on its own.
+	forcedCloseDetail = "reason=forced"
 )
 
 // windowSize is a PTY geometry update from a window-change request.
@@ -64,6 +74,10 @@ type exitInfo struct {
 	// agentInitiated reports that the agent already closed the session, so no
 	// TerminalClose needs to be sent back to it.
 	agentInitiated bool
+	// forced reports that the hub ended the session under the person using
+	// it. The remote shell is then still running on the agent, so it has to be
+	// closed explicitly, and the audit trail records why the session went away.
+	forced bool
 }
 
 // bridge runs one authorized SSH session against the agent terminal channel,
@@ -72,7 +86,8 @@ type exitInfo struct {
 func (s *Server) bridge(ch ssh.Channel, p bridgeParams) {
 	sessionID := uuid.NewString()
 
-	events, created := s.cfg.Terminals.Register(p.serverID, sessionID, p.userID, p.executionUser)
+	events, created := s.cfg.Terminals.Register(p.serverID, sessionID, p.userID, p.executionUser,
+		grpcserver.WithKind(grpcserver.TerminalKindSSH))
 	if !created {
 		s.refuseBridge(ch, p, sessionID, "terminal session could not be registered")
 		return
@@ -178,11 +193,20 @@ func (s *Server) relay(ch ssh.Channel, events <-chan grpcserver.TerminalEvent, s
 	}
 }
 
-// agentExit maps an agent-reported terminal exit to an SSH exit status. A
-// negative code means the agent never produced one (for example because its
-// stream died), so the session is reported as aborted.
+// agentExit maps a terminal exit event to an SSH exit status. A negative code
+// means the agent never produced one (for example because its stream died), so
+// the session is reported as aborted.
+//
+// A forced exit is the hub's own doing: the agent knows nothing about it and
+// its shell is still running, so the session is not treated as agent-initiated
+// however the registry closed the channel.
 func agentExit(event grpcserver.TerminalEvent) exitInfo {
-	exit := exitInfo{code: uint32(event.ExitCode), message: event.Error, agentInitiated: true}
+	exit := exitInfo{
+		code:           uint32(event.ExitCode),
+		message:        event.Error,
+		agentInitiated: !event.Forced,
+		forced:         event.Forced,
+	}
 	if event.ExitCode < 0 {
 		exit.code = exitAborted
 	}
@@ -233,7 +257,10 @@ func (s *Server) sendResize(sessionID string, p bridgeParams, size windowSize) {
 // mirroring the web terminal's closeTerminalSession.
 func (s *Server) teardown(ch ssh.Channel, p bridgeParams, sessionID string, exit exitInfo) {
 	alreadyClosed, removed := s.cfg.Terminals.RemoveIfHubInitiated(p.serverID, sessionID)
-	if removed && !alreadyClosed {
+	// A forced close closes the registry entry before the relay ever sees the
+	// exit, so alreadyClosed says nothing about the agent there: its shell is
+	// still running and has to be told to stop.
+	if removed && (!alreadyClosed || exit.forced) {
 		err := s.cfg.ConnMgr.SendToAgent(p.serverID, &pb.HubMessage{
 			Payload: &pb.HubMessage_TerminalClose{
 				TerminalClose: &pb.TerminalClose{SessionId: sessionID},
@@ -255,6 +282,9 @@ func (s *Server) teardown(ch ssh.Channel, p bridgeParams, sessionID string, exit
 	detail := sessionIDDetailPrefix + sessionID
 	if exit.agentInitiated {
 		detail += " agent_initiated"
+	}
+	if exit.forced {
+		detail += " " + forcedCloseDetail
 	}
 	s.logAudit(model.AuditSSHSessionClosed, model.AuditOutcomeSuccess, p.userID, p.serverID, detail, p.remoteIP)
 }
@@ -278,8 +308,16 @@ func openDetail(sessionID string, p bridgeParams) string {
 }
 
 // writeClientMessage puts an operator-facing line on the channel's stderr.
+//
+// Messages that already name the gateway — the ones the session endpoints hand
+// to the registry, which the web terminal shows verbatim too — are written as
+// they are rather than announced twice.
 func writeClientMessage(ch ssh.Channel, message string) {
-	if _, err := fmt.Fprintf(ch.Stderr(), "veyport: %s\r\n", message); err != nil {
+	line := message
+	if !strings.HasPrefix(line, clientMessagePrefix) {
+		line = clientMessagePrefix + line
+	}
+	if _, err := fmt.Fprintf(ch.Stderr(), "%s\r\n", line); err != nil {
 		return
 	}
 }

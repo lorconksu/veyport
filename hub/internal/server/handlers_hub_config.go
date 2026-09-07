@@ -14,6 +14,9 @@ type hubConfigResponse struct {
 	LockoutThreshold       int     `json:"lockout_threshold"`
 	LockoutWindowMinutes   int     `json:"lockout_window_minutes"`
 	LockoutDurationMinutes int     `json:"lockout_duration_minutes"`
+	DormantDays            int     `json:"dormant_days"`
+	SessionIdleMinutes     int     `json:"session_idle_minutes"`
+	SessionMaxHours        int     `json:"session_max_hours"`
 }
 
 type hubConfigRequest struct {
@@ -21,6 +24,9 @@ type hubConfigRequest struct {
 	LockoutThreshold       *int    `json:"lockout_threshold"`
 	LockoutWindowMinutes   *int    `json:"lockout_window_minutes"`
 	LockoutDurationMinutes *int    `json:"lockout_duration_minutes"`
+	DormantDays            *int    `json:"dormant_days"`
+	SessionIdleMinutes     *int    `json:"session_idle_minutes"`
+	SessionMaxHours        *int    `json:"session_max_hours"`
 }
 
 func (s *Server) handleGetHubConfig(w http.ResponseWriter, r *http.Request) {
@@ -42,12 +48,36 @@ func (s *Server) handleGetHubConfig(w http.ResponseWriter, r *http.Request) {
 	cfg.LockoutThreshold = policy.Threshold
 	cfg.LockoutWindowMinutes = int(policy.Window.Minutes())
 	cfg.LockoutDurationMinutes = int(policy.Duration.Minutes())
+	cfg.DormantDays = policy.DormantDays
+	cfg.SessionIdleMinutes = int(policy.SessionIdle.Minutes())
+	cfg.SessionMaxHours = int(policy.SessionMax.Hours())
 
 	respondJSON(w, http.StatusOK, cfg)
 }
 
 // grpcAddrPattern allows hostnames, IPs, and ports — no shell metacharacters.
 var grpcAddrPattern = regexp.MustCompile(`^[a-zA-Z0-9._:\-\[\]]+$`)
+
+// lockoutConfigField binds one nullable integer field of hubConfigRequest to
+// the store key it is persisted under and the message it reports when
+// negative, so validation and persistence can share a single loop instead of
+// repeating the same shape four times.
+type lockoutConfigField struct {
+	value       *int
+	key         string
+	negativeMsg string
+}
+
+func lockoutConfigFields(req *hubConfigRequest) []lockoutConfigField {
+	return []lockoutConfigField{
+		{req.LockoutThreshold, lockout.KeyThreshold, "lockout_threshold must be a non-negative integer"},
+		{req.LockoutWindowMinutes, lockout.KeyWindowMinutes, "lockout_window_minutes must be a non-negative integer"},
+		{req.LockoutDurationMinutes, lockout.KeyDurationMinutes, "lockout_duration_minutes must be a non-negative integer"},
+		{req.DormantDays, lockout.KeyDormantDays, "dormant_days must be a non-negative integer"},
+		{req.SessionIdleMinutes, lockout.KeySessionIdleMinutes, "session_idle_minutes must be a non-negative integer"},
+		{req.SessionMaxHours, lockout.KeySessionMaxHours, "session_max_hours must be a non-negative integer"},
+	}
+}
 
 func (s *Server) handleUpdateHubConfig(w http.ResponseWriter, r *http.Request) {
 	var req hubConfigRequest
@@ -61,19 +91,15 @@ func (s *Server) handleUpdateHubConfig(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	fields := lockoutConfigFields(&req)
+
 	// Validate every present lockout field before writing anything, so a
 	// rejected PUT never leaves a partial update behind.
-	if req.LockoutThreshold != nil && *req.LockoutThreshold < 0 {
-		respondError(w, http.StatusBadRequest, "lockout_threshold must be a non-negative integer")
-		return
-	}
-	if req.LockoutWindowMinutes != nil && *req.LockoutWindowMinutes < 0 {
-		respondError(w, http.StatusBadRequest, "lockout_window_minutes must be a non-negative integer")
-		return
-	}
-	if req.LockoutDurationMinutes != nil && *req.LockoutDurationMinutes < 0 {
-		respondError(w, http.StatusBadRequest, "lockout_duration_minutes must be a non-negative integer")
-		return
+	for _, f := range fields {
+		if f.value != nil && *f.value < 0 {
+			respondError(w, http.StatusBadRequest, f.negativeMsg)
+			return
+		}
 	}
 
 	if req.GRPCExternalAddr != nil {
@@ -83,20 +109,11 @@ func (s *Server) handleUpdateHubConfig(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	if req.LockoutThreshold != nil {
-		if err := s.store.SetConfig(lockout.KeyThreshold, strconv.Itoa(*req.LockoutThreshold)); err != nil {
-			respondError(w, http.StatusInternalServerError, "failed to save hub config")
-			return
+	for _, f := range fields {
+		if f.value == nil {
+			continue
 		}
-	}
-	if req.LockoutWindowMinutes != nil {
-		if err := s.store.SetConfig(lockout.KeyWindowMinutes, strconv.Itoa(*req.LockoutWindowMinutes)); err != nil {
-			respondError(w, http.StatusInternalServerError, "failed to save hub config")
-			return
-		}
-	}
-	if req.LockoutDurationMinutes != nil {
-		if err := s.store.SetConfig(lockout.KeyDurationMinutes, strconv.Itoa(*req.LockoutDurationMinutes)); err != nil {
+		if err := s.store.SetConfig(f.key, strconv.Itoa(*f.value)); err != nil {
 			respondError(w, http.StatusInternalServerError, "failed to save hub config")
 			return
 		}

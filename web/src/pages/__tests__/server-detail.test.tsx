@@ -299,21 +299,17 @@ describe('ServerDetailPage', () => {
     })
   })
 
-  it('shows "Select a file" prompt when no file selected', async () => {
+  it.each([
+    { description: '"Select a file" prompt when no file selected', text: 'Select a file to view its contents' },
+    { description: 'file tree nodes', text: '/etc' },
+    { description: 'admin-only PathManagement section', text: 'Manage File Access' },
+    { description: 'Dropzone section for admin', text: 'Dropzone' },
+  ])('shows $description', async ({ text }) => {
     mockApiFetch.mockResolvedValueOnce(mockServer)
     mockApiFetch.mockResolvedValue({ paths: ['/etc'] })
     renderPage()
     await waitFor(() => {
-      expect(screen.getByText('Select a file to view its contents')).toBeInTheDocument()
-    })
-  })
-
-  it('renders file tree nodes', async () => {
-    mockApiFetch.mockResolvedValueOnce(mockServer)
-    mockApiFetch.mockResolvedValue({ paths: ['/etc'] })
-    renderPage()
-    await waitFor(() => {
-      expect(screen.getByText('/etc')).toBeInTheDocument()
+      expect(screen.getByText(text)).toBeInTheDocument()
     })
   })
 
@@ -378,15 +374,6 @@ describe('ServerDetailPage', () => {
     resolveServer(mockServer)
   })
 
-  it('shows admin-only PathManagement section', async () => {
-    mockApiFetch.mockResolvedValueOnce(mockServer)
-    mockApiFetch.mockResolvedValue({ paths: ['/etc'] })
-    renderPage()
-    await waitFor(() => {
-      expect(screen.getByText('Manage File Access')).toBeInTheDocument()
-    })
-  })
-
   it('does not show PathManagement for viewer', async () => {
     mockUseAuth.mockReturnValue({
       user: { id: 'u2', username: 'viewer', role: 'viewer', email: 'v@b.com', avatar: null, totp_enabled: true, created_at: '', updated_at: '' },
@@ -396,15 +383,6 @@ describe('ServerDetailPage', () => {
     renderPage()
     await waitFor(() => {
       expect(screen.queryByText('Manage File Access')).not.toBeInTheDocument()
-    })
-  })
-
-  it('shows Dropzone section for admin', async () => {
-    mockApiFetch.mockResolvedValueOnce(mockServer)
-    mockApiFetch.mockResolvedValue({ paths: ['/etc'] })
-    renderPage()
-    await waitFor(() => {
-      expect(screen.getByText('Dropzone')).toBeInTheDocument()
     })
   })
 

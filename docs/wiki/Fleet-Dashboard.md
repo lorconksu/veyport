@@ -84,6 +84,24 @@ The registration token is single-use and expires after a short period. If you do
 
 ---
 
+## Installing the CLI
+
+Any user (admin or viewer) can install the `vey` command-line client from the dashboard.
+
+1. Click the **Install CLI** button in the top-right corner of the dashboard, next to **Add Server**.
+2. The Install CLI modal shows a one-line install command pre-filled with this Hub's address:
+
+   ```
+   curl -fsSL https://veyport.example.com/install/cli.sh | sh
+   ```
+
+3. Copy it and run it on your own machine (Linux or macOS). It detects your platform, verifies the download's checksum, and installs `vey` to `/usr/local/bin` or `~/.local/bin`. No root is required.
+4. Then run the pre-filled sign-in command from the modal, e.g. `vey --hub https://veyport.example.com login`.
+
+See [[CLI]] for the full command reference and a manual install path, and [[SSH Gateway]] for `vey ssh`.
+
+---
+
 ## Auto-Refresh
 
 The Fleet Dashboard polls the Hub every **10 seconds** and updates all server cards in place. You do not need to reload the page to see status changes.

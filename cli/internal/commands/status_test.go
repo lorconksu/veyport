@@ -346,3 +346,183 @@ func TestStatus_ReachableAuthError_ExitAuth(t *testing.T) {
 		t.Errorf("reachable = %v, want false", got["reachable"])
 	}
 }
+
+// --- Session expiry lines (009) -----------------------------------------
+
+// TestStatus_SessionMode_PrintsSessionExpiryLines covers the human-mode
+// and --json additions from 009: after GET /api/auth/me succeeds in session
+// mode, `vey status` fetches GET /api/auth/sessions and reports the calling
+// session's expires_at/idle_deadline_at
+// (specs/009-session-records/contracts/ui-cli.md: "vey status | ... prints
+// Session expires: <RFC3339> and Idle deadline: <RFC3339> (or "none"); JSON
+// adds session_expires_at, session_idle_deadline_at").
+func TestStatus_SessionMode_PrintsSessionExpiryLines(t *testing.T) {
+	t.Setenv("VEYPORT_TOKEN", "")
+
+	const expiresAt = "2026-09-06T18:00:00Z"
+	const idleDeadline = "2026-09-06T12:15:00Z"
+
+	mux := http.NewServeMux()
+	mountRefresh(mux, "access-1", "refresh-2")
+	mux.HandleFunc("GET /api/auth/me", func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewEncoder(w).Encode(map[string]string{"username": "alice", "role": "admin"})
+	})
+	mux.HandleFunc("GET /api/auth/sessions", func(w http.ResponseWriter, r *http.Request) {
+		if !requireBearer(r, "access-1") {
+			w.WriteHeader(http.StatusUnauthorized)
+			return
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"sessions": []map[string]any{
+				{"id": "other-session", "kind": "web", "current": false},
+				{"id": "this-session", "kind": "cli", "current": true, "expires_at": expiresAt, "idle_deadline_at": idleDeadline},
+			},
+		})
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	configDir := t.TempDir()
+	seedSession(t, configDir, srv.URL, auth.StoredSession{
+		RefreshToken: "refresh-1", Username: "alice", Role: "admin", ObtainedAt: time.Now(),
+	})
+
+	t.Run("json", func(t *testing.T) {
+		ctx, stdout, _ := newCmdContext(srv.URL, configDir, true, nil)
+		code := RunStatus(ctx)
+		if code != cmdutil.ExitOK {
+			t.Fatalf("exit code = %d, want %d (ExitOK); stdout=%q", code, cmdutil.ExitOK, stdout.String())
+		}
+		got := decodeJSON(t, stdout)
+		if got["session_expires_at"] != expiresAt {
+			t.Errorf("session_expires_at = %v, want %q", got["session_expires_at"], expiresAt)
+		}
+		if got["session_idle_deadline_at"] != idleDeadline {
+			t.Errorf("session_idle_deadline_at = %v, want %q", got["session_idle_deadline_at"], idleDeadline)
+		}
+	})
+
+	t.Run("human", func(t *testing.T) {
+		ctx, stdout, stderr := newCmdContext(srv.URL, configDir, false, nil)
+		code := RunStatus(ctx)
+		if code != cmdutil.ExitOK {
+			t.Fatalf("exit code = %d, want %d (ExitOK); stderr=%q", code, cmdutil.ExitOK, stderr.String())
+		}
+		out := stdout.String()
+		if !strings.Contains(out, "Session expires: "+expiresAt) {
+			t.Errorf("stdout = %q, want a %q line", out, "Session expires: "+expiresAt)
+		}
+		if !strings.Contains(out, "Idle deadline: "+idleDeadline) {
+			t.Errorf("stdout = %q, want a %q line", out, "Idle deadline: "+idleDeadline)
+		}
+	})
+}
+
+// TestStatus_SessionMode_NoAbsoluteLimit_PrintsNone covers the "0 disables
+// the absolute limit" case: expires_at absent on the current session row
+// renders as "none" rather than an empty string.
+func TestStatus_SessionMode_NoAbsoluteLimit_PrintsNone(t *testing.T) {
+	t.Setenv("VEYPORT_TOKEN", "")
+
+	mux := http.NewServeMux()
+	mountRefresh(mux, "access-1", "refresh-2")
+	mux.HandleFunc("GET /api/auth/me", func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewEncoder(w).Encode(map[string]string{"username": "alice", "role": "admin"})
+	})
+	mux.HandleFunc("GET /api/auth/sessions", func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"sessions": []map[string]any{
+				{"id": "this-session", "kind": "cli", "current": true},
+			},
+		})
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	configDir := t.TempDir()
+	seedSession(t, configDir, srv.URL, auth.StoredSession{
+		RefreshToken: "refresh-1", Username: "alice", Role: "admin", ObtainedAt: time.Now(),
+	})
+
+	ctx, stdout, stderr := newCmdContext(srv.URL, configDir, false, nil)
+	code := RunStatus(ctx)
+	if code != cmdutil.ExitOK {
+		t.Fatalf("exit code = %d, want %d (ExitOK); stderr=%q", code, cmdutil.ExitOK, stderr.String())
+	}
+	out := stdout.String()
+	if !strings.Contains(out, "Session expires: none") {
+		t.Errorf("stdout = %q, want %q", out, "Session expires: none")
+	}
+	if !strings.Contains(out, "Idle deadline: none") {
+		t.Errorf("stdout = %q, want %q", out, "Idle deadline: none")
+	}
+}
+
+// TestStatus_SessionMode_SessionsCallFails_OmitsLinesButStillPrintsRest
+// covers the failure path: a broken/unreachable GET /api/auth/sessions
+// must not affect RunStatus's exit code or the rest of the report, and the
+// two session lines are simply absent (contracts/ui-cli.md: "when the
+// sessions call fails, status still prints the rest and omits the two
+// lines").
+func TestStatus_SessionMode_SessionsCallFails_OmitsLinesButStillPrintsRest(t *testing.T) {
+	t.Setenv("VEYPORT_TOKEN", "")
+
+	mux := http.NewServeMux()
+	mountRefresh(mux, "access-1", "refresh-2")
+	mux.HandleFunc("GET /api/auth/me", func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewEncoder(w).Encode(map[string]string{"username": "alice", "role": "admin"})
+	})
+	mux.HandleFunc("GET /api/auth/sessions", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	configDir := t.TempDir()
+	seedSession(t, configDir, srv.URL, auth.StoredSession{
+		RefreshToken: "refresh-1", Username: "alice", Role: "admin", ObtainedAt: time.Now(),
+	})
+
+	ctx, stdout, stderr := newCmdContext(srv.URL, configDir, false, nil)
+	code := RunStatus(ctx)
+	if code != cmdutil.ExitOK {
+		t.Fatalf("exit code = %d, want %d (ExitOK); stderr=%q", code, cmdutil.ExitOK, stderr.String())
+	}
+	out := stdout.String()
+	if !strings.Contains(out, "interactive session as alice (admin)") {
+		t.Errorf("stdout = %q, want the usual human report unaffected", out)
+	}
+	if strings.Contains(out, "Session expires:") || strings.Contains(out, "Idle deadline:") {
+		t.Errorf("stdout = %q, want the session lines omitted when the sessions call fails", out)
+	}
+}
+
+// TestStatus_APITokenMode_OmitsSessionLines covers the api_token branch:
+// API tokens are not sessions (contracts/rest-api.md), so `vey status`
+// never calls GET /api/auth/sessions for one and never prints the lines.
+func TestStatus_APITokenMode_OmitsSessionLines(t *testing.T) {
+	const token = "adt_1234567890abcdef"
+	t.Setenv("VEYPORT_TOKEN", token)
+
+	mux := http.NewServeMux()
+	mux.HandleFunc("GET /api/auth/me", func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewEncoder(w).Encode(map[string]string{"username": "svc", "role": "operator"})
+	})
+	mux.HandleFunc("GET /api/auth/sessions", func(w http.ResponseWriter, r *http.Request) {
+		t.Error("GET /api/auth/sessions should not be called in api_token mode")
+		w.WriteHeader(http.StatusInternalServerError)
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	configDir := t.TempDir()
+	ctx, stdout, stderr := newCmdContext(srv.URL, configDir, false, nil)
+	code := RunStatus(ctx)
+	if code != cmdutil.ExitOK {
+		t.Fatalf("exit code = %d, want %d (ExitOK); stderr=%q", code, cmdutil.ExitOK, stderr.String())
+	}
+	out := stdout.String()
+	if strings.Contains(out, "Session expires:") || strings.Contains(out, "Idle deadline:") {
+		t.Errorf("stdout = %q, want no session lines in api_token mode", out)
+	}
+}

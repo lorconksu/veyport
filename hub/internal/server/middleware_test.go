@@ -23,7 +23,7 @@ func TestAuthMiddleware_ValidToken(t *testing.T) {
 		t.Fatalf("get user: %v", err)
 	}
 
-	access, _, _ := auth.GenerateTokenPair(s.jwtSecret, user.ID, string(user.Role), user.TokenGeneration)
+	access, _, _ := sessionTokenPair(t, s, user.ID)
 
 	handler := s.authMiddleware(auth.TokenTypeAccess, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		uid := UserIDFromContext(r.Context())

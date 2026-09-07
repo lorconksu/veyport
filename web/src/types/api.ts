@@ -1,5 +1,7 @@
 export type Role = 'admin' | 'auditor' | 'viewer'
 
+export type AccountStatus = 'active' | 'locked' | 'disabled' | 'dormant'
+
 export interface User {
   id: string
   username: string
@@ -15,6 +17,12 @@ export interface User {
   last_failed_login_at?: string | null
   last_login_at?: string | null
   locked_until?: string | null
+  status?: AccountStatus
+  disabled_at?: string | null
+  disabled_by?: string | null
+  reactivated_at?: string | null
+  dormancy_exempt?: boolean
+  last_activity_at?: string | null
   created_at: string
   updated_at: string
 }
@@ -357,6 +365,38 @@ export interface HubConfig {
   lockout_threshold?: number
   lockout_window_minutes?: number
   lockout_duration_minutes?: number
+  dormant_days?: number
+  session_idle_minutes?: number
+  session_max_hours?: number
+}
+
+export type SessionKind = 'web' | 'cli' | 'ssh' | 'terminal'
+
+export interface Session {
+  id: string
+  kind: SessionKind
+  ip?: string
+  user_agent?: string
+  created_at?: string
+  last_seen_at?: string
+  expires_at?: string | null
+  idle_deadline_at?: string | null
+  ended_at?: string | null
+  end_reason?: string
+  current: boolean
+  // Shell-only fields (kind ssh/terminal), sourced from the terminal-session registry.
+  server?: string
+  started_at?: string
+  last_activity_at?: string
+}
+
+export interface SessionListResponse {
+  sessions: Session[]
+}
+
+export interface EndedCountResponse {
+  ended: number
+  shells_closed: number
 }
 
 export interface NotificationPreference {

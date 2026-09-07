@@ -102,6 +102,24 @@ type FileContent struct {
 	MimeType  string `json:"mime_type"`
 }
 
+// Session mirrors one row from GET /api/auth/sessions
+// (hub/internal/model.Session, contracts/rest-api.md). vey status only
+// consumes the entry with Current true, reading ExpiresAt/IdleDeadlineAt
+// for its "Session expires:"/"Idle deadline:" lines
+// (specs/009-session-records/contracts/ui-cli.md).
+type Session struct {
+	ID             string  `json:"id"`
+	Kind           string  `json:"kind"`
+	ExpiresAt      *string `json:"expires_at,omitempty"`
+	IdleDeadlineAt *string `json:"idle_deadline_at,omitempty"`
+	Current        bool    `json:"current"`
+}
+
+// SessionsResponse is the 200 response from GET /api/auth/sessions.
+type SessionsResponse struct {
+	Sessions []Session `json:"sessions"`
+}
+
 // errorResponse is the hub's standard error envelope: {"error": "..."}.
 type errorResponse struct {
 	Error string `json:"error"`

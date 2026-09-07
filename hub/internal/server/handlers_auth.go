@@ -15,8 +15,9 @@ import (
 )
 
 const (
-	errFailedToHashPassword = "failed to hash password"
-	errInvalidCredentials   = "invalid credentials"
+	errFailedToHashPassword  = "failed to hash password"
+	errInvalidCredentials    = "invalid credentials"
+	errFailedToCreateSession = "failed to create session"
 )
 
 func (s *Server) handleAuthStatus(w http.ResponseWriter, r *http.Request) {
@@ -76,12 +77,17 @@ func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// The account created here is the hub's first administrator. It is marked
+	// exempt from dormancy so a hub always keeps one administrative account
+	// that inactivity can never lock its owner out of (008 FR-013); migration
+	// 022 marks the earliest existing admin for hubs that predate this.
 	user := &model.User{
-		ID:           uuid.NewString(),
-		Username:     req.Username,
-		Email:        req.Email,
-		PasswordHash: hash,
-		Role:         model.RoleAdmin,
+		ID:             uuid.NewString(),
+		Username:       req.Username,
+		Email:          req.Email,
+		PasswordHash:   hash,
+		Role:           model.RoleAdmin,
+		DormancyExempt: true,
 	}
 
 	if err := s.store.CreateUser(user); err != nil {
@@ -134,6 +140,15 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// A disabled or dormant account is refused ahead of everything else,
+	// including the lock check and the directory branch (008 FR-009, R4): the
+	// account cannot sign in at all, so no credential work is warranted and no
+	// lock state should accrue on its behalf.
+	if st := s.accountStatus(user); accountRefuses(st) {
+		s.refuseAccount(w, r, user, st)
+		return
+	}
+
 	// The lock is checked before any credential work — before the directory
 	// branch and before the password compare — so a locked account can never
 	// reveal whether the supplied password was right (spec FR-005, SC-002).
@@ -165,6 +180,15 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleUnknownUserLogin(w http.ResponseWriter, r *http.Request, req model.LoginRequest) {
 	if ldapUser, ldapErr := s.authenticateLDAPLogin(r.Context(), req.Username, req.Password); ldapErr == nil {
+		// The username matched no hub account, but the directory resolved to
+		// one — the upsert matches on the directory's stable identifier, so it
+		// can return an existing shadow account under a name this hub does not
+		// index it by. Checking here keeps that route from becoming the one way
+		// into a disabled or dormant account (008 FR-009).
+		if st := s.accountStatus(ldapUser); accountRefuses(st) {
+			s.refuseAccount(w, r, ldapUser, st)
+			return
+		}
 		s.respondAfterPrimaryLogin(w, ldapUser)
 		return
 	}
@@ -176,7 +200,13 @@ func (s *Server) handleUnknownUserLogin(w http.ResponseWriter, r *http.Request, 
 
 func (s *Server) handleLDAPUserLogin(w http.ResponseWriter, r *http.Request, req model.LoginRequest, user *model.User) {
 	// Re-checked here as well as in handleLogin: no directory is contacted on
-	// behalf of a locked account, whatever route reaches this branch (FR-005).
+	// behalf of an unusable or locked account, whatever route reaches this
+	// branch (007 FR-005, 008 FR-009). Without this the hub could be turned
+	// into a credential-stuffing proxy for accounts it has already refused.
+	if st := s.accountStatus(user); accountRefuses(st) {
+		s.refuseAccount(w, r, user, st)
+		return
+	}
 	if lockout.IsLocked(user.LockedUntil, s.now()) {
 		s.refuseLocked(w, r, user)
 		return
@@ -263,6 +293,14 @@ func (s *Server) handleLoginTOTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// An account disabled or gone dormant between the two stages is refused
+	// here too: a token minted by the password stage must not outlive the
+	// account's usability (008 FR-009).
+	if st := s.accountStatus(user); accountRefuses(st) {
+		s.refuseAccount(w, r, user, st)
+		return
+	}
+
 	// An account that locked between the two stages is refused here too, before
 	// the stored secret is decrypted or the code is evaluated (FR-005).
 	if lockout.IsLocked(user.LockedUntil, s.now()) {
@@ -290,7 +328,18 @@ func (s *Server) handleLoginTOTP(w http.ResponseWriter, r *http.Request) {
 	// Sign-in is complete: clear the failure streak and stamp the sign-in time.
 	s.recordLoginSuccess(user)
 
-	accessToken, refreshToken, err := auth.GenerateTokenPair(s.jwtSecret, user.ID, string(user.Role), user.TokenGeneration)
+	// The session record comes before the tokens: both tokens carry its id, so
+	// a sign-in that cannot record a session must not issue credentials bound
+	// to one that does not exist (009 FR-001, FR-002).
+	sess, err := s.newSession(r, user)
+	if err != nil {
+		respondError(w, http.StatusInternalServerError, errFailedToCreateSession)
+		return
+	}
+
+	accessToken, refreshToken, err := auth.GenerateSessionTokenPair(
+		s.jwtSecret, user.ID, string(user.Role), user.TokenGeneration, sess.ID,
+	)
 	if err != nil {
 		respondError(w, http.StatusInternalServerError, errFailedToGenerateTokens)
 		return
@@ -340,9 +389,28 @@ func (s *Server) handleRefresh(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// A refresh token issued before the account was disabled or went dormant
+	// must not mint a new pair. The generation bump performed by a disable
+	// would catch this one too, but dormancy bumps nothing, so the check has to
+	// stand on the account's live status (008 FR-009).
+	if err := s.accountAccessError(user); err != nil {
+		respondError(w, http.StatusUnauthorized, err.Error())
+		return
+	}
+
 	// Validate token generation matches DB (detect revoked/outdated refresh tokens)
 	if claims.TokenGeneration != user.TokenGeneration {
 		respondError(w, http.StatusUnauthorized, "token has been revoked")
+		return
+	}
+
+	// The session behind the refresh token has to be live: a refresh is a
+	// request like any other, so it is subject to the same ended/absolute/idle
+	// checks and counts as activity. A refresh token minted before this
+	// feature carries no session and is refused here, which is the one-time
+	// re-sign-in at upgrade (009 FR-002, FR-003, R10).
+	if sessionErr := s.sessionAccessError(claims); sessionErr != nil {
+		respondError(w, http.StatusUnauthorized, sessionErr.Error())
 		return
 	}
 
@@ -353,8 +421,12 @@ func (s *Server) handleRefresh(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Use user.Role from DB, not claims.Role from the old token
-	accessToken, refreshToken, err := auth.GenerateTokenPair(s.jwtSecret, user.ID, string(user.Role), newGen)
+	// Use user.Role from DB, not claims.Role from the old token. The rotation
+	// stays inside the same session and never touches its absolute expiry
+	// (009 FR-002).
+	accessToken, refreshToken, err := auth.GenerateSessionTokenPair(
+		s.jwtSecret, user.ID, string(user.Role), newGen, claims.SessionID,
+	)
 	if err != nil {
 		respondError(w, http.StatusInternalServerError, errFailedToGenerateTokens)
 		return
@@ -370,12 +442,34 @@ func (s *Server) handleRefresh(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleLogout(w http.ResponseWriter, r *http.Request) {
 	// Blacklist the access token if present
 	if tokenStr := readAccessToken(r); tokenStr != "" {
-		if claims, err := auth.ValidateToken(s.jwtSecret, tokenStr); err == nil && claims.ID != "" {
-			s.tokenBlacklist.Add(claims.ID, claims.ExpiresAt.Time)
+		if claims, err := auth.ValidateToken(s.jwtSecret, tokenStr); err == nil {
+			if claims.ID != "" {
+				s.tokenBlacklist.Add(claims.ID, claims.ExpiresAt.Time)
+			}
+			s.endSessionOnLogout(claims)
 		}
 	}
 	clearAuthCookies(w)
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// endSessionOnLogout ends the server-side session the signing-out client was
+// using, so its refresh token dies with it rather than outliving the sign-out
+// by the blacklist's access-token window (009 FR-011).
+//
+// A failure is swallowed: sign-out must succeed for the client whatever the
+// store says, and an already-ended or unknown session is the normal case when
+// a client signs out twice.
+func (s *Server) endSessionOnLogout(claims *auth.Claims) {
+	if claims.SessionID == "" {
+		return
+	}
+	userID := claims.Subject
+	if _, err := s.store.EndSession(
+		claims.SessionID, model.SessionEndLogout, &userID, s.now().UTC(),
+	); err != nil && !isSessionNotFound(err) {
+		log.Printf("warning: failed to end session %s on logout: %v", claims.SessionID, err)
+	}
 }
 
 func (s *Server) handleMe(w http.ResponseWriter, r *http.Request) {
@@ -385,6 +479,9 @@ func (s *Server) handleMe(w http.ResponseWriter, r *http.Request) {
 		respondError(w, http.StatusNotFound, errUserNotFound)
 		return
 	}
+	// Status is derived rather than stored, so it is computed at the moment of
+	// the response (008 R7).
+	user.Status = string(s.accountStatus(user))
 	respondJSON(w, http.StatusOK, user)
 }
 
@@ -550,8 +647,18 @@ func (s *Server) handleTOTPEnable(w http.ResponseWriter, r *http.Request) {
 	// stamps the sign-in time exactly like the code stage does.
 	s.recordLoginSuccess(user)
 
+	// A first sign-in completes here rather than at the code stage, so this is
+	// the other point that establishes a session (009 FR-001).
+	sess, err := s.newSession(r, user)
+	if err != nil {
+		respondError(w, http.StatusInternalServerError, errFailedToCreateSession)
+		return
+	}
+
 	// Generate full access tokens now that 2FA is enabled
-	accessToken, refreshToken, err := auth.GenerateTokenPair(s.jwtSecret, user.ID, string(user.Role), user.TokenGeneration)
+	accessToken, refreshToken, err := auth.GenerateSessionTokenPair(
+		s.jwtSecret, user.ID, string(user.Role), user.TokenGeneration, sess.ID,
+	)
 	if err != nil {
 		respondError(w, http.StatusInternalServerError, errFailedToGenerateTokens)
 		return

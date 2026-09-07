@@ -127,6 +127,7 @@ func startSSHGWHarness(t *testing.T) *sshGWHarness {
 		t.Fatalf("userca.InitHostKey: %v", err)
 	}
 
+	grpcPort, sshPort := freePortPair(t)
 	h := &sshGWHarness{
 		store:     st,
 		connMgr:   connmgr.New(),
@@ -136,8 +137,8 @@ func startSSHGWHarness(t *testing.T) *sshGWHarness {
 		hostKey:   hostKey,
 		caCert:    caCert,
 		caPin:     fmt.Sprintf("%x", sha256.Sum256(caCert.Raw)),
-		grpcAddr:  fmt.Sprintf("127.0.0.1:%d", freePort(t)),
-		sshAddr:   fmt.Sprintf("127.0.0.1:%d", freePort(t)),
+		grpcAddr:  fmt.Sprintf("127.0.0.1:%d", grpcPort),
+		sshAddr:   fmt.Sprintf("127.0.0.1:%d", sshPort),
 	}
 
 	gs := grpcserver.New(grpcserver.Config{

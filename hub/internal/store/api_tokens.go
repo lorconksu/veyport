@@ -162,19 +162,7 @@ func scanAPITokenRow(rows *sql.Rows) (*model.APIToken, error) {
 func parseAPITokenTimes(token *model.APIToken, expiresAt, lastUsedAt, revokedAt sql.NullString, createdAt, updatedAt string) {
 	token.CreatedAt, _ = time.Parse(sqliteTimeFormat, createdAt)
 	token.UpdatedAt, _ = time.Parse(sqliteTimeFormat, updatedAt)
-	if expiresAt.Valid {
-		if parsed, err := time.Parse(sqliteTimeFormat, expiresAt.String); err == nil {
-			token.ExpiresAt = &parsed
-		}
-	}
-	if lastUsedAt.Valid {
-		if parsed, err := time.Parse(sqliteTimeFormat, lastUsedAt.String); err == nil {
-			token.LastUsedAt = &parsed
-		}
-	}
-	if revokedAt.Valid {
-		if parsed, err := time.Parse(sqliteTimeFormat, revokedAt.String); err == nil {
-			token.RevokedAt = &parsed
-		}
-	}
+	token.ExpiresAt = parseSQLiteTime(expiresAt)
+	token.LastUsedAt = parseSQLiteTime(lastUsedAt)
+	token.RevokedAt = parseSQLiteTime(revokedAt)
 }

@@ -7,12 +7,15 @@ package model
 // stays inline, so this file's use of constants is inconsistent rather than a
 // deliberate convention.
 const (
-	AuditCatalogLastUpdated      = "2026-09-05T00:00:00Z"
+	AuditCatalogLastUpdated      = "2026-09-06T12:00:00Z"
 	auditCategoryUserManagement  = "User Management"
 	auditCategoryAgentLifecycle  = "Agent Lifecycle"
 	auditCategoryFileAccess      = "File Access"
 	auditCategoryAuditGovernance = "Audit Governance"
 	auditCategorySSHGateway      = "SSH Gateway"
+	// auditResourceSession is the resource type shared by the three session
+	// events below.
+	auditResourceSession = "session"
 )
 
 var AuditCatalog = []AuditCatalogEntry{
@@ -30,6 +33,18 @@ var AuditCatalog = []AuditCatalogEntry{
 	{Action: AuditUserPasswordReuseRejected, Label: "Password reuse rejected", Category: "Authentication", Outcome: AuditOutcomeFailure, ActorType: AuditActorTypeUser, ResourceType: "user"},
 	{Action: AuditUserRoleUpdated, Label: "User role updated", Category: auditCategoryUserManagement, Outcome: AuditOutcomeSuccess, ActorType: AuditActorTypeUser, ResourceType: "user"},
 	{Action: AuditUserDeleted, Label: "User deleted", Category: auditCategoryUserManagement, Outcome: AuditOutcomeSuccess, ActorType: AuditActorTypeUser, ResourceType: "user"},
+	// Account lifecycle (008): all administrator actions on another account.
+	{Action: AuditUserDisabled, Label: "Account disabled", Category: auditCategoryUserManagement, Outcome: AuditOutcomeSuccess, ActorType: AuditActorTypeUser, ResourceType: "user"},
+	{Action: AuditUserEnabled, Label: "Account enabled", Category: auditCategoryUserManagement, Outcome: AuditOutcomeSuccess, ActorType: AuditActorTypeUser, ResourceType: "user"},
+	{Action: AuditUserUnlocked, Label: "Account unlocked", Category: auditCategoryUserManagement, Outcome: AuditOutcomeSuccess, ActorType: AuditActorTypeUser, ResourceType: "user"},
+	{Action: AuditUserDormancyExemptSet, Label: "Dormancy exemption granted", Category: auditCategoryUserManagement, Outcome: AuditOutcomeSuccess, ActorType: AuditActorTypeUser, ResourceType: "user"},
+	{Action: AuditUserDormancyExemptCleared, Label: "Dormancy exemption removed", Category: auditCategoryUserManagement, Outcome: AuditOutcomeSuccess, ActorType: AuditActorTypeUser, ResourceType: "user"},
+	// Sessions (009): sign-in creates one, a revoke or sign-out ends one, and
+	// the hub itself expires one. Only the last is a system action, and it is
+	// filed as a failure because it is a refused request, not a completed one.
+	{Action: AuditSessionCreated, Label: "Session created", Category: "Authentication", Outcome: AuditOutcomeSuccess, ActorType: AuditActorTypeUser, ResourceType: auditResourceSession},
+	{Action: AuditSessionRevoked, Label: "Session revoked", Category: "Authentication", Outcome: AuditOutcomeSuccess, ActorType: AuditActorTypeUser, ResourceType: auditResourceSession},
+	{Action: AuditSessionExpired, Label: "Session expired", Category: "Authentication", Outcome: AuditOutcomeFailure, ActorType: AuditActorTypeSystem, ResourceType: auditResourceSession},
 	{Action: AuditServerCreated, Label: "Server created", Category: auditCategoryAgentLifecycle, Outcome: AuditOutcomeSuccess, ActorType: AuditActorTypeUser, ResourceType: "server"},
 	{Action: AuditServerUpdated, Label: "Server updated", Category: auditCategoryAgentLifecycle, Outcome: AuditOutcomeSuccess, ActorType: AuditActorTypeUser, ResourceType: "server"},
 	{Action: AuditServerDeleted, Label: "Server deleted", Category: auditCategoryAgentLifecycle, Outcome: AuditOutcomeSuccess, ActorType: AuditActorTypeUser, ResourceType: "server"},

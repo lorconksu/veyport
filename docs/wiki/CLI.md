@@ -4,7 +4,7 @@
 > - **What:** `vey` is a standalone command-line client for the Veyport Hub REST API — sign in, browse the fleet, read files and tail logs, export audit history, all scriptable
 > - **Who:** Operators who want fleet visibility from a terminal, and automation/scripts that need non-interactive access
 > - **Why:** Everything the web UI shows for servers, files, logs, and audit is also reachable as a scriptable command, with stable exit codes and `--json` output
-> - **Where:** Download the binary from your own Hub at `/install/cli/{os}/{arch}`
+> - **Where:** One command from your own Hub — `curl -fsSL https://<your-hub>/install/cli.sh | sh` (also under **Install CLI** on the dashboard); binaries are at `/install/cli/{os}/{arch}` for manual installs
 > - **How:** Interactive sign-in (`vey login`) for humans, or an API token via `VEYPORT_TOKEN` for scripts — both talk to the Hub over the same Bearer-authenticated REST API described in [[API Reference]]
 
 ---
@@ -15,16 +15,17 @@
 2. [Install](#install)
 3. [Authentication](#authentication)
 4. [Configuration](#configuration)
-5. [Command Reference](#command-reference)
-6. [Exit Codes](#exit-codes)
-7. [TLS](#tls)
-8. [Scripting Notes](#scripting-notes)
+5. [Session awareness](#session-awareness)
+6. [Command Reference](#command-reference)
+7. [Exit Codes](#exit-codes)
+8. [TLS](#tls)
+9. [Scripting Notes](#scripting-notes)
 
 ---
 
 ## Overview
 
-`vey` is a Go binary that talks to the same Hub REST API the web dashboard uses (`Authorization: Bearer <token>`, JSON bodies, `Cache-Control: no-store`). There is no cookie handling and no CSRF token — Bearer requests bypass CSRF the same way a CLI-created API token does.
+`vey` is a Go binary that talks to the same Hub REST API the web dashboard uses (`Authorization: Bearer <token>`, JSON bodies, `Cache-Control: no-store`). There is no cookie handling and no CSRF token — Bearer requests bypass CSRF the same way a CLI-created API token does. Every request carries `User-Agent: vey/<version>`, which is how the hub tells an interactive `vey login` session apart from a browser when it records a server-side session (see [Session awareness](#session-awareness), below).
 
 `vey` currently covers fleet visibility, remote file/log access, audit export, and — as of the SSH gateway feature — native interactive shell access via `vey ssh-cert` / `vey ssh`. There is still no REST-driven `vey terminal` command mirroring the browser's SSE-based terminal stream; use the web dashboard's terminal (see [[Server Detail]]) for that specific flow, or `vey ssh` for a real terminal from your own machine (see [[SSH Gateway]]).
 
@@ -179,6 +180,30 @@ Hub URLs are normalized (lowercased host, scheme+host+port only) and must be `ht
 
 Global flags precede the subcommand; each subcommand's own flags follow it (e.g. `vey servers list --status online`).
 
+## Session awareness
+
+As of feature 009, every completed `vey login` creates a server-side session on the hub, exactly
+like a browser sign-in - it shows up in the admin's Sessions panel and the user's own "Your
+sessions" list (see [[Settings]]), it is subject to the hub's idle and absolute session limits
+(see [[Logging In]]), and it can be ended by an administrator or by the user themselves without
+touching any other session.
+
+- **How the hub tells CLI sessions apart:** every `vey` request carries `User-Agent:
+  vey/<version>`, which the hub records as session kind `cli` (anything else is recorded as
+  `web`).
+- **`vey status`** now also reports when the current session expires and when it goes idle (see
+  below).
+- **`vey logout`** now genuinely ends the server-side session, not just the locally-stored
+  credentials - see [Command Reference](#command-reference).
+- **A session ended or timed out elsewhere** (an administrator's action, "Sign out other
+  sessions" from a browser, or the idle/absolute limit) is indistinguishable from any other
+  authentication failure to `vey`: the next command exits with the authentication-failure status
+  and the hub's message verbatim (`session expired — sign in again` or `session ended — sign in
+  again`). Run `vey login` again.
+- **After the hub is upgraded** to a release with server-side session records, a stored pre-upgrade
+  session has no server-side record and is refused the same way on first use - run `vey login`
+  once. This is a one-time event; see [[Logging In]].
+
 ## Command Reference
 
 This section transcribes the command contract in `specs/004-cli-connector/contracts/cli-commands.md`.
@@ -189,11 +214,23 @@ Interactive three-leg sign-in against the effective hub. Prompts for username (d
 
 ### `vey logout`
 
-Invalidates the session at the Hub (best effort — a dead session still clears locally) and removes stored credentials for the effective hub only. Exits 0 even if the server-side call fails (with a stderr note); exits 3 only when there was nothing to log out (no stored session, or the active credential is an API token rather than a session).
+Invalidates the session at the Hub (best effort — a dead session still clears locally) and removes stored credentials for the effective hub only. As of feature 009, this genuinely ends the server-side session record (visible in an admin's session history with reason `logout`), not just the locally-stored credentials. Exits 0 even if the server-side call fails (with a stderr note); exits 3 only when there was nothing to log out (no stored session, or the active credential is an API token rather than a session).
 
 ### `vey status`
 
-Reports the effective hub (and which source set it), the auth mode (`api token (adt_xxxx…)` / `interactive session as <user> (<role>)` / `not signed in`), hub reachability (a `GET /api/auth/me` round-trip), and which credential storage backend is in use (keyring vs. fallback file). Exits 0 if authenticated and reachable, 3 if not authenticated or the reachability check fails with an auth error, 6 if the hub is unreachable. `--json` emits `{hub, hub_source, mode, username, role, reachable, storage}`.
+Reports the effective hub (and which source set it), the auth mode (`api token (adt_xxxx…)` / `interactive session as <user> (<role>)` / `not signed in`), hub reachability (a `GET /api/auth/me` round-trip), and which credential storage backend is in use (keyring vs. fallback file). For an interactive session, it also prints the session's absolute expiry and idle deadline (feature 009):
+
+```
+Session expires: 2026-09-06T22:14:03Z
+Idle deadline: 2026-09-06T10:29:03Z
+```
+
+("none" in place of a timestamp when the corresponding limit is disabled policy-wide.) `--json`
+adds `session_expires_at` and `session_idle_deadline_at` to the existing fields. Exits 0 if
+authenticated and reachable, 3 if not authenticated or the reachability check fails with an auth
+error (including a session ended or expired since the last command - see [Session
+awareness](#session-awareness)), 6 if the hub is unreachable. `--json` emits `{hub, hub_source,
+mode, username, role, reachable, storage, session_expires_at, session_idle_deadline_at}`.
 
 ### `vey servers list [--status <s>] [--search <q>] [--limit N] [--offset N]`
 
@@ -238,7 +275,7 @@ A REST-driven `vey terminal` command mirroring the browser's SSE-based terminal 
 | `0` | Success |
 | `1` | Unexpected/generic error |
 | `2` | Usage error (bad flags/arguments, ambiguous server name, malformed API token) |
-| `3` | Authentication failure (not signed in, expired/invalid credentials, refresh exhausted, account locked) |
+| `3` | Authentication failure (not signed in, expired/invalid credentials, refresh exhausted, account locked/disabled/dormant) |
 | `4` | Permission denied (`403` with otherwise-valid auth) |
 | `5` | Not found (unknown server or path) |
 | `6` | Connectivity failure (dial/TLS/timeout, or a stream that dropped unexpectedly) |
@@ -249,6 +286,21 @@ Exit codes are stable and intended for scripting: distinguish "re-authenticate" 
 A `423` response from the Hub during `vey login` (the account is temporarily locked after too
 many failed attempts) maps to exit code `3`, with the Hub's message printed verbatim to stderr,
 e.g. `account temporarily locked — try again later`.
+
+A `403` from the Hub during `vey login` whose message is an account-state refusal (`account
+disabled — contact an administrator` or `account dormant — contact an administrator`) also maps
+to exit code `3`, message printed verbatim - these are authentication failures, not permission
+refusals, even though the Hub uses status `403` rather than `401` for them. Any other `403` keeps
+exit code `4`. If your account is disabled while `vey` already holds a session, `vey status`
+reports `Reachable: false` with exit code `3`, the same as any other revoked session - see [[API
+Reference]] for the enforcement matrix behind this.
+
+As of feature 009, a session-related `401` also maps to exit code `3`, with the hub's message
+printed verbatim to stderr: `session expired — sign in again` (idle timeout, absolute session
+limit reached, or a stored pre-upgrade session with no server-side record) or `session ended —
+sign in again` (an administrator ended it, or it was ended from a browser via "Sign out other
+sessions"). Either way, the fix is the same: run `vey login` again. See [Session
+awareness](#session-awareness).
 
 ## TLS
 

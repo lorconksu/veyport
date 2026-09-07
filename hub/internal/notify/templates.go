@@ -11,6 +11,10 @@ type emailTemplate struct {
 	body    string
 }
 
+// usernameLine is the "Username: {{username}}\n" line shared by several
+// templates below (go:S1192).
+const usernameLine = "Username: {{username}}\n"
+
 var templates = map[string]emailTemplate{
 	model.NotifyAgentOffline: {
 		subject: "Agent Offline: {{server_name}}",
@@ -32,7 +36,7 @@ var templates = map[string]emailTemplate{
 	model.NotifyLoginFailed: {
 		subject: "Failed Login Attempt",
 		body: "A failed login attempt was detected.\n\n" +
-			"Username: {{username}}\n" +
+			usernameLine +
 			"IP Address: {{ip}}\n\n" +
 			"If this was not you, please review your security settings.",
 	},
@@ -44,7 +48,7 @@ var templates = map[string]emailTemplate{
 	model.NotifyAccountLocked: {
 		subject: "Account Locked: {{username}}",
 		body: "An account has been locked after repeated failed sign-in attempts.\n\n" +
-			"Username: {{username}}\n" +
+			usernameLine +
 			"Source IP: {{ip}}\n" +
 			"Locked until: {{locked_until}}\n" +
 			"Time: {{timestamp}}\n\n" +
@@ -53,13 +57,13 @@ var templates = map[string]emailTemplate{
 	model.NotifyUserCreated: {
 		subject: "New User Created: {{username}}",
 		body: "A new user account has been created.\n\n" +
-			"Username: {{username}}\n\n" +
-			"If this action was not authorized, please investigate immediately.",
+			usernameLine +
+			"\nIf this action was not authorized, please investigate immediately.",
 	},
 	model.NotifyTOTPChanged: {
 		subject: "2FA Configuration Changed",
 		body: "Two-factor authentication configuration has been changed.\n\n" +
-			"Username: {{username}}\n" +
+			usernameLine +
 			"Detail: {{detail}}\n\n" +
 			"If you did not make this change, contact your administrator.",
 	},

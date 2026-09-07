@@ -40,6 +40,50 @@ const mockUsers = [
   { id: 'u2', username: 'viewer', email: 'viewer@test.com', role: 'viewer', totp_enabled: false, avatar: null, created_at: '2024-01-15T00:00:00Z', updated_at: '' },
 ]
 
+// Default effective hub-config: every test that mounts UsersTab now also
+// mounts AccountPolicyCard (008), which fires its own GET /settings/hub
+// query alongside the ['users'] query. Routing apiFetch by path (instead of
+// one shared mockResolvedValueOnce FIFO queue) keeps that second query from
+// consuming responses meant for /users, independent of fetch ordering.
+const defaultHubConfig = {
+  grpc_external_addr: '',
+  lockout_threshold: 5,
+  lockout_window_minutes: 15,
+  lockout_duration_minutes: 30,
+  dormant_days: 35,
+}
+
+/** Wrap a non-Error value so mockApiRoutes rejects with it verbatim (an Error instance already rejects on its own). */
+class RejectWith {
+  constructor(public value: unknown) {}
+}
+function rejectWith(value: unknown) {
+  return new RejectWith(value)
+}
+
+/**
+ * Routes apiFetch calls by path: each path gets its own FIFO queue of
+ * responses (a value resolves, an Error instance — or a rejectWith() marker
+ * for a non-Error rejection — rejects). Any path not given an explicit
+ * queue (notably /settings/hub) falls back to a sane default so
+ * AccountPolicyCard never hangs. Any call to an unlisted path beyond its
+ * queue falls back to `{}`.
+ */
+function mockApiRoutes(routes: Record<string, unknown[]>) {
+  const queues = new Map<string, unknown[]>(Object.entries(routes).map(([path, values]) => [path, [...values]]))
+  mockApiFetch.mockImplementation((path: string) => {
+    const queue = queues.get(path)
+    if (queue && queue.length > 0) {
+      const next = queue.shift()
+      if (next instanceof RejectWith) return Promise.reject(next.value)
+      if (next instanceof Error) return Promise.reject(next)
+      return Promise.resolve(next)
+    }
+    if (path === '/settings/hub') return Promise.resolve(defaultHubConfig)
+    return Promise.resolve({})
+  })
+}
+
 function renderPage(initialPath = '/settings') {
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } })
   return render(
@@ -136,7 +180,10 @@ describe('SettingsPage', () => {
   })
 
   it('shows error on password change failure', async () => {
-    mockApiFetch.mockRejectedValueOnce(new Error('Wrong current password'))
+    // Path-routed (not a bare mockRejectedValueOnce): the Profile tab's "Your
+    // sessions" card (009) fires its own GET /auth/sessions on mount, which
+    // would otherwise consume this rejection meant for PUT /auth/password.
+    mockApiRoutes({ '/auth/password': [new Error('Wrong current password')] })
     renderPage()
 
     fireEvent.change(screen.getByPlaceholderText('Current password'), { target: { value: 'WrongOld1@#$' } })
@@ -160,7 +207,7 @@ describe('SettingsPage', () => {
   })
 
   it('clicking Users tab switches to UsersTab', async () => {
-    mockApiFetch.mockResolvedValueOnce({ users: mockUsers })
+    mockApiRoutes({ '/users': [{ users: mockUsers }] })
     renderPage()
 
     fireEvent.click(screen.getByRole('button', { name: 'Users' }))
@@ -170,16 +217,19 @@ describe('SettingsPage', () => {
   })
 
   it('Users tab shows loading state', async () => {
+    // Both the users table and the Account Policy card (mounted above it,
+    // 008) show their own "Loading..." state while /users and
+    // /settings/hub are both pending.
     mockApiFetch.mockReturnValue(new Promise(() => {}))
     renderPage()
     fireEvent.click(screen.getByRole('button', { name: 'Users' }))
     await waitFor(() => {
-      expect(screen.getByText('Loading...')).toBeInTheDocument()
+      expect(screen.getAllByText('Loading...').length).toBeGreaterThan(0)
     })
   })
 
   it('Users tab shows user list', async () => {
-    mockApiFetch.mockResolvedValueOnce({ users: mockUsers })
+    mockApiRoutes({ '/users': [{ users: mockUsers }] })
     renderPage()
 
     fireEvent.click(screen.getByRole('button', { name: 'Users' }))
@@ -189,7 +239,7 @@ describe('SettingsPage', () => {
   })
 
   it('Users tab shows no users message when empty', async () => {
-    mockApiFetch.mockResolvedValueOnce({ users: [] })
+    mockApiRoutes({ '/users': [{ users: [] }] })
     renderPage()
 
     fireEvent.click(screen.getByRole('button', { name: 'Users' }))
@@ -199,7 +249,7 @@ describe('SettingsPage', () => {
   })
 
   it('Users tab shows Create User button', async () => {
-    mockApiFetch.mockResolvedValueOnce({ users: mockUsers })
+    mockApiRoutes({ '/users': [{ users: mockUsers }] })
     renderPage()
 
     fireEvent.click(screen.getByRole('button', { name: 'Users' }))
@@ -209,7 +259,7 @@ describe('SettingsPage', () => {
   })
 
   it('Create User button opens CreateUserModal', async () => {
-    mockApiFetch.mockResolvedValueOnce({ users: mockUsers })
+    mockApiRoutes({ '/users': [{ users: mockUsers }] })
     renderPage()
 
     fireEvent.click(screen.getByRole('button', { name: 'Users' }))
@@ -226,7 +276,7 @@ describe('SettingsPage', () => {
       { ...mockUsers[0] },
       { ...mockUsers[1], totp_enabled: true },
     ]
-    mockApiFetch.mockResolvedValueOnce({ users: usersWithTotp })
+    mockApiRoutes({ '/users': [{ users: usersWithTotp }] })
     renderPage()
 
     fireEvent.click(screen.getByRole('button', { name: 'Users' }))
@@ -236,7 +286,7 @@ describe('SettingsPage', () => {
   })
 
   it('shows Delete button for other users', async () => {
-    mockApiFetch.mockResolvedValueOnce({ users: mockUsers })
+    mockApiRoutes({ '/users': [{ users: mockUsers }] })
     renderPage()
 
     fireEvent.click(screen.getByRole('button', { name: 'Users' }))
@@ -246,7 +296,7 @@ describe('SettingsPage', () => {
   })
 
   it('opens delete confirmation modal when Delete clicked', async () => {
-    mockApiFetch.mockResolvedValueOnce({ users: mockUsers })
+    mockApiRoutes({ '/users': [{ users: mockUsers }] })
     renderPage()
 
     fireEvent.click(screen.getByRole('button', { name: 'Users' }))
@@ -261,7 +311,7 @@ describe('SettingsPage', () => {
   })
 
   it('delete user confirmation modal has Cancel and Delete User buttons', async () => {
-    mockApiFetch.mockResolvedValueOnce({ users: mockUsers })
+    mockApiRoutes({ '/users': [{ users: mockUsers }] })
     renderPage()
 
     fireEvent.click(screen.getByRole('button', { name: 'Users' }))
@@ -275,7 +325,7 @@ describe('SettingsPage', () => {
   })
 
   it('cancel on delete modal closes it', async () => {
-    mockApiFetch.mockResolvedValueOnce({ users: mockUsers })
+    mockApiRoutes({ '/users': [{ users: mockUsers }] })
     renderPage()
 
     fireEvent.click(screen.getByRole('button', { name: 'Users' }))
@@ -289,7 +339,7 @@ describe('SettingsPage', () => {
 
   it('opens Disable 2FA modal when button clicked', async () => {
     const usersWithTotp = [mockUsers[0], { ...mockUsers[1], totp_enabled: true }]
-    mockApiFetch.mockResolvedValueOnce({ users: usersWithTotp })
+    mockApiRoutes({ '/users': [{ users: usersWithTotp }] })
     renderPage()
 
     fireEvent.click(screen.getByRole('button', { name: 'Users' }))
@@ -339,7 +389,7 @@ describe('SettingsPage', () => {
   })
 
   it('shows users tab when URL has ?tab=users', async () => {
-    mockApiFetch.mockResolvedValueOnce({ users: mockUsers })
+    mockApiRoutes({ '/users': [{ users: mockUsers }] })
     renderPage('/settings?tab=users')
     await waitFor(() => {
       expect(screen.getByText('User Management')).toBeInTheDocument()
@@ -348,7 +398,7 @@ describe('SettingsPage', () => {
 
   it('cancels Disable 2FA modal', async () => {
     const usersWithTotp = [mockUsers[0], { ...mockUsers[1], totp_enabled: true }]
-    mockApiFetch.mockResolvedValueOnce({ users: usersWithTotp })
+    mockApiRoutes({ '/users': [{ users: usersWithTotp }] })
     renderPage()
 
     fireEvent.click(screen.getByRole('button', { name: 'Users' }))
@@ -393,10 +443,10 @@ describe('SettingsPage', () => {
   })
 
   it('confirms delete user and calls DELETE endpoint', async () => {
-    mockApiFetch
-      .mockResolvedValueOnce({ users: mockUsers }) // initial users fetch
-      .mockResolvedValueOnce({ status: 'ok' })      // delete mutation
-      .mockResolvedValueOnce({ users: [mockUsers[0]] }) // refetch after delete
+    mockApiRoutes({
+      '/users': [{ users: mockUsers }, { users: [mockUsers[0]] }], // initial fetch, then refetch after delete
+      '/users/u2': [{ status: 'ok' }], // delete mutation
+    })
     renderPage()
 
     fireEvent.click(screen.getByRole('button', { name: 'Users' }))
@@ -413,10 +463,10 @@ describe('SettingsPage', () => {
 
   it('submits Disable 2FA form with TOTP code', async () => {
     const usersWithTotp = [mockUsers[0], { ...mockUsers[1], totp_enabled: true }]
-    mockApiFetch
-      .mockResolvedValueOnce({ users: usersWithTotp }) // initial users fetch
-      .mockResolvedValueOnce({ status: 'ok' })          // disable totp mutation
-      .mockResolvedValueOnce({ users: [{ ...mockUsers[1], totp_enabled: false }] }) // refetch
+    mockApiRoutes({
+      '/users': [{ users: usersWithTotp }, { users: [{ ...mockUsers[1], totp_enabled: false }] }], // initial fetch, then refetch
+      '/auth/totp/disable': [{ status: 'ok' }], // disable totp mutation
+    })
     renderPage()
 
     fireEvent.click(screen.getByRole('button', { name: 'Users' }))
@@ -434,10 +484,10 @@ describe('SettingsPage', () => {
   })
 
   it('changes user role via select dropdown', async () => {
-    mockApiFetch
-      .mockResolvedValueOnce({ users: mockUsers }) // initial users fetch
-      .mockResolvedValueOnce({ user: { ...mockUsers[1], role: 'admin' } }) // update role
-      .mockResolvedValueOnce({ users: mockUsers }) // refetch
+    mockApiRoutes({
+      '/users': [{ users: mockUsers }, { users: mockUsers }], // initial fetch, then refetch
+      '/users/u2/role': [{ user: { ...mockUsers[1], role: 'admin' } }], // update role
+    })
     renderPage()
 
     fireEvent.click(screen.getByRole('button', { name: 'Users' }))
@@ -450,9 +500,10 @@ describe('SettingsPage', () => {
   })
 
   it('shows role update error when mutation fails', async () => {
-    mockApiFetch
-      .mockResolvedValueOnce({ users: mockUsers }) // initial users fetch
-      .mockRejectedValueOnce(new Error('Permission denied')) // update role error
+    mockApiRoutes({
+      '/users': [{ users: mockUsers }], // initial users fetch
+      '/users/u2/role': [new Error('Permission denied')], // update role error
+    })
     renderPage()
 
     fireEvent.click(screen.getByRole('button', { name: 'Users' }))
@@ -465,7 +516,9 @@ describe('SettingsPage', () => {
   })
 
   it('shows avatar mutation error when upload fails', async () => {
-    mockApiFetch.mockRejectedValueOnce(new Error('Avatar upload failed'))
+    // Path-routed: the "Your sessions" card's own GET /auth/sessions call
+    // must not consume the rejection meant for PUT /auth/avatar.
+    mockApiRoutes({ '/auth/avatar': [new Error('Avatar upload failed')] })
     mockUseAuth.mockReturnValue({
       user: { id: 'u1', username: 'admin', email: 'admin@test.com', role: 'admin', totp_enabled: true, avatar: 'data:image/png;base64,abc', created_at: '', updated_at: '' },
       login: vi.fn(),
@@ -497,9 +550,10 @@ describe('SettingsPage', () => {
   })
 
   it('shows delete user error when mutation fails', async () => {
-    mockApiFetch
-      .mockResolvedValueOnce({ users: mockUsers }) // initial users fetch
-      .mockRejectedValueOnce(new Error('Cannot delete user')) // delete mutation error
+    mockApiRoutes({
+      '/users': [{ users: mockUsers }], // initial users fetch
+      '/users/u2': [new Error('Cannot delete user')], // delete mutation error
+    })
     renderPage()
 
     fireEvent.click(screen.getByRole('button', { name: 'Users' }))
@@ -516,9 +570,10 @@ describe('SettingsPage', () => {
 
   it('shows disable 2FA error when mutation fails', async () => {
     const usersWithTotp = [mockUsers[0], { ...mockUsers[1], totp_enabled: true }]
-    mockApiFetch
-      .mockResolvedValueOnce({ users: usersWithTotp }) // initial users fetch
-      .mockRejectedValueOnce(new Error('Invalid TOTP code')) // disable totp error
+    mockApiRoutes({
+      '/users': [{ users: usersWithTotp }], // initial users fetch
+      '/auth/totp/disable': [new Error('Invalid TOTP code')], // disable totp error
+    })
     renderPage()
 
     fireEvent.click(screen.getByRole('button', { name: 'Users' }))
@@ -541,7 +596,7 @@ describe('SettingsPage', () => {
       { ...mockUsers[0] },
       { ...mockUsers[1], created_at: todayIso },
     ]
-    mockApiFetch.mockResolvedValueOnce({ users: usersToday })
+    mockApiRoutes({ '/users': [{ users: usersToday }] })
     renderPage()
 
     fireEvent.click(screen.getByRole('button', { name: 'Users' }))
@@ -556,7 +611,7 @@ describe('SettingsPage', () => {
       { ...mockUsers[0] },
       { ...mockUsers[1], created_at: yesterday },
     ]
-    mockApiFetch.mockResolvedValueOnce({ users: usersYesterday })
+    mockApiRoutes({ '/users': [{ users: usersYesterday }] })
     renderPage()
 
     fireEvent.click(screen.getByRole('button', { name: 'Users' }))
@@ -571,7 +626,7 @@ describe('SettingsPage', () => {
       { ...mockUsers[0] },
       { ...mockUsers[1], created_at: fiveDaysAgo },
     ]
-    mockApiFetch.mockResolvedValueOnce({ users: users5Days })
+    mockApiRoutes({ '/users': [{ users: users5Days }] })
     renderPage()
 
     fireEvent.click(screen.getByRole('button', { name: 'Users' }))
@@ -586,7 +641,7 @@ describe('SettingsPage', () => {
       { ...mockUsers[0] },
       { ...mockUsers[1], created_at: oldDate },
     ]
-    mockApiFetch.mockResolvedValueOnce({ users: usersOld })
+    mockApiRoutes({ '/users': [{ users: usersOld }] })
     renderPage()
 
     fireEvent.click(screen.getByRole('button', { name: 'Users' }))
@@ -660,7 +715,7 @@ describe('SettingsPage', () => {
     ]
 
     it('renders "Last login" and "Status" header cells', async () => {
-      mockApiFetch.mockResolvedValueOnce({ users: lockoutUsers })
+      mockApiRoutes({ '/users': [{ users: lockoutUsers }] })
       renderPage()
 
       fireEvent.click(screen.getByRole('button', { name: 'Users' }))
@@ -671,7 +726,7 @@ describe('SettingsPage', () => {
     })
 
     it('shows "Never" (muted) for a user with no last_login_at', async () => {
-      mockApiFetch.mockResolvedValueOnce({ users: lockoutUsers })
+      mockApiRoutes({ '/users': [{ users: lockoutUsers }] })
       renderPage()
 
       fireEvent.click(screen.getByRole('button', { name: 'Users' }))
@@ -681,7 +736,7 @@ describe('SettingsPage', () => {
     })
 
     it('shows relative last login with absolute title', async () => {
-      mockApiFetch.mockResolvedValueOnce({ users: lockoutUsers })
+      mockApiRoutes({ '/users': [{ users: lockoutUsers }] })
       renderPage()
 
       fireEvent.click(screen.getByRole('button', { name: 'Users' }))
@@ -693,7 +748,7 @@ describe('SettingsPage', () => {
     })
 
     it('shows a "Locked until HH:MM" badge for a future lock with failed-attempt title', async () => {
-      mockApiFetch.mockResolvedValueOnce({ users: lockoutUsers })
+      mockApiRoutes({ '/users': [{ users: lockoutUsers }] })
       renderPage()
 
       fireEvent.click(screen.getByRole('button', { name: 'Users' }))
@@ -704,7 +759,7 @@ describe('SettingsPage', () => {
     })
 
     it('shows "Active" for a lock whose expiry has already passed', async () => {
-      mockApiFetch.mockResolvedValueOnce({ users: lockoutUsers })
+      mockApiRoutes({ '/users': [{ users: lockoutUsers }] })
       renderPage()
 
       fireEvent.click(screen.getByRole('button', { name: 'Users' }))
@@ -716,7 +771,7 @@ describe('SettingsPage', () => {
     })
 
     it('shows "Locked (no auto-unlock)" for the far-future sentinel', async () => {
-      mockApiFetch.mockResolvedValueOnce({ users: lockoutUsers })
+      mockApiRoutes({ '/users': [{ users: lockoutUsers }] })
       renderPage()
 
       fireEvent.click(screen.getByRole('button', { name: 'Users' }))
@@ -725,15 +780,23 @@ describe('SettingsPage', () => {
       })
     })
 
-    it('never renders an Unlock button', async () => {
-      mockApiFetch.mockResolvedValueOnce({ users: lockoutUsers })
+    it('renders an Unlock button for a locked user, not for others (008 US2)', async () => {
+      mockApiRoutes({ '/users': [{ users: lockoutUsers }] })
       renderPage()
 
       fireEvent.click(screen.getByRole('button', { name: 'Users' }))
       await waitFor(() => {
         expect(screen.getByText('Locked (no auto-unlock)')).toBeInTheDocument()
       })
-      expect(screen.queryByRole('button', { name: /unlock/i })).not.toBeInTheDocument()
+
+      // Two locked rows (locked-user, sentinel-lock-user) → two Unlock buttons.
+      expect(screen.getAllByRole('button', { name: 'Unlock' })).toHaveLength(2)
+
+      const activeRow = screen.getByText('viewer').closest('tr')!
+      expect(within(activeRow).queryByRole('button', { name: 'Unlock' })).not.toBeInTheDocument()
+
+      const staleLockRow = screen.getByText('stale-lock-user').closest('tr')!
+      expect(within(staleLockRow).queryByRole('button', { name: 'Unlock' })).not.toBeInTheDocument()
     })
   })
 
@@ -753,7 +816,7 @@ describe('SettingsPage', () => {
   })
 
   it('clicking Profile tab when Users is active switches back to profile', async () => {
-    mockApiFetch.mockResolvedValueOnce({ users: mockUsers })
+    mockApiRoutes({ '/users': [{ users: mockUsers }] })
     renderPage('/settings?tab=users')
     expect(await screen.findByText('User Management')).toBeInTheDocument()
 
@@ -764,7 +827,7 @@ describe('SettingsPage', () => {
   })
 
   it('CreateUserModal onClose callback hides modal', async () => {
-    mockApiFetch.mockResolvedValueOnce({ users: mockUsers })
+    mockApiRoutes({ '/users': [{ users: mockUsers }] })
     renderPage()
 
     fireEvent.click(screen.getByRole('button', { name: 'Users' }))
@@ -785,11 +848,14 @@ describe('SettingsPage', () => {
       user: { id: 'u1', username: 'admin', email: 'admin@test.com', role: 'admin', totp_enabled: true, avatar: 'data:image/png;base64,abc', created_at: '', updated_at: '' },
       login: mockLogin,
     })
-    // Remove avatar mutation succeeds, then /auth/me returns updated user
+    // Remove avatar mutation succeeds, then /auth/me returns updated user.
+    // Path-routed: the "Your sessions" card's own GET /auth/sessions call
+    // must not consume either queued response.
     const updatedUser = { id: 'u1', username: 'admin', email: 'admin@test.com', role: 'admin', totp_enabled: true, avatar: null, created_at: '', updated_at: '' }
-    mockApiFetch
-      .mockResolvedValueOnce({ status: 'ok' }) // PUT /auth/avatar
-      .mockResolvedValueOnce(updatedUser)       // GET /auth/me
+    mockApiRoutes({
+      '/auth/avatar': [{ status: 'ok' }],
+      '/auth/me': [updatedUser],
+    })
     renderPage()
     fireEvent.click(screen.getByText('Remove'))
     await waitFor(() => {
@@ -810,9 +876,10 @@ describe('SettingsPage', () => {
       login: mockLogin,
     })
     const updatedUser = { id: 'u1', username: 'admin', email: 'admin@test.com', role: 'admin', totp_enabled: true, avatar: null, created_at: '', updated_at: '' }
-    mockApiFetch
-      .mockResolvedValueOnce({ status: 'ok' }) // PUT /auth/avatar
-      .mockResolvedValueOnce(updatedUser)       // GET /auth/me
+    mockApiRoutes({
+      '/auth/avatar': [{ status: 'ok' }],
+      '/auth/me': [updatedUser],
+    })
     renderPage()
     fireEvent.click(screen.getByText('Remove'))
     await waitFor(() => {
@@ -861,8 +928,9 @@ describe('SettingsPage', () => {
     const file = new File(['data'], 'test.txt', { type: 'text/plain' })
     Object.defineProperty(file, 'size', { value: 100 })
     fireEvent.change(fileInput, { target: { files: [file] } })
-    // No upload should occur
-    expect(mockApiFetch).not.toHaveBeenCalled()
+    // No upload should occur (the "Your sessions" card's own GET
+    // /auth/sessions call on mount is expected and unrelated).
+    expect(mockApiFetch).not.toHaveBeenCalledWith('/auth/avatar', expect.anything())
   })
 
   it('handleFileUpload alerts on large file (> 500KB)', () => {
@@ -885,15 +953,17 @@ describe('SettingsPage', () => {
     // Button is disabled due to mismatch — but simulate direct form submit
     const form = screen.getByPlaceholderText('Current password').closest('form')!
     fireEvent.submit(form)
-    // mutation.reset() is called — no API call should be made
-    expect(mockApiFetch).not.toHaveBeenCalled()
+    // mutation.reset() is called — no password-change API call should be
+    // made (the "Your sessions" card's own GET /auth/sessions call on mount
+    // is expected and unrelated).
+    expect(mockApiFetch).not.toHaveBeenCalledWith('/auth/password', expect.anything())
   })
 
   it('shows own role as static Admin text for admin user (line 388 Admin branch)', async () => {
     // Set current user to admin (u1) — users list includes u1 as current user
     // When viewing own row, it shows static text instead of select dropdown
     // The admin's own row shows 'Admin'
-    mockApiFetch.mockResolvedValueOnce({ users: mockUsers })
+    mockApiRoutes({ '/users': [{ users: mockUsers }] })
     renderPage()
 
     fireEvent.click(screen.getByRole('button', { name: 'Users' }))
@@ -906,9 +976,10 @@ describe('SettingsPage', () => {
 
   it('shows fallback error message for non-Error disable 2FA failure (line 452)', async () => {
     const usersWithTotp = [mockUsers[0], { ...mockUsers[1], totp_enabled: true }]
-    mockApiFetch
-      .mockResolvedValueOnce({ users: usersWithTotp })
-      .mockRejectedValueOnce('non-error-string') // non-Error rejection
+    mockApiRoutes({
+      '/users': [{ users: usersWithTotp }],
+      '/auth/totp/disable': [rejectWith('non-error-string')], // non-Error rejection
+    })
     renderPage()
 
     fireEvent.click(screen.getByRole('button', { name: 'Users' }))
@@ -925,9 +996,10 @@ describe('SettingsPage', () => {
   })
 
   it('shows fallback error message for non-Error delete user failure (line 499)', async () => {
-    mockApiFetch
-      .mockResolvedValueOnce({ users: mockUsers })
-      .mockRejectedValueOnce('non-error-string') // non-Error rejection
+    mockApiRoutes({
+      '/users': [{ users: mockUsers }],
+      '/users/u2': [rejectWith('non-error-string')], // non-Error rejection
+    })
     renderPage()
 
     fireEvent.click(screen.getByRole('button', { name: 'Users' }))
@@ -993,6 +1065,590 @@ describe('SettingsPage', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Alerts' }))
     await waitFor(() => {
       expect(screen.getByText('Email Notification Preferences')).toBeInTheDocument()
+    })
+  })
+
+  describe('UsersTab account lifecycle (008)', () => {
+    const NOW = new Date('2026-09-06T12:00:00Z')
+
+    beforeEach(() => {
+      vi.useFakeTimers({ toFake: ['Date'] })
+      vi.setSystemTime(NOW)
+    })
+
+    afterEach(() => {
+      vi.useRealTimers()
+    })
+
+    // u1 (admin) is the current user (see mockUseAuth default) — its own
+    // row never shows lifecycle actions, only the marker.
+    const lifecycleUsers: User[] = [
+      { ...mockUsers[0], status: 'active' },
+      {
+        id: 'u2', username: 'active-viewer', email: 'av@test.com', role: 'viewer',
+        totp_enabled: false, avatar: null, created_at: '2024-01-15T00:00:00Z', updated_at: '',
+        status: 'active',
+      },
+      {
+        id: 'u3', username: 'disabled-user', email: 'disabled@test.com', role: 'viewer',
+        totp_enabled: false, avatar: null, created_at: '2024-01-15T00:00:00Z', updated_at: '',
+        status: 'disabled', disabled_at: '2026-09-01T00:00:00Z', disabled_by: 'u1',
+      },
+      {
+        id: 'u4', username: 'dormant-user', email: 'dormant@test.com', role: 'viewer',
+        totp_enabled: false, avatar: null, created_at: '2024-01-15T00:00:00Z', updated_at: '',
+        status: 'dormant', last_activity_at: '2026-07-01T00:00:00Z',
+      },
+      {
+        id: 'u5', username: 'locked-user', email: 'locked@test.com', role: 'viewer',
+        totp_enabled: false, avatar: null, created_at: '2024-01-15T00:00:00Z', updated_at: '',
+        status: 'locked', locked_until: '2026-09-06T12:10:00Z', failed_login_count: 3,
+      },
+      {
+        id: 'u6', username: 'exempt-admin', email: 'exempt@test.com', role: 'admin',
+        totp_enabled: true, avatar: null, created_at: '2024-01-15T00:00:00Z', updated_at: '',
+        status: 'active', dormancy_exempt: true,
+      },
+      {
+        id: 'u7', username: 'plain-admin', email: 'plain@test.com', role: 'admin',
+        totp_enabled: true, avatar: null, created_at: '2024-01-15T00:00:00Z', updated_at: '',
+        status: 'active', dormancy_exempt: false,
+      },
+    ]
+
+    /** The confirm modal's own card (heading + Cancel/confirm buttons), scoped away from the row's own action button of the same name. */
+    function getModal(headingText: string): HTMLElement {
+      return screen.getByRole('heading', { name: headingText }).closest('div') as HTMLElement
+    }
+
+    it('renders a status badge per account state', async () => {
+      mockApiRoutes({ '/users': [{ users: lifecycleUsers }] })
+      renderPage()
+      fireEvent.click(screen.getByRole('button', { name: 'Users' }))
+      await screen.findByText('disabled-user')
+
+      const disabledRow = screen.getByText('disabled-user').closest('tr')!
+      expect(within(disabledRow).getByText('Disabled')).toBeInTheDocument()
+      expect(disabledRow.className).toContain('opacity-60')
+
+      const dormantRow = screen.getByText('dormant-user').closest('tr')!
+      expect(within(dormantRow).getByText('Dormant')).toBeInTheDocument()
+
+      const lockedRow = screen.getByText('locked-user').closest('tr')!
+      expect(within(lockedRow).getByText(/^Locked until \d{2}:\d{2}$/)).toBeInTheDocument()
+
+      const activeRow = screen.getByText('active-viewer').closest('tr')!
+      expect(within(activeRow).getByText('Active')).toBeInTheDocument()
+    })
+
+    it('shows a "Never dormant" marker only for exempt admins', async () => {
+      mockApiRoutes({ '/users': [{ users: lifecycleUsers }] })
+      renderPage()
+      fireEvent.click(screen.getByRole('button', { name: 'Users' }))
+      await screen.findByText('exempt-admin')
+
+      const exemptRow = screen.getByText('exempt-admin').closest('tr')!
+      expect(within(exemptRow).getByText('Never dormant')).toBeInTheDocument()
+
+      const plainAdminRow = screen.getByText('plain-admin').closest('tr')!
+      expect(within(plainAdminRow).queryByText('Never dormant')).not.toBeInTheDocument()
+    })
+
+    it('shows Disable for active/locked/dormant rows, Enable for disabled, and never on the current user\'s own row', async () => {
+      mockApiRoutes({ '/users': [{ users: lifecycleUsers }] })
+      renderPage()
+      fireEvent.click(screen.getByRole('button', { name: 'Users' }))
+      await screen.findByText('active-viewer')
+
+      for (const username of ['active-viewer', 'locked-user', 'dormant-user']) {
+        const row = screen.getByText(username).closest('tr')!
+        expect(within(row).getByRole('button', { name: 'Disable' })).toBeInTheDocument()
+        expect(within(row).queryByRole('button', { name: 'Enable' })).not.toBeInTheDocument()
+      }
+
+      const disabledRow = screen.getByText('disabled-user').closest('tr')!
+      expect(within(disabledRow).queryByRole('button', { name: 'Disable' })).not.toBeInTheDocument()
+      expect(within(disabledRow).getByRole('button', { name: 'Enable' })).toBeInTheDocument()
+
+      const selfRow = screen.getByText('admin').closest('tr')!
+      expect(within(selfRow).queryByRole('button', { name: 'Disable' })).not.toBeInTheDocument()
+      expect(within(selfRow).queryByRole('button', { name: 'Enable' })).not.toBeInTheDocument()
+    })
+
+    it('shows Unlock only for the locked row', async () => {
+      mockApiRoutes({ '/users': [{ users: lifecycleUsers }] })
+      renderPage()
+      fireEvent.click(screen.getByRole('button', { name: 'Users' }))
+      await screen.findByText('locked-user')
+
+      const lockedRow = screen.getByText('locked-user').closest('tr')!
+      expect(within(lockedRow).getByRole('button', { name: 'Unlock' })).toBeInTheDocument()
+
+      for (const username of ['active-viewer', 'disabled-user', 'dormant-user']) {
+        const row = screen.getByText(username).closest('tr')!
+        expect(within(row).queryByRole('button', { name: 'Unlock' })).not.toBeInTheDocument()
+      }
+    })
+
+    it('shows Exempt/Remove exemption only for admin rows, and never on the current user\'s own row', async () => {
+      mockApiRoutes({ '/users': [{ users: lifecycleUsers }] })
+      renderPage()
+      fireEvent.click(screen.getByRole('button', { name: 'Users' }))
+      await screen.findByText('plain-admin')
+
+      const plainAdminRow = screen.getByText('plain-admin').closest('tr')!
+      expect(within(plainAdminRow).getByRole('button', { name: 'Exempt from dormancy' })).toBeInTheDocument()
+
+      const exemptRow = screen.getByText('exempt-admin').closest('tr')!
+      expect(within(exemptRow).getByRole('button', { name: 'Remove exemption' })).toBeInTheDocument()
+
+      const viewerRow = screen.getByText('active-viewer').closest('tr')!
+      expect(within(viewerRow).queryByRole('button', { name: 'Exempt from dormancy' })).not.toBeInTheDocument()
+      expect(within(viewerRow).queryByRole('button', { name: 'Remove exemption' })).not.toBeInTheDocument()
+
+      const selfRow = screen.getByText('admin').closest('tr')!
+      expect(within(selfRow).queryByRole('button', { name: 'Exempt from dormancy' })).not.toBeInTheDocument()
+      expect(within(selfRow).queryByRole('button', { name: 'Remove exemption' })).not.toBeInTheDocument()
+    })
+
+    it('clicking Disable opens a confirmation modal with the contract copy', async () => {
+      mockApiRoutes({ '/users': [{ users: lifecycleUsers }] })
+      renderPage()
+      fireEvent.click(screen.getByRole('button', { name: 'Users' }))
+      const row = (await screen.findByText('active-viewer')).closest('tr')!
+
+      fireEvent.click(within(row).getByRole('button', { name: 'Disable' }))
+      await waitFor(() => {
+        expect(screen.getByText(
+          'Disable active-viewer? Their sessions end on their next request and all their API tokens are revoked. You can enable the account again later.',
+        )).toBeInTheDocument()
+      })
+    })
+
+    it.each([
+      {
+        buttonName: 'Enable',
+        username: 'disabled-user',
+        contractCopy: 'Enable disabled-user? Any lock and failure count are cleared.',
+      },
+      {
+        buttonName: 'Unlock',
+        username: 'locked-user',
+        contractCopy: 'Unlock locked-user? The lock and failure count are cleared.',
+      },
+      {
+        buttonName: 'Remove exemption',
+        username: 'exempt-admin',
+        contractCopy: 'Remove the dormancy exemption from exempt-admin?',
+      },
+    ])('clicking $buttonName opens a confirmation modal with the contract copy', async ({ buttonName, username, contractCopy }) => {
+      mockApiRoutes({ '/users': [{ users: lifecycleUsers }] })
+      renderPage()
+      fireEvent.click(screen.getByRole('button', { name: 'Users' }))
+      const row = (await screen.findByText(username)).closest('tr')!
+
+      fireEvent.click(within(row).getByRole('button', { name: buttonName }))
+      await waitFor(() => {
+        expect(screen.getByText(contractCopy)).toBeInTheDocument()
+      })
+    })
+
+    it('clicking Exempt from dormancy opens a confirmation modal with the contract copy', async () => {
+      mockApiRoutes({ '/users': [{ users: lifecycleUsers }] })
+      renderPage()
+      fireEvent.click(screen.getByRole('button', { name: 'Users' }))
+      const row = (await screen.findByText('plain-admin')).closest('tr')!
+
+      fireEvent.click(within(row).getByRole('button', { name: 'Exempt from dormancy' }))
+      await waitFor(() => {
+        expect(screen.getByText(
+          'Mark plain-admin as never dormant? Use this for the recovery administrator.',
+        )).toBeInTheDocument()
+      })
+    })
+
+    it('confirming Disable issues PUT /users/{id}/status {disabled:true} and invalidates the list', async () => {
+      mockApiRoutes({
+        '/users': [{ users: lifecycleUsers }, { users: lifecycleUsers }],
+        '/users/u2/status': [{ user: { ...lifecycleUsers[1], status: 'disabled' } }],
+      })
+      renderPage()
+      fireEvent.click(screen.getByRole('button', { name: 'Users' }))
+      const row = (await screen.findByText('active-viewer')).closest('tr')!
+      fireEvent.click(within(row).getByRole('button', { name: 'Disable' }))
+      await screen.findByRole('heading', { name: 'Disable User' })
+
+      fireEvent.click(within(getModal('Disable User')).getByRole('button', { name: 'Disable' }))
+
+      await waitFor(() => {
+        expect(mockApiFetch).toHaveBeenCalledWith('/users/u2/status', {
+          method: 'PUT',
+          body: JSON.stringify({ disabled: true }),
+        })
+      })
+      await waitFor(() => {
+        expect(screen.queryByRole('heading', { name: 'Disable User' })).not.toBeInTheDocument()
+      })
+    })
+
+    it('confirming Enable issues PUT /users/{id}/status {disabled:false}', async () => {
+      mockApiRoutes({
+        '/users': [{ users: lifecycleUsers }, { users: lifecycleUsers }],
+        '/users/u3/status': [{ user: { ...lifecycleUsers[2], status: 'active' } }],
+      })
+      renderPage()
+      fireEvent.click(screen.getByRole('button', { name: 'Users' }))
+      const row = (await screen.findByText('disabled-user')).closest('tr')!
+      fireEvent.click(within(row).getByRole('button', { name: 'Enable' }))
+      await screen.findByRole('heading', { name: 'Enable User' })
+
+      fireEvent.click(within(getModal('Enable User')).getByRole('button', { name: 'Enable' }))
+
+      await waitFor(() => {
+        expect(mockApiFetch).toHaveBeenCalledWith('/users/u3/status', {
+          method: 'PUT',
+          body: JSON.stringify({ disabled: false }),
+        })
+      })
+    })
+
+    it('confirming Unlock issues POST /users/{id}/unlock', async () => {
+      mockApiRoutes({
+        '/users': [{ users: lifecycleUsers }, { users: lifecycleUsers }],
+        '/users/u5/unlock': [{ user: { ...lifecycleUsers[4], status: 'active' } }],
+      })
+      renderPage()
+      fireEvent.click(screen.getByRole('button', { name: 'Users' }))
+      const row = (await screen.findByText('locked-user')).closest('tr')!
+      fireEvent.click(within(row).getByRole('button', { name: 'Unlock' }))
+      await screen.findByRole('heading', { name: 'Unlock User' })
+
+      fireEvent.click(within(getModal('Unlock User')).getByRole('button', { name: 'Unlock' }))
+
+      await waitFor(() => {
+        expect(mockApiFetch).toHaveBeenCalledWith('/users/u5/unlock', { method: 'POST' })
+      })
+    })
+
+    it('confirming Exempt from dormancy issues PUT /users/{id}/dormancy-exemption {exempt:true}', async () => {
+      mockApiRoutes({
+        '/users': [{ users: lifecycleUsers }, { users: lifecycleUsers }],
+        '/users/u7/dormancy-exemption': [{ user: { ...lifecycleUsers[6], dormancy_exempt: true } }],
+      })
+      renderPage()
+      fireEvent.click(screen.getByRole('button', { name: 'Users' }))
+      const row = (await screen.findByText('plain-admin')).closest('tr')!
+      fireEvent.click(within(row).getByRole('button', { name: 'Exempt from dormancy' }))
+      await screen.findByRole('heading', { name: 'Dormancy Exemption' })
+
+      fireEvent.click(within(getModal('Dormancy Exemption')).getByRole('button', { name: 'Exempt' }))
+
+      await waitFor(() => {
+        expect(mockApiFetch).toHaveBeenCalledWith('/users/u7/dormancy-exemption', {
+          method: 'PUT',
+          body: JSON.stringify({ exempt: true }),
+        })
+      })
+    })
+
+    it('confirming Remove exemption issues PUT /users/{id}/dormancy-exemption {exempt:false}', async () => {
+      mockApiRoutes({
+        '/users': [{ users: lifecycleUsers }, { users: lifecycleUsers }],
+        '/users/u6/dormancy-exemption': [{ user: { ...lifecycleUsers[5], dormancy_exempt: false } }],
+      })
+      renderPage()
+      fireEvent.click(screen.getByRole('button', { name: 'Users' }))
+      const row = (await screen.findByText('exempt-admin')).closest('tr')!
+      fireEvent.click(within(row).getByRole('button', { name: 'Remove exemption' }))
+      await screen.findByRole('heading', { name: 'Dormancy Exemption' })
+
+      fireEvent.click(within(getModal('Dormancy Exemption')).getByRole('button', { name: 'Remove exemption' }))
+
+      await waitFor(() => {
+        expect(mockApiFetch).toHaveBeenCalledWith('/users/u6/dormancy-exemption', {
+          method: 'PUT',
+          body: JSON.stringify({ exempt: false }),
+        })
+      })
+    })
+
+    it('shows the API error verbatim in the error banner when Disable is rejected (e.g. self-disable / last admin)', async () => {
+      mockApiRoutes({
+        '/users': [{ users: lifecycleUsers }],
+        '/users/u2/status': [new Error('cannot disable the last enabled administrator')],
+      })
+      renderPage()
+      fireEvent.click(screen.getByRole('button', { name: 'Users' }))
+      const row = (await screen.findByText('active-viewer')).closest('tr')!
+      fireEvent.click(within(row).getByRole('button', { name: 'Disable' }))
+      await screen.findByRole('heading', { name: 'Disable User' })
+
+      fireEvent.click(within(getModal('Disable User')).getByRole('button', { name: 'Disable' }))
+
+      await waitFor(() => {
+        expect(screen.getByText('cannot disable the last enabled administrator')).toBeInTheDocument()
+      })
+      // The modal closes; the error surfaces in the page's error banner instead.
+      expect(screen.queryByRole('heading', { name: 'Disable User' })).not.toBeInTheDocument()
+    })
+
+    it('shows the API error verbatim when a non-admin exemption request is rejected', async () => {
+      // A viewer row never renders the Exempt action, so this exercises the
+      // banner rendering path directly via the same mutation/banner wiring
+      // used for admin rows (the 400 case is enforced server-side; the UI
+      // banner just needs to render whatever message the API returns).
+      mockApiRoutes({
+        '/users': [{ users: lifecycleUsers }],
+        '/users/u7/dormancy-exemption': [new Error('dormancy exemption applies to administrator accounts only')],
+      })
+      renderPage()
+      fireEvent.click(screen.getByRole('button', { name: 'Users' }))
+      const row = (await screen.findByText('plain-admin')).closest('tr')!
+      fireEvent.click(within(row).getByRole('button', { name: 'Exempt from dormancy' }))
+      await screen.findByRole('heading', { name: 'Dormancy Exemption' })
+
+      fireEvent.click(within(getModal('Dormancy Exemption')).getByRole('button', { name: 'Exempt' }))
+
+      await waitFor(() => {
+        expect(screen.getByText('dormancy exemption applies to administrator accounts only')).toBeInTheDocument()
+      })
+    })
+  })
+
+  describe('Sessions (009) — Users tab', () => {
+    /** Scopes to a confirm dialog's own card by its heading, same pattern as the lifecycle describe above. */
+    function getModal(headingText: string): HTMLElement {
+      return screen.getByRole('heading', { name: headingText }).closest('div') as HTMLElement
+    }
+
+    it('shows a Sessions action on every row, including the viewer\'s own', async () => {
+      mockApiRoutes({ '/users': [{ users: mockUsers }] })
+      renderPage()
+      fireEvent.click(screen.getByRole('button', { name: 'Users' }))
+      await screen.findByText('User Management')
+
+      const buttons = await screen.findAllByRole('button', { name: 'Sessions' })
+      expect(buttons).toHaveLength(mockUsers.length)
+    })
+
+    it('opens "Sessions — <username>" and lists that user\'s sessions', async () => {
+      mockApiRoutes({
+        '/users': [{ users: mockUsers }],
+        '/users/u2/sessions': [{
+          sessions: [
+            { id: 's1', kind: 'web', ip: '10.0.0.5', created_at: '2026-09-01T00:00:00Z', last_seen_at: '2026-09-05T00:00:00Z', current: false },
+          ],
+        }],
+      })
+      renderPage()
+      fireEvent.click(screen.getByRole('button', { name: 'Users' }))
+      const row = (await screen.findByText('viewer')).closest('tr')!
+      fireEvent.click(within(row).getByRole('button', { name: 'Sessions' }))
+
+      await screen.findByRole('heading', { name: 'Sessions — viewer' })
+      expect(await screen.findByText('10.0.0.5')).toBeInTheDocument()
+      expect(screen.getByText('Web')).toBeInTheDocument()
+    })
+
+    it('shows "No active sessions." when the user has none', async () => {
+      mockApiRoutes({
+        '/users': [{ users: mockUsers }],
+        '/users/u2/sessions': [{ sessions: [] }],
+      })
+      renderPage()
+      fireEvent.click(screen.getByRole('button', { name: 'Users' }))
+      const row = (await screen.findByText('viewer')).closest('tr')!
+      fireEvent.click(within(row).getByRole('button', { name: 'Sessions' }))
+
+      await screen.findByRole('heading', { name: 'Sessions — viewer' })
+      expect(await screen.findByText('No active sessions.')).toBeInTheDocument()
+    })
+
+    it('Log out row action confirms and issues DELETE /users/{id}/sessions/{sid}', async () => {
+      mockApiRoutes({
+        '/users': [{ users: mockUsers }],
+        '/users/u2/sessions': [
+          { sessions: [{ id: 's1', kind: 'web', ip: '10.0.0.5', created_at: '2026-09-01T00:00:00Z', last_seen_at: '2026-09-05T00:00:00Z', current: false }] },
+          { sessions: [] }, // refetch after the invalidate
+        ],
+        '/users/u2/sessions/s1': [{ status: 'ended' }],
+      })
+      renderPage()
+      fireEvent.click(screen.getByRole('button', { name: 'Users' }))
+      const row = (await screen.findByText('viewer')).closest('tr')!
+      fireEvent.click(within(row).getByRole('button', { name: 'Sessions' }))
+      await screen.findByRole('heading', { name: 'Sessions — viewer' })
+
+      fireEvent.click(await screen.findByRole('button', { name: 'Log out' }))
+      await screen.findByRole('heading', { name: 'Log out session' })
+      fireEvent.click(within(getModal('Log out session')).getByRole('button', { name: 'Log out' }))
+
+      await waitFor(() => {
+        expect(mockApiFetch).toHaveBeenCalledWith('/users/u2/sessions/s1', expect.objectContaining({ method: 'DELETE' }))
+      })
+    })
+
+    it('Terminate on a shell row confirms and issues DELETE /users/{id}/sessions/{shell-id}', async () => {
+      mockApiRoutes({
+        '/users': [{ users: mockUsers }],
+        '/users/u2/sessions': [
+          { sessions: [{ id: 'shell:srv1:sess1', kind: 'ssh', server: 'web-01', started_at: '2026-09-01T00:00:00Z', last_activity_at: '2026-09-05T00:00:00Z', current: false }] },
+          { sessions: [] },
+        ],
+        '/users/u2/sessions/shell:srv1:sess1': [{ status: 'ended' }],
+      })
+      renderPage()
+      fireEvent.click(screen.getByRole('button', { name: 'Users' }))
+      const row = (await screen.findByText('viewer')).closest('tr')!
+      fireEvent.click(within(row).getByRole('button', { name: 'Sessions' }))
+      await screen.findByRole('heading', { name: 'Sessions — viewer' })
+
+      expect(await screen.findByText('SSH shell')).toBeInTheDocument()
+      expect(screen.getByText('web-01')).toBeInTheDocument()
+
+      fireEvent.click(screen.getByRole('button', { name: 'Terminate' }))
+      await screen.findByRole('heading', { name: 'Terminate shell' })
+      fireEvent.click(within(getModal('Terminate shell')).getByRole('button', { name: 'Terminate' }))
+
+      await waitFor(() => {
+        expect(mockApiFetch).toHaveBeenCalledWith('/users/u2/sessions/shell:srv1:sess1', expect.objectContaining({ method: 'DELETE' }))
+      })
+    })
+
+    it('Log out everywhere confirms with the contract copy and issues DELETE /users/{id}/sessions', async () => {
+      mockApiRoutes({
+        '/users': [{ users: mockUsers }],
+        '/users/u2/sessions': [
+          { sessions: [{ id: 's1', kind: 'cli', ip: '10.0.0.9', created_at: '2026-09-01T00:00:00Z', last_seen_at: '2026-09-05T00:00:00Z', current: false }] },
+          { sessions: [] },
+        ],
+      })
+      renderPage()
+      fireEvent.click(screen.getByRole('button', { name: 'Users' }))
+      const row = (await screen.findByText('viewer')).closest('tr')!
+      fireEvent.click(within(row).getByRole('button', { name: 'Sessions' }))
+      await screen.findByRole('heading', { name: 'Sessions — viewer' })
+
+      fireEvent.click(await screen.findByRole('button', { name: 'Log out everywhere' }))
+      await screen.findByRole('heading', { name: 'Log out everywhere' })
+      expect(screen.getByText(
+        'Log out viewer everywhere? All web and CLI sessions end now and any open SSH shells are closed.',
+      )).toBeInTheDocument()
+
+      fireEvent.click(within(getModal('Log out everywhere')).getByRole('button', { name: 'Log out everywhere' }))
+
+      await waitFor(() => {
+        expect(mockApiFetch).toHaveBeenCalledWith('/users/u2/sessions', expect.objectContaining({ method: 'DELETE' }))
+      })
+    })
+
+    it('closes the modal via the Close button', async () => {
+      mockApiRoutes({
+        '/users': [{ users: mockUsers }],
+        '/users/u2/sessions': [{ sessions: [] }],
+      })
+      renderPage()
+      fireEvent.click(screen.getByRole('button', { name: 'Users' }))
+      const row = (await screen.findByText('viewer')).closest('tr')!
+      fireEvent.click(within(row).getByRole('button', { name: 'Sessions' }))
+      await screen.findByRole('heading', { name: 'Sessions — viewer' })
+
+      fireEvent.click(screen.getByRole('button', { name: 'Close' }))
+      await waitFor(() => {
+        expect(screen.queryByRole('heading', { name: 'Sessions — viewer' })).not.toBeInTheDocument()
+      })
+    })
+  })
+
+  describe('Sessions (009) — Profile tab "Your sessions"', () => {
+    function getModal(headingText: string): HTMLElement {
+      return screen.getByRole('heading', { name: headingText }).closest('div') as HTMLElement
+    }
+
+    it('shows a loading state then the only-session empty text when just the current session exists', async () => {
+      mockApiRoutes({
+        '/auth/sessions': [{ sessions: [{ id: 'cur', kind: 'web', ip: '10.0.0.1', current: true }] }],
+      })
+      renderPage()
+      expect(await screen.findByText('Your sessions')).toBeInTheDocument()
+      expect(await screen.findByText('This is your only active session.')).toBeInTheDocument()
+    })
+
+    it('lists other sessions with a This session tag and a per-row Sign out, and confirms "Sign out other sessions"', async () => {
+      mockApiRoutes({
+        '/auth/sessions': [
+          {
+            sessions: [
+              { id: 'cur', kind: 'web', ip: '10.0.0.1', current: true },
+              { id: 'other', kind: 'cli', ip: '10.0.0.2', current: false },
+            ],
+          },
+          { sessions: [{ id: 'cur', kind: 'web', ip: '10.0.0.1', current: true }] }, // refetch after sign-out-others
+        ],
+        '/auth/sessions/sign-out-others': [{ ended: 1, shells_closed: 0 }],
+      })
+      renderPage()
+      expect(await screen.findByText('This session')).toBeInTheDocument()
+      expect(screen.getByRole('button', { name: 'Sign out' })).toBeInTheDocument()
+
+      fireEvent.click(screen.getByRole('button', { name: 'Sign out other sessions' }))
+      await screen.findByRole('heading', { name: 'Sign out other sessions' })
+      fireEvent.click(within(getModal('Sign out other sessions')).getByRole('button', { name: 'Sign out' }))
+
+      await waitFor(() => {
+        expect(mockApiFetch).toHaveBeenCalledWith('/auth/sessions/sign-out-others', expect.objectContaining({ method: 'POST' }))
+      })
+    })
+
+    it('per-row Sign out issues DELETE /auth/sessions/{id} directly (no confirmation)', async () => {
+      mockApiRoutes({
+        '/auth/sessions': [
+          {
+            sessions: [
+              { id: 'cur', kind: 'web', ip: '10.0.0.1', current: true },
+              { id: 'other', kind: 'cli', ip: '10.0.0.2', current: false },
+            ],
+          },
+        ],
+        '/auth/sessions/other': [{ status: 'ended' }],
+      })
+      renderPage()
+      fireEvent.click(await screen.findByRole('button', { name: 'Sign out' }))
+
+      await waitFor(() => {
+        expect(mockApiFetch).toHaveBeenCalledWith('/auth/sessions/other', expect.objectContaining({ method: 'DELETE' }))
+      })
+    })
+
+    it.each([
+      { description: 'the Error message when ending a session rejects with an Error', rejection: new Error('session already gone'), text: 'session already gone' },
+      { description: 'the fallback text when ending a session rejects with a non-Error', rejection: rejectWith('boom'), text: 'Failed to end session' },
+    ])('shows $description', async ({ rejection, text }) => {
+      mockApiRoutes({
+        '/auth/sessions': [
+          {
+            sessions: [
+              { id: 'cur', kind: 'web', ip: '10.0.0.1', current: true },
+              { id: 'other', kind: 'cli', ip: '10.0.0.2', current: false },
+            ],
+          },
+        ],
+        '/auth/sessions/other': [rejection],
+      })
+      renderPage()
+      fireEvent.click(await screen.findByRole('button', { name: 'Sign out' }))
+
+      expect(await screen.findByText(text)).toBeInTheDocument()
+    })
+
+    it('shows an error banner when the sessions list fails to load', async () => {
+      mockApiRoutes({
+        '/auth/sessions': [new Error('failed to fetch sessions')],
+      })
+      renderPage()
+      await waitFor(() => {
+        expect(screen.getByText('Failed to load sessions.')).toBeInTheDocument()
+      })
     })
   })
 })
