@@ -53,6 +53,20 @@ type handshakeResult struct {
 	requireClientCert bool
 }
 
+// registerRequest bundles handleRegister's inputs (go:S107 — too many
+// parameters otherwise).
+type registerRequest struct {
+	rawToken            string
+	hostname            string
+	ip                  string
+	os                  string
+	agentVersion        string
+	csr                 []byte
+	nodePubkey          []byte
+	enrollFingerprint   string
+	nodeTransportPubkey []byte
+}
+
 // extractServerIDFromCert extracts the server ID from a client certificate's CN.
 func extractServerIDFromCert(cert *x509.Certificate) string {
 	if cert == nil {
@@ -223,7 +237,17 @@ func (h *Handler) performHandshake(stream pb.AgentService_ConnectServer) (*hands
 
 func (h *Handler) performRegisterHandshake(stream pb.AgentService_ConnectServer, reg *pb.RegisterAgent, peerIP string) (*handshakeResult, error) {
 	agentIP := preferredAgentIP(reg.GetIpAddress(), peerIP)
-	serverID, clientCert, caCert, nodeKek, err := h.handleRegister(reg.Token, reg.Hostname, agentIP, reg.Os, reg.AgentVersion, reg.Csr, reg.NodePubkey, reg.EnrollFingerprint, reg.NodeTransportPubkey)
+	serverID, clientCert, caCert, nodeKek, err := h.handleRegister(registerRequest{
+		rawToken:            reg.Token,
+		hostname:            reg.Hostname,
+		ip:                  agentIP,
+		os:                  reg.Os,
+		agentVersion:        reg.AgentVersion,
+		csr:                 reg.Csr,
+		nodePubkey:          reg.NodePubkey,
+		enrollFingerprint:   reg.EnrollFingerprint,
+		nodeTransportPubkey: reg.NodeTransportPubkey,
+	})
 	if err != nil {
 		h.logRegistrationAuditFailure(reg, peerIP, err)
 		_ = stream.Send(&pb.HubMessage{
@@ -457,8 +481,8 @@ func (h *Handler) handleStreamHeartbeat(serverID string, stream pb.AgentService_
 	return err
 }
 
-func (h *Handler) handleRegister(rawToken, hostname, ip, os, agentVersion string, csr, nodePubkey []byte, enrollFingerprint string, nodeTransportPubkey []byte) (string, []byte, []byte, []byte, error) {
-	hash := sha256.Sum256([]byte(rawToken))
+func (h *Handler) handleRegister(req registerRequest) (string, []byte, []byte, []byte, error) {
+	hash := sha256.Sum256([]byte(req.rawToken))
 	tokenHash := fmt.Sprintf("%x", hash)
 	srv, err := h.store.GetServerByToken(tokenHash)
 	if err != nil {
@@ -470,18 +494,18 @@ func (h *Handler) handleRegister(rawToken, hostname, ip, os, agentVersion string
 			return "", nil, nil, nil, fmt.Errorf("registration token expired")
 		}
 	}
-	clientCert, caCert, err := h.issueRegistrationCertificate(srv.ID, csr)
+	clientCert, caCert, err := h.issueRegistrationCertificate(srv.ID, req.csr)
 	if err != nil {
 		return "", nil, nil, nil, err
 	}
-	if err := h.store.ActivateServer(srv.ID, hostname, ip, os, agentVersion); err != nil {
+	if err := h.store.ActivateServer(srv.ID, req.hostname, req.ip, req.os, req.agentVersion); err != nil {
 		return "", nil, nil, nil, fmt.Errorf("failed to activate server: %w", err)
 	}
 
 	// Issue a per-node KEK if the agent sent a public key (new agents only).
 	// Old agents that omit NodePubkey skip this path for backward compatibility.
 	var nodeKek []byte
-	if len(nodePubkey) > 0 {
+	if len(req.nodePubkey) > 0 {
 		kek := make([]byte, 32)
 		if _, err := rand.Read(kek); err != nil {
 			return "", nil, nil, nil, fmt.Errorf("generate KEK: %w", err)
@@ -490,8 +514,8 @@ func (h *Handler) handleRegister(rawToken, hostname, ip, os, agentVersion string
 		if err != nil {
 			return "", nil, nil, nil, fmt.Errorf("seal KEK: %w", err)
 		}
-		pubKeyB64 := base64.StdEncoding.EncodeToString(nodePubkey)
-		if err := h.store.SetNodeCrypto(srv.ID, pubKeyB64, kekEnc, enrollFingerprint); err != nil {
+		pubKeyB64 := base64.StdEncoding.EncodeToString(req.nodePubkey)
+		if err := h.store.SetNodeCrypto(srv.ID, pubKeyB64, kekEnc, req.enrollFingerprint); err != nil {
 			return "", nil, nil, nil, fmt.Errorf("store node crypto: %w", err)
 		}
 		nodeKek = kek
@@ -500,8 +524,8 @@ func (h *Handler) handleRegister(rawToken, hostname, ip, os, agentVersion string
 	// Store the X25519 transport public key if the agent sent one.
 	// This key is used to encrypt the KEK during re-enrollment so that only the
 	// real node (holder of the transport private key) can decrypt it.
-	if len(nodeTransportPubkey) > 0 {
-		transportPubB64 := base64.StdEncoding.EncodeToString(nodeTransportPubkey)
+	if len(req.nodeTransportPubkey) > 0 {
+		transportPubB64 := base64.StdEncoding.EncodeToString(req.nodeTransportPubkey)
 		if err := h.store.SetNodeTransportPub(srv.ID, transportPubB64); err != nil {
 			// Non-fatal: log and continue; the agent can still operate, but
 			// re-enrollment will be denied until a transport key is registered.

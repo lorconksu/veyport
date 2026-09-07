@@ -172,15 +172,15 @@ func (s *Server) endOneSession(
 
 	sess, err := s.store.GetSession(sid)
 	switch {
-	case isSessionNotFound(err):
+	// A session that does not exist and one that exists but belongs to
+	// someone else answer identically: 404, so this endpoint cannot be used
+	// to probe for other accounts' session ids.
+	case isSessionNotFound(err) || (err == nil && sess.UserID != target.ID):
 		respondError(w, http.StatusNotFound, sessionNotFoundMessage)
 		return
 	case err != nil:
 		log.Printf("warning: failed to read session %s: %v", sid, err)
 		respondError(w, http.StatusInternalServerError, "failed to read session")
-		return
-	case sess.UserID != target.ID:
-		respondError(w, http.StatusNotFound, sessionNotFoundMessage)
 		return
 	case sess.EndedAt != nil:
 		respondJSON(w, http.StatusOK, sessionStatusResponse{Status: sessionAlreadyEndedStatus})

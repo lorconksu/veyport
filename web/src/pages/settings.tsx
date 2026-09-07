@@ -75,6 +75,16 @@ function firstMutationError(...muts: { isError: boolean; error: unknown }[]): st
   return null
 }
 
+function mutationErrorMessage(mutation: { isError: boolean; error: unknown }, fallback: string): string | null {
+  if (!mutation.isError) return null
+  return mutation.error instanceof Error ? mutation.error.message : fallback
+}
+
+function rowActionLabel(s: Session): string | null {
+  if (s.current) return null
+  return s.kind === 'ssh' || s.kind === 'terminal' ? 'Terminate' : 'Sign out'
+}
+
 function roleBadgeTone(role: Role): string {
   switch (role) {
     case 'admin':
@@ -129,11 +139,9 @@ function YourSessionsCard() {
 
   const sessions = data?.sessions ?? []
   const onlyCurrentSession = sessions.length <= 1
-  const errorMessage = endOneMutation.isError
-    ? (endOneMutation.error instanceof Error ? endOneMutation.error.message : 'Failed to end session')
-    : signOutOthersMutation.isError
-      ? (signOutOthersMutation.error instanceof Error ? signOutOthersMutation.error.message : 'Failed to sign out other sessions')
-      : null
+  const errorMessage =
+    mutationErrorMessage(endOneMutation, 'Failed to end session') ??
+    mutationErrorMessage(signOutOthersMutation, 'Failed to sign out other sessions')
 
   return (
     <div>
@@ -156,7 +164,7 @@ function YourSessionsCard() {
         {!isLoading && !isError && !onlyCurrentSession && (
           <SessionsTable
             sessions={sessions}
-            rowActionLabel={s => (s.current ? null : (s.kind === 'ssh' || s.kind === 'terminal' ? 'Terminate' : 'Sign out'))}
+            rowActionLabel={rowActionLabel}
             onRowAction={s => { endOneMutation.reset(); setPendingId(s.id); endOneMutation.mutate(s) }}
             pendingId={pendingId}
           />

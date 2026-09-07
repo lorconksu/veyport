@@ -415,31 +415,11 @@ func (s *Store) scanUser(row *sql.Row) (*model.User, error) {
 	}
 	u.CreatedAt, _ = time.Parse(sqliteTimeFormat, createdAt)
 	u.UpdatedAt, _ = time.Parse(sqliteTimeFormat, updatedAt)
-	if ldapLastSyncAt.Valid {
-		if parsed, err := time.Parse(sqliteTimeFormat, ldapLastSyncAt.String); err == nil {
-			u.LDAPLastSyncAt = &parsed
-		}
-	}
-	if tempPasswordExpiresAt.Valid {
-		if parsed, err := time.Parse(sqliteTimeFormat, tempPasswordExpiresAt.String); err == nil {
-			u.TempPasswordExpiresAt = &parsed
-		}
-	}
-	if lastFailedLoginAt.Valid {
-		if parsed, err := time.Parse(sqliteTimeFormat, lastFailedLoginAt.String); err == nil {
-			u.LastFailedLoginAt = &parsed
-		}
-	}
-	if lastLoginAt.Valid {
-		if parsed, err := time.Parse(sqliteTimeFormat, lastLoginAt.String); err == nil {
-			u.LastLoginAt = &parsed
-		}
-	}
-	if lockedUntil.Valid {
-		if parsed, err := time.Parse(sqliteTimeFormat, lockedUntil.String); err == nil {
-			u.LockedUntil = &parsed
-		}
-	}
+	u.LDAPLastSyncAt = parseSQLiteTime(ldapLastSyncAt)
+	u.TempPasswordExpiresAt = parseSQLiteTime(tempPasswordExpiresAt)
+	u.LastFailedLoginAt = parseSQLiteTime(lastFailedLoginAt)
+	u.LastLoginAt = parseSQLiteTime(lastLoginAt)
+	u.LockedUntil = parseSQLiteTime(lockedUntil)
 	scanLifecycleColumns(&u, disabledAt, disabledBy, reactivatedAt, lastActivityAt)
 	return &u, nil
 }

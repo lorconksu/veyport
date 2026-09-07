@@ -23,6 +23,10 @@ var ErrSessionNotFound = errors.New("session not found")
 const sessionColumns = `id, user_id, kind, ip, user_agent, created_at,
 	last_seen_at, expires_at, ended_at, end_reason, ended_by`
 
+// selectPrefix starts every session SELECT built from sessionColumns
+// (go:S1192).
+const selectPrefix = "SELECT "
+
 // scanSession reads one session row from a *sql.Row or *sql.Rows.
 func scanSession(row interface{ Scan(...interface{}) error }) (*model.Session, error) {
 	var s model.Session
@@ -86,7 +90,7 @@ func (s *Store) CreateSession(sess *model.Session) error {
 // is no such row.
 func (s *Store) GetSession(id string) (*model.Session, error) {
 	sess, err := scanSession(s.db.QueryRow(
-		"SELECT "+sessionColumns+" FROM sessions WHERE id = ?", id,
+		selectPrefix+sessionColumns+" FROM sessions WHERE id = ?", id,
 	))
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, ErrSessionNotFound
@@ -107,7 +111,7 @@ func (s *Store) GetSession(id string) (*model.Session, error) {
 // different columns.
 func (s *Store) ListUserSessions(userID string, includeEnded bool, since time.Time) ([]model.Session, error) {
 	sessions, err := s.querySessions(
-		"SELECT "+sessionColumns+` FROM sessions
+		selectPrefix+sessionColumns+` FROM sessions
 		 WHERE user_id = ? AND ended_at IS NULL
 		 ORDER BY last_seen_at DESC, created_at DESC, id`,
 		userID,
@@ -120,7 +124,7 @@ func (s *Store) ListUserSessions(userID string, includeEnded bool, since time.Ti
 	}
 
 	ended, err := s.querySessions(
-		"SELECT "+sessionColumns+` FROM sessions
+		selectPrefix+sessionColumns+` FROM sessions
 		 WHERE user_id = ? AND ended_at IS NOT NULL AND ended_at >= ?
 		 ORDER BY ended_at DESC, id`,
 		userID, since.UTC().Format(sqliteTimeFormat),

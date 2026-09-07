@@ -10,6 +10,16 @@ import (
 	"github.com/wyiu/veyport/hub/internal/model"
 )
 
+const (
+	// errFailedToListPendingReEnroll is logged/returned whenever the pending
+	// re-enrollment list cannot be loaded (go:S1192).
+	errFailedToListPendingReEnroll = "failed to list pending re-enrollments"
+
+	// errNoPendingReEnrollForServer answers a request that names a server with
+	// no pending re-enrollment (go:S1192).
+	errNoPendingReEnrollForServer = "no pending re-enrollment for this server"
+)
+
 // reEnrollApproveRequest is the body for POST /api/servers/{id}/reenroll/approve.
 type reEnrollApproveRequest struct {
 	RequestID string `json:"request_id"`
@@ -74,7 +84,7 @@ func (s *Server) handleReEnrollApprove(w http.ResponseWriter, r *http.Request) {
 	}
 	pendingList, err := s.store.ListPendingReEnroll()
 	if err != nil {
-		respondError(w, http.StatusInternalServerError, "failed to list pending re-enrollments")
+		respondError(w, http.StatusInternalServerError, errFailedToListPendingReEnroll)
 		return
 	}
 	var currentPendingID string
@@ -85,7 +95,7 @@ func (s *Server) handleReEnrollApprove(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	if currentPendingID == "" {
-		respondError(w, http.StatusNotFound, "no pending re-enrollment for this server")
+		respondError(w, http.StatusNotFound, errNoPendingReEnrollForServer)
 		return
 	}
 	if req.RequestID != currentPendingID {
@@ -103,7 +113,7 @@ func (s *Server) handleReEnrollApprove(w http.ResponseWriter, r *http.Request) {
 		// Map common errors to appropriate HTTP status codes.
 		switch {
 		case err.Error() == "no pending re-enroll for server":
-			respondError(w, http.StatusNotFound, "no pending re-enrollment for this server")
+			respondError(w, http.StatusNotFound, errNoPendingReEnrollForServer)
 		case strings.Contains(err.Error(), "timed out"):
 			respondError(w, http.StatusGatewayTimeout, "timed out waiting for agent proof")
 		default:
@@ -152,7 +162,7 @@ func (s *Server) handleReEnrollDeny(w http.ResponseWriter, r *http.Request) {
 	// superseded request.
 	pendingList, err := s.store.ListPendingReEnroll()
 	if err != nil {
-		respondError(w, http.StatusInternalServerError, "failed to list pending re-enrollments")
+		respondError(w, http.StatusInternalServerError, errFailedToListPendingReEnroll)
 		return
 	}
 	var currentPendingID string
@@ -163,7 +173,7 @@ func (s *Server) handleReEnrollDeny(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	if currentPendingID == "" {
-		respondError(w, http.StatusNotFound, "no pending re-enrollment for this server")
+		respondError(w, http.StatusNotFound, errNoPendingReEnrollForServer)
 		return
 	}
 	if req.RequestID != currentPendingID {
@@ -193,7 +203,7 @@ func (s *Server) handleReEnrollDeny(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleListPendingReEnroll(w http.ResponseWriter, r *http.Request) {
 	reqs, err := s.store.ListPendingReEnroll()
 	if err != nil {
-		respondError(w, http.StatusInternalServerError, "failed to list pending re-enrollments")
+		respondError(w, http.StatusInternalServerError, errFailedToListPendingReEnroll)
 		return
 	}
 	if reqs == nil {

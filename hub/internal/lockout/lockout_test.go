@@ -132,18 +132,21 @@ func TestIsLocked(t *testing.T) {
 	}
 }
 
+// nextStateCase is one table entry for TestNextState.
+type nextStateCase struct {
+	name            string
+	prev            lockout.State
+	policy          lockout.Policy
+	now             time.Time
+	wantCount       int
+	wantLockedUntil *time.Time
+	wantNewlyLocked bool
+}
+
 func TestNextState(t *testing.T) {
 	defaults := lockout.Defaults()
 
-	tests := []struct {
-		name            string
-		prev            lockout.State
-		policy          lockout.Policy
-		now             time.Time
-		wantCount       int
-		wantLockedUntil *time.Time
-		wantNewlyLocked bool
-	}{
+	tests := []nextStateCase{
 		{
 			name:      "fresh failure with no history starts at one",
 			prev:      lockout.State{},
@@ -274,29 +277,38 @@ func TestNextState(t *testing.T) {
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			got, newlyLocked := lockout.NextState(tc.prev, tc.now, tc.policy)
-
-			if got.Count != tc.wantCount {
-				t.Errorf("Count = %d, want %d", got.Count, tc.wantCount)
-			}
-			if got.LastFailedAt == nil {
-				t.Fatal("LastFailedAt = nil, want the supplied now")
-			}
-			if !got.LastFailedAt.Equal(tc.now) {
-				t.Errorf("LastFailedAt = %v, want %v", *got.LastFailedAt, tc.now)
-			}
-			switch {
-			case tc.wantLockedUntil == nil && got.LockedUntil != nil:
-				t.Errorf("LockedUntil = %v, want nil", *got.LockedUntil)
-			case tc.wantLockedUntil != nil && got.LockedUntil == nil:
-				t.Errorf("LockedUntil = nil, want %v", *tc.wantLockedUntil)
-			case tc.wantLockedUntil != nil && !got.LockedUntil.Equal(*tc.wantLockedUntil):
-				t.Errorf("LockedUntil = %v, want %v", *got.LockedUntil, *tc.wantLockedUntil)
-			}
-			if newlyLocked != tc.wantNewlyLocked {
-				t.Errorf("newlyLocked = %v, want %v", newlyLocked, tc.wantNewlyLocked)
-			}
+			assertNextState(t, tc)
 		})
+	}
+}
+
+// assertNextState runs lockout.NextState for one TestNextState case and
+// checks the resulting count, LastFailedAt, LockedUntil and newlyLocked
+// against the case's expectations.
+func assertNextState(t *testing.T, tc nextStateCase) {
+	t.Helper()
+
+	got, newlyLocked := lockout.NextState(tc.prev, tc.now, tc.policy)
+
+	if got.Count != tc.wantCount {
+		t.Errorf("Count = %d, want %d", got.Count, tc.wantCount)
+	}
+	if got.LastFailedAt == nil {
+		t.Fatal("LastFailedAt = nil, want the supplied now")
+	}
+	if !got.LastFailedAt.Equal(tc.now) {
+		t.Errorf("LastFailedAt = %v, want %v", *got.LastFailedAt, tc.now)
+	}
+	switch {
+	case tc.wantLockedUntil == nil && got.LockedUntil != nil:
+		t.Errorf("LockedUntil = %v, want nil", *got.LockedUntil)
+	case tc.wantLockedUntil != nil && got.LockedUntil == nil:
+		t.Errorf("LockedUntil = nil, want %v", *tc.wantLockedUntil)
+	case tc.wantLockedUntil != nil && !got.LockedUntil.Equal(*tc.wantLockedUntil):
+		t.Errorf("LockedUntil = %v, want %v", *got.LockedUntil, *tc.wantLockedUntil)
+	}
+	if newlyLocked != tc.wantNewlyLocked {
+		t.Errorf("newlyLocked = %v, want %v", newlyLocked, tc.wantNewlyLocked)
 	}
 }
 

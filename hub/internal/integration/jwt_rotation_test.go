@@ -238,32 +238,59 @@ func TestJWTRotationEndToEnd(t *testing.T) {
 //     ciphertexts unchanged (spec US2 scenario 2).
 //
 // Never prints key material.
+// Sample secrets encrypted with the JWT-secret-derived key in
+// seedLegacyStorageKeyLayout, exactly as encryptConfigSecret does in
+// ldap_auth.go: DeriveKey → Encrypt → "enc:" + hex.
+const (
+	legacyLDAPPlaintext = "ldap-bind-legacy-password" // NOSONAR — test fixture
+	legacySMTPPlaintext = "smtp-legacy-password"      // NOSONAR — test fixture
+)
+
 func TestStorageKeyLegacyUpgrade(t *testing.T) {
 	// ── Step 1: build bare store and seed the LEGACY layout ──────────────────
 	//
 	// Only InitJWTSecret is called — no storage_key exists yet.
 	// This mirrors a pre-separation v2.0.3 install.
+	st, originalJWTSecret, ldapCiphertext, smtpCiphertext := seedLegacyStorageKeyLayout(t)
+	defer st.Close()
+
+	// ── Step 2: run the full production init sequence ─────────────────────────
+	storageKey := verifyStorageKeyAdoptedFromLegacyJWTSecret(t, st, originalJWTSecret)
+	verifyLegacyCiphertextsIntact(t, st, storageKey, ldapCiphertext, smtpCiphertext, "", "legacy adoption")
+
+	// 2d. Exactly one auth.storage_key_separated audit entry.
+	if n := countStorageKeySeparatedAuditEntries(t, st); n != 1 {
+		t.Fatalf("expected exactly 1 %q audit entry after first startup, got %d", model.AuditStorageKeySeparated, n)
+	}
+
+	// ── Step 3: simulate a second startup (idempotency) ───────────────────────
+	verifyStorageKeySeparationIsIdempotent(t, st, storageKey)
+
+	// ── Step 4: rotate the JWT signing secret ─────────────────────────────────
+	//
+	// Spec US2 scenario 2: rotation must NOT re-encrypt stored secrets.
+	storageKeyAfterRotation := verifyRotationPreservesStorageKey(t, st, originalJWTSecret)
+	verifyLegacyCiphertextsIntact(t, st, storageKeyAfterRotation, ldapCiphertext, smtpCiphertext, " after rotation", "JWT rotation")
+}
+
+// seedLegacyStorageKeyLayout builds a bare in-memory store with only
+// InitJWTSecret run (no storage_key row), mirroring a pre-separation v2.0.3
+// install, then seeds the ldap.bind_password and smtp_password config values
+// with ciphertext encrypted under the JWT-derived key.
+func seedLegacyStorageKeyLayout(t *testing.T) (st *store.Store, originalJWTSecret, ldapCiphertext, smtpCiphertext string) {
+	t.Helper()
 
 	st, err := store.New(":memory:")
 	if err != nil {
 		t.Fatalf("create store: %v", err)
 	}
-	defer st.Close()
 
-	originalJWTSecret, err := server.InitJWTSecret(st)
+	originalJWTSecret, err = server.InitJWTSecret(st)
 	if err != nil {
 		t.Fatalf("InitJWTSecret (legacy seed): %v", err)
 	}
 
-	// Encrypt two sample secrets with the JWT-secret-derived key, exactly as
-	// encryptConfigSecret does in ldap_auth.go: DeriveKey → Encrypt → "enc:" + hex.
-	const (
-		ldapPlaintext = "ldap-bind-legacy-password" // NOSONAR — test fixture
-		smtpPlaintext = "smtp-legacy-password"      // NOSONAR — test fixture
-	)
-
-	encryptLegacy := func(t *testing.T, secret, plaintext string) string {
-		t.Helper()
+	encryptLegacy := func(secret, plaintext string) string {
 		key := auth.DeriveKey(secret)
 		ct, err := auth.Encrypt([]byte(plaintext), key)
 		if err != nil {
@@ -272,8 +299,8 @@ func TestStorageKeyLegacyUpgrade(t *testing.T) {
 		return "enc:" + hex.EncodeToString(ct)
 	}
 
-	ldapCiphertext := encryptLegacy(t, originalJWTSecret, ldapPlaintext)
-	smtpCiphertext := encryptLegacy(t, originalJWTSecret, smtpPlaintext)
+	ldapCiphertext = encryptLegacy(originalJWTSecret, legacyLDAPPlaintext)
+	smtpCiphertext = encryptLegacy(originalJWTSecret, legacySMTPPlaintext)
 
 	// Store them under the same keys the server uses.
 	if err := st.SetConfig("ldap.bind_password", ldapCiphertext); err != nil {
@@ -288,7 +315,15 @@ func TestStorageKeyLegacyUpgrade(t *testing.T) {
 		t.Fatalf("storage_key should not exist in legacy layout, got %q", v)
 	}
 
-	// ── Step 2: run the full production init sequence ─────────────────────────
+	return st, originalJWTSecret, ldapCiphertext, smtpCiphertext
+}
+
+// verifyStorageKeyAdoptedFromLegacyJWTSecret runs the production init
+// sequence (InitJWTSecret + InitStorageKey) against a legacy-layout store and
+// asserts InitStorageKey adopts the existing jwt_signing_key value (Path 2 in
+// the implementation) rather than generating a new key.
+func verifyStorageKeyAdoptedFromLegacyJWTSecret(t *testing.T, st *store.Store, originalJWTSecret string) string {
+	t.Helper()
 
 	// InitJWTSecret must return the existing secret unchanged.
 	jwtSecretAfterInit, err := server.InitJWTSecret(st)
@@ -317,52 +352,63 @@ func TestStorageKeyLegacyUpgrade(t *testing.T) {
 		t.Fatal("InitStorageKey must return the adopted jwt_signing_key value")
 	}
 
-	// 2b. Both ciphertexts must be byte-identical to what was seeded (zero re-encryption).
+	return storageKey
+}
+
+// verifyLegacyCiphertextsIntact asserts that the ldap/smtp ciphertexts seeded
+// under the legacy layout are byte-identical to what was stored (zero
+// re-encryption) and still decrypt correctly with storageKey. msgSuffix and
+// adoptionLabel let the same checks report the original wording at both call
+// sites: right after legacy adoption, and again after a JWT secret rotation.
+func verifyLegacyCiphertextsIntact(t *testing.T, st *store.Store, storageKey, ldapCiphertext, smtpCiphertext, msgSuffix, adoptionLabel string) {
+	t.Helper()
+
 	storedLDAP, ldapOK, ldapErr := st.LookupConfig("ldap.bind_password")
 	if ldapErr != nil || !ldapOK {
-		t.Fatalf("LookupConfig ldap.bind_password: ok=%v err=%v", ldapOK, ldapErr)
+		t.Fatalf("LookupConfig ldap.bind_password%s: ok=%v err=%v", msgSuffix, ldapOK, ldapErr)
 	}
 	if storedLDAP != ldapCiphertext {
-		t.Error("ldap.bind_password ciphertext must be byte-identical after legacy adoption (zero re-encryption)")
+		t.Errorf("ldap.bind_password ciphertext must be byte-identical after %s (zero re-encryption)", adoptionLabel)
 	}
 
 	storedSMTP, smtpOK, smtpErr := st.LookupConfig("smtp_password")
 	if smtpErr != nil || !smtpOK {
-		t.Fatalf("LookupConfig smtp_password: ok=%v err=%v", smtpOK, smtpErr)
+		t.Fatalf("LookupConfig smtp_password%s: ok=%v err=%v", msgSuffix, smtpOK, smtpErr)
 	}
 	if storedSMTP != smtpCiphertext {
-		t.Error("smtp_password ciphertext must be byte-identical after legacy adoption (zero re-encryption)")
+		t.Errorf("smtp_password ciphertext must be byte-identical after %s (zero re-encryption)", adoptionLabel)
 	}
 
-	// 2c. Both ciphertexts decrypt correctly with the storage key.
 	decryptedLDAP := decryptConfigSecretForTest(t, storageKey, storedLDAP)
-	if decryptedLDAP != ldapPlaintext {
-		t.Errorf("ldap.bind_password decrypt mismatch: got %q, want %q", decryptedLDAP, ldapPlaintext)
+	if decryptedLDAP != legacyLDAPPlaintext {
+		t.Errorf("ldap.bind_password decrypt mismatch%s: got %q, want %q", msgSuffix, decryptedLDAP, legacyLDAPPlaintext)
 	}
 
 	decryptedSMTP := decryptConfigSecretForTest(t, storageKey, storedSMTP)
-	if decryptedSMTP != smtpPlaintext {
-		t.Errorf("smtp_password decrypt mismatch: got %q, want %q", decryptedSMTP, smtpPlaintext)
+	if decryptedSMTP != legacySMTPPlaintext {
+		t.Errorf("smtp_password decrypt mismatch%s: got %q, want %q", msgSuffix, decryptedSMTP, legacySMTPPlaintext)
 	}
+}
 
-	// 2d. Exactly one auth.storage_key_separated audit entry.
-	countSep := func(t *testing.T) int {
-		t.Helper()
-		action := model.AuditStorageKeySeparated
-		entries, _, err := st.ListAuditLogs(model.AuditFilter{Action: &action, Limit: 10})
-		if err != nil {
-			t.Fatalf("ListAuditLogs (storage_key_separated): %v", err)
-		}
-		return len(entries)
-	}
-	if n := countSep(t); n != 1 {
-		t.Fatalf("expected exactly 1 %q audit entry after first startup, got %d", model.AuditStorageKeySeparated, n)
-	}
-
-	// ── Step 3: simulate a second startup (idempotency) ───────────────────────
-
-	_, err = server.InitJWTSecret(st)
+// countStorageKeySeparatedAuditEntries returns how many
+// auth.storage_key_separated audit entries exist in st.
+func countStorageKeySeparatedAuditEntries(t *testing.T, st *store.Store) int {
+	t.Helper()
+	action := model.AuditStorageKeySeparated
+	entries, _, err := st.ListAuditLogs(model.AuditFilter{Action: &action, Limit: 10})
 	if err != nil {
+		t.Fatalf("ListAuditLogs (storage_key_separated): %v", err)
+	}
+	return len(entries)
+}
+
+// verifyStorageKeySeparationIsIdempotent simulates a second startup and
+// asserts InitStorageKey returns the same storage key without recording
+// another auth.storage_key_separated audit entry.
+func verifyStorageKeySeparationIsIdempotent(t *testing.T, st *store.Store, storageKey string) {
+	t.Helper()
+
+	if _, err := server.InitJWTSecret(st); err != nil {
 		t.Fatalf("InitJWTSecret (second startup): %v", err)
 	}
 	storageKey2, err := server.InitStorageKey(st)
@@ -374,16 +420,18 @@ func TestStorageKeyLegacyUpgrade(t *testing.T) {
 	}
 
 	// Still exactly one separation audit entry — second startup must not add another.
-	if n := countSep(t); n != 1 {
+	if n := countStorageKeySeparatedAuditEntries(t, st); n != 1 {
 		t.Fatalf("expected still exactly 1 %q audit entry after second startup, got %d", model.AuditStorageKeySeparated, n)
 	}
+}
 
-	// ── Step 4: rotate the JWT signing secret ─────────────────────────────────
-	//
-	// Spec US2 scenario 2: rotation must NOT re-encrypt stored secrets.
+// verifyRotationPreservesStorageKey rotates the JWT signing secret and
+// asserts jwt_signing_key changes while storage_key remains the originally
+// adopted value (spec US2 scenario 2: rotation must not disturb storage_key).
+func verifyRotationPreservesStorageKey(t *testing.T, st *store.Store, originalJWTSecret string) string {
+	t.Helper()
 
-	_, err = server.RotateJWTSecret(st)
-	if err != nil {
+	if _, err := server.RotateJWTSecret(st); err != nil {
 		t.Fatalf("RotateJWTSecret: %v", err)
 	}
 
@@ -405,31 +453,5 @@ func TestStorageKeyLegacyUpgrade(t *testing.T) {
 		t.Fatal("storage_key must remain the original adopted value after JWT rotation")
 	}
 
-	// 4c. Both ciphertexts must still be byte-identical (zero re-encryption).
-	storedLDAPAfter, ldapOK2, ldapErr2 := st.LookupConfig("ldap.bind_password")
-	if ldapErr2 != nil || !ldapOK2 {
-		t.Fatalf("LookupConfig ldap.bind_password after rotation: ok=%v err=%v", ldapOK2, ldapErr2)
-	}
-	if storedLDAPAfter != ldapCiphertext {
-		t.Error("ldap.bind_password ciphertext must be byte-identical after JWT rotation (zero re-encryption)")
-	}
-
-	storedSMTPAfter, smtpOK2, smtpErr2 := st.LookupConfig("smtp_password")
-	if smtpErr2 != nil || !smtpOK2 {
-		t.Fatalf("LookupConfig smtp_password after rotation: ok=%v err=%v", smtpOK2, smtpErr2)
-	}
-	if storedSMTPAfter != smtpCiphertext {
-		t.Error("smtp_password ciphertext must be byte-identical after JWT rotation (zero re-encryption)")
-	}
-
-	// 4d. Both ciphertexts still decrypt correctly with the (unchanged) storage key.
-	decryptedLDAPAfter := decryptConfigSecretForTest(t, storageKeyAfterRotation, storedLDAPAfter)
-	if decryptedLDAPAfter != ldapPlaintext {
-		t.Errorf("ldap.bind_password decrypt mismatch after rotation: got %q, want %q", decryptedLDAPAfter, ldapPlaintext)
-	}
-
-	decryptedSMTPAfter := decryptConfigSecretForTest(t, storageKeyAfterRotation, storedSMTPAfter)
-	if decryptedSMTPAfter != smtpPlaintext {
-		t.Errorf("smtp_password decrypt mismatch after rotation: got %q, want %q", decryptedSMTPAfter, smtpPlaintext)
-	}
+	return storageKeyAfterRotation
 }

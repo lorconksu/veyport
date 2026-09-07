@@ -392,7 +392,7 @@ func (s *Server) handleInstallScript(w http.ResponseWriter, r *http.Request) {
 		respondError(w, http.StatusNotFound, "install script not available")
 		return
 	}
-	w.Header().Set("Content-Type", "text/x-shellscript; charset=utf-8")
+	w.Header().Set(headerContentType, "text/x-shellscript; charset=utf-8")
 	if _, err := w.Write(hub.InstallScript); err != nil {
 		log.Printf("install script write failed: %v", err)
 	}
@@ -411,7 +411,7 @@ func (s *Server) handleAgentBinary(w http.ResponseWriter, r *http.Request) {
 		respondError(w, http.StatusNotFound, "agent binary not found")
 		return
 	}
-	w.Header().Set("Content-Type", "application/octet-stream")
+	w.Header().Set(headerContentType, "application/octet-stream")
 	w.Header().Set("Content-Disposition", fmt.Sprintf(`attachment; filename="%s"`, filename))
 	http.ServeFile(w, r, binaryPath)
 }
@@ -430,7 +430,7 @@ func (s *Server) handleAgentBinaryChecksum(w http.ResponseWriter, r *http.Reques
 		respondError(w, http.StatusNotFound, "checksum not found")
 		return
 	}
-	w.Header().Set("Content-Type", "text/plain")
+	w.Header().Set(headerContentType, "text/plain")
 	if _, err := w.Write([]byte(strings.TrimSpace(string(data)))); err != nil {
 		log.Printf("checksum write failed: %v", err)
 	}

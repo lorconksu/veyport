@@ -154,6 +154,20 @@ func TestGenerateSessionTokenPair_BothTokensCarrySameSID(t *testing.T) {
 		t.Fatalf("validate refresh: %v", err)
 	}
 
+	assertSessionTokenPairClaims(t, accessClaims, refreshClaims)
+
+	if got := decodeClaimsJSON(t, access)["sid"]; got != testSessionID {
+		t.Fatalf("expected sid %q in the access payload, got %v", testSessionID, got)
+	}
+}
+
+// assertSessionTokenPairClaims checks the shared invariants of an
+// access/refresh pair minted by GenerateSessionTokenPair: matching session
+// ID, correct token types, matching subject/role/generation, distinct jtis,
+// and the standard access/refresh expiry windows.
+func assertSessionTokenPairClaims(t *testing.T, accessClaims, refreshClaims *auth.Claims) {
+	t.Helper()
+
 	if accessClaims.SessionID != testSessionID {
 		t.Fatalf("expected access sid %q, got %q", testSessionID, accessClaims.SessionID)
 	}
@@ -188,10 +202,6 @@ func TestGenerateSessionTokenPair_BothTokensCarrySameSID(t *testing.T) {
 	refreshTTL := time.Until(refreshClaims.ExpiresAt.Time)
 	if refreshTTL > auth.RefreshTokenExpiry || refreshTTL < auth.RefreshTokenExpiry-time.Minute {
 		t.Fatalf("unexpected refresh expiry: %v", refreshTTL)
-	}
-
-	if got := decodeClaimsJSON(t, access)["sid"]; got != testSessionID {
-		t.Fatalf("expected sid %q in the access payload, got %v", testSessionID, got)
 	}
 }
 

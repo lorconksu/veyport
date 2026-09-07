@@ -28,6 +28,9 @@ const (
 	bearerPrefix  = "Bearer "
 	cookieAccess  = "veyport_access"
 	cookieRefresh = "veyport_refresh"
+	// totpSetupPath is the TOTP enrollment endpoint used while bootstrapping
+	// admin accounts in the test harness.
+	totpSetupPath = "/api/auth/totp/setup"
 )
 
 // TestHarness holds all components for an in-process hub integration test.
@@ -198,11 +201,11 @@ func (h *TestHarness) SetupAdmin(t *testing.T) string {
 	json.NewDecoder(resp.Body).Decode(&regResp)
 
 	// TOTP setup
-	setupResp := h.HTTPPost(t, "/api/auth/totp/setup", nil, regResp.SetupToken)
+	setupResp := h.HTTPPost(t, totpSetupPath, nil, regResp.SetupToken)
 	defer setupResp.Body.Close()
 	if setupResp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(setupResp.Body)
-		t.Fatalf("totp setup: status=%d body=%s url=%s", setupResp.StatusCode, body, baseURL+"/api/auth/totp/setup")
+		t.Fatalf("totp setup: status=%d body=%s url=%s", setupResp.StatusCode, body, baseURL+totpSetupPath)
 	}
 
 	var totpResp model.TOTPSetupResponse
@@ -261,11 +264,11 @@ func (h *TestHarness) SetupAdminWithTOTP(t *testing.T) (accessToken, totpSecret 
 	json.NewDecoder(resp.Body).Decode(&regResp)
 
 	// TOTP setup — capture the plaintext secret before it gets encrypted in the store
-	setupResp := h.HTTPPost(t, "/api/auth/totp/setup", nil, regResp.SetupToken)
+	setupResp := h.HTTPPost(t, totpSetupPath, nil, regResp.SetupToken)
 	defer setupResp.Body.Close()
 	if setupResp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(setupResp.Body)
-		t.Fatalf("totp setup: status=%d body=%s url=%s", setupResp.StatusCode, body, baseURL+"/api/auth/totp/setup")
+		t.Fatalf("totp setup: status=%d body=%s url=%s", setupResp.StatusCode, body, baseURL+totpSetupPath)
 	}
 
 	var totpSetupResp model.TOTPSetupResponse

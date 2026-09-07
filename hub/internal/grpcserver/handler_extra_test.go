@@ -816,10 +816,11 @@ func TestHandleRegister_StoresTransportPub(t *testing.T) {
 
 	// nodePub needs to be non-nil to trigger sealKEK path.
 	nodePub := make([]byte, 32)
-	serverID, _, _, _, err := h.handleRegister(
-		"", "transport-host", "10.0.0.1", "linux", "0.1.0",
-		testRegistrationCSR(t), nodePub, "fp-original", transportPubBytes,
-	)
+	serverID, _, _, _, err := h.handleRegister(registerRequest{
+		rawToken: "", hostname: "transport-host", ip: "10.0.0.1", os: "linux", agentVersion: "0.1.0",
+		csr: testRegistrationCSR(t), nodePubkey: nodePub, enrollFingerprint: "fp-original",
+		nodeTransportPubkey: transportPubBytes,
+	})
 	if err != nil {
 		t.Fatalf("handleRegister: %v", err)
 	}
