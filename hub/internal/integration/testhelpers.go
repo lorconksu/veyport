@@ -176,65 +176,12 @@ func StartHarness(t *testing.T) *TestHarness {
 }
 
 // SetupAdmin registers the first admin user, completes TOTP setup, and returns
-// an access token.
+// an access token. It is SetupAdminWithTOTP without the secret, for callers
+// that never need to generate further codes.
 func (h *TestHarness) SetupAdmin(t *testing.T) string {
 	t.Helper()
-
-	baseURL := fmt.Sprintf("http://%s", h.HTTPAddr)
-
-	// Register first user (admin)
-	regBody := map[string]string{
-		"username": "admin",
-		"email":    "admin@test.com",
-		"password": "TestPassword123!",
-	}
-	resp := h.HTTPPost(t, "/api/auth/register", regBody, "")
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(resp.Body)
-		t.Fatalf("register admin: status=%d body=%s", resp.StatusCode, body)
-	}
-
-	var regResp struct {
-		SetupToken string `json:"setup_token"`
-	}
-	json.NewDecoder(resp.Body).Decode(&regResp)
-
-	// TOTP setup
-	setupResp := h.HTTPPost(t, totpSetupPath, nil, regResp.SetupToken)
-	defer setupResp.Body.Close()
-	if setupResp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(setupResp.Body)
-		t.Fatalf("totp setup: status=%d body=%s url=%s", setupResp.StatusCode, body, baseURL+totpSetupPath)
-	}
-
-	var totpResp model.TOTPSetupResponse
-	json.NewDecoder(setupResp.Body).Decode(&totpResp)
-
-	// Generate valid TOTP code and enable
-	code, err := auth.GenerateValidCode(totpResp.Secret)
-	if err != nil {
-		t.Fatalf("generate TOTP code: %v", err)
-	}
-
-	enableResp := h.HTTPPost(t, "/api/auth/totp/enable", model.TOTPEnableRequest{Code: code}, regResp.SetupToken)
-	defer enableResp.Body.Close()
-	if enableResp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(enableResp.Body)
-		t.Fatalf("totp enable: status=%d body=%s", enableResp.StatusCode, body)
-	}
-
-	var authResp model.AuthResponse
-	json.NewDecoder(enableResp.Body).Decode(&authResp)
-
-	for _, cookie := range enableResp.Cookies() {
-		if cookie.Name == cookieAccess && cookie.Value != "" {
-			return cookie.Value
-		}
-	}
-
-	t.Fatal("SetupAdmin: got empty access token cookie")
-	return ""
+	accessToken, _ := h.SetupAdminWithTOTP(t)
+	return accessToken
 }
 
 // SetupAdminWithTOTP is like SetupAdmin but also returns the raw (plaintext) TOTP

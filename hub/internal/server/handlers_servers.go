@@ -398,17 +398,39 @@ func (s *Server) handleInstallScript(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+// isValidAgentPlatform reports whether os/arch names an agent build the hub
+// ships: linux only, amd64 or arm64.
+func isValidAgentPlatform(osName, arch string) bool {
+	return osName == "linux" && (arch == "amd64" || arch == "arm64")
+}
+
 func (s *Server) handleAgentBinary(w http.ResponseWriter, r *http.Request) {
 	osName := r.PathValue("os")
 	arch := r.PathValue("arch")
-	if osName != "linux" || (arch != "amd64" && arch != "arm64") {
+	if !isValidAgentPlatform(osName, arch) {
 		respondError(w, http.StatusNotFound, "unsupported platform")
 		return
 	}
-	filename := fmt.Sprintf("veyport-agent-%s-%s", osName, arch)
+	s.serveBinaryFile(w, r, fmt.Sprintf("veyport-agent-%s-%s", osName, arch), "agent binary not found")
+}
+
+func (s *Server) handleAgentBinaryChecksum(w http.ResponseWriter, r *http.Request) {
+	osName := r.PathValue("os")
+	arch := r.PathValue("arch")
+	if !isValidAgentPlatform(osName, arch) {
+		respondError(w, http.StatusNotFound, "unsupported platform")
+		return
+	}
+	s.serveChecksumFile(w, fmt.Sprintf("veyport-agent-%s-%s.sha256", osName, arch), "checksum write failed")
+}
+
+// serveBinaryFile streams filename from agentBinDir as an attachment, or
+// answers 404 with notFoundMsg when it has not been built. Shared by the
+// agent and CLI download routes.
+func (s *Server) serveBinaryFile(w http.ResponseWriter, r *http.Request, filename, notFoundMsg string) {
 	binaryPath := filepath.Join(s.agentBinDir, filename)
 	if _, err := os.Stat(binaryPath); os.IsNotExist(err) {
-		respondError(w, http.StatusNotFound, "agent binary not found")
+		respondError(w, http.StatusNotFound, notFoundMsg)
 		return
 	}
 	w.Header().Set(headerContentType, "application/octet-stream")
@@ -416,23 +438,18 @@ func (s *Server) handleAgentBinary(w http.ResponseWriter, r *http.Request) {
 	http.ServeFile(w, r, binaryPath)
 }
 
-func (s *Server) handleAgentBinaryChecksum(w http.ResponseWriter, r *http.Request) {
-	osName := r.PathValue("os")
-	arch := r.PathValue("arch")
-	if osName != "linux" || (arch != "amd64" && arch != "arm64") {
-		respondError(w, http.StatusNotFound, "unsupported platform")
-		return
-	}
-	filename := fmt.Sprintf("veyport-agent-%s-%s.sha256", osName, arch)
-	checksumPath := filepath.Join(s.agentBinDir, filename)
-	data, err := os.ReadFile(checksumPath)
+// serveChecksumFile writes the trimmed contents of the named .sha256 file from
+// agentBinDir as text/plain, or 404 when it is absent. logPrefix labels a
+// failed write in the log. Shared by the agent and CLI checksum routes.
+func (s *Server) serveChecksumFile(w http.ResponseWriter, filename, logPrefix string) {
+	data, err := os.ReadFile(filepath.Join(s.agentBinDir, filename))
 	if err != nil {
 		respondError(w, http.StatusNotFound, "checksum not found")
 		return
 	}
 	w.Header().Set(headerContentType, "text/plain")
 	if _, err := w.Write([]byte(strings.TrimSpace(string(data)))); err != nil {
-		log.Printf("checksum write failed: %v", err)
+		log.Printf("%s: %v", logPrefix, err)
 	}
 }
 
