@@ -1806,6 +1806,30 @@ curl - O https://hub.example.com/install/linux/amd64
 
 ---
 
+### GET /install/cli.sh
+
+Download the `vey` CLI install script. This is the script behind the one-line install shown in the web UI under **Install CLI** on the dashboard; see [[CLI]] for the walkthrough. The Hub renders its own public address into the script, so the one-liner takes no arguments and no token — the CLI authenticates later via `vey login`.
+
+| Property | Value |
+|---|---|
+| Auth | None |
+| Content-Type (response) | `text/x-shellscript; charset=utf-8` |
+
+**Response:** A POSIX `sh` script that detects the platform (Linux/macOS, amd64/arm64), downloads the matching binary from `/install/cli/{os}/{arch}`, verifies it against `/install/cli/{os}/{arch}/sha256` before installing, and installs to `/usr/local/bin` when writable (offering `sudo` only on an interactive terminal), otherwise to `~/.local/bin` with a PATH hint. Re-running it upgrades an existing install in place.
+
+The Hub address baked into the script comes from `VEYPORT_PUBLIC_BASE_URL` if set, then the stored `public_base_url` setting, then the request's own host.
+
+**Error Cases:**
+- `500` - The Hub's public address is not configured or is not a valid `http`/`https` URL
+
+**cURL:**
+
+```bash
+curl -fsSL https://hub.example.com/install/cli.sh | sh
+```
+
+---
+
 ### GET /install/cli/{os}/{arch}
 
 Download the `vey` CLI binary for a specific platform. See [[CLI]] for the full install walkthrough and command reference.
