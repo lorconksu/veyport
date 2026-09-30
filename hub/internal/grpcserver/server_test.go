@@ -1,6 +1,7 @@
 package grpcserver
 
 import (
+	"errors"
 	"net"
 	"testing"
 	"time"
@@ -163,5 +164,23 @@ func TestStart_ServesOnSuppliedListener(t *testing.T) {
 	case err := <-errCh:
 		t.Fatalf("Start() returned before Stop(): %v", err)
 	default:
+	}
+}
+
+func TestStart_ReportsBindFailure(t *testing.T) {
+	lis, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	t.Cleanup(func() { lis.Close() })
+
+	s, _ := testGRPCServer(t)
+	s.addr = lis.Addr().String()
+	t.Cleanup(s.Stop)
+
+	err = s.Start()
+	var opErr *net.OpError
+	if !errors.As(err, &opErr) || opErr.Op != "listen" {
+		t.Fatalf("expected wrapped listen error for occupied address, got %v", err)
 	}
 }

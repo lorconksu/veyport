@@ -23,7 +23,7 @@ import (
 
 const (
 	// httpURLFormat is the format string used to build HTTP URLs for the test harness.
-	httpURLFormat = "http://%s%s"
+	httpURLFormat = "http://%s%s" // NOSONAR: test harness listeners bind exclusively to loopback.
 	// bearerPrefix is the Authorization header prefix for bearer tokens.
 	bearerPrefix  = "Bearer "
 	cookieAccess  = "veyport_access"
@@ -190,7 +190,7 @@ func (h *TestHarness) SetupAdmin(t *testing.T) string {
 func (h *TestHarness) SetupAdminWithTOTP(t *testing.T) (accessToken, totpSecret string) {
 	t.Helper()
 
-	baseURL := fmt.Sprintf("http://%s", h.HTTPAddr)
+	baseURL := fmt.Sprintf(httpURLFormat, h.HTTPAddr, "")
 
 	// Register first user (admin)
 	regBody := map[string]string{
