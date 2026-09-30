@@ -30,6 +30,7 @@ type Server struct {
 	hbCoalescer *HeartbeatCoalescer
 	handler     *Handler
 	addr        string
+	listener    net.Listener
 }
 
 type Config struct {
@@ -45,6 +46,10 @@ type Config struct {
 	CAKey                  *ecdsa.PrivateKey
 	Notifier               *notify.Notifier
 	StorageKey             string
+	// Listener is an optional pre-bound listener; when set, Addr is ignored
+	// for binding and Start serves on it. Tests use this to avoid port races,
+	// production leaves it nil.
+	Listener net.Listener
 }
 
 func New(cfg Config) *Server {
@@ -70,6 +75,7 @@ func New(cfg Config) *Server {
 		terminals:   cfg.TerminalSessions,
 		hbCoalescer: hbCoalescer,
 		addr:        cfg.Addr,
+		listener:    cfg.Listener,
 	}
 
 	var opts []grpc.ServerOption
@@ -141,11 +147,15 @@ func (s *Server) Handler() *Handler {
 }
 
 func (s *Server) Start() error {
-	lis, err := net.Listen("tcp", s.addr)
-	if err != nil {
-		return fmt.Errorf("grpc listen: %w", err)
+	lis := s.listener
+	if lis == nil {
+		var err error
+		lis, err = net.Listen("tcp", s.addr)
+		if err != nil {
+			return fmt.Errorf("grpc listen: %w", err)
+		}
 	}
-	fmt.Printf("Veyport gRPC server listening on %s\n", s.addr)
+	fmt.Printf("Veyport gRPC server listening on %s\n", lis.Addr())
 	return s.grpcServer.Serve(lis)
 }
 

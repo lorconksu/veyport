@@ -1,14 +1,20 @@
 package grpcserver
 
 import (
+	"errors"
+	"net"
 	"testing"
+	"time"
 
 	"github.com/wyiu/veyport/hub/internal/connmgr"
 	"github.com/wyiu/veyport/hub/internal/model"
 	"github.com/wyiu/veyport/hub/internal/store"
 )
 
-const testStale1 = "stale-1"
+const (
+	testStale1       = "stale-1"
+	testListenerWait = 5 * time.Second
+)
 
 func testGRPCServer(t *testing.T) (*Server, *store.Store) {
 	t.Helper()
@@ -120,5 +126,61 @@ func TestSweepStaleConnections_StaleConn(t *testing.T) {
 	srv, _ := st.GetServerByID(testStale1)
 	if srv.Status != "offline" {
 		t.Fatalf("expected 'offline' for orphaned server, got '%s'", srv.Status)
+	}
+}
+
+// TestStart_ServesOnSuppliedListener pins that a Config.Listener is used
+// instead of binding Addr, which is how the integration test harness avoids
+// racing on ephemeral ports with sibling packages under `go test ./...`.
+func TestStart_ServesOnSuppliedListener(t *testing.T) {
+	st, err := store.New(":memory:")
+	if err != nil {
+		t.Fatalf("create store: %v", err)
+	}
+	t.Cleanup(func() { st.Close() })
+
+	lis, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+
+	s := New(Config{
+		Store:    st,
+		ConnMgr:  connmgr.New(),
+		Listener: lis,
+	})
+	t.Cleanup(s.Stop)
+
+	errCh := make(chan error, 1)
+	go func() { errCh <- s.Start() }()
+
+	conn, err := net.DialTimeout("tcp", lis.Addr().String(), testListenerWait)
+	if err != nil {
+		t.Fatalf("dial supplied listener: %v", err)
+	}
+	conn.Close()
+
+	select {
+	case err := <-errCh:
+		t.Fatalf("Start() returned before Stop(): %v", err)
+	default:
+	}
+}
+
+func TestStart_ReportsBindFailure(t *testing.T) {
+	lis, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	t.Cleanup(func() { lis.Close() })
+
+	s, _ := testGRPCServer(t)
+	s.addr = lis.Addr().String()
+	t.Cleanup(s.Stop)
+
+	err = s.Start()
+	var opErr *net.OpError
+	if !errors.As(err, &opErr) || opErr.Op != "listen" {
+		t.Fatalf("expected wrapped listen error for occupied address, got %v", err)
 	}
 }

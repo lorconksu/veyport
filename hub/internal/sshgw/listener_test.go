@@ -128,6 +128,46 @@ func TestStopForceClosesConnectionsWhenContextExpires(t *testing.T) {
 	waitFor(t, "the force-closed connection to be untracked", func() bool { return f.srv.activeConns() == 0 })
 }
 
+// TestStart_ServesOnSuppliedListener pins that a Config.Listener is used
+// instead of binding Addr, which is how the integration test harness avoids
+// racing on ephemeral ports with sibling packages under `go test ./...`.
+func TestStart_ServesOnSuppliedListener(t *testing.T) {
+	lis, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("net.Listen() error: %v", err)
+	}
+	f := newFixture(t, func(cfg *Config) { cfg.Listener = lis })
+	f.start()
+
+	conn, err := net.DialTimeout("tcp", lis.Addr().String(), waitTimeout)
+	if err != nil {
+		t.Fatalf("dial supplied listener: %v", err)
+	}
+	_ = conn.Close()
+}
+
+// TestStart_DisabledClosesSuppliedListener pins that a disabled gateway closes
+// a caller-supplied Listener rather than leaking it: the early return never
+// opens anything itself, so the supplied listener is the only thing that
+// could leak.
+func TestStart_DisabledClosesSuppliedListener(t *testing.T) {
+	lis, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("net.Listen() error: %v", err)
+	}
+	f := newFixture(t, func(cfg *Config) {
+		cfg.Enabled = false
+		cfg.Listener = lis
+	})
+
+	if err := f.srv.Start(); err != nil {
+		t.Fatalf("Start() on a disabled gateway error: %v", err)
+	}
+	if _, err := lis.Accept(); err == nil {
+		t.Fatal("expected the supplied listener to be closed by a disabled gateway")
+	}
+}
+
 // TestServeRetriesTimeoutsAndReportsFatalErrors pins Accept error handling: a
 // timeout is transient and the loop continues, anything else ends serving with
 // an error the hub can log.

@@ -16,6 +16,11 @@ import (
 	pb "github.com/wyiu/veyport/proto/veyport/v1"
 )
 
+// ErrNoPendingReEnroll is returned by ReleaseKEK when there is no live
+// re-enrollment session for the given server. Callers (e.g. the HTTP approve
+// handler) should match it with errors.Is rather than comparing error text.
+var ErrNoPendingReEnroll = errors.New("no pending re-enroll for server")
+
 // reEnrollApprovalTimeout is how long the stream goroutine waits for an admin to
 // approve/deny before auto-expiring the request.
 // Declared as var (not const) so tests can override it without waiting 10 minutes.
@@ -35,10 +40,10 @@ var reEnrollProofTimeout = 30 * time.Second
 // ephemeralPub and encryptedKek are produced by sealKEKToNode; the raw KEK
 // never travels over this channel — it is sealed before delivery.
 type reEnrollApproval struct {
-	ephemeralPub  []byte
-	encryptedKek  []byte
-	challenge     []byte
-	decidedBy     string
+	ephemeralPub []byte
+	encryptedKek []byte
+	challenge    []byte
+	decidedBy    string
 }
 
 // reEnrollSession holds all transient state for a single in-flight re-enrollment.
@@ -357,7 +362,7 @@ func (h *Handler) handleReEnrollProof(stream pb.AgentService_ConnectServer, serv
 func (h *Handler) ReleaseKEK(serverID, decidedBy string) error {
 	sess, ok := h.lookupReEnroll(serverID)
 	if !ok {
-		return errors.New("no pending re-enroll for server")
+		return ErrNoPendingReEnroll
 	}
 
 	// Load and decrypt the stored KEK.
@@ -418,4 +423,3 @@ func (h *Handler) ReleaseKEK(serverID, decidedBy string) error {
 		return errors.New("timed out waiting for agent proof")
 	}
 }
-

@@ -38,15 +38,19 @@ func startCLIInstallHarness(t *testing.T, binDir string) (baseURL string) {
 		t.Fatalf("init jwt secret: %v", err)
 	}
 
-	httpPort := freePort(t)
-	httpAddr := fmt.Sprintf("127.0.0.1:%d", httpPort)
+	// Bind the listener ourselves and hand it to Start rather than picking a
+	// free port by binding :0 and closing: a bound listener queues
+	// connections in the kernel backlog before Serve/Accept ever runs, so no
+	// waitForPort poll is needed after launching Start in a goroutine.
+	lis := listenLoopback(t)
+	httpAddr := lis.Addr().String()
 
 	hs := server.New(server.Config{
-		Addr:        httpAddr,
 		Store:       st,
 		JWTSecret:   jwtSecret,
 		IsDev:       true,
 		AgentBinDir: binDir,
+		Listener:    lis,
 	})
 
 	errCh := make(chan error, 1)
@@ -58,8 +62,6 @@ func startCLIInstallHarness(t *testing.T, binDir string) (baseURL string) {
 		defer cancel()
 		hs.Shutdown(ctx)
 	})
-
-	waitForPort(t, httpAddr, 5*time.Second)
 
 	select {
 	case err := <-errCh:

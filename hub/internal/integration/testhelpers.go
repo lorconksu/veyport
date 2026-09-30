@@ -23,7 +23,7 @@ import (
 
 const (
 	// httpURLFormat is the format string used to build HTTP URLs for the test harness.
-	httpURLFormat = "http://%s%s"
+	httpURLFormat = "http://%s%s" // NOSONAR: test harness listeners bind exclusively to loopback.
 	// bearerPrefix is the Authorization header prefix for bearer tokens.
 	bearerPrefix  = "Bearer "
 	cookieAccess  = "veyport_access"
@@ -85,11 +85,14 @@ func StartHarness(t *testing.T) *TestHarness {
 	logSessions := grpcserver.NewLogSessions()
 	grpcCAPin := fmt.Sprintf("%x", sha256.Sum256(caCert.Raw))
 
-	// Find two distinct free TCP ports
-	grpcPort, httpPort := freePortPair(t)
-
-	grpcAddr := fmt.Sprintf("127.0.0.1:%d", grpcPort)
-	httpAddr := fmt.Sprintf("127.0.0.1:%d", httpPort)
+	// Bind both listeners ourselves and hand them to Start, rather than
+	// picking free ports by binding :0 and closing: a bound listener queues
+	// connections in the kernel backlog before Serve/Accept ever runs, so no
+	// waitForPort poll is needed after launching Start in a goroutine.
+	grpcLis := listenLoopback(t)
+	httpLis := listenLoopback(t)
+	grpcAddr := grpcLis.Addr().String()
+	httpAddr := httpLis.Addr().String()
 
 	// Start gRPC server
 	gs := grpcserver.New(grpcserver.Config{
@@ -102,6 +105,7 @@ func StartHarness(t *testing.T) *TestHarness {
 		CACert:                 caCert,
 		CAKey:                  caKey,
 		StorageKey:             storageKey,
+		Listener:               grpcLis,
 	})
 
 	grpcErrCh := make(chan error, 1)
@@ -123,16 +127,13 @@ func StartHarness(t *testing.T) *TestHarness {
 		ConnMgr:          cm,
 		Pending:          pending,
 		LogSessions:      logSessions,
+		Listener:         httpLis,
 	})
 
 	httpErrCh := make(chan error, 1)
 	go func() {
 		httpErrCh <- hs.Start()
 	}()
-
-	// Wait for both ports to be ready
-	waitForPort(t, grpcAddr, 5*time.Second)
-	waitForPort(t, httpAddr, 5*time.Second)
 
 	// Check for immediate startup errors
 	select {
@@ -189,7 +190,7 @@ func (h *TestHarness) SetupAdmin(t *testing.T) string {
 func (h *TestHarness) SetupAdminWithTOTP(t *testing.T) (accessToken, totpSecret string) {
 	t.Helper()
 
-	baseURL := fmt.Sprintf("http://%s", h.HTTPAddr)
+	baseURL := fmt.Sprintf(httpURLFormat, h.HTTPAddr, "")
 
 	// Register first user (admin)
 	regBody := map[string]string{
@@ -328,7 +329,11 @@ func (h *TestHarness) HTTPPut(t *testing.T, path string, body interface{}, token
 	return h.httpRequestWithBody(t, "PUT", path, body, token)
 }
 
-// listenLoopback opens a probe listener on an ephemeral localhost port.
+// listenLoopback binds an ephemeral localhost listener that the caller hands
+// to a hub server's Config.Listener, so the server serves on a socket this
+// harness already owns instead of racing a close-then-rebind against sibling
+// test packages under `go test ./internal/...` (CI saw this as an
+// intermittent "bind: address already in use").
 func listenLoopback(t *testing.T) net.Listener {
 	t.Helper()
 	l, err := net.Listen("tcp", "127.0.0.1:0")
@@ -336,47 +341,6 @@ func listenLoopback(t *testing.T) net.Listener {
 		t.Fatalf("find free port: %v", err)
 	}
 	return l
-}
-
-func listenerPort(l net.Listener) int {
-	return l.Addr().(*net.TCPAddr).Port
-}
-
-// freePort returns a free TCP port on localhost. Callers that need more
-// than one port should use freePortPair so the ports are guaranteed distinct.
-func freePort(t *testing.T) int {
-	t.Helper()
-	l := listenLoopback(t)
-	l.Close()
-	return listenerPort(l)
-}
-
-// freePortPair returns two distinct free TCP ports on localhost. Both
-// listeners stay open until both ports are known: binding :0, closing, and
-// binding :0 again can hand back the same port, which surfaced in CI as the
-// hub's gRPC and HTTP servers fighting over one address.
-func freePortPair(t *testing.T) (int, int) {
-	t.Helper()
-	first := listenLoopback(t)
-	defer first.Close()
-	second := listenLoopback(t)
-	defer second.Close()
-	return listenerPort(first), listenerPort(second)
-}
-
-// waitForPort polls a TCP address until it accepts connections or the timeout expires.
-func waitForPort(t *testing.T, addr string, timeout time.Duration) {
-	t.Helper()
-	deadline := time.Now().Add(timeout)
-	for time.Now().Before(deadline) {
-		conn, err := net.DialTimeout("tcp", addr, 100*time.Millisecond)
-		if err == nil {
-			conn.Close()
-			return
-		}
-		time.Sleep(50 * time.Millisecond)
-	}
-	t.Fatalf("port %s not ready within %v", addr, timeout)
 }
 
 // StartAgentProcess is in agent_process_test.go (needs access to test-only vars from main_test.go)
