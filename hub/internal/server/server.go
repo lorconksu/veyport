@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"io/fs"
+	"net"
 	"net/http"
 	"strconv"
 	"sync"
@@ -38,6 +39,7 @@ type ReEnrollReleaser interface {
 
 type Server struct {
 	httpServer        *http.Server
+	listener          net.Listener
 	store             *store.Store
 	jwtSecret         string
 	storageKey        string
@@ -117,6 +119,10 @@ type Config struct {
 	UserCA     *userca.UserCA
 	SSHHostKey ssh.Signer
 	SSHConfig  sshconfig.Config
+	// Listener is an optional pre-bound listener; when set, Addr is ignored
+	// for binding and Start serves on it. Tests use this to avoid port races,
+	// production leaves it nil.
+	Listener net.Listener
 }
 
 func New(cfg Config) *Server {
@@ -129,6 +135,7 @@ func New(cfg Config) *Server {
 	}
 
 	s := &Server{
+		listener:          cfg.Listener,
 		store:             cfg.Store,
 		jwtSecret:         cfg.JWTSecret,
 		storageKey:        storageKey,
@@ -212,6 +219,10 @@ func (s *Server) SetReEnrollReleaser(r ReEnrollReleaser) {
 }
 
 func (s *Server) Start() error {
+	if s.listener != nil {
+		fmt.Printf("Veyport Hub listening on %s\n", s.listener.Addr())
+		return s.httpServer.Serve(s.listener)
+	}
 	fmt.Printf("Veyport Hub listening on %s\n", s.httpServer.Addr)
 	return s.httpServer.ListenAndServe()
 }

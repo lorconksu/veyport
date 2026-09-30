@@ -127,7 +127,12 @@ func startSSHGWHarness(t *testing.T) *sshGWHarness {
 		t.Fatalf("userca.InitHostKey: %v", err)
 	}
 
-	grpcPort, sshPort := freePortPair(t)
+	// Bind both listeners ourselves and hand them to Start rather than
+	// picking free ports by binding :0 and closing: a bound listener queues
+	// connections in the kernel backlog before Serve/Accept ever runs, so no
+	// waitForPort poll is needed after launching Start in a goroutine.
+	grpcLis := listenLoopback(t)
+	sshLis := listenLoopback(t)
 	h := &sshGWHarness{
 		store:     st,
 		connMgr:   connmgr.New(),
@@ -137,8 +142,8 @@ func startSSHGWHarness(t *testing.T) *sshGWHarness {
 		hostKey:   hostKey,
 		caCert:    caCert,
 		caPin:     fmt.Sprintf("%x", sha256.Sum256(caCert.Raw)),
-		grpcAddr:  fmt.Sprintf("127.0.0.1:%d", grpcPort),
-		sshAddr:   fmt.Sprintf("127.0.0.1:%d", sshPort),
+		grpcAddr:  grpcLis.Addr().String(),
+		sshAddr:   sshLis.Addr().String(),
 	}
 
 	gs := grpcserver.New(grpcserver.Config{
@@ -152,6 +157,7 @@ func startSSHGWHarness(t *testing.T) *sshGWHarness {
 		CACert:                 caCert,
 		CAKey:                  caKey,
 		StorageKey:             storageKey,
+		Listener:               grpcLis,
 	})
 	go func() { _ = gs.Start() }()
 
@@ -164,11 +170,9 @@ func startSSHGWHarness(t *testing.T) *sshGWHarness {
 		Pending:   h.pending,
 		Addr:      h.sshAddr,
 		Enabled:   true,
+		Listener:  sshLis,
 	})
 	go func() { _ = sshSrv.Start() }()
-
-	waitForPort(t, h.grpcAddr, sshGWTimeout)
-	waitForPort(t, h.sshAddr, sshGWTimeout)
 
 	t.Cleanup(func() {
 		ctx, cancel := context.WithTimeout(context.Background(), sshGWTimeout)

@@ -126,26 +126,22 @@ func TestStart_ListenAndShutdown(t *testing.T) {
 
 	jwtSecret, _ := InitJWTSecret(st)
 
-	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	lis, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
-		t.Fatalf("pick port: %v", err)
+		t.Fatalf("listen: %v", err)
 	}
-	addr := ln.Addr().String()
-	ln.Close()
 
 	s := New(Config{
-		Addr:      addr,
 		Store:     st,
 		JWTSecret: jwtSecret,
 		IsDev:     true,
+		Listener:  lis,
 	})
 
 	errCh := make(chan error, 1)
 	go func() {
 		errCh <- s.Start()
 	}()
-
-	time.Sleep(20 * time.Millisecond)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
@@ -160,5 +156,55 @@ func TestStart_ListenAndShutdown(t *testing.T) {
 		}
 	case <-time.After(2 * time.Second):
 		t.Fatal("timeout waiting for Start()")
+	}
+}
+
+// TestStart_ServesOnSuppliedListener pins that a Config.Listener is used
+// instead of binding Addr, which is how the integration test harness avoids
+// racing on ephemeral ports with sibling packages under `go test ./...`.
+func TestStart_ServesOnSuppliedListener(t *testing.T) {
+	st, err := store.New(testMemoryDB)
+	if err != nil {
+		t.Fatalf(testCreateStoreErr, err)
+	}
+	defer st.Close()
+
+	jwtSecret, _ := InitJWTSecret(st)
+
+	lis, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+
+	s := New(Config{
+		Store:     st,
+		JWTSecret: jwtSecret,
+		IsDev:     true,
+		Listener:  lis,
+	})
+
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- s.Start()
+	}()
+	t.Cleanup(func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		defer cancel()
+		s.Shutdown(ctx)
+	})
+
+	resp, err := http.Get("http://" + lis.Addr().String() + "/api/health")
+	if err != nil {
+		t.Fatalf("GET /api/health on supplied listener: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200, got %d", resp.StatusCode)
+	}
+
+	select {
+	case startErr := <-errCh:
+		t.Fatalf("Start() returned before Shutdown(): %v", startErr)
+	default:
 	}
 }

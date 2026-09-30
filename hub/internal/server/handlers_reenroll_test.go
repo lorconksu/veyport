@@ -4,11 +4,13 @@ import (
 	"bytes"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"testing"
 
 	"github.com/wyiu/veyport/hub/internal/auth"
+	"github.com/wyiu/veyport/hub/internal/grpcserver"
 	"github.com/wyiu/veyport/hub/internal/model"
 )
 
@@ -129,7 +131,7 @@ func TestReEnrollApprove_WrongTOTP(t *testing.T) {
 // there is no live gRPC stream in this test — we only need to assert the call
 // was made (full stream validation happens in Task 8).
 func TestReEnrollApprove_CorrectTOTP_ReachesReleaseKEK(t *testing.T) {
-	mock := &mockReEnrollReleaser{err: errors.New("no pending re-enroll for server")}
+	mock := &mockReEnrollReleaser{err: grpcserver.ErrNoPendingReEnroll}
 	s := newTestServerWithReleaser(t, mock)
 
 	_, rawSecret, accessToken := seedAdminWithTOTP(t, s)
@@ -155,6 +157,68 @@ func TestReEnrollApprove_CorrectTOTP_ReachesReleaseKEK(t *testing.T) {
 	}
 	if mock.serverID != "srv-reenroll-2" {
 		t.Fatalf("ReleaseKEK called with wrong serverID: %q", mock.serverID)
+	}
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("want 404 for ErrNoPendingReEnroll, got %d: %s", rec.Code, rec.Body.String())
+	}
+}
+
+// TestReEnrollApprove_WrappedNoPendingReEnroll_Still404 verifies that the
+// handler matches ErrNoPendingReEnroll via errors.Is even when it is wrapped
+// by the releaser, proving the mapping relies on error identity rather than
+// string comparison.
+func TestReEnrollApprove_WrappedNoPendingReEnroll_Still404(t *testing.T) {
+	mock := &mockReEnrollReleaser{err: fmt.Errorf("release KEK for srv-reenroll-3: %w", grpcserver.ErrNoPendingReEnroll)}
+	s := newTestServerWithReleaser(t, mock)
+
+	_, rawSecret, accessToken := seedAdminWithTOTP(t, s)
+	seedReEnrollRequest(t, s, accessToken, "srv-reenroll-3", "re-req-3")
+
+	s.ClearTOTPCache()
+	code, _ := auth.GenerateValidCode(rawSecret)
+
+	body, _ := json.Marshal(reEnrollApproveRequest{
+		RequestID: "re-req-3",
+		TOTPCode:  code,
+	})
+	req := httptest.NewRequest("POST", "/api/servers/srv-reenroll-3/reenroll/approve", bytes.NewReader(body))
+	req.Header.Set("Authorization", testBearerPrefix+accessToken)
+	rec := httptest.NewRecorder()
+	s.routes().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("want 404 for wrapped ErrNoPendingReEnroll, got %d: %s", rec.Code, rec.Body.String())
+	}
+}
+
+// TestReEnrollApprove_SameTextDifferentError_Not404 verifies that an error
+// with the same text as ErrNoPendingReEnroll but a different identity is NOT
+// treated as "no pending re-enroll" — proving the mapping no longer relies on
+// string comparison.
+func TestReEnrollApprove_SameTextDifferentError_Not404(t *testing.T) {
+	mock := &mockReEnrollReleaser{err: errors.New("no pending re-enroll for server")}
+	s := newTestServerWithReleaser(t, mock)
+
+	_, rawSecret, accessToken := seedAdminWithTOTP(t, s)
+	seedReEnrollRequest(t, s, accessToken, "srv-reenroll-4", "re-req-4")
+
+	s.ClearTOTPCache()
+	code, _ := auth.GenerateValidCode(rawSecret)
+
+	body, _ := json.Marshal(reEnrollApproveRequest{
+		RequestID: "re-req-4",
+		TOTPCode:  code,
+	})
+	req := httptest.NewRequest("POST", "/api/servers/srv-reenroll-4/reenroll/approve", bytes.NewReader(body))
+	req.Header.Set("Authorization", testBearerPrefix+accessToken)
+	rec := httptest.NewRecorder()
+	s.routes().ServeHTTP(rec, req)
+
+	if rec.Code == http.StatusNotFound {
+		t.Fatalf("want non-404 for a distinct error with matching text, got %d: %s", rec.Code, rec.Body.String())
+	}
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("want 409 (default branch) for a distinct error, got %d: %s", rec.Code, rec.Body.String())
 	}
 }
 

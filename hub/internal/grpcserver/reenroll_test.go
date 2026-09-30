@@ -397,7 +397,7 @@ func TestHandleReEnrollProof_CertIssuanceFails(t *testing.T) {
 // ReleaseKEK error branches
 // ---------------------------------------------------------------------------
 
-// TestReleaseKEK_NoSession: no pending session → error "no pending re-enroll for server"
+// TestReleaseKEK_NoSession: no pending session → ErrNoPendingReEnroll sentinel.
 func TestReleaseKEK_NoSession(t *testing.T) {
 	h, _ := testHandler(t)
 
@@ -405,7 +405,7 @@ func TestReleaseKEK_NoSession(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected error when no session exists")
 	}
-	if !strings.Contains(err.Error(), "no pending re-enroll") {
+	if !errors.Is(err, ErrNoPendingReEnroll) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 }
