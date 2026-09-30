@@ -96,7 +96,7 @@ func randChar(charset string) byte {
 	return charset[n]
 }
 
-func randInt(max int) int {
-	n, _ := rand.Int(rand.Reader, big.NewInt(int64(max)))
+func randInt(upperBound int) int {
+	n, _ := rand.Int(rand.Reader, big.NewInt(int64(upperBound)))
 	return int(n.Int64())
 }

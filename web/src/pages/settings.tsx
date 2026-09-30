@@ -204,11 +204,10 @@ function ProfileTab() {
         method: 'PUT',
         body: JSON.stringify({ avatar }),
       }),
-    onSuccess: () => {
+    onSuccess: async () => {
       // Refresh user data to get updated avatar
-      apiFetch<User>('/auth/me').then(updatedUser => {
-        login(updatedUser)
-      })
+      const updatedUser = await apiFetch<User>('/auth/me')
+      login(updatedUser)
     },
   })
 
@@ -820,7 +819,6 @@ function UsersTab() {
                 onChange={e => setAdminTotpCode(e.target.value)}
                 className="w-full bg-elevated border border-border rounded px-3 py-2 text-sm text-text-primary placeholder:text-text-faint focus:outline-none focus:border-accent mb-4 font-mono text-center tracking-widest"
                 maxLength={6}
-                autoFocus
                 required
               />
               <div className="flex gap-2">

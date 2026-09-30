@@ -29,7 +29,8 @@ export function SetupTOTPPage() {
 
   const renderQR = useCallback((qrUrl: string) => {
     if (!qrCanvasRef.current) return
-    QRCode.toCanvas(qrCanvasRef.current, qrUrl, { width: 192, margin: 2 })
+    void QRCode.toCanvas(qrCanvasRef.current, qrUrl, { width: 192, margin: 2 })
+      .catch(() => setError('Failed to render QR code. Use the manual entry key below.'))
   }, [])
 
   const submitCode = async (code: string) => {
@@ -101,9 +102,12 @@ export function SetupTOTPPage() {
               <button
                 type="button"
                 onClick={() => {
-                  navigator.clipboard.writeText(totpData.secret)
-                  setCopied(true)
-                  setTimeout(() => setCopied(false), 2000)
+                  void navigator.clipboard.writeText(totpData.secret)
+                    .then(() => {
+                      setCopied(true)
+                      setTimeout(() => setCopied(false), 2000)
+                    })
+                    .catch(() => setError('Failed to copy secret. Copy the manual entry key below.'))
                 }}
                 className="flex items-center gap-1 text-text-muted hover:text-text-primary text-[10px] uppercase tracking-wider transition-colors"
               >

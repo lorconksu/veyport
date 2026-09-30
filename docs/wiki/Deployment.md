@@ -256,13 +256,14 @@ WantedBy=multi-user.target
 |------|-------------|
 | `--hub <addr>` | Hub gRPC address (e.g. `veyport.example.com:443` or `192.168.1.10:9090`) |
 | `--token <token>` | One-time registration token obtained from the Hub when creating a server record |
+| `--insecure` | Disables TLS for development only, including self-unregistration. Never use on an untrusted network. |
 | `--self-unregister` | Calls `DELETE /api/servers/{id}/self-unregister` on the Hub to remove the current server entry, then exits. Used by the install script before re-installing to clean up the old registration. Requires a valid `agent.conf` with a known `server_id`. |
 
-### TLS auto-detection
+### Agent transport security
 
-The agent infers the connection security mode from the hub address:
-- **Hostname** (e.g. `veyport.example.com:443`) - TLS enabled
-- **IP address** (e.g. `192.168.1.10:9090`) - insecure (no TLS)
+The agent uses TLS by default for both hostnames and IP addresses. Self-unregistration uses the same host over HTTPS on port 443 and does not follow redirects, so its unregister credential stays on the original request. An IP address must have a trusted TLS endpoint to support self-unregistration.
+
+`--insecure` explicitly enables plaintext transport for development only. With `--self-unregister --insecure`, the REST request uses HTTP on port 8081. Production deployments should use a TLS proxy and omit this flag.
 
 ### Reconnect behavior
 

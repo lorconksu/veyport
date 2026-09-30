@@ -43,7 +43,7 @@ func main() {
 	flag.Parse()
 
 	if *selfUnregister {
-		runSelfUnregister(*configPath)
+		runSelfUnregister(*configPath, *insecureFlag)
 		return
 	}
 
@@ -120,7 +120,7 @@ func resolveDropzoneDir(configPath, dropzoneDirFlag string) string {
 
 // runSelfUnregister loads the config, sends an unregister request to the Hub, removes the config
 // file, then exits. If no config is found, it exits immediately with no error.
-func runSelfUnregister(configPath string) {
+func runSelfUnregister(configPath string, insecureTransport bool) {
 	cfg, err := loadConfig(configPath)
 	if err != nil || cfg == nil {
 		log.Printf("no config found at %s — nothing to unregister", configPath)
@@ -132,6 +132,7 @@ func runSelfUnregister(configPath string) {
 		ServerID:        cfg.ServerID,
 		AgentVersion:    version,
 		UnregisterToken: cfg.UnregisterToken,
+		Insecure:        insecureTransport,
 	})
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()

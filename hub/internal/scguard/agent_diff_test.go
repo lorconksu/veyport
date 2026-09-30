@@ -4,8 +4,9 @@
 // The feature's premise is that the SSH gateway is entirely a Hub-side
 // addition: the agent needs no new capability, no new logging, and no new
 // recording to support it (FR-008, SC-008). That promise is only as good as
-// something that checks it, so this package diffs agent/ and proto/ against
-// the point where this branch diverged from main and fails if either changed.
+// something that checks it, so this package verifies the agent/proto diff
+// introduced by the SSH gateway merge. Later agent security maintenance must
+// not be confused with capabilities introduced by that completed feature.
 //
 // The guard's concern is capability, logging/recording, and wire format —
 // not exact dependency versions. A routine dependency bump (e.g. a Go
@@ -61,29 +62,25 @@ var dependencyManifests = []string{
 // only "origin/main" fetched.
 var candidateMainRefs = []string{"main", "origin/main"}
 
-// TestAgentAndProtoUnchangedSinceMainMergeBase is the SC-008 guard: it fails
-// the build if this feature branch has modified anything under agent/ or
-// proto/ — other than the dependency manifests in dependencyManifests —
-// relative to the commit where it forked from main.
-//
-// It is deliberately tolerant of running outside a full git checkout (a
-// downloaded source tarball, a git-less container, a shallow clone with no
-// "main" ref reachable) — in every such case it SKIPS with a clear message
-// rather than FAILS, because "the guard machinery isn't available here" is a
-// different fact from "the agent was modified" and must not be conflated with
-// it.
+// sshGatewayMerge is the completed feature's immutable boundary (PR #65).
+const sshGatewayMerge = "602ae2329d12cba9c4b84288bf6d3944a3c57561"
+
+// TestAgentAndProtoUnchangedSinceMainMergeBase verifies the completed SSH
+// gateway feature introduced no agent or protocol changes beyond dependency
+// manifests. Before that feature is merged, it checks the live branch diff.
+// Missing history in shallow or non-git checkouts still causes a clear skip.
 func TestAgentAndProtoUnchangedSinceMainMergeBase(t *testing.T) {
 	repoRoot, ok := requireGitCheckout(t)
 	if !ok {
 		return
 	}
 
-	mergeBase, ok := resolveMergeBase(t, repoRoot)
+	mergeBase, featureHead, ok := resolveGuardRange(t, repoRoot)
 	if !ok {
 		return
 	}
 
-	diffArgs := []string{"diff", "--stat", mergeBase, "--"}
+	diffArgs := []string{"diff", "--stat", mergeBase, featureHead, "--"}
 	diffArgs = append(diffArgs, guardedPaths...)
 	diffArgs = append(diffArgs, dependencyManifests...)
 	out, err := runGit(repoRoot, diffArgs...)
@@ -95,7 +92,7 @@ func TestAgentAndProtoUnchangedSinceMainMergeBase(t *testing.T) {
 	}
 
 	if strings.TrimSpace(out) != "" {
-		t.Fatalf("SC-008 violated: agent/ or proto/ changed relative to merge-base %s with main "+
+		t.Fatalf("SC-008 violated: agent/ or proto/ changed within the SSH feature range starting at %s "+
 			"(dependency manifests agent/go.{mod,sum} and proto/go.{mod,sum} are already excluded "+
 			"from this diff, so this is a real change to source, generated, or build files):\n\n%s\n"+
 			"Feature 005-ssh-gateway (spec.md SC-008) requires the agent codebase to ship "+
@@ -131,28 +128,22 @@ func TestGuardPathspecExcludesOnlyDependencyManifests(t *testing.T) {
 	}
 }
 
-// TestAgentAndProtoDiffWithoutExcludesIsOnlyDependencyManifests documents,
-// and pins, the exact situation the dependencyManifests exclusion exists
-// for on this branch: with NO excludes applied, the only files that differ
-// under agent/ and proto/ relative to main's merge-base must be the four
-// dependency manifests themselves. If this test ever fails because some
-// other file also changed, that file needs its own review under SC-008 —
-// it must not be silently swept in by widening dependencyManifests.
-//
-// On main (and on any branch with no agent/proto changes at all) this test
-// passes trivially, since the unfiltered diff is then empty too.
+// TestAgentAndProtoDiffWithoutExcludesIsOnlyDependencyManifests checks the
+// same feature boundary without excludes, ensuring any changes consist only
+// of the four reviewed dependency manifests. Later agent security fixes are
+// outside the completed SSH feature boundary.
 func TestAgentAndProtoDiffWithoutExcludesIsOnlyDependencyManifests(t *testing.T) {
 	repoRoot, ok := requireGitCheckout(t)
 	if !ok {
 		return
 	}
 
-	mergeBase, ok := resolveMergeBase(t, repoRoot)
+	mergeBase, featureHead, ok := resolveGuardRange(t, repoRoot)
 	if !ok {
 		return
 	}
 
-	diffArgs := append([]string{"diff", "--name-only", mergeBase, "--"}, guardedPaths...)
+	diffArgs := append([]string{"diff", "--name-only", mergeBase, featureHead, "--"}, guardedPaths...)
 	out, err := runGit(repoRoot, diffArgs...)
 	if err != nil {
 		t.Fatalf("SC-008 guard: %v", err)
@@ -172,11 +163,24 @@ func TestAgentAndProtoDiffWithoutExcludesIsOnlyDependencyManifests(t *testing.T)
 
 	for _, file := range strings.Split(trimmed, "\n") {
 		if !allowed[file] {
-			t.Fatalf("unfiltered agent/proto diff against merge-base %s with main contains %q, "+
+			t.Fatalf("unfiltered SSH feature agent/proto diff starting at %s contains %q, "+
 				"which is not a dependency manifest — this file needs SC-008 review, not a widened "+
 				"exclusion:\n\n%s", mergeBase, file, out)
 		}
 	}
+}
+
+// After the feature lands, pin its original diff rather than freezing all
+// future agent development. On the original unmerged feature branch, retain
+// the live comparison against main. Shallow checkouts still skip when neither
+// boundary can be resolved, as they did before.
+func resolveGuardRange(t *testing.T, repoRoot string) (string, string, bool) {
+	t.Helper()
+	if _, err := runGit(repoRoot, "merge-base", "--is-ancestor", sshGatewayMerge, "HEAD"); err == nil {
+		return sshGatewayMerge + "^", sshGatewayMerge, true
+	}
+	base, ok := resolveMergeBase(t, repoRoot)
+	return base, "HEAD", ok
 }
 
 // requireGitCheckout reports the repository root, skipping the test with an
