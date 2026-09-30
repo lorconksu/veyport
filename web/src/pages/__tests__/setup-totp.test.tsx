@@ -27,7 +27,7 @@ vi.mock('@/hooks/use-auth', () => ({
 }))
 
 vi.mock('qrcode', () => ({
-  default: { toCanvas: vi.fn() },
+  default: { toCanvas: vi.fn().mockResolvedValue(undefined) },
 }))
 
 // Mock clipboard
@@ -91,6 +91,24 @@ describe('SetupTOTPPage', () => {
     await waitFor(() => {
       expect(screen.getByText('ABCDEFGHIJKLMNOP')).toBeInTheDocument()
     })
+  })
+
+  it('keeps the manual entry key available when QR rendering fails', async () => {
+    const QRCode = await import('qrcode')
+    vi.mocked(QRCode.default.toCanvas).mockRejectedValueOnce(new Error('canvas unavailable'))
+    mockApiFetchWithToken.mockResolvedValueOnce(totpData)
+    renderPage()
+    expect(await screen.findByText('Failed to render QR code. Use the manual entry key below.')).toBeInTheDocument()
+    expect(screen.getByText(totpData.secret)).toBeInTheDocument()
+  })
+
+  it('shows a copy error without claiming success when the clipboard rejects', async () => {
+    vi.mocked(navigator.clipboard.writeText).mockRejectedValueOnce(new Error('permission denied'))
+    mockApiFetchWithToken.mockResolvedValueOnce(totpData)
+    renderPage()
+    fireEvent.click(await screen.findByRole('button', { name: 'Copy' }))
+    expect(await screen.findByText('Failed to copy secret. Copy the manual entry key below.')).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Copied' })).not.toBeInTheDocument()
   })
 
   it('renders 6 digit inputs after TOTP data loads', async () => {

@@ -157,7 +157,6 @@ export function AddServerModal({ onClose }: Readonly<AddServerModalProps>) {
               onKeyDown={(e) => e.key === 'Enter' && handleGenerate()}
               placeholder="e.g., web-prod-1"
               className="w-full px-3 py-2 bg-elevated border border-border rounded text-sm text-text-primary placeholder:text-text-faint focus:outline-none focus:border-accent"
-              autoFocus
             />
             {createMutation.isError && (
               <p className="text-status-error text-xs mt-2">

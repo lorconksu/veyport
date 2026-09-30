@@ -96,7 +96,6 @@ export function CreateUserModal({ onClose }: Readonly<CreateUserModalProps>) {
                 value={username}
                 onChange={e => setUsername(e.target.value)}
                 className="w-full bg-elevated border border-border rounded px-3 py-2 text-sm text-text-primary placeholder:text-text-faint focus:outline-none focus:border-accent"
-                autoFocus
                 required
               />
               <input

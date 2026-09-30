@@ -101,7 +101,6 @@ export function TOTPDigitInput({
           onKeyDown={(e) => handleKeyDown(position, e)}
           onPaste={handlePaste}
           className="w-10 h-12 bg-elevated border border-border rounded text-center text-lg font-mono text-text-primary focus:outline-none focus:border-accent"
-          autoFocus={position === 0}
           disabled={disabled}
         />
       ))}

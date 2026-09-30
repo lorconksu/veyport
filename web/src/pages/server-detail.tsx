@@ -420,7 +420,7 @@ function DropzoneUpload({ serverId }: Readonly<{ serverId: string }>) {
     e.preventDefault()
     setDragOver(false)
     const file = e.dataTransfer.files[0]
-    if (file) handleUpload(file)
+    if (file) void handleUpload(file)
   }
 
   const handleDragOver = (e: React.DragEvent<HTMLButtonElement>) => {
@@ -435,7 +435,7 @@ function DropzoneUpload({ serverId }: Readonly<{ serverId: string }>) {
   const handleFileInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0]
     if (file) {
-      handleUpload(file)
+      void handleUpload(file)
       // Reset input so the same file can be re-uploaded
       e.target.value = ''
     }
@@ -820,7 +820,7 @@ function LiveTail({
       }
     }
 
-    startStream(controller.signal)
+    void startStream(controller.signal)
 
     return () => {
       controller.abort()
@@ -1163,7 +1163,6 @@ function FileSearchBar({
         onChange={(e) => onSearchChange(e.target.value)}
         placeholder="Search in file..."
         className="flex-1 bg-transparent text-sm text-text-primary placeholder:text-text-faint focus:outline-none"
-        autoFocus
         onKeyDown={(e) => {
           if (e.key === 'Escape') onClose()
           if (e.key === 'Enter' && !e.shiftKey) onNavigateNext()

@@ -102,7 +102,7 @@ func (s *Store) CreateSession(sess *model.Session) error {
 // GetSession reads one session by id, returning ErrSessionNotFound when there
 // is no such row.
 func (s *Store) GetSession(id string) (*model.Session, error) {
-	sess, err := scanSession(s.db.QueryRow(querySessionByID, id))
+	sess, err := scanSession(s.db.QueryRow(querySessionByID, id)) // NOSONAR: compile-time constant SQL; id is a bound parameter.
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, ErrSessionNotFound
 	}
