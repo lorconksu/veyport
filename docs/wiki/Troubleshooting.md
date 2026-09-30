@@ -77,8 +77,9 @@ any administrator assign the exemption to another admin account in **Settings �
 As of feature 009, every sign-in creates a server-side session with two independent limits (both
 configurable in **Settings → Users → Account policy**, see [[Settings]]):
 
-- **Idle timeout** (default **15 minutes**) - no request was made for that long. Ordinary use
-  resets this clock, so it only fires when you actually stop using Veyport.
+- **Idle timeout** (default **15 minutes**) - no authenticated session request reached the Hub
+  for that long. Local interactions such as typing or copying an install command do not
+  independently reset this clock.
 - **Maximum session** (default **12 hours**) - the session's absolute lifetime, set at sign-in and
   never extended, regardless of activity.
 
@@ -100,10 +101,25 @@ and exit code `3` for `vey`. This is expected and one-time: every user, web and 
 more after that specific upgrade, and normal session behaviour applies from then on. There is
 nothing to configure or recover - just sign in again.
 
+### I was signed out while working in a visible dashboard
+
+The current dashboard does not report mouse or keyboard activity separately from API requests.
+Its regular polling normally keeps a visible tab active, but a stalled request can block later
+polls: the API helper has no application-level request timeout. Hidden tabs also pause polling.
+If no authenticated session request reaches the Hub within the idle limit, the next request
+returns you to sign-in even if you were typing in the page. The page can continue to look signed
+in until that request occurs.
+
+Sign in again. If it recurs while the dashboard stays visible, record the browser and version,
+the time, and whether the browser's Network panel shows pending or failed `/api/servers` requests.
+An administrator can check the `session.expired` audit event to distinguish an idle timeout from
+the absolute session limit. See [[Audit Logs]]. A stalled request is a possible cause, not proof
+of what happened in a particular browser.
+
 ### An open dashboard tab never seems to go idle
 
 The Fleet Dashboard polls the Hub in the background roughly every 10 seconds, and each request
-counts as activity, so a tab left open and visible can outlast the idle timeout indefinitely. This
+counts as activity, so a tab left open and visible with working polling can outlast the idle timeout. This
 is a known, documented limitation, not a bug: the **absolute session limit** (default 12 hours)
 still applies regardless, so a tab open longer than that is eventually signed out anyway. Client-
 side "the user actually walked away" detection (mouse/keyboard inactivity in the browser itself)

@@ -38,6 +38,8 @@ Commands:
   login          sign in to a hub interactively
   logout         sign out and remove stored credentials for the hub
   status         show the effective hub, auth mode, and reachability
+  ssh-cert       obtain an SSH certificate for server connections
+  ssh <server>   open an interactive SSH session by server name or ID
   servers list   list servers on the hub
   servers get    show one server's details
   files ls       list a path on a remote server
