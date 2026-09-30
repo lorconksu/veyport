@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/wyiu/veyport/cli/internal/cmdutil"
+	"github.com/wyiu/veyport/cli/internal/commands"
 )
 
 // captureOutput redirects os.Stdout and os.Stderr for the duration of fn and
@@ -127,6 +128,21 @@ func TestRun_Help(t *testing.T) {
 	}
 	if stderr != "" {
 		t.Errorf("stderr = %q, want empty on --help", stderr)
+	}
+	listedCommands := make(map[string]bool)
+	_, commandHelp, found := strings.Cut(stdout, "Commands:\n")
+	if !found {
+		t.Fatal("help is missing the Commands section")
+	}
+	for _, line := range strings.Split(commandHelp, "\n") {
+		if fields := strings.Fields(line); len(fields) > 0 {
+			listedCommands[fields[0]] = true
+		}
+	}
+	for name := range commands.Registry {
+		if !listedCommands[name] {
+			t.Errorf("help does not list registered command %q", name)
+		}
 	}
 }
 
