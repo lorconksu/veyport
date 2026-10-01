@@ -1,5 +1,19 @@
 # Veyport Deployment Guide
 
+## Runtime identity and access paths
+
+The Hub serves HTTP on `:8081`, agent mTLS gRPC on `:9090`, and the SSH gateway on
+`:2222` by default. Expose the gateway through TCP when enabling `vey ssh`;
+HTTPS-only reverse proxy routes do not carry SSH. Managed nodes need the agent's
+outbound Hub connection; gateway shells do not use the node's own SSH daemon.
+See [[Proxy Configuration]] and [[SSH Gateway]].
+
+The standard agent systemd installer omits `User=`, so the agent runs as **root**.
+Local Veyport admin shells inherit that identity in both the browser and CLI.
+LDAP shells instead use the mapped host account, which must be resolvable on each
+managed node. Changing the agent service identity also changes the OS permissions
+available to its file operations and inherited admin shells; see [[Architecture]].
+
 > **TL;DR**
 > - **What:** Docker-first deployment with a single `docker-compose.yml`; bare-metal binary also available
 > - **Who:** The person deploying Veyport Hub and agents

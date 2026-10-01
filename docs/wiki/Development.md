@@ -366,6 +366,25 @@ Create a new page in `web/src/pages/` and add the route in `web/src/App.tsx`. Us
 
 ## Code Style and Conventions
 
+### Terminal and session architecture
+
+`hub/internal/server.AuthorizeTerminalExecution` is shared by browser terminal
+handlers and `hub/internal/sshgw`. Both send `TerminalOpenRequest.run_as_user`
+through the existing agent stream to `agent/internal/terminal.Manager`.
+An empty execution user means inherit the agent's OS account, used for local
+admins; the standard installed agent runs as root. LDAP accounts resolve to their
+mapped host username and execute with that account's UID, GID, and groups.
+Do not silently fall back to the agent identity when a mapped account is missing.
+
+The standalone CLI is in `cli/`; it uses HTTPS for API requests and certificate
+issuance, then invokes the system SSH client against the Hub gateway. Terminal
+authorization is independent of whether the transport is browser SSE or SSH.
+
+Session idle activity currently comes from authenticated HTTP requests, not browser
+input events. Polling can stall or pause, while local editing continues. Preserve
+this distinction when changing frontend queries or session policy; [[Architecture]]
+documents the current behavior and limits.
+
 ### Go
 
 - Standard `gofmt` formatting. Run `go fmt ./...` before committing.
@@ -373,7 +392,7 @@ Create a new page in `web/src/pages/` and add the route in `web/src/App.tsx`. Us
 - No global state. Dependencies are injected via the `Server` struct and `Config`.
 - All SQL queries are in the `store` package. Handlers must not construct SQL.
 - Audit log entries should be written for all user-facing state changes. See `model.Audit*` constants for the naming pattern (`resource.action`).
-- Terminal endpoints must remain browser-interactive only. Keep `interactiveOnly`, `terminalAccessOnly`, and the per-server root assignment check together when adding terminal behavior.
+- HTTP terminal endpoints and SSH certificate issuance require an interactive login; API tokens are refused. Keep the HTTP middleware checks and the shared terminal authorization decision consistent with SSH. LDAP non-admins also require terminal access and a per-server `/` assignment.
 
 ### TypeScript / React
 

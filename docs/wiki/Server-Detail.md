@@ -102,7 +102,11 @@ The Terminal workspace opens a live shell through the same outbound agent stream
 - **LDAP users** need membership in the configured terminal group (`veyport-terminal-users` by default) and a root (`/`) path assignment on that server.
 - **Local non-admin users** cannot open terminal sessions.
 
-LDAP terminal sessions run as the mapped LDAP username on the agent host. Local admin sessions run as the agent service identity.
+LDAP terminal sessions, including LDAP admin sessions, run as the mapped LDAP username
+on the agent host. Local admin sessions inherit the agent service identity: the standard
+installer runs the agent as **root**, so these shells also run as root. The same rule
+applies to `vey ssh`. A missing mapped host account fails instead of falling back to root.
+See [[Architecture]] and [[SSH Gateway]].
 
 ### Starting a Terminal Session
 
