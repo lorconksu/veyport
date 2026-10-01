@@ -18,6 +18,7 @@
 2. [Prerequisites](#prerequisites)
 3. [Enrollment: `vey ssh-cert`](#enrollment-vey-ssh-cert)
 4. [Connecting: `vey ssh <server>`](#connecting-vey-ssh-server)
+   - [Which OS account runs the shell?](#which-os-account-runs-the-shell)
 5. [The manual `ssh` form and the `user+server` login name](#the-manual-ssh-form-and-the-userserver-login-name)
 6. [Host-key pinning](#host-key-pinning)
 7. [Certificate lifetime and re-issuance](#certificate-lifetime-and-re-issuance)
@@ -122,6 +123,23 @@ vey --hub https://hub.example.com ssh web01
 5. Propagates the `ssh` client's exit status back to your shell.
 
 You get a full interactive PTY: full-screen editors, pagers, `htop`, and window resizing all work, because the Hub relays raw terminal bytes and `window-change` events end-to-end over the same channel the web terminal uses.
+
+## Which OS account runs the shell?
+
+Your Veyport username authenticates you to the gateway. It does not automatically
+become the Linux username on the target VM. Both SSH and browser terminal sessions
+use the same authorization decision and agent PTY manager:
+
+- **Local admins** inherit the agent's OS account. The standard installer runs the
+  agent as root, so `whoami` in the shell reports `root`. This is the current design.
+- **LDAP admins and authorized LDAP users** run as their mapped LDAP username on
+  the target host. The host must resolve that account; lookup failure refuses the
+  shell rather than falling back to root.
+
+`vey ssh` has no option to select an arbitrary Linux user. A root (`/`) path
+assignment grants terminal eligibility to an authorized LDAP user; it does not
+restrict commands inside the shell to a filesystem subtree. The shell follows its
+OS account's permissions. See [[Architecture]] for the execution identity table.
 
 ## The manual `ssh` form and the `user+server` login name
 
