@@ -94,24 +94,7 @@ API tokens can call normal access-token-protected API endpoints, but they are in
 
 ### Typical Login Flow
 
-```mermaid
-sequenceDiagram
-    participant Client
-    participant Hub
-
-    Client->>Hub: POST /api/auth/login {username, password}
-    alt TOTP not set up
-        Hub-->>Client: 200 {setup_token, requires_totp_setup: true}
-        Client->>Hub: POST /api/auth/totp/setup (Bearer setup_token)
-        Hub-->>Client: 200 {secret, qr_url}
-        Client->>Hub: POST /api/auth/totp/enable {code} (Bearer setup_token)
-        Hub-->>Client: 200 Set-Cookie(access, refresh, csrf) + {user}
-    else TOTP enabled
-        Hub-->>Client: 202 {totp_token}
-        Client->>Hub: POST /api/auth/login/totp {totp_token, code}
-        Hub-->>Client: 200 Set-Cookie(access, refresh, csrf) + {user}
-    end
-```
+![Typical Login Flow diagram](../screenshots/diagram-api-reference-0047ed06.png)
 
 ---
 

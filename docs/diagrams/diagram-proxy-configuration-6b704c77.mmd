@@ -1,0 +1,21 @@
+flowchart LR
+    subgraph Internet
+        Browser["Browser / API Client"]
+        Agent["Veyport Agent"]
+    end
+
+    subgraph Proxy["Reverse Proxy"]
+        HTTPS["HTTPS :443<br/>TLS Termination"]
+        GRPC["gRPC :9443<br/>TLS Passthrough"]
+    end
+
+    subgraph Hub["Veyport Hub"]
+        HTTP_SVC[":8081<br/>Web UI + REST API"]
+        GRPC_SVC[":9090<br/>gRPC (mTLS)"]
+    end
+
+    Browser -- "HTTPS" --> HTTPS
+    HTTPS -- "HTTP (plaintext)" --> HTTP_SVC
+
+    Agent -- "TLS (mTLS)" --> GRPC
+    GRPC -- "Raw TLS (untouched)" --> GRPC_SVC

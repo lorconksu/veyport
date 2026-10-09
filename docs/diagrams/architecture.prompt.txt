@@ -1,0 +1,17 @@
+Maintain the original Veyport Architecture infographic format: near-white
+landscape background, navy title, blue illustrated browser/proxy/server icons,
+central navy Hub card, lighter module cards, clear arrows, and concise callouts.
+
+Include browser HTTPS via optional reverse proxy to Hub HTTP :8081. Include vey
+CLI HTTPS for login, API requests, and SSH certificate issuance via the same
+proxy; show a separate CLI SSH :2222 path directly to the Hub SSH gateway, not
+through an HTTP proxy. Include LDAP/FreeIPA identity lookup. Hub modules: Web UI,
+REST API, SSE; local/LDAP authentication, TOTP, RBAC, sessions; SSH gateway and
+shared terminal authorization; agent operation broker; SQLite including sessions.
+Agents initiate outbound gRPC mTLS :9090 connections; logical commands and data
+flow both ways over those streams. Managed nodes expose no inbound Veyport port.
+
+Shell identity callout: local admins inherit agent identity, which is root under
+the standard installer; LDAP users run as their mapped host accounts. Do not show
+Hub connections to node SSH daemons, invent activity detection, or claim audit
+immutability. Preserve readable labels, whitespace, and the illustrated style.

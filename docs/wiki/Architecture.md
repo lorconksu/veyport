@@ -2,17 +2,7 @@
 
 Veyport uses a **Hub-and-Spoke** model. The Hub hosts the web UI, REST API, SSH gateway, and SQLite database. Browsers and the `vey` CLI connect to the Hub; agents deployed on managed servers maintain persistent gRPC streams back to it.
 
-```mermaid
-flowchart LR
-    Browser[Browser] -->|HTTPS REST and SSE| Hub[Hub HTTP :8081]
-    CLI[vey CLI] -->|HTTPS login and SSH certificate| Hub
-    CLI -->|Native SSH :2222| Gateway[Hub SSH gateway]
-    Hub --> DB[(SQLite)]
-    Gateway -->|Live terminal authorization| Hub
-    Hub <-->|Agent-initiated mTLS gRPC :9090| Agent[Agent on managed server]
-    Gateway -->|Shared terminal broker over agent stream| Agent
-    Agent -->|OS execution identity| Shell[PTY shell]
-```
+![Veyport Architecture diagram](../screenshots/veyport-architecture.png)
 
 ## Components
 
@@ -89,25 +79,7 @@ Agent connections are authenticated with **Hub-issued short-lived client certifi
 
 ### Re-Enrollment Flow
 
-```mermaid
-sequenceDiagram
-    participant Agent
-    participant Hub
-    participant Admin
-
-    Agent->>Hub: ReEnrollRequest (serverID, CSR, DMI fingerprint)
-    Hub->>Hub: Record pending request, check clone signals
-    Hub-->>Admin: Dashboard shows Pending re-enrollment (+ clone warning if anomaly)
-    Admin->>Hub: POST /api/servers/{id}/reenroll/approve (TOTP step-up)
-    Hub->>Hub: Validate TOTP, encrypt KEK to node X25519 transport key
-    Hub-->>Agent: ReEnrollApproved (ephemeral_pub, encrypted_kek, challenge)
-    Agent->>Agent: ECDH + HKDF-SHA256 + AES-256-GCM → decrypt KEK
-    Agent->>Agent: Unseal ed25519 identity key, sign challenge
-    Agent->>Hub: ReEnrollProof (ed25519 signature)
-    Hub->>Hub: Verify signature against stored pubkey, re-issue cert for same serverID
-    Hub-->>Agent: New client certificate
-    Agent->>Hub: Reconnects with renewed cert (same serverID, history preserved)
-```
+![Re-Enrollment Flow diagram](../screenshots/diagram-architecture-8eb42cca.png)
 
 ### Re-Enrollment Security Model
 

@@ -1,0 +1,35 @@
+flowchart TB
+    subgraph Internet
+        Browser["Browser"]
+        Agent["Veyport Agent"]
+    end
+
+    subgraph AWS
+        R53["Route 53<br/>veyport.example.com"]
+        ACM["ACM Certificate"]
+
+        subgraph VPC
+            ALB["Application Load Balancer<br/>HTTPS :443 + gRPC :9443"]
+
+            subgraph OptionA["Option A: EC2"]
+                EC2["EC2 Instance<br/>t3.small<br/>Docker"]
+                EBS["EBS Volume<br/>/data"]
+            end
+
+            subgraph OptionB["Option B: ECS Fargate"]
+                ECS["ECS Task<br/>yiucloud/veyport"]
+                EFS["EFS Volume<br/>/data"]
+            end
+        end
+    end
+
+    Browser -->|HTTPS :443| R53
+    Agent -->|gRPC :9443| R53
+    R53 --> ALB
+    ACM -.->|TLS cert| ALB
+    ALB -->|:8081| EC2
+    ALB -->|:9090 HTTP/2| EC2
+    EC2 --- EBS
+    ALB -->|:8081| ECS
+    ALB -->|:9090 HTTP/2| ECS
+    ECS --- EFS
