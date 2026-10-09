@@ -9,7 +9,6 @@ import (
 	"fmt"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/wyiu/veyport/hub/internal/model"
 	pb "github.com/wyiu/veyport/proto/veyport/v1"
@@ -196,23 +195,7 @@ func TestHandleReEnrollRequest_ApprovalSignal(t *testing.T) {
 		Csr:         testRegistrationCSR(t),
 	}
 
-	// Send an approval signal via goroutine after a tiny delay, so the select
-	// in handleReEnrollRequest can pick it up.
-	go func() {
-		time.Sleep(5 * time.Millisecond)
-		sess, ok := h.lookupReEnroll("srv-approve")
-		if !ok {
-			return
-		}
-		sess.approve <- reEnrollApproval{
-			ephemeralPub: make([]byte, 32),
-			encryptedKek: make([]byte, 44),
-			challenge:    make([]byte, 32),
-			decidedBy:    "admin-1",
-		}
-	}()
-
-	approvalSent, err := h.handleReEnrollRequest(stream, req)
+	approvalSent, err := handleApprovedReEnrollForTest(t, h, stream, req)
 	if err != nil {
 		t.Fatalf("expected nil error, got: %v", err)
 	}
