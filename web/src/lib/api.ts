@@ -5,6 +5,7 @@ const BASE_URL = '/api'
 // Singleton refresh promise to prevent race conditions when multiple
 // requests hit 401 simultaneously
 let refreshPromise: Promise<boolean> | null = null
+const REFRESH_TIMEOUT_MS = 10_000
 
 function shouldSetJsonContentType(body: BodyInit | null | undefined): boolean {
   return body != null && !(body instanceof FormData)
@@ -30,15 +31,19 @@ async function refreshToken(): Promise<boolean> {
   if (refreshPromise) return refreshPromise
 
   refreshPromise = (async () => {
+    const controller = new AbortController()
+    const timeout = setTimeout(() => controller.abort(), REFRESH_TIMEOUT_MS)
     try {
       const csrfToken = getCSRFToken()
       const res = await fetch(`${BASE_URL}/auth/refresh`, {
         method: 'POST',
         credentials: 'same-origin',
+        signal: controller.signal,
         headers: csrfToken ? { 'X-CSRF-Token': csrfToken } : undefined,
       })
       return res.ok
     } finally {
+      clearTimeout(timeout)
       refreshPromise = null
     }
   })()
@@ -61,6 +66,9 @@ export async function apiFetch<T>(
   // Handle 401 with automatic refresh (singleton to prevent race conditions)
   if (res.status === 401) {
     const refreshed = await refreshToken()
+    // A hidden/unmounted page can cancel its check while another request shares
+    // the refresh. Do not retry or redirect on behalf of that cancelled caller.
+    options.signal?.throwIfAborted()
 
     if (refreshed) {
       // Retry with new cookies (set by server)
@@ -84,7 +92,7 @@ export async function apiFetch<T>(
     throw new Error((error as { error?: string }).error || `HTTP ${res.status}`)
   }
 
-  if (res.status === 204 || res.headers.get('content-length') === '0') {
+  if (options.method?.toUpperCase() === 'HEAD' || res.status === 204 || res.headers.get('content-length') === '0') {
     return undefined as T
   }
   return res.json() as Promise<T>

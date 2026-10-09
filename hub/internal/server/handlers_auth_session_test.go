@@ -2,6 +2,7 @@ package server
 
 import (
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -225,8 +226,47 @@ func TestSession_FirstLoginTOTPEnableCreatesSession(t *testing.T) {
 	}
 }
 
+// Browser activity checks use the existing route and session middleware, with
+// an empty response body even when the session is refused.
+func TestSession_HeadActivityCheck(t *testing.T) {
+	s, clk := sessionServer(t)
+	setSessionPolicy(t, s, 1, 12)
+	_, accessToken, _, sid := signedInUser(t, s, "head-activity")
+	server := httptest.NewServer(s.routes())
+	t.Cleanup(server.Close)
+	client := server.Client()
+	client.Timeout = 5 * time.Second
+	check := func(wantStatus int) {
+		t.Helper()
+		req, err := http.NewRequest(http.MethodHead, server.URL+testMePath, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		req.Header.Set("Authorization", testBearerPrefix+accessToken)
+		resp, err := client.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer resp.Body.Close()
+		body, err := io.ReadAll(resp.Body)
+		if err != nil || len(body) != 0 || resp.StatusCode != wantStatus {
+			t.Fatalf("HEAD: status=%d body=%q err=%v, want status=%d and no body", resp.StatusCode, body, err, wantStatus)
+		}
+	}
+	clk.advance(15 * time.Second)
+	check(http.StatusOK)
+	if got := reloadSession(t, s, sid).LastSeenAt; !got.Equal(clk.now()) {
+		t.Fatalf("HEAD did not record activity: last seen=%s, want %s", got, clk.now())
+	}
+	clk.advance(61 * time.Second)
+	check(http.StatusUnauthorized)
+	if got := reloadSession(t, s, sid).EndReason; got != "expired_idle" {
+		t.Fatalf("expired session end reason=%q, want expired_idle", got)
+	}
+}
+
 // (c) Requests keep the session alive, but the activity clock is written at
-// most once a minute however busy the client is (FR-003).
+// most once a minute with the default idle policy (FR-003).
 func TestSession_RequestsTouchLastSeenThrottled(t *testing.T) {
 	s, clk := sessionServer(t)
 	setSessionPolicy(t, s, 15, 12)

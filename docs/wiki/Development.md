@@ -380,10 +380,12 @@ The standalone CLI is in `cli/`; it uses HTTPS for API requests and certificate
 issuance, then invokes the system SSH client against the Hub gateway. Terminal
 authorization is independent of whether the transport is browser SSE or SSH.
 
-Session idle activity currently comes from authenticated HTTP requests, not browser
-input events. Polling can stall or pause, while local editing continues. Preserve
-this distinction when changing frontend queries or session policy; [[Architecture]]
-documents the current behavior and limits.
+The Hub records session idle activity through authenticated HTTP requests. The
+signed-in app shell uses `useSessionActivity` to send `HEAD /api/auth/me` after
+recent visible-tab interaction, independently of React Query polling. Preserve
+its throttling, hidden-tab suppression, request cancellation, and bounded token
+refresh when changing queries or session policy. Background polling still counts
+as activity; [[Architecture]] documents the behavior and limits.
 
 ### Go
 

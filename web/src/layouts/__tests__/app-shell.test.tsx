@@ -16,6 +16,8 @@ vi.mock('@/lib/api', () => ({
   apiFetch: vi.fn(),
 }))
 
+vi.mock('@/hooks/use-session-activity', () => ({ useSessionActivity: vi.fn() }))
+
 vi.mock('@/lib/avatar', () => ({
   getAvatarColor: vi.fn(() => '#3b82f6'),
 }))
@@ -35,6 +37,7 @@ import { apiFetch } from '@/lib/api'
 const mockApiFetch = apiFetch as ReturnType<typeof vi.fn>
 
 import { useAuth } from '@/hooks/use-auth'
+import { useSessionActivity } from '@/hooks/use-session-activity'
 const mockUseAuth = useAuth as ReturnType<typeof vi.fn>
 
 function renderWithProviders(ui: React.ReactElement) {
@@ -61,6 +64,11 @@ describe('AppShell', () => {
       expect(screen.getByText('Audit Logs')).toBeInTheDocument()
       expect(screen.getByText('Settings')).toBeInTheDocument()
     })
+  })
+
+  it('enables activity tracking for the signed-in app shell', () => {
+    renderWithProviders(<AppShell />)
+    expect(useSessionActivity).toHaveBeenCalledWith(true)
   })
 
   it('renders the Logo', async () => {
