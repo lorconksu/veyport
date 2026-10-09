@@ -1,0 +1,6 @@
+flowchart LR
+    A[vey CLI] -- "Bearer JWT or adt_ API token" --> B[Hub REST API]
+    B -- gRPC --> C[Agent on remote server]
+    A -. "GET /install/cli/os/arch" .-> B
+    A -- "ssh -p 2222 (cert auth)" --> D[Hub SSH Gateway]
+    D -- gRPC --> C

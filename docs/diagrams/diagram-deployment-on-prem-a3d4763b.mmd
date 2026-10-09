@@ -1,0 +1,4 @@
+flowchart LR
+    Client["Browser / Agent"] -->|443 HTTPS| Proxy["Reverse Proxy<br/>(Traefik, Nginx, etc.)"]
+    Proxy -->|8081 HTTP| Hub["Veyport Hub"]
+    Proxy -->|9090 h2c| HubGRPC["Veyport Hub<br/>(gRPC)"]

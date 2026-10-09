@@ -1,0 +1,56 @@
+[
+  {
+    "source": "docs/diagrams/diagram-deployment-aws-e315128f.mmd",
+    "image": "docs/screenshots/diagram-deployment-aws-e315128f.png",
+    "title": "AWS Deployment Architecture",
+    "private": false
+  },
+  {
+    "source": "docs/diagrams/diagram-cli-5d7a06d9.mmd",
+    "image": "docs/screenshots/diagram-cli-5d7a06d9.png",
+    "title": "CLI Access Architecture",
+    "private": false
+  },
+  {
+    "source": "docs/diagrams/diagram-deployment-on-prem-a3d4763b.mmd",
+    "image": "docs/screenshots/diagram-deployment-on-prem-a3d4763b.png",
+    "title": "On-Premises Network Architecture",
+    "private": false
+  },
+  {
+    "source": "docs/diagrams/diagram-deployment-gcp-dde515df.mmd",
+    "image": "docs/screenshots/diagram-deployment-gcp-dde515df.png",
+    "title": "GCP Deployment Architecture",
+    "private": false
+  },
+  {
+    "source": "docs/diagrams/diagram-architecture-8eb42cca.mmd",
+    "image": "docs/screenshots/diagram-architecture-8eb42cca.png",
+    "title": "Re-Enrollment Flow",
+    "private": false
+  },
+  {
+    "source": "docs/diagrams/diagram-deployment-azure-3412b186.mmd",
+    "image": "docs/screenshots/diagram-deployment-azure-3412b186.png",
+    "title": "Azure Deployment Architecture",
+    "private": false
+  },
+  {
+    "source": "docs/diagrams/diagram-proxy-configuration-6b704c77.mmd",
+    "image": "docs/screenshots/diagram-proxy-configuration-6b704c77.png",
+    "title": "Reverse Proxy Traffic Flow",
+    "private": false
+  },
+  {
+    "source": "docs/diagrams/diagram-ssh-gateway-d1757e51.mmd",
+    "image": "docs/screenshots/diagram-ssh-gateway-d1757e51.png",
+    "title": "SSH Gateway Architecture",
+    "private": false
+  },
+  {
+    "source": "docs/diagrams/diagram-api-reference-0047ed06.mmd",
+    "image": "docs/screenshots/diagram-api-reference-0047ed06.png",
+    "title": "Authentication Flow",
+    "private": false
+  }
+]

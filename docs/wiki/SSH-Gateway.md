@@ -40,35 +40,7 @@ That means:
 - No new capability is added to the agent. The gateway is entirely a Hub-side feature; it reuses the agent's existing terminal protocol.
 - Authorization (who may open a shell on which server, and as which OS user) is decided by the same rule the web terminal uses, evaluated fresh on every connection — not cached in the certificate.
 
-```mermaid
-flowchart LR
-    subgraph Operator
-        A["ssh client\n(vey ssh, or native ssh)"]
-    end
-
-    subgraph Hub["Veyport Hub"]
-        G["SSH Gateway\n:2222"]
-        CA["User SSH CA"]
-        AUTHZ["AuthorizeTerminalExecution\n(same core as web terminal)"]
-        AUDIT[("Audit log")]
-    end
-
-    subgraph Fleet["Fleet server"]
-        AG["Agent"]
-        SH["Shell (PTY)"]
-    end
-
-    A -- "1. vey ssh-cert\n(interactive session only)" --> CA
-    CA -- "short-lived user cert (~12h)" --> A
-    A -- "2. ssh -p 2222 user+server@hub\n(cert auth)" --> G
-    G -- "3. re-check authorization\nfor THIS connection" --> AUTHZ
-    G -- "4. open terminal over gRPC" --> AG
-    AG --> SH
-    SH -- "PTY output" --> AG
-    AG -- "TerminalData" --> G
-    G -- "bytes relayed" --> A
-    G -.-> AUDIT
-```
+![Overview diagram](../screenshots/diagram-ssh-gateway-d1757e51.png)
 
 ## Prerequisites
 

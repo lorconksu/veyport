@@ -60,17 +60,7 @@ for issue and pull-request expectations.
 
 Veyport uses a **Hub-and-Spoke** model. The Hub is the central server that hosts the web UI, REST API, and SQLite database. Agents are lightweight binaries deployed on each remote server, maintaining persistent gRPC streams back to the Hub.
 
-```mermaid
-flowchart LR
-    Browser[Browser] -->|HTTPS REST and SSE| Hub[Hub HTTP :8081]
-    CLI[vey CLI] -->|HTTPS login and SSH certificate| Hub
-    CLI -->|Native SSH :2222| Gateway[Hub SSH gateway]
-    Hub --> DB[(SQLite)]
-    Gateway -->|Live terminal authorization| Hub
-    Hub <-->|Agent-initiated mTLS gRPC :9090| Agent[Agent on managed server]
-    Gateway -->|Shared terminal broker over agent stream| Agent
-    Agent -->|OS execution identity| Shell[PTY shell]
-```
+![Architecture diagram](docs/screenshots/veyport-architecture.png)
 
 - **Hub** — Central Go server. Serves the web UI, exposes REST APIs, manages SQLite, and enforces authentication and permissions. Runs HTTP on `:8081`, agent gRPC on `:9090`, and an SSH gateway on `:2222` by default.
 - **Agent** — Lightweight Go binary on each remote server. Maintains a persistent bidirectional mTLS gRPC stream to the Hub, executing file, log, upload, and PTY terminal operations on demand.

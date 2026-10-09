@@ -13,43 +13,7 @@ This guide covers deploying Veyport Hub on Azure using Azure Container Instances
 
 ## Architecture Overview
 
-```mermaid
-flowchart TB
-    subgraph Internet
-        Browser["Browser"]
-        Agent["Veyport Agent"]
-    end
-
-    subgraph Azure
-        DNS["Azure DNS<br/>veyport.example.com"]
-        Cert["Managed Certificate"]
-
-        subgraph VNet["Virtual Network"]
-            AppGW["Application Gateway v2<br/>HTTPS :443 + gRPC :9443"]
-
-            subgraph OptionA["Option A: Container Instances"]
-                ACI["Azure Container Instance<br/>yiucloud/veyport"]
-                AzFiles["Azure Files Share<br/>/data"]
-            end
-
-            subgraph OptionB["Option B: App Service"]
-                AppSvc["App Service (Container)<br/>yiucloud/veyport"]
-                AppStorage["Persistent Storage Mount<br/>/data"]
-            end
-        end
-    end
-
-    Browser -->|HTTPS :443| DNS
-    Agent -->|gRPC :9443| DNS
-    DNS --> AppGW
-    Cert -.->|TLS cert| AppGW
-    AppGW -->|:8081| ACI
-    AppGW -->|:9090 HTTP/2| ACI
-    ACI --- AzFiles
-    AppGW -->|:8081| AppSvc
-    AppGW -->|:9090 HTTP/2| AppSvc
-    AppSvc --- AppStorage
-```
+![Architecture Overview diagram](../screenshots/diagram-deployment-azure-3412b186.png)
 
 ---
 

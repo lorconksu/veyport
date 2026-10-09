@@ -13,43 +13,7 @@ This guide covers deploying Veyport Hub on GCP using Compute Engine with Docker 
 
 ## Architecture Overview
 
-```mermaid
-flowchart TB
-    subgraph Internet
-        Browser["Browser"]
-        Agent["Veyport Agent"]
-    end
-
-    subgraph GCP
-        CloudDNS["Cloud DNS<br/>veyport.example.com"]
-        ManagedCert["Managed SSL Certificate"]
-
-        subgraph VPC["VPC Network"]
-            CLB["Cloud Load Balancer<br/>HTTPS :443 + gRPC :9443"]
-
-            subgraph OptionA["Option A: Compute Engine"]
-                GCE["GCE Instance<br/>e2-small<br/>Docker"]
-                PD["Persistent Disk<br/>/data"]
-            end
-
-            subgraph OptionB["Option B: Cloud Run"]
-                CR["Cloud Run Service<br/>yiucloud/veyport<br/>min-instances: 1"]
-                FS["Filestore / GCS FUSE<br/>/data"]
-            end
-        end
-    end
-
-    Browser -->|HTTPS :443| CloudDNS
-    Agent -->|gRPC :9443| CloudDNS
-    CloudDNS --> CLB
-    ManagedCert -.->|TLS cert| CLB
-    CLB -->|:8081| GCE
-    CLB -->|:9090 HTTP/2| GCE
-    GCE --- PD
-    CLB -->|:8081| CR
-    CLB -->|:9090 HTTP/2| CR
-    CR --- FS
-```
+![Architecture Overview diagram](../screenshots/diagram-deployment-gcp-dde515df.png)
 
 ---
 

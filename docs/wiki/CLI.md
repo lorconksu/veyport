@@ -30,14 +30,7 @@
 
 `vey` currently covers fleet visibility, remote file/log access, audit export, and — as of the SSH gateway feature — native interactive shell access via `vey ssh-cert` / `vey ssh`. There is still no REST-driven `vey terminal` command mirroring the browser's SSE-based terminal stream; use the web dashboard's terminal (see [[Server Detail]]) for that specific flow, or `vey ssh` for a real terminal from your own machine (see [[SSH Gateway]]).
 
-```mermaid
-flowchart LR
-    A[vey CLI] -- "Bearer JWT or adt_ API token" --> B[Hub REST API]
-    B -- gRPC --> C[Agent on remote server]
-    A -. "GET /install/cli/os/arch" .-> B
-    A -- "ssh -p 2222 (cert auth)" --> D[Hub SSH Gateway]
-    D -- gRPC --> C
-```
+![Overview diagram](../screenshots/diagram-cli-5d7a06d9.png)
 
 ## Connect to a server
 
