@@ -4,6 +4,7 @@ import { JSDOM } from '../web/node_modules/jsdom/lib/api.js';
 import { writeFileSync,readFileSync,mkdirSync } from 'node:fs';
 import { dirname } from 'node:path';
 import { spawnSync } from 'node:child_process';
+import { applyDiagramStyle, diagramStyleDefinitions } from './doc-diagram-style.mjs';
 const dom=new JSDOM('<html><body></body></html>',{pretendToBeVisual:true});
 globalThis.window=dom.window; globalThis.document=dom.window.document;
 globalThis.CSSStyleSheet=dom.window.CSSStyleSheet;
@@ -24,7 +25,7 @@ proto.getBBox=function(){
 proto.getBoundingClientRect=function(){const b=this.getBBox();return{...b,top:b.y,left:b.x,right:b.x+b.width,bottom:b.y+b.height};};
 proto.getComputedTextLength=function(){return this.getBBox().width;};
 const {default:mermaid}=await import('../web/node_modules/mermaid/dist/mermaid.core.mjs');
-mermaid.initialize({startOnLoad:false,theme:'base',fontFamily:'DejaVu Sans',htmlLabels:false,themeVariables:{edgeLabelBackground:'#f7faff',clusterBkg:'#eef4fc',clusterBorder:'#4775b3',tertiaryColor:'#eef4fc',noteBkgColor:'#edf4fc',noteBorderColor:'#4775b3',actorBkg:'#153f73',actorTextColor:'#ffffff',actorBorder:'#123560',primaryColor:'#e2edfc',primaryTextColor:'#061c3c',primaryBorderColor:'#1c579c',lineColor:'#123560',background:'#f7faff',fontSize:'18px'},flowchart:{htmlLabels:false,wrappingWidth:400,rankSpacing:120,nodeSpacing:70}});
+mermaid.initialize({startOnLoad:false,theme:'base',fontFamily:'DejaVu Sans',htmlLabels:false,themeVariables:{edgeLabelBackground:'#f7faff',clusterBkg:'#eef4fc',clusterBorder:'#4775b3',tertiaryColor:'#eef4fc',noteBkgColor:'#edf4fc',noteBorderColor:'#4775b3',actorBkg:'#153f73',actorTextColor:'#ffffff',actorBorder:'#123560',primaryColor:'#123c71',primaryTextColor:'#ffffff',primaryBorderColor:'#1c579c',lineColor:'#123560',background:'#f7faff',fontSize:'18px'},flowchart:{htmlLabels:false,wrappingWidth:400,rankSpacing:120,nodeSpacing:70,padding:48}});
 const manifests=process.argv.slice(2).length?process.argv.slice(2):['docs/diagrams/manifest.json'];
 const records=manifests.flatMap(p=>JSON.parse(readFileSync(p,'utf8')));
 const escape=s=>s.replaceAll('&','&amp;').replaceAll('<','&lt;').replaceAll('>','&gt;').replaceAll('"','&quot;');
@@ -55,11 +56,12 @@ for(const record of records){
   edge.innerHTML=`<rect x="${-width/2-8}" y="${-height/2-6}" width="${width+16}" height="${height+12}" rx="4" style="fill:#f7faff;opacity:1;fill-opacity:1;stroke:none"/><text text-anchor="middle" fill="#061c3c" font-family="DejaVu Sans" font-size="18">${rows.map((r,j)=>`<tspan x="0" y="${-height/2+18+j*24}">${escape(r)}</tspan>`).join('')}</text>`;
  }
  for(const label of svgDoc.querySelectorAll('.loopText, .loopText tspan, .sectionTitle, .sectionTitle tspan'))label.setAttribute('style','fill:#061c3c');
+ applyDiagramStyle(svgDoc, id);
  svg=new dom.window.XMLSerializer().serializeToString(svgDoc.documentElement);
  const [,minX,minY,width,height]=svg.match(/viewBox="([\-\d.]+) ([\-\d.]+) ([\d.]+) ([\d.]+)"/).map(Number);
- const w=Math.max(width+96,record.title.length*17+96,720),h=height+164;
+ const w=Math.max(width+96,record.title.length*22+96,720),h=height+164;
  const contents=svg.replace(/^<svg[^>]*>/,'').replace(/<\/svg>$/,'');
- const framed=`<svg xmlns="http://www.w3.org/2000/svg" xml:space="preserve" width="${w}" height="${h}" viewBox="0 0 ${w} ${h}"><rect width="${w}" height="${h}" fill="#f7faff"/><rect x="16" y="16" width="${w-32}" height="${h-32}" rx="18" fill="#ffffff" stroke="#dce6f3"/><text x="48" y="58" font-family="DejaVu Sans" font-size="28" font-weight="bold" fill="#061c3c">${escape(record.title)}</text><text x="48" y="86" font-family="DejaVu Sans" font-size="14" fill="#315f99">Veyport · Reference diagram</text><svg id="${id}" overflow="visible" x="${(w-width)/2}" y="112" width="${width}" height="${height}" viewBox="${minX} ${minY} ${width} ${height}">${contents}</svg></svg>`;
+ const framed=`<svg xmlns="http://www.w3.org/2000/svg" xml:space="preserve" width="${w}" height="${h}" viewBox="0 0 ${w} ${h}"><rect width="${w}" height="${h}" fill="#ffffff"/>${diagramStyleDefinitions(id)}<rect x="16" y="16" width="${w-32}" height="${h-32}" rx="18" fill="#ffffff" stroke="#d4e3f5"/><text x="${w/2}" y="58" text-anchor="middle" font-family="DejaVu Sans" font-size="34" font-weight="bold" fill="#061c3c">${escape(record.title)}</text><text x="${w/2}" y="86" text-anchor="middle" font-family="DejaVu Sans" font-size="14" fill="#315f99">Veyport · ${escape(record.title)}</text><svg id="${id}" overflow="visible" x="${(w-width)/2}" y="112" width="${width}" height="${height}" viewBox="${minX} ${minY} ${width} ${height}">${contents}</svg></svg>`;
  const svgPath=record.image.replace(/\.png$/,'.svg');
  mkdirSync(dirname(record.image),{recursive:true});writeFileSync(svgPath,framed);
  const run=spawnSync('python3',['scripts/svg-to-png.py',svgPath,record.image],{encoding:'utf8'});

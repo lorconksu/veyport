@@ -5,8 +5,11 @@ illustrated blue-and-white format of `docs/screenshots/veyport-architecture.png`
 when updating the overview. Update its contents rather than replacing it with a
 code diagram. The README and architecture wiki share that image.
 
-Other flow and sequence diagrams use matching navy text, blue panels, white
-backgrounds, and descriptive titles. Their editable topology is stored in `.mmd`
+All flow and sequence diagrams use a shared style matching the overview: navy
+and blue gradient cards, white text and component icons, rounded pale blue group
+panels, strong navy arrows, white backgrounds, and centered descriptive titles.
+The shared styling lives in `scripts/doc-diagram-style.mjs`; change it there and
+regenerate every diagram to keep their appearance consistent. Their editable topology is stored in `.mmd`
 files here. `manifest.json` maps those sources to their PNG images. Generated SVG
 files live alongside the PNGs as editable vector exports.
 
@@ -15,6 +18,8 @@ the reference diagrams with:
 
 ```bash
 node scripts/render-doc-diagrams.mjs
+# Include internal documentation when present locally:
+node scripts/render-doc-diagrams.mjs docs/diagrams/manifest.json docs-internal/diagrams/manifest.json
 ```
 
 The renderer uses the project's Mermaid and JSDOM packages, Python 3, system
