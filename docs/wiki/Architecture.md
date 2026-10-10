@@ -56,13 +56,15 @@ absolute lifetime is **12 hours**; administrators configure both in Account poli
 Validated authenticated requests update `last_seen_at`, with writes throttled to
 `min(60 seconds, idle limit / 10)` (60 seconds when idle expiry is disabled).
 
-The dashboard currently counts API requests as activity. It does not independently
-report clicks, typing, scrolling, or clipboard operations. Polling normally keeps a
-visible tab active, pauses in hidden tabs, and can be blocked by a stalled request.
-There is no application-level timeout in the browser API helper. Consequently, a
-page can remain visible while its session receives no recorded activity. These are
-current limitations; an activity heartbeat has not been implemented. See [[Logging In]]
-and [[Troubleshooting]].
+Signed-in pages also report recent keyboard, pointer, input, touch, and scroll
+interaction through `HEAD /api/auth/me`, independently of data polling. Checks are
+throttled to one per 15 seconds and stop when the tab is hidden or interaction has
+been absent for 30 seconds. Merely opening or returning to a visible tab does not
+start these checks. Each activity request and the shared token refresh have a
+10-second timeout. Network failures can be retried during recent activity; only
+the Hub decides whether a session is still valid. Existing authenticated data
+polling also counts as activity, so visible polling can keep an unattended tab
+alive until its absolute limit. See [[Logging In]] and [[Troubleshooting]].
 
 SSH certificates have a separate validity period and are checked when connecting.
 Established shells are not governed by HTTP session idle or absolute timers, and

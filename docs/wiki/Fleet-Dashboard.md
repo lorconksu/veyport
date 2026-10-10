@@ -110,8 +110,10 @@ full command reference, and manual install path, and [[SSH Gateway]] for gateway
 The Fleet Dashboard polls the Hub every **10 seconds** and updates all server cards in place. You do not need to reload the page to see status changes.
 
 Polling pauses when the browser considers the tab hidden. A stalled request can also block later
-polls. Session activity is measured from authenticated requests reaching the Hub, rather than
-clicks or typing; see [[Logging In]] and [[Troubleshooting]] if a visible dashboard signs you out.
+polls. Signed-in pages send separate, throttled session checks after recent keyboard, pointer,
+input, touch, or scroll interaction in a visible tab. This includes the Add Server dialog and
+works independently of a stalled server-list query. These checks stop in hidden or unattended
+tabs; see [[Logging In]] and [[Troubleshooting]] for session limits and network failures.
 
 ---
 

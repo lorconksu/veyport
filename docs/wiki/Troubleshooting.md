@@ -103,12 +103,16 @@ nothing to configure or recover - just sign in again.
 
 ### I was signed out while working in a visible dashboard
 
-The current dashboard does not report mouse or keyboard activity separately from API requests.
-Its regular polling normally keeps a visible tab active, but a stalled request can block later
-polls: the API helper has no application-level request timeout. Hidden tabs also pause polling.
+Signed-in pages report recent keyboard, pointer, input, touch, and scroll interaction
+independently of dashboard polling, including interaction inside the Add Server dialog.
+Checks are throttled to one per 15 seconds, use a 10-second request timeout, and stop in hidden
+tabs or after 30 seconds without interaction. Token refresh also has a 10-second timeout, so a
+stalled refresh cannot hold later checks indefinitely. The checks still need a working network,
+and cannot revive a session that has already expired or been revoked.
+
 If no authenticated session request reaches the Hub within the idle limit, the next request
-returns you to sign-in even if you were typing in the page. The page can continue to look signed
-in until that request occurs.
+returns you to sign-in. The absolute lifetime can also end a session while you are actively
+working. The page can continue to look signed in until a request is refused.
 
 Sign in again. If it recurs while the dashboard stays visible, record the browser and version,
 the time, and whether the browser's Network panel shows pending or failed `/api/servers` requests.
@@ -122,9 +126,9 @@ The Fleet Dashboard polls the Hub in the background roughly every 10 seconds, an
 counts as activity, so a tab left open and visible with working polling can outlast the idle timeout. This
 is a known, documented limitation, not a bug: the **absolute session limit** (default 12 hours)
 still applies regardless, so a tab open longer than that is eventually signed out anyway. Client-
-side "the user actually walked away" detection (mouse/keyboard inactivity in the browser itself)
-is out of scope for this release. If you need a tab to genuinely time out sooner, close it, or
-ask an administrator to lower the maximum session limit.
+side activity checks stop when interaction ends, but do not change the Hub's existing
+request-based idle accounting for background polling. If you need a tab to time out sooner,
+close it, or ask an administrator to lower the maximum session limit.
 
 ### I'm the only admin and lost my authenticator
 
