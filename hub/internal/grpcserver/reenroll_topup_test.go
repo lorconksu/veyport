@@ -154,24 +154,9 @@ func TestHandleReEnrollRequest_SendApprovedFails(t *testing.T) {
 		Csr:         testRegistrationCSR(t),
 	}
 
-	// Send an approval signal via goroutine after a tiny delay.
-	go func() {
-		time.Sleep(5 * time.Millisecond)
-		sess, ok := h.lookupReEnroll("srv-send-fails")
-		if !ok {
-			return
-		}
-		sess.approve <- reEnrollApproval{
-			ephemeralPub: make([]byte, 32),
-			encryptedKek: make([]byte, 44),
-			challenge:    make([]byte, 32),
-			decidedBy:    "admin-1",
-		}
-	}()
-
-	approvalSent, err := h.handleReEnrollRequest(stream, req)
-	if err == nil {
-		t.Fatal("expected error when stream.Send fails for ReEnrollApproved")
+	approvalSent, err := handleApprovedReEnrollForTest(t, h, stream, req)
+	if !errors.Is(err, sendErr) {
+		t.Fatalf("expected stream send error, got: %v", err)
 	}
 	if approvalSent {
 		t.Fatal("expected approvalSent=false when stream.Send fails")

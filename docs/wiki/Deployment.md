@@ -1,5 +1,19 @@
 # Veyport Deployment Guide
 
+## Runtime identity and access paths
+
+The Hub serves HTTP on `:8081`, agent mTLS gRPC on `:9090`, and the SSH gateway on
+`:2222` by default. Expose the gateway through TCP when enabling `vey ssh`;
+HTTPS-only reverse proxy routes do not carry SSH. Managed nodes need the agent's
+outbound Hub connection; gateway shells do not use the node's own SSH daemon.
+See [[Proxy Configuration]] and [[SSH Gateway]].
+
+The standard agent systemd installer omits `User=`, so the agent runs as **root**.
+Local Veyport admin shells inherit that identity in both the browser and CLI.
+LDAP shells instead use the mapped host account, which must be resolvable on each
+managed node. Changing the agent service identity also changes the OS permissions
+available to its file operations and inherited admin shells; see [[Architecture]].
+
 > **TL;DR**
 > - **What:** Docker-first deployment with a single `docker-compose.yml`; bare-metal binary also available
 > - **Who:** The person deploying Veyport Hub and agents
@@ -256,13 +270,14 @@ WantedBy=multi-user.target
 |------|-------------|
 | `--hub <addr>` | Hub gRPC address (e.g. `veyport.example.com:443` or `192.168.1.10:9090`) |
 | `--token <token>` | One-time registration token obtained from the Hub when creating a server record |
+| `--insecure` | Disables TLS for development only, including self-unregistration. Never use on an untrusted network. |
 | `--self-unregister` | Calls `DELETE /api/servers/{id}/self-unregister` on the Hub to remove the current server entry, then exits. Used by the install script before re-installing to clean up the old registration. Requires a valid `agent.conf` with a known `server_id`. |
 
-### TLS auto-detection
+### Agent transport security
 
-The agent infers the connection security mode from the hub address:
-- **Hostname** (e.g. `veyport.example.com:443`) - TLS enabled
-- **IP address** (e.g. `192.168.1.10:9090`) - insecure (no TLS)
+The agent uses TLS by default for both hostnames and IP addresses. Self-unregistration uses the same host over HTTPS on port 443 and does not follow redirects, so its unregister credential stays on the original request. An IP address must have a trusted TLS endpoint to support self-unregistration.
+
+`--insecure` explicitly enables plaintext transport for development only. With `--self-unregister --insecure`, the REST request uses HTTP on port 8081. Production deployments should use a TLS proxy and omit this flag.
 
 ### Reconnect behavior
 

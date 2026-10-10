@@ -23,7 +23,7 @@ async function parallelLimit<T>(
     while (nextIndex < tasks.length) {
       const i = nextIndex++
       try {
-        const value = await tasks[i]()
+        const value = await tasks[i]() // NOSONAR: each worker waits before taking another task to enforce the concurrency limit.
         results[i] = { status: 'fulfilled', value }
       } catch (reason) {
         results[i] = { status: 'rejected', reason }

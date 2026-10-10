@@ -13,29 +13,7 @@ Veyport Hub is a dual-service application. The web UI, REST API, and asset servi
 
 - **gRPC (Agent connections)** -- TLS passthrough with **no termination**. The Hub runs its own Certificate Authority and issues short-lived mTLS certificates to agents during registration. Agents authenticate to the Hub using these certificates over a direct TLS connection. If the proxy terminates TLS, it breaks the mTLS chain and agents cannot authenticate. The proxy must forward raw TCP/TLS traffic to port 9090 without inspecting or decrypting it.
 
-```mermaid
-flowchart LR
-    subgraph Internet
-        Browser["Browser / API Client"]
-        Agent["Veyport Agent"]
-    end
-
-    subgraph Proxy["Reverse Proxy"]
-        HTTPS["HTTPS :443<br/>TLS Termination"]
-        GRPC["gRPC :9443<br/>TLS Passthrough"]
-    end
-
-    subgraph Hub["Veyport Hub"]
-        HTTP_SVC[":8081<br/>Web UI + REST API"]
-        GRPC_SVC[":9090<br/>gRPC (mTLS)"]
-    end
-
-    Browser -- "HTTPS" --> HTTPS
-    HTTPS -- "HTTP (plaintext)" --> HTTP_SVC
-
-    Agent -- "TLS (mTLS)" --> GRPC
-    GRPC -- "Raw TLS (untouched)" --> GRPC_SVC
-```
+![Overview diagram](../screenshots/diagram-proxy-configuration-6b704c77.png)
 
 ### Why TLS passthrough for gRPC?
 

@@ -91,6 +91,14 @@ type Config struct {
 	// Enabled reports whether the listener should open at all (FR-015).
 	Enabled bool
 
+	// Listener is an optional pre-bound listener; when set, Addr is ignored
+	// and listen() serves on it directly instead of calling net.Listen.
+	// Tests use this to avoid port races when packages run in parallel;
+	// production leaves it nil. When the gateway ends up not listening at
+	// all — disabled, or unusable key material — a supplied Listener is
+	// closed so the caller does not leak it.
+	Listener net.Listener
+
 	// HandshakeTimeout bounds the pre-authentication phase.
 	// Zero means DefaultHandshakeTimeout.
 	HandshakeTimeout time.Duration
@@ -148,6 +156,7 @@ func (s *Server) Start() error {
 func (s *Server) listen() (net.Listener, error) {
 	if !s.cfg.Enabled {
 		log.Printf("SSH gateway: disabled by configuration; not listening")
+		s.closeUnusedListener()
 		return nil, nil
 	}
 	if reason := s.unusableKeyMaterial(); reason != "" {
@@ -157,12 +166,19 @@ func (s *Server) listen() (net.Listener, error) {
 			"restore the stored key or clear it deliberately to re-enable.", reason)
 		s.logAudit(model.AuditSSHSessionRefused, model.AuditOutcomeFailure, "", "",
 			"gateway_disabled reason="+reason, "")
+		s.closeUnusedListener()
 		return nil, nil
 	}
 
-	lis, err := net.Listen("tcp", s.cfg.Addr)
-	if err != nil {
-		return nil, fmt.Errorf("ssh gateway listen on %s: %w", s.cfg.Addr, err)
+	var lis net.Listener
+	if s.cfg.Listener != nil {
+		lis = s.cfg.Listener
+	} else {
+		var err error
+		lis, err = net.Listen("tcp", s.cfg.Addr)
+		if err != nil {
+			return nil, fmt.Errorf("ssh gateway listen on %s: %w", s.cfg.Addr, err)
+		}
 	}
 
 	s.mu.Lock()
@@ -177,6 +193,16 @@ func (s *Server) listen() (net.Listener, error) {
 	log.Printf("Veyport SSH gateway listening on %s (host key %s)",
 		lis.Addr(), ssh.FingerprintSHA256(s.cfg.HostKey.PublicKey()))
 	return lis, nil
+}
+
+// closeUnusedListener closes a caller-supplied Listener when the gateway
+// decides not to listen at all (disabled, or unusable key material). These
+// early-return paths never open anything themselves, so the only listener
+// that could leak here is one the caller handed in.
+func (s *Server) closeUnusedListener() {
+	if s.cfg.Listener != nil {
+		_ = s.cfg.Listener.Close()
+	}
 }
 
 // unusableKeyMaterial names the missing trust material, or "" when the gateway

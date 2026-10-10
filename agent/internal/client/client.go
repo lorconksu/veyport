@@ -14,6 +14,7 @@ import (
 	"log"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -63,31 +64,31 @@ const (
 var errReconnectWithMTLS = errors.New("reconnect required to authenticate with issued client certificate")
 
 type Client struct {
-	hubAddr              string
-	serverID             string
-	token                string
-	hostname             string
-	ipAddress            string
-	os                   string
-	agentVersion         string
-	backoff              time.Duration
-	maxBackoff           time.Duration
-	tailSessionsMu       sync.Mutex
-	tailSessions         map[string]chan struct{}
-	certRenewalMu        sync.Mutex
-	certRenewalSent      bool
-	certRenewalAt        time.Time
-	dropzone             *dropzone.Dropzone
-	certStore            *certs.Store
-	certDir              string // directory for mTLS cert storage and node key
-	unregisterToken      string
-	insecure             bool
-	allowedPaths         []string
-	hubCAPin             string
-	onRegistered         func(serverID string)
-	reconnectCh          chan struct{} // signals connectAndStream to reconnect (e.g. to adopt a renewed cert)
-	sealedNodeKeyHex     string       // AES-GCM sealed Ed25519 private key (hex), empty if not yet enrolled
-	transportPrivBytes   []byte       // X25519 transport private key (32 bytes), empty until first enrollment
+	hubAddr            string
+	serverID           string
+	token              string
+	hostname           string
+	ipAddress          string
+	os                 string
+	agentVersion       string
+	backoff            time.Duration
+	maxBackoff         time.Duration
+	tailSessionsMu     sync.Mutex
+	tailSessions       map[string]chan struct{}
+	certRenewalMu      sync.Mutex
+	certRenewalSent    bool
+	certRenewalAt      time.Time
+	dropzone           *dropzone.Dropzone
+	certStore          *certs.Store
+	certDir            string // directory for mTLS cert storage and node key
+	unregisterToken    string
+	insecure           bool
+	allowedPaths       []string
+	hubCAPin           string
+	onRegistered       func(serverID string)
+	reconnectCh        chan struct{} // signals connectAndStream to reconnect (e.g. to adopt a renewed cert)
+	sealedNodeKeyHex   string        // AES-GCM sealed Ed25519 private key (hex), empty if not yet enrolled
+	transportPrivBytes []byte        // X25519 transport private key (32 bytes), empty until first enrollment
 }
 
 func New(cfg Config) *Client {
@@ -148,26 +149,24 @@ func (c *Client) ServerID() string {
 // SelfUnregister calls the Hub's HTTP API to delete this server.
 // Used by the install script to clean up the old registration before a re-install.
 func (c *Client) SelfUnregister(ctx context.Context) error {
-	// Derive HTTP base URL from the gRPC hub address
-	host, port, err := net.SplitHostPort(c.hubAddr)
+	// The REST API is reached through the TLS proxy by default, even when
+	// the hub is configured by IP address. Plaintext requires --insecure.
+	host, _, err := net.SplitHostPort(c.hubAddr)
 	if err != nil {
 		host = c.hubAddr
-		port = ""
 	}
 
-	var baseURL string
-	if port == "443" || (net.ParseIP(host) == nil && strings.Contains(host, ".")) {
-		// Hostname — use HTTPS (same host, default HTTPS port)
-		baseURL = "https://" + host
-	} else {
-		// Direct IP — Hub HTTP is on port 8081 by convention, but we don't know for sure.
-		// Try the common case: same host, port 8081
-		baseURL = "http://" + host + ":8081"
+	endpoint := url.URL{
+		Scheme: "https",
+		Host:   net.JoinHostPort(host, "443"),
+		Path:   "/api/servers/" + c.serverID + "/self-unregister",
+	}
+	if c.insecure {
+		endpoint.Scheme = "http"
+		endpoint.Host = net.JoinHostPort(host, "8081")
 	}
 
-	url := fmt.Sprintf("%s/api/servers/%s/self-unregister", baseURL, c.serverID)
-
-	req, err := http.NewRequestWithContext(ctx, "DELETE", url, nil)
+	req, err := http.NewRequestWithContext(ctx, "DELETE", endpoint.String(), nil)
 	if err != nil {
 		return fmt.Errorf("create request: %w", err)
 	}
@@ -175,7 +174,10 @@ func (c *Client) SelfUnregister(ctx context.Context) error {
 		req.Header.Set("X-Unregister-Token", c.unregisterToken)
 	}
 
-	resp, err := http.DefaultClient.Do(req)
+	// Never forward the unregister credential to a redirect target.
+	httpClient := *http.DefaultClient
+	httpClient.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
+	resp, err := httpClient.Do(req)
 	if err != nil {
 		return fmt.Errorf("HTTP request: %w", err)
 	}

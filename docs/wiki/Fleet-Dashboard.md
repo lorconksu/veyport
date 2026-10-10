@@ -98,13 +98,22 @@ Any user (admin or viewer) can install the `vey` command-line client from the da
 3. Copy it and run it on your own machine (Linux or macOS). It detects your platform, verifies the download's checksum, and installs `vey` to `/usr/local/bin` or `~/.local/bin`. No root is required.
 4. Then run the pre-filled sign-in command from the modal, e.g. `vey --hub https://veyport.example.com login`.
 
-See [[CLI]] for the full command reference and a manual install path, and [[SSH Gateway]] for `vey ssh`.
+After signing in, run `vey servers list`, then `vey ssh-cert` and `vey ssh <server-name-or-id>`
+to open an interactive shell on an online server. Some released CLI builds omit these SSH commands
+from `vey --help`; they can still be run directly. See [[CLI]] for the connection quick start,
+full command reference, and manual install path, and [[SSH Gateway]] for gateway requirements.
 
 ---
 
 ## Auto-Refresh
 
 The Fleet Dashboard polls the Hub every **10 seconds** and updates all server cards in place. You do not need to reload the page to see status changes.
+
+Polling pauses when the browser considers the tab hidden. A stalled request can also block later
+polls. Signed-in pages send separate, throttled session checks after recent keyboard, pointer,
+input, touch, or scroll interaction in a visible tab. This includes the Add Server dialog and
+works independently of a stalled server-list query. These checks stop in hidden or unattended
+tabs; see [[Logging In]] and [[Troubleshooting]] for session limits and network failures.
 
 ---
 

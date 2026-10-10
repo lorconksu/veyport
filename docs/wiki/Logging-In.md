@@ -84,11 +84,12 @@ Admins configure directory integration in [[Settings]] under the **Directory** t
 Every completed sign-in - web or the `vey` CLI - creates a session on the hub, and that session
 has two limits, both administrator-configurable in **Settings → Users → Account policy**:
 
-- **Idle timeout** (default **15 minutes**) - if no request is made for this long, the session
-  expires. Normal use resets the clock on every request, so an idle limit only bites when you
-  genuinely stop using Veyport - walking away from an open dashboard tab is the common case,
-  since the dashboard itself polls in the background and can keep a tab alive as long as it's
-  open in a foreground-reachable browser.
+- **Idle timeout** (default **15 minutes**) - if no authenticated session request reaches the
+  Hub for this long, the session expires. Signed-in pages send throttled session checks after
+  recent keyboard, pointer, input, touch, or scroll interaction in a visible tab, including
+  inside dialogs. These checks run independently of data polling and have a network timeout.
+  They stop when the tab is hidden or interaction ends. Data polling also counts as activity;
+  a visible page alone still does not guarantee the Hub is reachable.
 - **Maximum session** (default **12 hours**) - a session cannot be extended past this no matter
   how active you are. It is set when you sign in and never moves, even across activity that would
   otherwise reset the idle clock.

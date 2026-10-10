@@ -113,6 +113,14 @@ describe('apiFetch', () => {
     expect(result).toBeUndefined()
   })
 
+  it('returns undefined for a HEAD response without reading a JSON body', async () => {
+    const response = makeResponse({}, 200)
+    const readBody = vi.spyOn(response, 'json')
+    mockFetch.mockResolvedValueOnce(response)
+    await expect(apiFetch('/auth/me', { method: 'HEAD' })).resolves.toBeUndefined()
+    expect(readBody).not.toHaveBeenCalled()
+  })
+
   it('returns undefined when content-length is 0', async () => {
     const emptyResponse = {
       ok: true,
@@ -152,6 +160,41 @@ describe('apiFetch', () => {
 
     await expect(apiFetch('/protected')).rejects.toThrow('Session expired')
     expect(window.location.href).toBe('/login')
+  })
+
+  it('bounds a stalled refresh and lets later requests refresh again', async () => {
+    vi.useFakeTimers()
+    try {
+      mockFetch.mockResolvedValueOnce(makeResponse({}, 401))
+      mockFetch.mockImplementationOnce((_url, options) => new Promise((_resolve, reject) => {
+        options!.signal!.addEventListener('abort', () => reject(new DOMException('Aborted', 'AbortError')))
+      }))
+      const pending = expect(apiFetch('/protected')).rejects.toThrow('Aborted')
+      await vi.advanceTimersByTimeAsync(10_000)
+      await pending
+      expect(mockFetch.mock.calls[1][1]!.signal!.aborted).toBe(true)
+      expect(window.location.href).toBe('')
+
+      mockFetch.mockResolvedValueOnce(makeResponse({}, 401))
+      mockFetch.mockResolvedValueOnce(makeResponse({}))
+      mockFetch.mockResolvedValueOnce(makeResponse({ data: 'recovered' }))
+      await expect(apiFetch('/protected')).resolves.toEqual({ data: 'recovered' })
+      expect(mockFetch).toHaveBeenCalledTimes(5)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('does not retry or redirect a caller cancelled during shared refresh', async () => {
+    const controller = new AbortController()
+    mockFetch.mockResolvedValueOnce(makeResponse({}, 401))
+    mockFetch.mockImplementationOnce(async () => {
+      controller.abort()
+      return makeResponse({})
+    })
+    await expect(apiFetch('/protected', { signal: controller.signal })).rejects.toThrow()
+    expect(mockFetch).toHaveBeenCalledTimes(2)
+    expect(window.location.href).toBe('')
   })
 
   it('passes custom options (method, body) to fetch', async () => {

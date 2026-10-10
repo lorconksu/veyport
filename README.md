@@ -60,13 +60,20 @@ for issue and pull-request expectations.
 
 Veyport uses a **Hub-and-Spoke** model. The Hub is the central server that hosts the web UI, REST API, and SQLite database. Agents are lightweight binaries deployed on each remote server, maintaining persistent gRPC streams back to the Hub.
 
-![Veyport Architecture](docs/screenshots/veyport-architecture.png)
+![Architecture diagram](docs/screenshots/veyport-architecture.png)
 
-- **Hub** — Central Go server. Serves the web UI, exposes REST APIs, manages SQLite, and enforces all authentication and permissions. Runs HTTP on `:8081` and gRPC on `:9090`.
-- **Agent** — Lightweight Go binary on each remote server. Maintains a persistent bidirectional gRPC stream to the Hub, executing file, log, and upload commands on demand.
+- **Hub** — Central Go server. Serves the web UI, exposes REST APIs, manages SQLite, and enforces authentication and permissions. Runs HTTP on `:8081`, agent gRPC on `:9090`, and an SSH gateway on `:2222` by default.
+- **Agent** — Lightweight Go binary on each remote server. Maintains a persistent bidirectional mTLS gRPC stream to the Hub, executing file, log, upload, and PTY terminal operations on demand.
+- **CLI (`vey`)** — Connects to the Hub over HTTPS for API operations and SSH certificates, then uses the native SSH client to reach a server through the Hub gateway and existing agent stream.
 - **Frontend** — React SPA embedded into the Hub binary via `go:embed`. Single-binary deployment with zero external dependencies.
 
 For the full architecture breakdown, see [Architecture](docs/wiki/Architecture.md).
+
+Browser and CLI shells share the same authorization and execution identity: local
+admins inherit the agent account (**root** under the standard installer); LDAP
+users run as their mapped host account. See [SSH Gateway](docs/wiki/SSH-Gateway.md)
+for connection requirements and [Architecture](docs/wiki/Architecture.md#session-activity-and-lifetimes)
+for the current request-based session activity model.
 
 ## Quick Start
 

@@ -94,24 +94,7 @@ API tokens can call normal access-token-protected API endpoints, but they are in
 
 ### Typical Login Flow
 
-```mermaid
-sequenceDiagram
-    participant Client
-    participant Hub
-
-    Client->>Hub: POST /api/auth/login {username, password}
-    alt TOTP not set up
-        Hub-->>Client: 200 {setup_token, requires_totp_setup: true}
-        Client->>Hub: POST /api/auth/totp/setup (Bearer setup_token)
-        Hub-->>Client: 200 {secret, qr_url}
-        Client->>Hub: POST /api/auth/totp/enable {code} (Bearer setup_token)
-        Hub-->>Client: 200 Set-Cookie(access, refresh, csrf) + {user}
-    else TOTP enabled
-        Hub-->>Client: 202 {totp_token}
-        Client->>Hub: POST /api/auth/login/totp {totp_token, code}
-        Hub-->>Client: 200 Set-Cookie(access, refresh, csrf) + {user}
-    end
-```
+![Typical Login Flow diagram](../screenshots/diagram-api-reference-0047ed06.png)
 
 ---
 
@@ -2777,7 +2760,7 @@ caller's session before anything else runs:
 | Session ended (revoked by an admin, by the user, by logout, or by an account disable) | `401 {"error":"session ended — sign in again"}` |
 | Absolute lifetime reached | `401 {"error":"session expired — sign in again"}` (session marked `expired_absolute`, audited once on first detection) |
 | Idle limit exceeded | `401 {"error":"session expired — sign in again"}` (session marked `expired_idle`, audited once on first detection) |
-| None of the above | request proceeds; `last_seen_at` is bumped, at most once per minute per session |
+| None of the above | request proceeds; `last_seen_at` writes are throttled to `min(60 seconds, idle limit / 10)`, or 60 seconds when idle expiry is disabled |
 
 **Upgrade note:** a session that existed before this release has no session record, so its access
 and refresh tokens are refused with the `session expired` message the first time they're used
@@ -2786,7 +2769,11 @@ pre-upgrade sessions; see [[Troubleshooting]] ("everyone had to sign in again af
 
 The idle and absolute limits are configured as `session_idle_minutes` and `session_max_hours` on
 the Account policy card alongside the 007/008 lockout and dormancy fields -- see endpoints 37/38
-above.
+above. Signed-in browser pages use `HEAD /api/auth/me` as a throttled activity check
+following recent interaction in a visible tab. HEAD returns the same status as GET
+without a response body, avoiding repeated profile and avatar downloads. It uses the same session checks
+as other authenticated requests: it cannot revive an expired or revoked session,
+and it cannot extend the absolute lifetime.
 
 ### GET /api/auth/sessions
 

@@ -1,0 +1,9 @@
+flowchart LR
+    Browser[Browser] -->|HTTPS REST and SSE| Hub[Hub HTTP :8081]
+    CLI[vey CLI] -->|HTTPS login and SSH certificate| Hub
+    CLI -->|Native SSH :2222| Gateway[Hub SSH gateway]
+    Hub --> DB[(SQLite)]
+    Gateway -->|Live terminal authorization| Hub
+    Hub <-->|Agent-initiated mTLS gRPC :9090| Agent[Agent on managed server]
+    Gateway -->|Shared terminal broker over agent stream| Agent
+    Agent -->|OS execution identity| Shell[PTY shell]

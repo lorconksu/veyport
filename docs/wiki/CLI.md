@@ -12,14 +12,15 @@
 ## Table of Contents
 
 1. [Overview](#overview)
-2. [Install](#install)
-3. [Authentication](#authentication)
-4. [Configuration](#configuration)
-5. [Session awareness](#session-awareness)
-6. [Command Reference](#command-reference)
-7. [Exit Codes](#exit-codes)
-8. [TLS](#tls)
-9. [Scripting Notes](#scripting-notes)
+2. [Connect to a server](#connect-to-a-server)
+3. [Install](#install)
+4. [Authentication](#authentication)
+5. [Configuration](#configuration)
+6. [Session awareness](#session-awareness)
+7. [Command Reference](#command-reference)
+8. [Exit Codes](#exit-codes)
+9. [TLS](#tls)
+10. [Scripting Notes](#scripting-notes)
 
 ---
 
@@ -29,14 +30,28 @@
 
 `vey` currently covers fleet visibility, remote file/log access, audit export, and — as of the SSH gateway feature — native interactive shell access via `vey ssh-cert` / `vey ssh`. There is still no REST-driven `vey terminal` command mirroring the browser's SSE-based terminal stream; use the web dashboard's terminal (see [[Server Detail]]) for that specific flow, or `vey ssh` for a real terminal from your own machine (see [[SSH Gateway]]).
 
-```mermaid
-flowchart LR
-    A[vey CLI] -- "Bearer JWT or adt_ API token" --> B[Hub REST API]
-    B -- gRPC --> C[Agent on remote server]
-    A -. "GET /install/cli/os/arch" .-> B
-    A -- "ssh -p 2222 (cert auth)" --> D[Hub SSH Gateway]
-    D -- gRPC --> C
+![Overview diagram](../screenshots/diagram-cli-5d7a06d9.png)
+
+## Connect to a server
+
+After installing `vey`, sign in to your Hub, choose an online server, obtain an SSH
+certificate, and connect from an interactive terminal:
+
+```bash
+vey --hub https://hub.example.com login
+vey servers list
+vey ssh-cert
+vey ssh web01
 ```
+
+Replace `web01` with the server's unique name or ID. Login saves the Hub address, so
+subsequent commands can omit `--hub`. SSH requires an interactive login and your
+machine's native `ssh` client; API tokens cannot obtain an SSH certificate.
+
+Some released builds, including **2.0.43**, omit `ssh-cert` and `ssh` from
+`vey --help` even though both commands are available. Run them directly as shown
+above. Re-run `vey ssh-cert` if the stored certificate expires. See [[SSH Gateway]]
+for gateway configuration and connection troubleshooting.
 
 ## Install
 

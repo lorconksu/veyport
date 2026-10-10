@@ -442,6 +442,22 @@ describe('SettingsPage', () => {
     })
   })
 
+  it('reports a failed profile refresh after saving an avatar', async () => {
+    const login = vi.fn()
+    mockUseAuth.mockReturnValue({
+      user: { ...mockUsers[0], avatar: 'data:image/png;base64,abc' },
+      login,
+    })
+    mockApiRoutes({
+      '/auth/avatar': [{ status: 'ok' }],
+      '/auth/me': [new Error('Failed to refresh profile')],
+    })
+    renderPage()
+    fireEvent.click(screen.getByText('Remove'))
+    expect(await screen.findByText('Failed to refresh profile')).toBeInTheDocument()
+    expect(login).not.toHaveBeenCalled()
+  })
+
   it('confirms delete user and calls DELETE endpoint', async () => {
     mockApiRoutes({
       '/users': [{ users: mockUsers }, { users: [mockUsers[0]] }], // initial fetch, then refetch after delete

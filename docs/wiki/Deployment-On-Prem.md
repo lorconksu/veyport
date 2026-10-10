@@ -196,12 +196,7 @@ For detailed reverse proxy configuration (Traefik, Nginx, Caddy), see [[Proxy-Co
 
 ### Port mapping summary
 
-```mermaid
-flowchart LR
-    Client["Browser / Agent"] -->|443 HTTPS| Proxy["Reverse Proxy<br/>(Traefik, Nginx, etc.)"]
-    Proxy -->|8081 HTTP| Hub["Veyport Hub"]
-    Proxy -->|9090 h2c| HubGRPC["Veyport Hub<br/>(gRPC)"]
-```
+![Port mapping summary diagram](../screenshots/diagram-deployment-on-prem-a3d4763b.png)
 
 | External Port | Internal Port | Protocol | Purpose |
 |---------------|---------------|----------|---------|

@@ -2,11 +2,13 @@ package server
 
 import (
 	"encoding/json"
+	"errors"
 	"net/http"
 	"strings"
 
 	"github.com/google/uuid"
 	"github.com/wyiu/veyport/hub/internal/auth"
+	"github.com/wyiu/veyport/hub/internal/grpcserver"
 	"github.com/wyiu/veyport/hub/internal/model"
 )
 
@@ -78,7 +80,7 @@ func (s *Server) handleReEnrollApprove(w http.ResponseWriter, r *http.Request) {
 	if err := s.reEnrollReleaser.ReleaseKEK(serverID, adminID); err != nil {
 		// Map common errors to appropriate HTTP status codes.
 		switch {
-		case err.Error() == "no pending re-enroll for server":
+		case errors.Is(err, grpcserver.ErrNoPendingReEnroll):
 			respondError(w, http.StatusNotFound, errNoPendingReEnrollForServer)
 		case strings.Contains(err.Error(), "timed out"):
 			respondError(w, http.StatusGatewayTimeout, "timed out waiting for agent proof")
