@@ -208,11 +208,13 @@ func (s *Service) ValidateAnchor(ctx context.Context, cfg TransitionConfig) erro
 	if err != nil || anchor.InstallationID != m.InstallationID || anchor.Version < m.Version || anchor.Version < state.Active.Version {
 		return ErrRecovery
 	}
-	valid := anchor.Version == state.Active.Version && anchor.SHA256 == state.Active.SHA256
-	if state.Pending != nil && anchor.Version == state.Pending.Version && anchor.SHA256 == state.Pending.SHA256 && anchor.RequestID == state.PendingChange {
-		valid = true
+	committed, err := s.Store.GetSecurityChange(state.Active.RequestID)
+	if err != nil || committed.State != "applied" || committed.ExpectedVersion+1 != state.Active.Version || Digest(committed.ApprovedBytes) != committed.Digest {
+		return ErrRecovery
 	}
-	if !valid {
+	// Role, identity and settings changes can preserve every policy field.
+	// Continuity therefore also binds the exact independently approved change.
+	if anchor.Version != state.Active.Version || anchor.SHA256 != state.Active.SHA256 || anchor.RequestID != committed.ID || anchor.RequestSHA256 != committed.Digest {
 		return ErrRecovery
 	}
 	return nil
