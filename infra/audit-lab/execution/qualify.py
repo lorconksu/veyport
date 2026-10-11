@@ -254,14 +254,17 @@ def activate(state):
 
 
 def verify_stored_receipt(row):
-    receipt = json.loads(row['admission_receipt'])
-    token = receipt['token']
+    # Production stores the compact signed JWT, not the ingestion response's
+    # {token,manifest} wrapper. The manifest is taken only from verified claims.
+    token = row['admission_receipt']
+    if not isinstance(token, str) or not 0 < len(token) <= 16384 or not re.fullmatch(r'[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+', token):
+        raise RuntimeError('Stored admission token rejected')
     header64, claims64, signature64 = token.split('.')
     decode = lambda value: base64.urlsafe_b64decode(value + '=' * (-len(value) % 4))
     header, claims = json.loads(decode(header64)), json.loads(decode(claims64))
     runtime = json.loads(private_bytes(PRIVATE / 'receipt-runtime.json'))
     signature = decode(signature64)
-    if len(signature) != 64 or header.get('alg') != 'ES256' or header.get('kid') != runtime['signing_key_id']:
+    if len(signature) != 64 or header.get('typ') != 'JWT' or header.get('alg') != 'ES256' or header.get('kid') != runtime['signing_key_id']:
         raise RuntimeError('Stored receipt signer rejected')
     def integer(raw):
         raw = raw.lstrip(b'\0') or b'\0'
@@ -271,20 +274,43 @@ def verify_stored_receipt(row):
     encoded = integer(signature[:32]) + integer(signature[32:])
     sig_file = PRIVATE / 'execution-receipt-signature.der'
     sig_file.write_bytes(b'\x30' + bytes([len(encoded)]) + encoded)
-    checked = subprocess.run(['openssl', 'dgst', '-sha256', '-verify', runtime['signing_public_key_path'], '-signature', str(sig_file)], input=(header64 + '.' + claims64).encode(), capture_output=True)
+    sig_file.chmod(0o600)
+    try:
+        checked = subprocess.run(['openssl', 'dgst', '-sha256', '-verify', runtime['signing_public_key_path'], '-signature', str(sig_file)], input=(header64 + '.' + claims64).encode(), capture_output=True, timeout=15)
+    finally:
+        sig_file.unlink(missing_ok=True)
     preparation = json.loads(row['preparation'])
     actor = {'user_id': row['actor_id'], 'person_id': row['actor_person_id'], 'name': row['actor_name'], 'provider': row['actor_provider'], 'subject': row['actor_subject']}
     actor_sha = hashlib.sha256(json.dumps(actor, separators=(',', ':'), ensure_ascii=False).encode()).hexdigest()
+    expiry_ms = preparation['expires_unix_milli']
+    expires = datetime.datetime.fromtimestamp(expiry_ms // 1000, datetime.timezone.utc).strftime('%Y-%m-%dT%H:%M:%S')
+    if expiry_ms % 1000:
+        expires += '.' + str(expiry_ms % 1000).zfill(3).rstrip('0')
+    binding = {'execution_id': row['id'], 'preparation_id': preparation['preparation_id'], 'boot_id': preparation['boot_id'], 'node_id': row['node_id'], 'node_name': row['node_name'], 'identity': preparation['identity'], 'command_sha256': row['command_sha256'], 'command_bytes': row['command_length']}
+    if row['script_sha256']:
+        binding['script_sha256'] = row['script_sha256']
+    if row['script_length']:
+        binding['script_bytes'] = row['script_length']
+    binding.update({'prepared_until': expires + 'Z', 'limits': preparation['limits']})
+    binding_sha = hashlib.sha256(json.dumps({'execution': binding, 'details': None}, separators=(',', ':'), ensure_ascii=False).encode()).hexdigest()
     def timestamp(value):
         parsed = datetime.datetime.fromisoformat(value.replace('Z', '+00:00'))
         return parsed if parsed.tzinfo else parsed.replace(tzinfo=datetime.timezone.utc)
-    minimum_retention = timestamp(row['created_at']) + datetime.timedelta(hours=24)
+    retention_hours = row['retention_hours']
+    if type(retention_hours) is not int or not 24 <= retention_hours <= 87600:
+        raise RuntimeError('Stored immutable policy retention rejected')
+    minimum_retention = max(timestamp(row['created_at']), datetime.datetime.fromtimestamp(claims['iat'], datetime.timezone.utc)) + datetime.timedelta(hours=retention_hours)
     audience = claims.get('aud', [])
     if isinstance(audience, str):
         audience = [audience]
-    if checked.returncode or claims['iss'] != runtime['issuer'] or runtime['audience'] not in audience or claims['event_type'] != 'execution.admission' or claims['event_id'] != row['admission_event_id'] or claims['record_sha256'] != row['admission_record_sha256'] or claims['actor_sha256'] != actor_sha or claims['execution_id'] != row['id'] or claims['preparation_id'] != preparation['preparation_id'] or claims['boot_id'] != preparation['boot_id'] or claims['node_id'] != row['node_id'] or claims['identity_sha256'] != preparation['identity']['identity_sha256'] or claims['policy_version'] != int(row['policy_version']) or claims['policy_sha256'] != row['policy_sha256'] or claims['qualification_sha256'] != runtime['qualification_sha256'] or claims['manifest'] != receipt['manifest'] or timestamp(receipt['manifest']['retain_until']) < minimum_retention or not 0 < claims['exp'] - claims['iat'] <= 300:
+    manifest = claims['manifest']
+    valid_manifest = all(isinstance(manifest.get(key), str) and manifest[key] for key in ('bucket', 'key', 'version_id')) and manifest['version_id'] != 'null' and re.fullmatch(r'[0-9a-f]{64}', manifest.get('sha256', '')) and type(manifest.get('bytes')) is int and manifest['bytes'] > 0
+    # This is historical admission evidence, not permission to replay a receipt:
+    # expiry must have fitted the exact preparation when issued, but may be past
+    # now after the process completed and lifecycle recovery was confirmed.
+    if checked.returncode or claims.get('schema_version') != 1 or claims.get('key_id') != header['kid'] or claims.get('jti') != row['admission_event_id'] or claims['iss'] != runtime['issuer'] or audience != [runtime['audience']] or claims['event_type'] != 'execution.admission' or claims['event_id'] != row['admission_event_id'] or claims['record_sha256'] != row['admission_record_sha256'] or claims['actor_sha256'] != actor_sha or claims['binding_sha256'] != binding_sha or claims['execution_id'] != row['id'] or claims['preparation_id'] != preparation['preparation_id'] or claims['boot_id'] != preparation['boot_id'] or claims['node_id'] != row['node_id'] or claims['identity_sha256'] != preparation['identity']['identity_sha256'] or claims['policy_version'] != int(row['policy_version']) or claims['policy_sha256'] != row['policy_sha256'] or claims['qualification_sha256'] != runtime['qualification_sha256'] or not valid_manifest or timestamp(manifest['retain_until']) < minimum_retention or not 0 < claims['exp'] - claims['iat'] <= 300 or claims['exp'] * 1000 > expiry_ms or not claims['iat'] <= claims['nbf'] < claims['exp']:
         raise RuntimeError('Signed admission did not match exact stored execution/retention trust')
-    return {'execution_id': row['id'], 'record_sha256': row['admission_record_sha256'], 'receipt_sha256': hashlib.sha256(token.encode()).hexdigest(), 'manifest_version': receipt['manifest']['version_id'], 'signature_verified': True}
+    return {'execution_id': row['id'], 'record_sha256': row['admission_record_sha256'], 'receipt_sha256': hashlib.sha256(token.encode()).hexdigest(), 'manifest_version': manifest['version_id'], 'signature_verified': True}
 
 
 def execution_matrix(state):
@@ -306,7 +332,7 @@ def execution_matrix(state):
                 if result.returncode != 42 or result.stdout != b'isolated-verified' or result.stderr != b'isolated-stderr' or present != b'x':
                     raise RuntimeError('Confirmed protected whole script/output/exit contract failed')
                 wait_for('confirmed completion evidence', lambda: database("SELECT evidence_state FROM executions ORDER BY created_at DESC LIMIT 1")[0]['evidence_state'] == 'confirmed')
-                row = database('SELECT id,actor_id,actor_person_id,actor_name,actor_provider,actor_subject,node_id,policy_version,policy_sha256,preparation,admission_event_id,admission_record_sha256,admission_receipt,created_at FROM executions ORDER BY created_at DESC LIMIT 1')[0]
+                row = database("SELECT id,actor_id,actor_person_id,actor_name,actor_provider,actor_subject,node_id,node_name,command_sha256,command_length,script_sha256,script_length,policy_version,policy_sha256,preparation,admission_event_id,admission_record_sha256,admission_receipt,created_at,(SELECT json_extract(payload,'$.retention_hours') FROM audit_policy_versions WHERE version=executions.policy_version) AS retention_hours FROM executions ORDER BY created_at DESC LIMIT 1")[0]
                 evidence.append({'case': mode, 'exact_once_marker': True, 'exit_code': 42, **verify_stored_receipt(row)})
             remote('agent', 'rm -f -- ' + marker)
         finally:
@@ -334,7 +360,7 @@ def main():
         return
     activate(state)
     execution = execution_matrix(state)
-    report = {'schema': 1, 'recorded_at': datetime.datetime.now(datetime.timezone.utc).isoformat(), 'scope': 'isolated synthetic .59/.64; no human approvals or staging mutation', 'phase': 'API/CLI/native transport only; browser qualification requires current frontend rebuild', 'build': json.loads((ARTIFACTS / 'build.json').read_text()), 'hub_https': HUB, 'target': '10.10.1.64', 'receipt': 'https://10.10.1.60:8443', 'change_id': state.get('change_id'), 'change_sha256': state.get('change_digest'), 'execution': execution, 'limitations': ['Prototype VM/fault qualification only; final Sonar and broader failure matrix remain separate']}
+    report = {'schema': 1, 'recorded_at': datetime.datetime.now(datetime.timezone.utc).isoformat(), 'scope': 'isolated synthetic .59/.64; no human approvals or staging mutation', 'phase': 'API/CLI/native transport qualification; browser evidence tracked separately', 'build': json.loads((ARTIFACTS / 'build.json').read_text()), 'hub_https': HUB, 'target': '10.10.1.64', 'receipt': 'https://10.10.1.60:8443', 'change_id': state.get('change_id'), 'change_sha256': state.get('change_digest'), 'execution': execution, 'limitations': ['Prototype VM/fault qualification only; final Sonar and broader failure matrix remain separate']}
     (HERE / 'qualification.json').write_text(json.dumps(report, indent=2) + '\n')
     print('Public synthetic qualification metadata written; private credentials and receipts withheld', flush=True)
 
