@@ -68,6 +68,15 @@ Hub. The receipt allows a matching prepared execution to proceed; it does not
 attest the command's behavior or completion. ELK stores a redacted searchable
 projection that can be rebuilt from archived evidence.
 
+Policy reads verify the exact stored bytes against their SHA-256; the digestless
+compatibility exception is limited to the original version-1 Standard record.
+Before actor/node scope chooses an execution or interactive path, the Hub checks
+local enrollment-marker and exact approval continuity, including both sides of a
+pending transition. Changing policy bytes and recomputing the database digest
+cannot replace that continuity. An approved return to Standard remains governed
+and can use its local authorization while the archive is offline. Startup and
+recovery continue to authenticate the latest external anchor.
+
 The current lab qualification is a prototype configuration, not a compliance
 certification or production high-availability claim. It uses a single ELK guest,
 a shared hypervisor root boundary, and manually unlocked encrypted storage. A

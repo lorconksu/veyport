@@ -13,7 +13,20 @@ and accompanied by an external receipt. Neither mechanism protects against loss
 of the Hub host, its privileged operator, encryption keys, or the shared lab
 hypervisor. Review [[Architecture]] for the trust boundary.
 
-The audit log is visible to **admins and auditors**. Admins can also manage retention and threshold settings; auditors can review, export, filter, and flag events without changing those controls.
+Policy records are checked against the SHA-256 of their exact stored bytes.
+Command and interactive authorization also verifies local enrollment and the
+exact approved change before selecting Standard or Enhanced scope. Corrupted or
+inconsistent policy state cannot supply a Standard fallback, and an approved
+return to Standard keeps its security governance. Startup and recovery check the
+latest external anchor; normal approved Standard access does not require the
+archive to remain online.
+
+The audit log is visible to principals with **audit.read**, including admins,
+auditors, and original-readers. Before governance enrollment, Standard admins can
+also manage retention and threshold settings. Once enrolled, these settings
+require a protected request and two independent approvals, including after an
+approved return to Standard. Audit readers can review, export, filter, and flag
+events without gaining settings authority.
 
 ---
 
@@ -113,7 +126,11 @@ The Audit Logs page also supports a lightweight review workflow:
 - **Saved Filters** - keep commonly used filter combinations for later reviews
 - **Flagged Events** - attach notes to suspicious entries or filtered result sets
 
-Admins and auditors can use these workflow features. Only admins can change retention and detection thresholds or run retention from the UI.
+Principals with **audit.read** can use these workflow features. Before governance
+enrollment, Standard admins can change retention and detection thresholds;
+enrolled installations require the protected change process. The local retention
+action remains an operations-admin action and does not change the immutable
+external archive's retention.
 
 ---
 
