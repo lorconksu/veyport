@@ -33,12 +33,14 @@ type ClientConfig struct {
 	TLS              *tls.Config
 	Bearer           string
 	Verifier         *Verifier
+	Now              func() time.Time
 }
 type Client struct {
 	endpoint string
 	http     *http.Client
 	bearer   string
 	verifier *Verifier
+	now      func() time.Time
 }
 
 func NewClient(c ClientConfig) (*Client, error) {
@@ -49,7 +51,10 @@ func NewClient(c ClientConfig) (*Client, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &Client{endpoint: strings.TrimSuffix(c.Endpoint, "/"), http: client, bearer: c.Bearer, verifier: c.Verifier}, nil
+	if c.Now == nil {
+		c.Now = time.Now
+	}
+	return &Client{endpoint: strings.TrimSuffix(c.Endpoint, "/"), http: client, bearer: c.Bearer, verifier: c.Verifier, now: c.Now}, nil
 }
 
 func (c *Client) Preserve(ctx context.Context, raw []byte, inputs []AttachmentInput) (auditrecord.Receipt, error) {
@@ -261,7 +266,11 @@ func (c *Client) Anchor(ctx context.Context, installationID string) (auditrecord
 		return response, ErrReceipt
 	}
 	expected.Nonce = nonce
-	claims, err := c.verifier.Verify(response.Receipt.Token, expected, time.Now())
+	now := time.Now()
+	if c.now != nil {
+		now = c.now()
+	}
+	claims, err := c.verifier.Verify(response.Receipt.Token, expected, now)
 	if err != nil || auditrecord.Digest(claims.Manifest) != auditrecord.Digest(response.Receipt.Manifest) {
 		return response, ErrReceipt
 	}
@@ -330,7 +339,7 @@ func (g Gate) Admit(ctx context.Context, raw []byte, attachments []AttachmentInp
 		return auditrecord.Receipt{}, ErrReceipt
 	}
 	if _, err = g.Verifier.Consume(ctx, receipt.Token, e, now, g.Consumer); err != nil {
-		return auditrecord.Receipt{}, err
+		return receipt, err
 	}
 	return receipt, nil
 }

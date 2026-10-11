@@ -320,14 +320,29 @@ func (ts *TerminalSessions) RemoveIfHubInitiated(serverID, sessionID string) (bo
 }
 
 func (ts *TerminalSessions) EndAll(serverID string, exitCode int32, err string) {
+	ts.prepareEndAll(serverID, exitCode, err)()
+}
+
+// prepareEndAll captures exact registration objects before detaching the
+// current control connection. Later disconnect bookkeeping must not close
+// registrations added by an authenticated replacement connection.
+func (ts *TerminalSessions) prepareEndAll(serverID string, exitCode int32, err string) func() {
 	prefix := serverID + ":"
 	ts.mu.Lock()
-	defer ts.mu.Unlock()
+	var captured []*terminalSession
 	for key, s := range ts.sessions {
 		if len(key) < len(prefix) || key[:len(prefix)] != prefix {
 			continue
 		}
-		endLocked(s, exitCode, err, false)
+		captured = append(captured, s)
+	}
+	ts.mu.Unlock()
+	return func() {
+		ts.mu.Lock()
+		defer ts.mu.Unlock()
+		for _, s := range captured {
+			endLocked(s, exitCode, err, false)
+		}
 	}
 }
 

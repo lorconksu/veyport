@@ -110,6 +110,7 @@ type Config struct {
 	// ExecutionConsumerTimeout can shorten the default one-minute blocked
 	// write budget. It never imposes an idle timeout on quiet commands.
 	ExecutionConsumerTimeout time.Duration
+	ProtectedExecution       *ProtectedExecutionConfig
 }
 
 // Server is the SSH gateway listener. The zero value is not usable; build one
@@ -122,17 +123,20 @@ type Server struct {
 	conns    map[net.Conn]struct{}
 	closing  bool
 
-	wg        sync.WaitGroup
-	ready     chan struct{}
-	readyOnce sync.Once
+	wg             sync.WaitGroup
+	ready          chan struct{}
+	readyOnce      sync.Once
+	evidenceCancel context.CancelFunc
+	evidenceWake   chan struct{}
 }
 
 // New builds a gateway from cfg. It performs no I/O; call Start to listen.
 func New(cfg Config) *Server {
 	return &Server{
-		cfg:   cfg,
-		conns: make(map[net.Conn]struct{}),
-		ready: make(chan struct{}),
+		cfg:          cfg,
+		conns:        make(map[net.Conn]struct{}),
+		ready:        make(chan struct{}),
+		evidenceWake: make(chan struct{}, 1),
 	}
 }
 
@@ -143,6 +147,7 @@ func New(cfg Config) *Server {
 // without ever opening a port: the hub's REST and gRPC planes keep serving
 // (FR-006, FR-015). Only a genuine bind failure is returned as an error.
 func (s *Server) Start() error {
+	s.startEvidenceRecovery()
 	lis, err := s.listen()
 	s.markReady()
 	if err != nil {
@@ -151,6 +156,13 @@ func (s *Server) Start() error {
 	if lis == nil {
 		return nil
 	}
+	defer func() {
+		s.mu.Lock()
+		if s.listener == lis {
+			s.listener = nil
+		}
+		s.mu.Unlock()
+	}()
 	return s.serve(lis)
 }
 
@@ -259,6 +271,9 @@ func (s *Server) Stop(ctx context.Context) error {
 		return nil
 	}
 	s.closing = true
+	if s.evidenceCancel != nil {
+		s.evidenceCancel()
+	}
 	lis := s.listener
 	s.mu.Unlock()
 
@@ -294,6 +309,17 @@ func (s *Server) Addr() string {
 		return ""
 	}
 	return s.listener.Addr().String()
+}
+
+// Ready reports an actual bound gateway listener. It cannot approve protected
+// activation from configuration flags or key material alone.
+func (s *Server) Ready() bool {
+	if s == nil {
+		return false
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.listener != nil && !s.closing
 }
 
 func (s *Server) markReady() {

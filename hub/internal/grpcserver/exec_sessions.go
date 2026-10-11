@@ -8,6 +8,7 @@ import (
 	"crypto/subtle"
 	"errors"
 	"fmt"
+	"io"
 	"strings"
 	"sync"
 	"time"
@@ -69,7 +70,7 @@ type ExecutionSession struct {
 	ticketIssued, ticketUsed, dispatch bool
 	attached                           chan struct{}
 	started                            chan struct{}
-	start                              chan *pb.ExecutionStart
+	start                              chan executionDispatch
 	stdin                              chan *pb.ExecutionHubMessage
 	stdout, stderr                     chan []byte
 	result                             chan *pb.ExecutionResult
@@ -80,6 +81,11 @@ type ExecutionSession struct {
 	inputSequence                      uint64
 	inputClosed                        bool
 	inputMu                            sync.Mutex
+	startAttempted                     bool
+	enhanced                           bool
+	scriptHash                         []byte
+	scriptLength                       uint64
+	limits                             *pb.ExecutionLimits
 }
 
 func NewExecutionSessions(terminals *TerminalSessions, connections *connmgr.ConnManager) *ExecutionSessions {
@@ -107,6 +113,10 @@ func (es *ExecutionSessions) SetCapabilities(node string, stream pb.AgentService
 		return
 	}
 	es.mu.Lock()
+	if conn != es.connections.GetConn(node) || !executionConnectionOpen(conn) {
+		es.mu.Unlock()
+		return
+	}
 	valid := caps != nil && caps.ProtocolVersion == 1 && caps.StandardExec && caps.BootId != "" && len(caps.BootId) <= 128
 	previous := es.capabilities[node]
 	var cancelled []*ExecutionSession
@@ -157,7 +167,7 @@ func (es *ExecutionSessions) Register(node, id, actor, runAs string, command []b
 		return nil, errors.New("shared terminal and execution capacity reached")
 	}
 	_, _, _ = es.terminals.AttachStream(node, id, actor)
-	s := &ExecutionSession{ID: id, NodeID: node, ActorID: actor, RequestedUser: runAs, Revocations: marker, registry: es, connection: caps.connection, bootID: caps.capability.BootId, commandHash: sha256.Sum256(command), preparedReady: make(chan struct{}), attached: make(chan struct{}), started: make(chan struct{}), start: make(chan *pb.ExecutionStart, 1), stdin: make(chan *pb.ExecutionHubMessage, executionQueueFrames), stdout: make(chan []byte, executionQueueFrames), stderr: make(chan []byte, executionQueueFrames), result: make(chan *pb.ExecutionResult, 1), done: make(chan struct{})}
+	s := &ExecutionSession{ID: id, NodeID: node, ActorID: actor, RequestedUser: runAs, Revocations: marker, registry: es, connection: caps.connection, bootID: caps.capability.BootId, commandHash: sha256.Sum256(command), limits: DefaultExecutionLimits(), preparedReady: make(chan struct{}), attached: make(chan struct{}), started: make(chan struct{}), start: make(chan executionDispatch, 1), stdin: make(chan *pb.ExecutionHubMessage, executionQueueFrames), stdout: make(chan []byte, executionQueueFrames), stderr: make(chan []byte, executionQueueFrames), result: make(chan *pb.ExecutionResult, 1), done: make(chan struct{})}
 	s.Stdout, s.Stderr, s.Result, s.Attached, s.Started, s.Done = s.stdout, s.stderr, s.result, s.attached, s.started, s.done
 	s.transportDone = make(chan struct{})
 	es.sessions[key] = s
@@ -176,14 +186,29 @@ func (es *ExecutionSessions) Remove(node, id string) {
 }
 
 func (es *ExecutionSessions) EndAll(node, reason string) {
+	es.endConnection(node, nil, reason)
+}
+
+// EndConnection cancels only the disconnecting control-stream generation.
+// A replacement may already have registered while disconnect bookkeeping was
+// waiting on storage or notification delivery.
+func (es *ExecutionSessions) EndConnection(node string, stream pb.AgentService_ConnectServer, reason string) {
+	if stream != nil {
+		es.endConnection(node, stream, reason)
+	}
+}
+
+func (es *ExecutionSessions) endConnection(node string, stream pb.AgentService_ConnectServer, reason string) {
 	es.mu.Lock()
 	var sessions []*ExecutionSession
 	for _, s := range es.sessions {
-		if s.NodeID == node {
+		if s.NodeID == node && (stream == nil || s.connection.Stream == stream) {
 			sessions = append(sessions, s)
 		}
 	}
-	delete(es.capabilities, node)
+	if caps, ok := es.capabilities[node]; ok && (stream == nil || caps.connection.Stream == stream) {
+		delete(es.capabilities, node)
+	}
 	es.mu.Unlock()
 	for _, s := range sessions {
 		s.Cancel(reason)
@@ -229,7 +254,7 @@ func (s *ExecutionSession) validatePrepared(p *pb.ExecutionPrepared) error {
 	if b == nil || b.ExecutionId != s.ID || b.NodeId != s.NodeID || b.PreparationId == "" || len(b.PreparationId) > 128 || b.BootId != s.bootID || b.ExpiresUnixMilli <= time.Now().UnixMilli() || b.ExpiresUnixMilli > time.Now().Add(ExecutionAttachTimeout).UnixMilli() {
 		return errors.New("invalid execution preparation binding")
 	}
-	if !bytes.Equal(p.CommandSha256, s.commandHash[:]) || !proto.Equal(p.Limits, DefaultExecutionLimits()) {
+	if !bytes.Equal(p.CommandSha256, s.commandHash[:]) || !proto.Equal(p.Limits, s.limits) {
 		return errors.New("execution preparation content or limits changed")
 	}
 	if i == nil || i.Username == "" || len(i.Username) > 256 || i.Shell == "" || len(i.Shell) > 4096 || i.Cwd == "" || len(i.Cwd) > 4096 || len(i.Home) > 4096 || len(i.Groups) > 1024 || len(i.IdentitySha256) != 32 || len(i.GroupsSha256) != 32 || (s.RequestedUser != "" && i.Username != s.RequestedUser) {
@@ -296,7 +321,7 @@ func (es *ExecutionSessions) Attach(node string, a *pb.ExecutionAttachRequest) (
 func (s *ExecutionSession) Dispatch() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if s.prepared == nil || !s.ticketUsed || s.dispatch || s.connection != s.registry.connections.GetConn(s.NodeID) || !executionConnectionOpen(s.connection) || s.prepared.Binding.ExpiresUnixMilli <= time.Now().UnixMilli() {
+	if s.enhanced || s.prepared == nil || !s.ticketUsed || s.dispatch || s.connection != s.registry.connections.GetConn(s.NodeID) || !executionConnectionOpen(s.connection) || s.prepared.Binding.ExpiresUnixMilli <= time.Now().UnixMilli() {
 		return errors.New("execution is not dispatchable")
 	}
 	select {
@@ -306,7 +331,51 @@ func (s *ExecutionSession) Dispatch() error {
 	}
 	s.dispatch = true
 	p := s.prepared
-	s.start <- &pb.ExecutionStart{Binding: proto.Clone(p.Binding).(*pb.ExecutionBinding), CommandSha256: append([]byte(nil), p.CommandSha256...), IdentitySha256: append([]byte(nil), p.Identity.IdentitySha256...), Limits: proto.Clone(p.Limits).(*pb.ExecutionLimits), PolicyVersion: "standard-v1"}
+	s.start <- executionDispatch{start: &pb.ExecutionStart{Binding: proto.Clone(p.Binding).(*pb.ExecutionBinding), CommandSha256: append([]byte(nil), p.CommandSha256...), IdentitySha256: append([]byte(nil), p.Identity.IdentitySha256...), Limits: proto.Clone(p.Limits).(*pb.ExecutionLimits), PolicyVersion: "standard-v1"}}
+	return nil
+}
+
+type executionDispatch struct {
+	start       *pb.ExecutionStart
+	script      io.Reader
+	beforeStart func() error
+}
+
+func (es *ExecutionSessions) SupportsProtected(node string) bool {
+	es.mu.Lock()
+	defer es.mu.Unlock()
+	caps, ok := es.capabilities[node]
+	return ok && caps.capability.ProtectedScript && caps.connection == es.connections.GetConn(node) && executionConnectionOpen(caps.connection)
+}
+
+// Configure must run before preparation; exact limits and script binding are
+// preserved across collection, receipt validation and the stream dispatch.
+func (s *ExecutionSession) Configure(enhanced bool, hash []byte, length uint64, limits *pb.ExecutionLimits) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.prepared != nil || s.prepareErr != nil || limits == nil || length > 16<<20 || (len(hash) != 0 && len(hash) != 32) {
+		return errors.New("invalid execution configuration")
+	}
+	s.enhanced = enhanced
+	s.scriptHash = append([]byte(nil), hash...)
+	s.scriptLength = length
+	s.limits = proto.Clone(limits).(*pb.ExecutionLimits)
+	return nil
+}
+func (s *ExecutionSession) DispatchProtected(receipt []byte, receiptExpiry int64, policy string, script io.Reader, beforeStart func() error) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if !s.enhanced || s.prepared == nil || !s.ticketUsed || s.dispatch || len(receipt) == 0 || len(receipt) > 16<<10 || receiptExpiry <= time.Now().UnixMilli() || receiptExpiry > s.prepared.Binding.ExpiresUnixMilli || beforeStart == nil || (len(s.scriptHash) != 0 && script == nil) || s.connection != s.registry.connections.GetConn(s.NodeID) || !executionConnectionOpen(s.connection) || s.prepared.Binding.ExpiresUnixMilli <= time.Now().UnixMilli() {
+		return errors.New("protected execution is not dispatchable")
+	}
+	select {
+	case <-s.done:
+		return errors.New(s.reason)
+	default:
+	}
+	s.dispatch = true
+	p := s.prepared
+	s.start <- executionDispatch{start: &pb.ExecutionStart{Binding: proto.Clone(p.Binding).(*pb.ExecutionBinding), CommandSha256: append([]byte(nil), p.CommandSha256...), IdentitySha256: append([]byte(nil), p.Identity.IdentitySha256...), Limits: proto.Clone(p.Limits).(*pb.ExecutionLimits), PolicyVersion: policy, AdmissionReceipt: append([]byte(nil), receipt...), AdmissionExpiresUnixMilli: receiptExpiry}, script: script, beforeStart: beforeStart}
 	return nil
 }
 
@@ -374,4 +443,10 @@ func (s *ExecutionSession) Binding() *pb.ExecutionBinding {
 
 func (s *ExecutionSession) String() string {
 	return fmt.Sprintf("execution %s on node %s", s.ID, s.NodeID)
+}
+
+func (s *ExecutionSession) StartAttempted() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.startAttempted
 }

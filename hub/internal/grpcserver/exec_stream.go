@@ -1,7 +1,9 @@
 package grpcserver
 
 import (
+	"bytes"
 	"context"
+	"crypto/sha256"
 	"errors"
 	"io"
 	"syscall"
@@ -108,9 +110,9 @@ func sendExecution(stream pb.AgentService_ExecuteServer, s *ExecutionSession) er
 		return err
 	}
 	close(s.attached)
-	var start *pb.ExecutionStart
+	var dispatch executionDispatch
 	select {
-	case start = <-s.start:
+	case dispatch = <-s.start:
 	case <-s.Done:
 		return nil
 	case <-s.transportDone:
@@ -118,7 +120,23 @@ func sendExecution(stream pb.AgentService_ExecuteServer, s *ExecutionSession) er
 	case <-stream.Context().Done():
 		return stream.Context().Err()
 	}
-	if err := stream.Send(&pb.ExecutionHubMessage{Payload: &pb.ExecutionHubMessage_Start{Start: start}}); err != nil {
+	if dispatch.script != nil {
+		if err := sendProtectedScript(stream, s, dispatch.script); err != nil {
+			return err
+		}
+	}
+	if dispatch.beforeStart != nil {
+		if err := dispatch.beforeStart(); err != nil {
+			return err
+		}
+	}
+	if s.Binding().ExpiresUnixMilli <= time.Now().UnixMilli() || (dispatch.start.AdmissionExpiresUnixMilli != 0 && dispatch.start.AdmissionExpiresUnixMilli <= time.Now().UnixMilli()) {
+		return status.Error(codes.DeadlineExceeded, "execution authority expired before launch")
+	}
+	s.mu.Lock()
+	s.startAttempted = true
+	s.mu.Unlock()
+	if err := stream.Send(&pb.ExecutionHubMessage{Payload: &pb.ExecutionHubMessage_Start{Start: dispatch.start}}); err != nil {
 		return err
 	}
 	for {
@@ -142,6 +160,45 @@ func sendExecution(stream pb.AgentService_ExecuteServer, s *ExecutionSession) er
 			}
 		}
 	}
+}
+
+func sendProtectedScript(stream pb.AgentService_ExecuteServer, s *ExecutionSession, reader io.Reader) error {
+	buffer := make([]byte, MaxExecutionFrameBytes)
+	hash := sha256.New()
+	var offset uint64
+	for {
+		n, err := reader.Read(buffer)
+		if n > 0 {
+			if offset+uint64(n) > s.scriptLength {
+				return status.Error(codes.DataLoss, "protected input length mismatch")
+			}
+			_, _ = hash.Write(buffer[:n])
+			if sendErr := stream.Send(&pb.ExecutionHubMessage{Payload: &pb.ExecutionHubMessage_ScriptChunk{ScriptChunk: &pb.ExecutionScriptChunk{Offset: offset, Data: append([]byte(nil), buffer[:n]...)}}}); sendErr != nil {
+				return sendErr
+			}
+			offset += uint64(n)
+		}
+		if err != nil {
+			if err != io.EOF {
+				return err
+			}
+			break
+		}
+		select {
+		case <-s.Done:
+			return errors.New(s.Reason())
+		case <-stream.Context().Done():
+			return stream.Context().Err()
+		default:
+		}
+		if s.Binding().ExpiresUnixMilli <= time.Now().UnixMilli() {
+			return status.Error(codes.DeadlineExceeded, "protected transfer expired")
+		}
+	}
+	if offset != s.scriptLength || !bytes.Equal(hash.Sum(nil), s.scriptHash) {
+		return status.Error(codes.DataLoss, "protected input content mismatch")
+	}
+	return stream.Send(&pb.ExecutionHubMessage{Payload: &pb.ExecutionHubMessage_ScriptEof{ScriptEof: &pb.ExecutionScriptEOF{Length: offset, Sha256: append([]byte(nil), s.scriptHash...)}}})
 }
 
 func receiveExecution(stream pb.AgentService_ExecuteServer, s *ExecutionSession) error {
@@ -228,7 +285,9 @@ func receiveExecution(stream pb.AgentService_ExecuteServer, s *ExecutionSession)
 			// fixed classification in ordinary hub records and client diagnostics.
 			result := proto.Clone(r).(*pb.ExecutionResult)
 			result.Signal = redactedExecutionSignal(result.Signal)
-			if result.Reason != "" {
+			if result.Reason == "completion not durable" {
+				result.Reason = "completion metadata unconfirmed"
+			} else if result.Reason != "" {
 				result.Reason = "agent reported " + result.State
 			}
 			s.result <- result

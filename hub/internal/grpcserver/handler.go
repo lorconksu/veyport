@@ -182,6 +182,9 @@ func (h *Handler) peerAddr(stream pb.AgentService_ConnectServer) string {
 
 // onAgentConnected logs the audit event and sends the online notification.
 func (h *Handler) onAgentConnected(serverID, peerAddr string) {
+	// Registration happens after handshake status writes. A previous stream's
+	// delayed disconnect may have written offline between those two steps.
+	_ = h.store.UpdateServerStatus(serverID, "online")
 	h.store.LogAudit(model.AuditEntry{
 		Action:    model.AuditServerConnected,
 		Target:    &serverID,
@@ -201,13 +204,29 @@ func (h *Handler) onAgentConnected(serverID, peerAddr string) {
 
 // onAgentDisconnected unregisters the connection, flushes heartbeats, and logs the disconnect event.
 func (h *Handler) onAgentDisconnected(serverID string, stream pb.AgentService_ConnectServer) {
+	if h.executions != nil {
+		h.executions.EndConnection(serverID, stream, "agent disconnected")
+	}
+	var endTerminals func()
+	if h.terminals != nil {
+		endTerminals = h.terminals.prepareEndAll(serverID, -1, "agent disconnected")
+	}
 	if !h.connMgr.UnregisterIfCurrent(serverID, stream) {
 		return
+	}
+	if endTerminals != nil {
+		defer endTerminals()
 	}
 	if h.hbCoalescer != nil {
 		h.hbCoalescer.Flush(serverID)
 	}
 	_ = h.store.UpdateServerStatus(serverID, "offline")
+	if executionConnectionOpen(h.connMgr.GetConn(serverID)) {
+		// A replacement already registered while the offline write waited. Its
+		// live connection also drives execution readiness and CLI discovery.
+		_ = h.store.UpdateServerStatus(serverID, "online")
+		return
+	}
 	h.store.LogAudit(model.AuditEntry{
 		Action:    model.AuditServerDisconnected,
 		Target:    &serverID,
@@ -220,12 +239,6 @@ func (h *Handler) onAgentDisconnected(serverID string, stream pb.AgentService_Co
 			"server_id":   serverID,
 			"timestamp":   time.Now().UTC().Format(model.NotifyTimestampFormat),
 		})
-	}
-	if h.terminals != nil {
-		h.terminals.EndAll(serverID, -1, "agent disconnected")
-	}
-	if h.executions != nil {
-		h.executions.EndAll(serverID, "agent disconnected")
 	}
 	log.Printf("agent disconnected: %s", serverID)
 }

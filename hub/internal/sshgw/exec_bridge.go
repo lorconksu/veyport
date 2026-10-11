@@ -2,7 +2,6 @@ package sshgw
 
 import (
 	"context"
-	"crypto/sha256"
 	"encoding/hex"
 	"errors"
 	"fmt"
@@ -15,6 +14,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/google/uuid"
+	"github.com/wyiu/veyport/hub/internal/authorization"
 	"github.com/wyiu/veyport/hub/internal/grpcserver"
 	"github.com/wyiu/veyport/hub/internal/model"
 	"github.com/wyiu/veyport/hub/internal/server"
@@ -27,6 +27,7 @@ type execParams struct {
 	user     *model.User
 	metadata *model.Execution
 	session  *grpcserver.ExecutionSession
+	policy   model.ExecutionPolicy
 }
 
 func (s *Server) authorizeExec(conn *ssh.ServerConn) (execParams, error) {
@@ -43,7 +44,11 @@ func (s *Server) authorizeExec(conn *ssh.ServerConn) (execParams, error) {
 	if err != nil {
 		return execParams{}, errors.New(authorizationMessage(err))
 	}
-	return execParams{bridgeParams: bridgeParams{serverID: node.ID, serverName: node.Name, userID: user.ID, username: username, executionUser: runAs, remoteIP: remoteHost(conn.RemoteAddr())}, user: user}, nil
+	policy, err := authorization.New(s.cfg.Store).PolicyForExecution(user.ID, node.ID)
+	if err != nil {
+		return execParams{}, err
+	}
+	return execParams{policy: policy, bridgeParams: bridgeParams{serverID: node.ID, serverName: node.Name, userID: user.ID, username: username, executionUser: runAs, remoteIP: remoteHost(conn.RemoteAddr())}, user: user}, nil
 }
 
 // Request success means submission acceptance. No preparation, remote process
@@ -60,13 +65,26 @@ func (s *Server) startExec(conn *ssh.ServerConn, ch ssh.Channel, req *ssh.Reques
 	}
 	st.started, st.exec = true, true
 	p, err := s.authorizeExec(conn)
-	if err == nil && (s.cfg.Executions == nil || !s.cfg.Executions.Supports(p.serverID)) {
+	if err == nil && !p.policy.Enhanced && (s.cfg.Executions == nil || !s.cfg.Executions.Supports(p.serverID)) {
 		err = grpcserver.ErrExecutionUnsupported
 	}
 	if err != nil {
 		replyTo(req, true)
 		s.refuseShell(ch, p.userID, p.serverID, p.remoteIP, "reason=execution_submission_denied", err.Error())
 		return
+	}
+	if p.policy.Enhanced {
+		version, versionErr := s.cfg.Store.GetPolicyVersion(p.policy.Version)
+		if versionErr != nil || s.cfg.Executions == nil || !s.cfg.Executions.SupportsProtected(p.serverID) || s.cfg.ProtectedExecution.Ready(context.Background(), version) != nil {
+			denialErr := s.recordProtectedReadinessDenial(p, payload.Command)
+			replyTo(req, true)
+			if denialErr != nil {
+				s.refuseShell(ch, p.userID, p.serverID, p.remoteIP, "reason=execution_denial_metadata_unavailable", "execution denied; denial evidence is incomplete")
+				return
+			}
+			s.refuseShell(ch, p.userID, p.serverID, p.remoteIP, "reason=protected_execution_unavailable", "enhanced execution and qualified encrypted archive are unavailable")
+			return
+		}
 	}
 	id := uuid.NewString()
 	p.session, err = s.cfg.Executions.Register(p.serverID, id, p.userID, p.executionUser, []byte(payload.Command))
@@ -75,8 +93,13 @@ func (s *Server) startExec(conn *ssh.ServerConn, ch ssh.Channel, req *ssh.Reques
 		s.refuseShell(ch, p.userID, p.serverID, p.remoteIP, "reason=execution_capacity", err.Error())
 		return
 	}
-	hash := sha256.Sum256([]byte(payload.Command))
-	p.metadata = &model.Execution{ID: id, ActorID: p.userID, ActorName: p.username, ActorProvider: string(p.user.AuthProvider), NodeID: p.serverID, NodeName: p.serverName, RequestedUser: p.executionUser, CommandSHA256: hex.EncodeToString(hash[:]), CommandLength: len(payload.Command)}
+	p.metadata, err = s.newExecutionMetadata(p, id, payload.Command)
+	if err != nil {
+		s.cfg.Executions.Remove(p.serverID, id)
+		replyTo(req, true)
+		s.refuseShell(ch, p.userID, p.serverID, p.remoteIP, "reason=actor_identity_unavailable", "execution identity unavailable")
+		return
+	}
 	if err = s.cfg.Store.CreateExecution(p.metadata); err != nil {
 		s.cfg.Executions.Remove(p.serverID, id)
 		replyTo(req, true)
@@ -101,15 +124,36 @@ func (s *Server) runExec(ch ssh.Channel, p execParams, command string) {
 	var ioWG sync.WaitGroup
 	watchDone := make(chan struct{})
 	go func() { defer close(watchDone); s.watchExecution(ctx, cancel, ch, p, &stdoutWrite, &stderrWrite) }()
-	result, err := s.executeStandard(ctx, ch, p, command, &stdoutWrite, &stderrWrite, &ioWG)
+	var input *protectedSubmission
+	var submissionErr error
+	if p.policy.Enhanced {
+		input, submissionErr = s.collectProtectedInput(ctx, ch, p, command)
+		if input != nil && input.file != nil {
+			defer input.file.Close()
+		}
+	}
+	var result *pb.ExecutionResult
+	var err error
+	if submissionErr != nil {
+		err = submissionErr
+	} else {
+		result, err = s.execute(ctx, ch, p, command, input, &stdoutWrite, &stderrWrite, &ioWG)
+	}
 	if err != nil {
 		reason := p.session.Reason()
 		if reason == "" {
-			reason = "execution preparation or transport failed"
+			reason = err.Error()
 		}
 		state := "admission_failed"
+		if p.policy.Enhanced && !p.session.StartAttempted() {
+			_ = s.cfg.Store.MarkExecutionAdmissionUnused(p.session.ID)
+		}
 		if p.metadata.State == "dispatching" || p.metadata.State == "running" {
-			state = "transport_lost"
+			state = "outcome_unknown"
+			if !p.session.StartAttempted() {
+				state = "launch_failed"
+				_ = s.cfg.Store.MarkExecutionAdmissionUnused(p.session.ID)
+			}
 		}
 		if reason != "execution transport lost" && ctx.Err() != nil {
 			state = "cancelled"
@@ -148,10 +192,23 @@ func (s *Server) cancelPreparedExecution(p execParams) {
 	_ = s.cfg.ConnMgr.SendToAgentContext(ctx, p.serverID, &pb.HubMessage{Payload: &pb.HubMessage_ExecutionCancel{ExecutionCancel: &pb.ExecutionCancel{Binding: binding, Reason: "hub cancelled execution"}}})
 }
 
-func (s *Server) executeStandard(ctx context.Context, ch ssh.Channel, p execParams, command string, stdoutWrite, stderrWrite *atomic.Int64, ioWG *sync.WaitGroup) (*pb.ExecutionResult, error) {
+func (s *Server) execute(ctx context.Context, ch ssh.Channel, p execParams, command string, input *protectedSubmission, stdoutWrite, stderrWrite *atomic.Int64, ioWG *sync.WaitGroup) (*pb.ExecutionResult, error) {
 	prepareCtx, prepareCancel := context.WithTimeout(ctx, grpcserver.ExecutionAttachTimeout)
 	defer prepareCancel()
-	if err := s.cfg.ConnMgr.SendToAgentContext(prepareCtx, p.serverID, &pb.HubMessage{Payload: &pb.HubMessage_ExecutionPrepare{ExecutionPrepare: &pb.ExecutionPrepare{ExecutionId: p.session.ID, NodeId: p.serverID, RunAsUser: p.executionUser, Command: command, Limits: grpcserver.DefaultExecutionLimits()}}}); err != nil {
+	limits := grpcserver.DefaultExecutionLimits()
+	if p.policy.RuntimeSeconds > 0 && p.policy.RuntimeSeconds < 3600 {
+		limits.RuntimeSeconds = uint32(p.policy.RuntimeSeconds)
+	}
+	var scriptHash []byte
+	var scriptLength uint64
+	if input != nil {
+		scriptHash = input.hash
+		scriptLength = input.length
+	}
+	if err := p.session.Configure(p.policy.Enhanced, scriptHash, scriptLength, limits); err != nil {
+		return nil, err
+	}
+	if err := s.cfg.ConnMgr.SendToAgentContext(prepareCtx, p.serverID, &pb.HubMessage{Payload: &pb.HubMessage_ExecutionPrepare{ExecutionPrepare: &pb.ExecutionPrepare{ExecutionId: p.session.ID, NodeId: p.serverID, RunAsUser: p.executionUser, Command: command, Limits: limits, Enhanced: p.policy.Enhanced, ScriptSha256: scriptHash, ScriptLength: scriptLength}}}); err != nil {
 		return nil, err
 	}
 	prepared, err := p.session.WaitPrepared(prepareCtx)
@@ -179,22 +236,57 @@ func (s *Server) executeStandard(ctx context.Context, ch ssh.Channel, p execPara
 	case <-p.session.Done:
 		return nil, errors.New(p.session.Reason())
 	}
-	if err = s.recheckExecution(p); err != nil {
+	if err = s.recheckExecutionPolicy(p); err != nil {
 		return nil, err
 	}
-	if err = s.cfg.Store.ClaimExecutionDispatch(p.session.ID, prepared.Binding.PreparationId); err != nil {
+	var receiptToken []byte
+	var receiptExpiry int64
+	var beforeStart func() error
+	if p.policy.Enhanced {
+		receipt, expiry, check, admitErr := s.admitProtectedExecution(ctx, p, command, prepared, input)
+		if admitErr != nil {
+			return nil, admitErr
+		}
+		receiptToken = []byte(receipt.Token)
+		receiptExpiry = expiry
+		beforeStart = check
+	} else if err = s.cfg.Store.ClaimExecutionDispatch(p.session.ID, prepared.Binding.PreparationId); err != nil {
 		return nil, err
 	}
 	p.metadata.State = "dispatching"
+	if p.policy.Enhanced {
+		if err = s.queueExecutionEvent(p, "admitted", "admitted"); err != nil {
+			_ = s.cfg.Store.MarkExecutionEvidencePermanent(p.session.ID)
+		}
+		s.wakeEvidenceRecovery()
+	}
 	if err = s.auditExecution(p, model.AuditExecutionDispatched, "dispatching"); err != nil {
 		return nil, err
 	}
-	if err = p.session.Dispatch(); err != nil {
+	if p.policy.Enhanced {
+		var reader io.ReadCloser
+		if input.file != nil {
+			reader, err = input.file.Open()
+			if err != nil {
+				return nil, err
+			}
+			defer reader.Close()
+		}
+		err = p.session.DispatchProtected(receiptToken, receiptExpiry, policyLabel(p.policy), reader, beforeStart)
+	} else {
+		err = p.session.Dispatch()
+	}
+	if err != nil {
 		return nil, err
 	}
 	ioWG.Add(3)
 	outputDone := make(chan struct{}, 2)
-	go func() { defer ioWG.Done(); s.forwardExecutionInput(ctx, ch, p) }()
+	go func() {
+		defer ioWG.Done()
+		if !p.policy.Enhanced {
+			s.forwardExecutionInput(ctx, ch, p)
+		}
+	}()
 	go func() {
 		defer ioWG.Done()
 		defer func() { outputDone <- struct{}{} }()
@@ -219,6 +311,11 @@ func (s *Server) executeStandard(ctx context.Context, ch ssh.Channel, p execPara
 			p.metadata.State = "running"
 			if err = s.cfg.Store.MarkExecutionRunning(p.session.ID); err != nil {
 				p.session.Cancel("execution state could not be recorded")
+			} else if p.policy.Enhanced {
+				if err = s.queueExecutionEvent(p, "running", "running"); err != nil {
+					_ = s.cfg.Store.MarkExecutionEvidencePermanent(p.session.ID)
+				}
+				s.wakeEvidenceRecovery()
 			}
 		case <-p.session.Done:
 			err = errors.New(p.session.Reason())
@@ -375,7 +472,7 @@ func (s *Server) recheckExecution(p execParams) error {
 // SSH credentials. Compare the credential and identity snapshot instead; global
 // revocation additionally closes the shared registry marker immediately.
 func executionCredentialsChanged(original, current *model.User) bool {
-	if original.PasswordHash != current.PasswordHash || original.TOTPEnabled != current.TOTPEnabled || original.Username != current.Username || original.AuthProvider != current.AuthProvider || original.ExternalID != current.ExternalID || original.LDAPDN != current.LDAPDN || original.LDAPUsername != current.LDAPUsername || original.Role != current.Role {
+	if original.PasswordHash != current.PasswordHash || original.TOTPEnabled != current.TOTPEnabled || original.Username != current.Username || original.AuthProvider != current.AuthProvider || original.ExternalID != current.ExternalID || original.LDAPDN != current.LDAPDN || original.LDAPUsername != current.LDAPUsername || original.Role != current.Role || original.SecurityRevision != current.SecurityRevision {
 		return true
 	}
 	return (original.TOTPSecret == nil) != (current.TOTPSecret == nil) || (original.TOTPSecret != nil && current.TOTPSecret != nil && *original.TOTPSecret != *current.TOTPSecret)
@@ -383,7 +480,7 @@ func executionCredentialsChanged(original, current *model.User) bool {
 
 func executionPreparation(p *pb.ExecutionPrepared) model.ExecutionPreparation {
 	i := p.Identity
-	return model.ExecutionPreparation{PreparationID: p.Binding.PreparationId, BootID: p.Binding.BootId, ExpiresUnixMilli: p.Binding.ExpiresUnixMilli, Identity: model.ExecutionIdentity{Username: i.Username, UID: i.Uid, GID: i.Gid, Groups: append([]uint32(nil), i.Groups...), GroupsSHA256: hex.EncodeToString(i.GroupsSha256), IdentitySHA256: hex.EncodeToString(i.IdentitySha256), Home: i.Home, Shell: i.Shell, Cwd: i.Cwd}}
+	return model.ExecutionPreparation{PreparationID: p.Binding.PreparationId, BootID: p.Binding.BootId, ExpiresUnixMilli: p.Binding.ExpiresUnixMilli, Limits: model.ExecutionLimits{MaxFrameBytes: p.Limits.MaxFrameBytes, MaxBufferBytes: p.Limits.MaxBufferBytes, RuntimeSeconds: p.Limits.RuntimeSeconds, TermGraceSeconds: p.Limits.TermGraceSeconds, BlockedConsumerSeconds: p.Limits.BlockedConsumerSeconds}, Identity: model.ExecutionIdentity{Username: i.Username, UID: i.Uid, GID: i.Gid, Groups: append([]uint32(nil), i.Groups...), GroupsSHA256: hex.EncodeToString(i.GroupsSha256), IdentitySHA256: hex.EncodeToString(i.IdentitySha256), Home: i.Home, Shell: i.Shell, Cwd: i.Cwd}}
 }
 
 func (s *Server) auditExecution(p execParams, action, state string) error {
@@ -402,8 +499,20 @@ func (s *Server) auditExecution(p execParams, action, state string) error {
 func (s *Server) finishExec(ch ssh.Channel, p execParams, state string, code uint32, observedExit *int32, signal, reason string) {
 	p.metadata.ExitCode = observedExit
 	p.metadata.Signal = signal
+	p.metadata.State = state
 	storeErr := s.cfg.Store.FinishExecution(p.session.ID, state, observedExit, signal, reason)
 	auditErr := s.auditExecution(p, model.AuditExecutionFinished, state)
+	if p.policy.Enhanced {
+		if err := s.queueExecutionLifecycle(p); err != nil {
+			_ = s.cfg.Store.MarkExecutionEvidencePermanent(p.session.ID)
+			writeClientMessage(ch, "external completion evidence is permanently incomplete")
+		} else {
+			s.wakeEvidenceRecovery()
+		}
+	}
+	if reason == "completion metadata unconfirmed" {
+		_ = s.cfg.Store.MarkExecutionEvidenceIncomplete(p.session.ID)
+	}
 	if storeErr != nil || auditErr != nil {
 		_ = s.cfg.Store.MarkExecutionEvidenceIncomplete(p.session.ID)
 		log.Printf("SSH execution %s: completion evidence unavailable", p.session.ID)

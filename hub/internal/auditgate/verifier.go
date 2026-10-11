@@ -135,3 +135,21 @@ func (v *Verifier) Consume(ctx context.Context, token string, e auditrecord.Expe
 	}
 	return c, nil
 }
+
+// VerifyHistorical confirms completed evidence at its original issuance time.
+// It cannot validate an admission or raw-read permit after expiry or renew one.
+func (v *Verifier) VerifyHistorical(token string, e auditrecord.Expected, now time.Time) (auditrecord.Claims, error) {
+	var claims auditrecord.Claims
+	if v == nil || (e.EventType != auditrecord.ExecutionLifecycle && e.EventType != auditrecord.ExecutionDenial) || len(token) > auditrecord.MaxReceiptBytes {
+		return claims, ErrReceipt
+	}
+	parts := strings.Split(token, ".")
+	if len(parts) != 3 {
+		return claims, ErrReceipt
+	}
+	payload, err := base64.RawURLEncoding.DecodeString(parts[1])
+	if err != nil || auditrecord.Decode(payload, &claims, auditrecord.MaxReceiptBytes) != nil || claims.IssuedAt == nil || claims.IssuedAt.Time.After(now.Add(v.config.ClockSkew)) {
+		return claims, ErrReceipt
+	}
+	return v.Verify(token, e, claims.IssuedAt.Time)
+}

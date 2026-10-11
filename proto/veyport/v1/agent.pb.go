@@ -3858,8 +3858,12 @@ type ExecutionStart struct {
 	Limits           *ExecutionLimits       `protobuf:"bytes,4,opt,name=limits,proto3" json:"limits,omitempty"`
 	PolicyVersion    string                 `protobuf:"bytes,5,opt,name=policy_version,json=policyVersion,proto3" json:"policy_version,omitempty"`
 	AdmissionReceipt []byte                 `protobuf:"bytes,6,opt,name=admission_receipt,json=admissionReceipt,proto3" json:"admission_receipt,omitempty"`
-	unknownFields    protoimpl.UnknownFields
-	sizeCache        protoimpl.SizeCache
+	// Enhanced-only expiry copied from hub-verified receipt claims. The agent
+	// trusts its enrolled mTLS hub and checks this authority immediately before
+	// spawn; it does not independently verify the archive signature.
+	AdmissionExpiresUnixMilli int64 `protobuf:"varint,7,opt,name=admission_expires_unix_milli,json=admissionExpiresUnixMilli,proto3" json:"admission_expires_unix_milli,omitempty"`
+	unknownFields             protoimpl.UnknownFields
+	sizeCache                 protoimpl.SizeCache
 }
 
 func (x *ExecutionStart) Reset() {
@@ -3932,6 +3936,13 @@ func (x *ExecutionStart) GetAdmissionReceipt() []byte {
 		return x.AdmissionReceipt
 	}
 	return nil
+}
+
+func (x *ExecutionStart) GetAdmissionExpiresUnixMilli() int64 {
+	if x != nil {
+		return x.AdmissionExpiresUnixMilli
+	}
+	return 0
 }
 
 type ExecutionStarted struct {
@@ -4674,14 +4685,15 @@ const file_proto_veyport_v1_agent_proto_rawDesc = "" +
 	"\x06cancel\x18\a \x01(\v2\x1b.veyport.v1.ExecutionCancelH\x00R\x06cancelB\t\n" +
 	"\apayload\"K\n" +
 	"\x11ExecutionAttached\x126\n" +
-	"\abinding\x18\x01 \x01(\v2\x1c.veyport.v1.ExecutionBindingR\abinding\"\xa1\x02\n" +
+	"\abinding\x18\x01 \x01(\v2\x1c.veyport.v1.ExecutionBindingR\abinding\"\xe2\x02\n" +
 	"\x0eExecutionStart\x126\n" +
 	"\abinding\x18\x01 \x01(\v2\x1c.veyport.v1.ExecutionBindingR\abinding\x12%\n" +
 	"\x0ecommand_sha256\x18\x02 \x01(\fR\rcommandSha256\x12'\n" +
 	"\x0fidentity_sha256\x18\x03 \x01(\fR\x0eidentitySha256\x123\n" +
 	"\x06limits\x18\x04 \x01(\v2\x1b.veyport.v1.ExecutionLimitsR\x06limits\x12%\n" +
 	"\x0epolicy_version\x18\x05 \x01(\tR\rpolicyVersion\x12+\n" +
-	"\x11admission_receipt\x18\x06 \x01(\fR\x10admissionReceipt\"J\n" +
+	"\x11admission_receipt\x18\x06 \x01(\fR\x10admissionReceipt\x12?\n" +
+	"\x1cadmission_expires_unix_milli\x18\a \x01(\x03R\x19admissionExpiresUnixMilli\"J\n" +
 	"\x10ExecutionStarted\x126\n" +
 	"\abinding\x18\x01 \x01(\v2\x1c.veyport.v1.ExecutionBindingR\abinding\"|\n" +
 	"\x14ExecutionStartFailed\x126\n" +

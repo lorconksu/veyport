@@ -20,7 +20,7 @@ func (s *Store) CreateExecution(e *model.Execution) error {
 		return err
 	}
 	defer tx.Rollback()
-	_, err = tx.Exec(`INSERT INTO executions(id,actor_id,actor_name,actor_provider,node_id,node_name,requested_user,command_sha256,command_length,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?)`, e.ID, e.ActorID, e.ActorName, e.ActorProvider, e.NodeID, e.NodeName, e.RequestedUser, e.CommandSHA256, e.CommandLength, now, now)
+	_, err = tx.Exec(`INSERT INTO executions(id,actor_id,actor_name,actor_provider,node_id,node_name,requested_user,command_sha256,command_length,policy_version,enhanced,actor_person_id,actor_subject,policy_sha256,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`, e.ID, e.ActorID, e.ActorName, e.ActorProvider, e.NodeID, e.NodeName, e.RequestedUser, e.CommandSHA256, e.CommandLength, executionPolicyVersion(e.PolicyVersion), e.Enhanced, e.ActorPersonID, e.ActorSubject, e.PolicySHA256, now, now)
 	if err != nil {
 		return fmt.Errorf("create execution: %w", err)
 	}
@@ -68,7 +68,7 @@ func (s *Store) ClaimExecutionDispatch(id, preparation string) error {
 		return err
 	}
 	defer tx.Rollback()
-	res, err := tx.Exec(`UPDATE executions SET state='dispatching',updated_at=? WHERE id=? AND state='prepared' AND json_extract(preparation,'$.preparation_id')=?`, now, id, preparation)
+	res, err := tx.Exec(`UPDATE executions SET state='dispatching',updated_at=? WHERE id=? AND enhanced=0 AND state='prepared' AND json_extract(preparation,'$.preparation_id')=?`, now, id, preparation)
 	if err = executionUpdated(res, err); err != nil {
 		return err
 	}
@@ -128,7 +128,7 @@ func (s *Store) FinishExecution(id, state string, exitCode *int32, signal, reaso
 		return err
 	}
 	defer tx.Rollback()
-	res, err := tx.Exec(`UPDATE executions SET state=?,evidence_state=?,exit_code=?,signal=?,reason=?,updated_at=?,finished_at=? WHERE id=? AND finished_at IS NULL`, state, evidence, exitCode, signal, reason, now, now, id)
+	res, err := tx.Exec(`UPDATE executions SET state=?,evidence_state=CASE WHEN evidence_state='permanently_incomplete' THEN evidence_state WHEN enhanced=1 THEN 'completion_unconfirmed' ELSE ? END,exit_code=?,signal=?,reason=?,updated_at=?,finished_at=? WHERE id=? AND finished_at IS NULL`, state, evidence, exitCode, signal, reason, now, now, id)
 	if err = executionUpdated(res, err); err != nil {
 		return err
 	}
@@ -138,12 +138,20 @@ func (s *Store) FinishExecution(id, state string, exitCode *int32, signal, reaso
 	return tx.Commit()
 }
 
+const executionColumns = `id,actor_id,actor_name,actor_provider,node_id,node_name,requested_user,command_sha256,command_length,policy_version,preparation,state,evidence_state,exit_code,signal,reason,created_at,updated_at,finished_at,enhanced,actor_person_id,actor_subject,policy_sha256,script_sha256,script_length,admission_event_id,admission_record_sha256,admission_receipt,admission_disposition`
+
 func (s *Store) GetExecution(id string) (*model.Execution, error) {
+	return scanExecution(s.db.QueryRow("SELECT "+executionColumns+" FROM executions WHERE id=?", id))
+}
+
+type executionScanner interface{ Scan(...any) error }
+
+func scanExecution(row executionScanner) (*model.Execution, error) {
 	var e model.Execution
 	var preparation, created, updated string
 	var finished sql.NullString
 	var code sql.NullInt32
-	err := s.db.QueryRow(`SELECT id,actor_id,actor_name,actor_provider,node_id,node_name,requested_user,command_sha256,command_length,policy_version,preparation,state,evidence_state,exit_code,signal,reason,created_at,updated_at,finished_at FROM executions WHERE id=?`, id).Scan(&e.ID, &e.ActorID, &e.ActorName, &e.ActorProvider, &e.NodeID, &e.NodeName, &e.RequestedUser, &e.CommandSHA256, &e.CommandLength, &e.PolicyVersion, &preparation, &e.State, &e.EvidenceState, &code, &e.Signal, &e.Reason, &created, &updated, &finished)
+	err := row.Scan(&e.ID, &e.ActorID, &e.ActorName, &e.ActorProvider, &e.NodeID, &e.NodeName, &e.RequestedUser, &e.CommandSHA256, &e.CommandLength, &e.PolicyVersion, &preparation, &e.State, &e.EvidenceState, &code, &e.Signal, &e.Reason, &created, &updated, &finished, &e.Enhanced, &e.ActorPersonID, &e.ActorSubject, &e.PolicySHA256, &e.ScriptSHA256, &e.ScriptLength, &e.AdmissionEventID, &e.AdmissionRecordSHA256, &e.AdmissionReceipt, &e.AdmissionDisposition)
 	if err != nil {
 		return nil, err
 	}
@@ -169,7 +177,7 @@ func (s *Store) ReconcileExecutions() error {
 	if err != nil {
 		return err
 	}
-	_, err = tx.Exec(`UPDATE executions SET state=CASE WHEN state IN ('dispatching','running') THEN 'outcome_unknown' ELSE 'cancelled' END,evidence_state=CASE WHEN state IN ('dispatching','running') THEN 'completion_unconfirmed' ELSE evidence_state END,reason='hub restarted',updated_at=?,finished_at=? WHERE finished_at IS NULL`, now, now)
+	_, err = tx.Exec(`UPDATE executions SET state=CASE WHEN state IN ('dispatching','running') THEN 'outcome_unknown' ELSE 'cancelled' END,evidence_state=CASE WHEN evidence_state='permanently_incomplete' THEN evidence_state WHEN state IN ('dispatching','running') OR enhanced=1 THEN 'completion_unconfirmed' ELSE evidence_state END,reason='hub restarted',updated_at=?,finished_at=? WHERE finished_at IS NULL`, now, now)
 	if err != nil {
 		return err
 	}
@@ -177,6 +185,13 @@ func (s *Store) ReconcileExecutions() error {
 }
 
 func (s *Store) MarkExecutionEvidenceIncomplete(id string) error {
-	_, err := s.db.Exec(`UPDATE executions SET evidence_state='completion_unconfirmed' WHERE id=?`, id)
+	_, err := s.db.Exec(`UPDATE executions SET evidence_state='completion_unconfirmed' WHERE id=? AND evidence_state!='permanently_incomplete'`, id)
 	return err
+}
+
+func executionPolicyVersion(value string) string {
+	if value == "" {
+		return "standard-v1"
+	}
+	return value
 }

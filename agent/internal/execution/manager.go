@@ -10,6 +10,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"hash"
 	"io"
 	"os"
 	"os/exec"
@@ -22,6 +23,7 @@ import (
 
 	"github.com/wyiu/veyport/agent/internal/executionidentity"
 	"github.com/wyiu/veyport/agent/internal/sessionlimit"
+	"github.com/wyiu/veyport/proto/protectedinput"
 	pb "github.com/wyiu/veyport/proto/veyport/v1"
 	"golang.org/x/sys/unix"
 	"google.golang.org/protobuf/proto"
@@ -44,15 +46,23 @@ type Config struct {
 	PreparationTTL  time.Duration
 	TermGrace       time.Duration
 	BlockedConsumer time.Duration
+	Spool           protectedinput.Store
 }
 type preparation struct {
-	response     *pb.ExecutionPrepared
-	identity     *executionidentity.Identity
-	command      string
-	runAsUser    string
-	timer        *time.Timer
-	attached     bool
-	launchCancel context.CancelFunc
+	response       *pb.ExecutionPrepared
+	identity       *executionidentity.Identity
+	command        string
+	runAsUser      string
+	timer          *time.Timer
+	attached       bool
+	launchCancel   context.CancelFunc
+	enhanced       bool
+	scriptHash     []byte
+	scriptLength   uint64
+	scriptOffset   uint64
+	scriptComplete bool
+	script         protectedinput.File
+	scriptDigest   hash.Hash
 }
 type Manager struct {
 	mu                  sync.Mutex
@@ -67,6 +77,7 @@ type Manager struct {
 	launchWG            sync.WaitGroup
 	runs                map[string]*Run
 	closed              bool
+	spool               protectedinput.Store
 }
 
 func NewManager(cfg Config) (*Manager, error) {
@@ -92,7 +103,7 @@ func NewManager(cfg Config) (*Manager, error) {
 	if cfg.BlockedConsumer <= 0 {
 		cfg.BlockedConsumer = time.Minute
 	}
-	return &Manager{nodeID: cfg.NodeID, bootID: boot, journal: cfg.Journal, budget: cfg.Budget, resolve: cfg.Resolve, ttl: cfg.PreparationTTL, grace: cfg.TermGrace, blocked: cfg.BlockedConsumer, prepared: make(map[string]*preparation), pending: make(map[string]bool), launching: make(map[string]*preparation), runs: make(map[string]*Run)}, nil
+	return &Manager{nodeID: cfg.NodeID, bootID: boot, journal: cfg.Journal, budget: cfg.Budget, resolve: cfg.Resolve, ttl: cfg.PreparationTTL, grace: cfg.TermGrace, blocked: cfg.BlockedConsumer, spool: cfg.Spool, prepared: make(map[string]*preparation), pending: make(map[string]bool), launching: make(map[string]*preparation), runs: make(map[string]*Run)}, nil
 }
 func randomID() (string, error) {
 	var data [32]byte
@@ -102,7 +113,7 @@ func randomID() (string, error) {
 	return hex.EncodeToString(data[:]), nil
 }
 func (m *Manager) Capabilities() *pb.ExecutionCapabilities {
-	return &pb.ExecutionCapabilities{ProtocolVersion: 1, StandardExec: true, ProtectedScript: false, BootId: m.bootID}
+	return &pb.ExecutionCapabilities{ProtocolVersion: 1, StandardExec: true, ProtectedScript: m.spool != nil && m.spool.Ready() == nil, BootId: m.bootID}
 }
 func normalizeLimits(limits *pb.ExecutionLimits) (*pb.ExecutionLimits, error) {
 	result := &pb.ExecutionLimits{MaxFrameBytes: MaxFrameBytes, MaxBufferBytes: MaxBufferBytes, RuntimeSeconds: 3600, TermGraceSeconds: 5, BlockedConsumerSeconds: 60}
@@ -128,8 +139,16 @@ func (m *Manager) Prepare(req *pb.ExecutionPrepare) *pb.ExecutionPrepared {
 	if req.ExecutionId == "" || len(req.ExecutionId) > 128 || req.NodeId != m.nodeID {
 		return fail(fmt.Errorf("invalid execution ownership"))
 	}
-	if req.Enhanced || len(req.ScriptSha256) != 0 || req.ScriptLength != 0 {
-		return fail(fmt.Errorf("protected execution is not supported by this agent"))
+	interpreter := ScriptInterpreter(req.Command)
+	if req.Enhanced {
+		if m.spool == nil || m.spool.Ready() != nil {
+			return fail(fmt.Errorf("protected encrypted input storage unavailable"))
+		}
+		if req.ScriptLength > protectedinput.MaxScriptBytes || (interpreter != "" && len(req.ScriptSha256) != sha256.Size) || (interpreter == "" && (len(req.ScriptSha256) != 0 || req.ScriptLength != 0)) {
+			return fail(fmt.Errorf("invalid protected script binding"))
+		}
+	} else if len(req.ScriptSha256) != 0 || req.ScriptLength != 0 {
+		return fail(fmt.Errorf("script binding requires protected admission"))
 	}
 	if req.Command == "" || len(req.Command) > MaxCommandBytes || !utf8.ValidString(req.Command) || strings.IndexByte(req.Command, 0) >= 0 {
 		return fail(fmt.Errorf("invalid execution command"))
@@ -169,6 +188,12 @@ func (m *Manager) Prepare(req *pb.ExecutionPrepare) *pb.ExecutionPrepared {
 	if err != nil {
 		return fail(err)
 	}
+	if req.Enhanced && interpreter != "" {
+		identity, err = withInterpreter(identity, interpreter)
+		if err != nil {
+			return fail(err)
+		}
+	}
 	prepID, err := randomID()
 	if err != nil {
 		return fail(err)
@@ -189,7 +214,14 @@ func (m *Manager) Prepare(req *pb.ExecutionPrepare) *pb.ExecutionPrepared {
 	if _, exists := m.runs[req.ExecutionId]; exists {
 		return fail(ErrAlreadyClaimed)
 	}
-	p := &preparation{response: response, identity: identity, command: req.Command, runAsUser: req.RunAsUser}
+	p := &preparation{response: response, identity: identity, command: req.Command, runAsUser: req.RunAsUser, enhanced: req.Enhanced, scriptHash: append([]byte(nil), req.ScriptSha256...), scriptLength: req.ScriptLength, scriptComplete: !req.Enhanced || interpreter == ""}
+	if req.Enhanced && interpreter != "" {
+		p.script, err = m.spool.Create()
+		if err != nil {
+			return fail(fmt.Errorf("protected encrypted input storage unavailable"))
+		}
+		p.scriptDigest = sha256.New()
+	}
 	m.prepared[req.ExecutionId] = p
 	installed = true
 	p.timer = time.AfterFunc(m.ttl, func() { m.expire(req.ExecutionId, p) })
@@ -200,6 +232,9 @@ func (m *Manager) expire(id string, p *preparation) {
 	defer m.mu.Unlock()
 	if m.prepared[id] == p {
 		delete(m.prepared, id)
+		if p.script != nil {
+			_ = p.script.Close()
+		}
 		m.budget.Release()
 	}
 }
@@ -264,9 +299,14 @@ func (m *Manager) Start(ctx context.Context, start *pb.ExecutionStart) (*Run, er
 		m.mu.Unlock()
 		return nil, fmt.Errorf("execution admission binding mismatch")
 	}
-	if len(start.AdmissionReceipt) != 0 {
+	if p.enhanced {
+		if len(start.AdmissionReceipt) == 0 || len(start.AdmissionReceipt) > 16<<10 || !p.scriptComplete || start.AdmissionExpiresUnixMilli <= time.Now().UnixMilli() || start.AdmissionExpiresUnixMilli > binding.ExpiresUnixMilli {
+			m.mu.Unlock()
+			return nil, fmt.Errorf("complete protected input and admission required")
+		}
+	} else if len(start.AdmissionReceipt) != 0 || start.AdmissionExpiresUnixMilli != 0 {
 		m.mu.Unlock()
-		return nil, fmt.Errorf("protected admission is not supported by this agent")
+		return nil, fmt.Errorf("unexpected protected admission")
 	}
 	p.timer.Stop()
 	delete(m.prepared, binding.ExecutionId)
@@ -281,6 +321,9 @@ func (m *Manager) Start(ctx context.Context, start *pb.ExecutionStart) (*Run, er
 		delete(m.launching, binding.ExecutionId)
 		m.mu.Unlock()
 		if !launched {
+			if p.script != nil {
+				_ = p.script.Close()
+			}
 			launchCancel()
 			m.budget.Release()
 		}
@@ -288,6 +331,9 @@ func (m *Manager) Start(ctx context.Context, start *pb.ExecutionStart) (*Run, er
 	}()
 	ctx = launchCtx
 	identity, err := m.resolve(p.runAsUser, p.identity.Cwd)
+	if err == nil && p.enhanced && ScriptInterpreter(p.command) != "" {
+		identity, err = withInterpreter(identity, ScriptInterpreter(p.command))
+	}
 	if err != nil || !bytes.Equal(identity.Digest(), p.identity.Digest()) {
 		return nil, fmt.Errorf("prepared operating-system identity changed")
 	}
@@ -297,12 +343,31 @@ func (m *Manager) Start(ctx context.Context, start *pb.ExecutionStart) (*Run, er
 	if _, err = m.journal.Claim(binding, p.response.CommandSha256, p.response.Identity.IdentitySha256, start.PolicyVersion); err != nil {
 		return nil, err
 	}
-	if ctx.Err() != nil || time.Now().UnixMilli() >= binding.ExpiresUnixMilli {
-		result := &pb.ExecutionResult{Binding: binding, State: "launch_failed", Reason: "preparation expired or cancelled before launch"}
+	launchAuthorityValid := func() bool {
+		now := time.Now().UnixMilli()
+		return ctx.Err() == nil && now < binding.ExpiresUnixMilli && (!p.enhanced || now < start.AdmissionExpiresUnixMilli)
+	}
+	if !launchAuthorityValid() {
+		result := &pb.ExecutionResult{Binding: binding, State: "launch_failed", Reason: "execution authority expired or cancelled before launch"}
 		_ = m.journal.RecordResult(result)
 		return nil, fmt.Errorf("execution cancelled or expired before launch")
 	}
 	cmd := exec.Command(p.identity.Shell, "-c", p.command)
+	if p.enhanced && ScriptInterpreter(p.command) != "" {
+		cmd = exec.Command(p.identity.Shell, "-s")
+	}
+	var scriptReader io.ReadCloser
+	if p.script != nil {
+		scriptReader, err = p.script.Open()
+		if err != nil {
+			return nil, fmt.Errorf("protected input unavailable before launch")
+		}
+		defer func() {
+			if !launched {
+				_ = scriptReader.Close()
+			}
+		}()
+	}
 	cmd.Dir = p.identity.Cwd
 	cmd.Env = p.identity.Env()
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true, Credential: p.identity.CredentialForExecution()}
@@ -326,6 +391,12 @@ func (m *Manager) Start(ctx context.Context, start *pb.ExecutionStart) (*Run, er
 		_ = stdout.Close()
 		return launchFailure("execution error pipe unavailable")
 	}
+	if !launchAuthorityValid() {
+		_ = stdin.Close()
+		_ = stdout.Close()
+		_ = stderr.Close()
+		return launchFailure("execution authority expired or cancelled before launch")
+	}
 	if err = cmd.Start(); err != nil {
 		_ = stdin.Close()
 		_ = stdout.Close()
@@ -341,7 +412,7 @@ func (m *Manager) Start(ctx context.Context, start *pb.ExecutionStart) (*Run, er
 		return nil, fmt.Errorf("launch outcome could not be durably recorded")
 	}
 	runCtx, cancel := context.WithTimeout(ctx, time.Duration(p.response.Limits.RuntimeSeconds)*time.Second)
-	r := &Run{binding: proto.Clone(binding).(*pb.ExecutionBinding), cmd: cmd, stdin: stdin, stdout: stdout, stderr: stderr, input: make(chan inputFrame, queueFrames), output: make(chan *pb.ExecutionAgentMessage, queueFrames), ctx: runCtx, cancel: func() { cancel(); launchCancel() }, done: make(chan struct{}), processExited: make(chan struct{}), inputStopped: make(chan struct{}), manager: m, grace: m.grace, blocked: m.blocked}
+	r := &Run{enhanced: p.enhanced, script: p.script, scriptReader: scriptReader, binding: proto.Clone(binding).(*pb.ExecutionBinding), cmd: cmd, stdin: stdin, stdout: stdout, stderr: stderr, input: make(chan inputFrame, queueFrames), output: make(chan *pb.ExecutionAgentMessage, queueFrames), ctx: runCtx, cancel: func() { cancel(); launchCancel() }, done: make(chan struct{}), processExited: make(chan struct{}), inputStopped: make(chan struct{}), manager: m, grace: m.grace, blocked: m.blocked}
 	m.mu.Lock()
 	m.runs[binding.ExecutionId] = r
 	m.mu.Unlock()
@@ -363,6 +434,9 @@ func (m *Manager) Cancel(cancel *pb.ExecutionCancel) error {
 		}
 		p.timer.Stop()
 		delete(m.prepared, cancel.Binding.ExecutionId)
+		if p.script != nil {
+			_ = p.script.Close()
+		}
 		m.budget.Release()
 		m.mu.Unlock()
 		return nil
@@ -400,6 +474,9 @@ func (m *Manager) Close() {
 	for id, p := range m.prepared {
 		p.timer.Stop()
 		delete(m.prepared, id)
+		if p.script != nil {
+			_ = p.script.Close()
+		}
 		m.budget.Release()
 	}
 	for _, p := range m.launching {
@@ -448,6 +525,9 @@ type Run struct {
 	inputMu                        sync.Mutex
 	inputSequence                  uint64
 	inputClosed                    bool
+	enhanced                       bool
+	script                         protectedinput.File
+	scriptReader                   io.ReadCloser
 	cancelOnce                     sync.Once
 	reasonMu                       sync.Mutex
 	reason                         string
@@ -460,7 +540,7 @@ func (r *Run) Done() <-chan struct{}                      { return r.done }
 func (r *Run) Input(data *pb.ExecutionData) error {
 	r.inputMu.Lock()
 	defer r.inputMu.Unlock()
-	if data == nil || r.inputClosed || data.Sequence != r.inputSequence || len(data.Data) > MaxFrameBytes {
+	if r.enhanced || data == nil || r.inputClosed || data.Sequence != r.inputSequence || len(data.Data) > MaxFrameBytes {
 		return fmt.Errorf("invalid execution input sequence or frame")
 	}
 	frame := inputFrame{data: append([]byte(nil), data.Data...)}
@@ -502,7 +582,7 @@ func (r *Run) Input(data *pb.ExecutionData) error {
 func (r *Run) InputEOF(eof *pb.ExecutionInputEOF) error {
 	r.inputMu.Lock()
 	defer r.inputMu.Unlock()
-	if eof == nil || r.inputClosed || eof.Sequence != r.inputSequence {
+	if r.enhanced || eof == nil || r.inputClosed || eof.Sequence != r.inputSequence {
 		return fmt.Errorf("invalid execution input EOF")
 	}
 	select {
@@ -540,6 +620,14 @@ func (r *Run) InputEOF(eof *pb.ExecutionInputEOF) error {
 func (r *Run) inputLoop() {
 	defer close(r.inputStopped)
 	defer r.stdin.Close()
+	if r.enhanced {
+		if r.scriptReader != nil {
+			defer r.scriptReader.Close()
+			defer r.script.Close()
+			_, _ = io.Copy(r.stdin, r.scriptReader)
+		}
+		return
+	}
 	for {
 		select {
 		case frame := <-r.input:
@@ -791,7 +879,6 @@ func (r *Run) lifecycle() {
 		}
 	}
 	if err := r.manager.journal.RecordResult(result); err != nil {
-		result.State = "outcome_unknown"
 		result.Reason = "completion not durable"
 	}
 	// Cancellation must still expose its final metadata when the consumer drains.

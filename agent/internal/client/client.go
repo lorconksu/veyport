@@ -35,6 +35,7 @@ import (
 	"github.com/wyiu/veyport/agent/internal/nodekey"
 	"github.com/wyiu/veyport/agent/internal/sessionlimit"
 	"github.com/wyiu/veyport/agent/internal/terminal"
+	"github.com/wyiu/veyport/proto/protectedinput"
 	pb "github.com/wyiu/veyport/proto/veyport/v1"
 )
 
@@ -87,9 +88,10 @@ type Client struct {
 	allowedPaths       []string
 	hubCAPin           string
 	onRegistered       func(serverID string)
-	reconnectCh        chan struct{} // signals connectAndStream to reconnect (e.g. to adopt a renewed cert)
-	sealedNodeKeyHex   string        // AES-GCM sealed Ed25519 private key (hex), empty if not yet enrolled
-	transportPrivBytes []byte        // X25519 transport private key (32 bytes), empty until first enrollment
+	reconnectCh        chan struct{}        // signals connectAndStream to reconnect (e.g. to adopt a renewed cert)
+	sealedNodeKeyHex   string               // AES-GCM sealed Ed25519 private key (hex), empty if not yet enrolled
+	executionSpool     protectedinput.Store // explicit internal storage dependency; runtime provisions encrypted storage
+	transportPrivBytes []byte               // X25519 transport private key (32 bytes), empty until first enrollment
 }
 
 func New(cfg Config) *Client {

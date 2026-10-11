@@ -366,6 +366,10 @@ message ExecutionStart {
   ExecutionLimits limits = 4;
   string policy_version = 5;
   bytes admission_receipt = 6;
+  // Enhanced-only expiry copied from hub-verified receipt claims. The agent
+  // trusts its enrolled mTLS hub and checks this authority immediately before
+  // spawn; it does not independently verify the archive signature.
+  int64 admission_expires_unix_milli = 7;
 }
 message ExecutionStarted { ExecutionBinding binding = 1; }
 message ExecutionStartFailed {

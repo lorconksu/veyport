@@ -4,12 +4,14 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"os"
 	"path/filepath"
 	"sync"
 	"time"
 
 	"github.com/wyiu/veyport/agent/internal/execution"
 	"github.com/wyiu/veyport/agent/internal/sessionlimit"
+	"github.com/wyiu/veyport/proto/protectedinput"
 	pb "github.com/wyiu/veyport/proto/veyport/v1"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials"
@@ -52,7 +54,16 @@ func (c *Client) newExecutionTransport(ctx context.Context, budget *sessionlimit
 		conn.Close()
 		return nil, err
 	}
-	manager, err := execution.NewManager(execution.Config{NodeID: c.serverID, Journal: journal, Budget: budget})
+	spool := c.executionSpool
+	if path := os.Getenv("VEYPORT_EXECUTION_SPOOL_DIR"); path != "" {
+		storage, storageErr := protectedinput.New(path)
+		if storageErr != nil {
+			conn.Close()
+			return nil, storageErr
+		}
+		spool = storage
+	}
+	manager, err := execution.NewManager(execution.Config{NodeID: c.serverID, Journal: journal, Budget: budget, Spool: spool})
 	if err != nil {
 		conn.Close()
 		return nil, err
@@ -191,11 +202,26 @@ func (e *executionTransport) serve(attach *pb.ExecutionAttachRequest) error {
 	if msg.GetAttached() == nil || !proto.Equal(msg.GetAttached().Binding, attach.Binding) {
 		return fmt.Errorf("execution attachment binding mismatch")
 	}
-	msg, err = stream.Recv()
-	if err != nil {
-		return err
+	var start *pb.ExecutionStart
+	for start == nil {
+		msg, err = stream.Recv()
+		if err != nil {
+			return err
+		}
+		switch payload := msg.Payload.(type) {
+		case *pb.ExecutionHubMessage_ScriptChunk:
+			err = e.manager.ScriptChunk(attach.Binding, payload.ScriptChunk)
+		case *pb.ExecutionHubMessage_ScriptEof:
+			err = e.manager.ScriptEOF(attach.Binding, payload.ScriptEof)
+		case *pb.ExecutionHubMessage_Start:
+			start = payload.Start
+		default:
+			err = fmt.Errorf("unexpected prelaunch execution message")
+		}
+		if err != nil {
+			return err
+		}
 	}
-	start := msg.GetStart()
 	if start == nil || !proto.Equal(start.Binding, attach.Binding) {
 		return fmt.Errorf("execution start required")
 	}
