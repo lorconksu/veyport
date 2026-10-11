@@ -22,10 +22,13 @@ import (
 	"github.com/golang-jwt/jwt/v5"
 	"github.com/wyiu/veyport/hub/internal/auditgate"
 	"github.com/wyiu/veyport/hub/internal/auditrecord"
+	"github.com/wyiu/veyport/hub/internal/auditruntime"
 	"github.com/wyiu/veyport/hub/internal/auth"
 	"github.com/wyiu/veyport/hub/internal/authorization"
 	"github.com/wyiu/veyport/hub/internal/model"
+	"github.com/wyiu/veyport/hub/internal/server"
 	"github.com/wyiu/veyport/hub/internal/sshgw"
+	"github.com/wyiu/veyport/hub/internal/testaudit"
 	"github.com/wyiu/veyport/proto/protectedinput"
 	"golang.org/x/crypto/ssh"
 )
@@ -143,84 +146,116 @@ type cryptographicTestArchive struct {
 	records       map[string][]byte
 	receipts      map[string]auditrecord.Receipt
 	lastAdmission auditrecord.Receipt
+	admissions    int
+	reached       map[string]int
+	underlying    auditgate.Preserver
+	resolve       func(context.Context, model.PolicyVersion) (auditgate.Gate, error)
 }
 
-func testCryptographicArchive(t *testing.T) *cryptographicTestArchive {
+func testCryptographicArchive(t *testing.T, key *ecdsa.PrivateKey, fixture *testaudit.Fixture) *cryptographicTestArchive {
 	t.Helper()
-	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	verifier, err := auditgate.NewVerifier(auditgate.VerifierConfig{Issuer: fixture.Config.Issuer, Audience: fixture.Config.Audience, Keys: map[string]*ecdsa.PublicKey{fixture.Config.SigningKeyID: &key.PublicKey}, QualificationSHA256: fixture.Config.QualificationSHA256, GovernanceQualificationSHA256: fixture.Config.GovernanceQualificationSHA256, MaxTTL: time.Minute})
 	if err != nil {
 		t.Fatal(err)
 	}
-	verifier, err := auditgate.NewVerifier(auditgate.VerifierConfig{Issuer: "independent-test-archive", Audience: "test-hub", Keys: map[string]*ecdsa.PublicKey{"test-key": &key.PublicKey}, QualificationSHA256: auditrecord.Hash([]byte("qualified-test-storage")), MaxTTL: time.Minute})
-	if err != nil {
-		t.Fatal(err)
-	}
-	return &cryptographicTestArchive{key: key, verifier: verifier, records: map[string][]byte{}, receipts: map[string]auditrecord.Receipt{}}
+	return &cryptographicTestArchive{key: key, verifier: verifier, records: map[string][]byte{}, receipts: map[string]auditrecord.Receipt{}, reached: map[string]int{}}
 }
 func (a *cryptographicTestArchive) setMode(mode string) { a.mu.Lock(); a.mode = mode; a.mu.Unlock() }
+func (a *cryptographicTestArchive) admissionCount() int {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return a.admissions
+}
+func (a *cryptographicTestArchive) modeCount(mode string) int {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return a.reached[mode]
+}
+func (a *cryptographicTestArchive) Resolve(ctx context.Context, policy model.PolicyVersion) (auditgate.Gate, error) {
+	a.mu.Lock()
+	mode, resolve := a.mode, a.resolve
+	a.mu.Unlock()
+	if mode == "not-ready" || resolve == nil {
+		return auditgate.Gate{}, errors.New("archive readiness unavailable fixture")
+	}
+	gate, err := resolve(ctx, policy)
+	if err != nil {
+		return auditgate.Gate{}, err
+	}
+	a.mu.Lock()
+	a.underlying = gate.Preserver
+	a.mu.Unlock()
+	return auditgate.Gate{Preserver: a, Verifier: gate.Verifier}, nil
+}
 func (a *cryptographicTestArchive) Preserve(ctx context.Context, raw []byte, attachments []auditgate.AttachmentInput) (auditrecord.Receipt, error) {
 	expected, e, err := auditrecord.ExpectedFor(raw)
 	if err != nil {
 		return auditrecord.Receipt{}, err
 	}
-	if len(attachments) != len(e.Attachments) {
-		return auditrecord.Receipt{}, auditrecord.ErrSchema
-	}
-	for i, input := range attachments {
-		data, err := io.ReadAll(io.LimitReader(input.Reader, e.Attachments[i].Bytes+1))
-		if err != nil || int64(len(data)) != e.Attachments[i].Bytes || auditrecord.Hash(data) != e.Attachments[i].SHA256 {
-			return auditrecord.Receipt{}, auditrecord.ErrSchema
-		}
-	}
 	a.mu.Lock()
-	defer a.mu.Unlock()
-	if a.mode == "partition" {
+	mode, underlying, previous := a.mode, a.underlying, a.lastAdmission
+	if e.EventType == auditrecord.ExecutionAdmission {
+		a.admissions++
+	}
+	a.mu.Unlock()
+	if mode == "partition" || underlying == nil {
+		if e.EventType == auditrecord.ExecutionAdmission && mode == "partition" {
+			a.mu.Lock()
+			a.reached[mode]++
+			a.mu.Unlock()
+		}
 		return auditrecord.Receipt{}, errors.New("archive partition fixture")
 	}
-	if previous, ok := a.records[e.EventID]; ok {
-		if !bytes.Equal(previous, raw) {
-			return auditrecord.Receipt{}, auditrecord.ErrSchema
+	if e.EventType == auditrecord.ExecutionAdmission && mode == "replay" {
+		if previous.Token == "" {
+			return auditrecord.Receipt{}, errors.New("fixture has no previous admission to replay")
 		}
-		return a.receipts[e.EventID], nil
+		a.mu.Lock()
+		a.reached[mode]++
+		a.mu.Unlock()
+		return previous, nil
 	}
-	now := time.Now().UTC().Truncate(time.Second)
-	expires := now.Add(45 * time.Second)
-	if e.EventType == auditrecord.ExecutionAdmission && expires.After(e.Execution.PreparedUntil) {
-		expires = e.Execution.PreparedUntil.Truncate(time.Second)
+	// Valid bytes, attachments, immutable versions and receipts come from the
+	// actual scoped TLS service. Only explicit rejection modes alter a receipt.
+	receipt, err := underlying.Preserve(ctx, raw, attachments)
+	if err != nil {
+		return auditrecord.Receipt{}, err
 	}
-	manifest := auditrecord.ObjectRef{Bucket: "test-protected-archive", Key: e.EventID, VersionID: "immutable-version", SHA256: auditrecord.Hash([]byte("manifest")), Bytes: int64(len(raw)), RetainUntil: now.Add(48 * time.Hour)}
-	claims := auditrecord.Claims{RegisteredClaims: jwt.RegisteredClaims{Issuer: "independent-test-archive", Audience: jwt.ClaimStrings{"test-hub"}, IssuedAt: jwt.NewNumericDate(now), NotBefore: jwt.NewNumericDate(now), ExpiresAt: jwt.NewNumericDate(expires), ID: e.EventID}, SchemaVersion: 1, KeyID: "test-key", EventID: e.EventID, EventType: e.EventType, RecordSHA256: expected.RecordSHA256, ActorSHA256: expected.ActorSHA256, BindingSHA256: expected.BindingSHA256, PolicyVersion: e.PolicyVersion, PolicySHA256: e.PolicySHA256, Manifest: manifest, QualificationSHA256: auditrecord.Hash([]byte("qualified-test-storage"))}
-	if e.Execution != nil {
-		claims.ExecutionID = e.Execution.ExecutionID
-		claims.PreparationID = e.Execution.PreparationID
-		claims.BootID = e.Execution.BootID
-		claims.NodeID = e.Execution.NodeID
-		claims.IdentitySHA256 = e.Execution.Identity.IdentitySHA256
+	var claims auditrecord.Claims
+	if e.EventType == auditrecord.ExecutionAdmission {
+		claims, err = a.verifier.Verify(receipt.Token, expected, time.Now().UTC())
+	} else {
+		claims, err = a.verifier.VerifyHistorical(receipt.Token, expected, time.Now().UTC())
+	}
+	if err != nil {
+		return auditrecord.Receipt{}, err
 	}
 	if e.EventType == auditrecord.ExecutionAdmission {
-		switch a.mode {
+		switch mode {
 		case "wrong-binding":
 			claims.BindingSHA256 = auditrecord.Hash([]byte("wrong"))
 		case "wrong-actor":
 			claims.ActorSHA256 = auditrecord.Hash([]byte("wrong"))
 		case "expired":
-			claims.ExpiresAt = jwt.NewNumericDate(now)
-		case "replay":
-			return a.lastAdmission, nil
+			claims.ExpiresAt = jwt.NewNumericDate(time.Now().UTC())
+		}
+		if mode == "wrong-binding" || mode == "wrong-actor" || mode == "expired" {
+			token := jwt.NewWithClaims(jwt.SigningMethodES256, claims)
+			token.Header["kid"] = claims.KeyID
+			receipt.Token, err = token.SignedString(a.key)
+			if err != nil {
+				return auditrecord.Receipt{}, err
+			}
 		}
 	}
-	token := jwt.NewWithClaims(jwt.SigningMethodES256, claims)
-	token.Header["kid"] = "test-key"
-	signed, err := token.SignedString(a.key)
-	if err != nil {
-		return auditrecord.Receipt{}, err
-	}
-	receipt := auditrecord.Receipt{Token: signed, Manifest: manifest}
+	a.mu.Lock()
+	defer a.mu.Unlock()
 	a.records[e.EventID] = append([]byte(nil), raw...)
 	a.receipts[e.EventID] = receipt
 	if e.EventType == auditrecord.ExecutionAdmission {
+		a.reached[mode]++
 		a.lastAdmission = receipt
-		if a.mode == "lost-reply" {
+		if mode == "lost-reply" {
 			return auditrecord.Receipt{}, errors.New("lost archived response fixture")
 		}
 	}
@@ -244,18 +279,22 @@ type protectedNativeHarness struct {
 
 func startProtectedNativeHarness(t *testing.T) *protectedNativeHarness {
 	t.Helper()
-	archive := testCryptographicArchive(t)
+	signingKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	receipts := testaudit.NewWithSigningKey(t, testaudit.NewRealClock(), signingKey)
+	archive := testCryptographicArchive(t, signingKey, receipts)
 	spool := &protectedTestStore{}
+	securityDir := filepath.Join(t.TempDir(), "security")
+	installation, err := authorization.InitInstallation(securityDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	transition := authorization.TransitionConfig{InstallationID: installation, EnrollmentPath: filepath.Join(securityDir, "enhanced-enrollment.json")}
 	h := startSSHGWHarnessWithOptions(t, func(c *sshgw.Config) {
-		c.ProtectedExecution = &sshgw.ProtectedExecutionConfig{Spool: spool, ResolveArchive: func(context.Context, model.PolicyVersion) (auditgate.Gate, error) {
-			archive.mu.Lock()
-			unavailable := archive.mode == "not-ready"
-			archive.mu.Unlock()
-			if unavailable {
-				return auditgate.Gate{}, errors.New("archive readiness unavailable fixture")
-			}
-			return auditgate.Gate{Preserver: archive, Verifier: archive.verifier}, nil
-		}}
+		c.SecurityTransition = transition
+		c.ProtectedExecution = &sshgw.ProtectedExecutionConfig{Spool: spool, ResolveArchive: archive.Resolve}
 	})
 	actor := h.seedAuthorizedUser(t)
 	if _, err := h.store.DB().Exec(`UPDATE users SET auth_provider='local',role='admin',totp_enabled=1 WHERE id=?`, actor); err != nil {
@@ -291,18 +330,109 @@ func startProtectedNativeHarness(t *testing.T) *protectedNativeHarness {
 		t.Fatal(err)
 	}
 	startProtectedFixtureAgent(t, h)
-	// The governance workflow has its own tests. This isolated execution fixture
-	// installs a synthetic approved immutable policy to exercise enforcement.
-	policy := model.AuditPolicy{Profile: "enhanced", RuntimeSeconds: 3600, RetentionHours: 24, Destination: "https://synthetic-archive.invalid", CredentialRef: "test-immutable-ref", TrustKeyIDs: []string{"test-key"}, QualificationSHA256: auditrecord.Hash([]byte("qualified-test-storage"))}
-	raw, _ := json.Marshal(policy)
-	if _, err = h.store.DB().Exec(`INSERT INTO audit_policy_versions(version,payload,digest) VALUES(2,?,?)`, raw, authorization.Digest(raw)); err != nil {
-		t.Fatal(err)
-	}
-	if _, err = h.store.DB().Exec(`UPDATE audit_policy_state SET active_version=2,state='enhanced' WHERE id=1`); err != nil {
-		t.Fatal(err)
-	}
+	activateNativeProtectedPolicy(t, h, receipts, archive, spool, transition)
 	return &protectedNativeHarness{h: h, archive: archive, spool: spool, configRoot: root, hubURL: hubURL, token: token}
 }
+
+// Install the policy through the production approval/application service, with
+// independently verified TLS evidence and the gateway's outside-DB continuity
+// identity. The action proofs are test-issued to isolate native execution;
+// actual password/MFA HTTP issuance is covered by server governance tests.
+func activateNativeProtectedPolicy(t *testing.T, h *sshGWHarness, receipts *testaudit.Fixture, archive *cryptographicTestArchive, spool *protectedTestStore, transition authorization.TransitionConfig) {
+	t.Helper()
+	service := authorization.New(h.store)
+	if err := service.ConfigureExecutionPolicy(transition); err != nil {
+		t.Fatal(err)
+	}
+	storageKey, err := server.InitStorageKey(h.store)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ids := []string{"native-officer", "native-approver-a", "native-approver-b"}
+	var nominations []model.SecurityNomination
+	for i, id := range ids {
+		secret, err := auth.Encrypt([]byte("JBSWY3DPEHPK3PXP"), auth.DeriveKey(storageKey))
+		if err != nil {
+			t.Fatal(err)
+		}
+		encoded := fmt.Sprintf("enc:%x", secret)
+		role := model.RoleViewer
+		protectedRole := model.RoleSecurityApprover
+		if i == 0 {
+			role, protectedRole = model.RoleAdmin, model.RoleSecurityOfficer
+		}
+		if err := h.store.CreateUser(&model.User{ID: id, Username: id, Email: id + "@synthetic.invalid", Role: role, AuthProvider: model.AuthProviderLocal, TOTPEnabled: true, TOTPSecret: &encoded}); err != nil {
+			t.Fatal(err)
+		}
+		nominations = append(nominations, model.SecurityNomination{UserID: id, PersonID: "synthetic-person-" + id, Roles: []model.Role{protectedRole}, Verification: "Synthetic native integration identity, never deployment approval"})
+	}
+	credential, err := json.Marshal(receipts.Credential)
+	if err != nil {
+		t.Fatal(err)
+	}
+	secret, err := json.Marshal(map[string]string{"kind": "destination", "value": string(credential)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	encrypted, err := auth.Encrypt(secret, auth.DeriveKey(storageKey))
+	if err != nil {
+		t.Fatal(err)
+	}
+	const credentialRef = "secret:native-immutable-destination"
+	if err := h.store.SaveSecuritySecret(credentialRef, encrypted, ids[0], time.Now().UTC()); err != nil {
+		t.Fatal(err)
+	}
+	resolveSecret := func(ref string) (string, string, error) {
+		return server.ResolveSecuritySecret(h.store, storageKey, ref)
+	}
+	runtime, err := auditruntime.Load(receipts.ConfigFile(t), auditruntime.Options{Store: h.store, Spool: spool, GatewayReady: h.gateway.Ready, SupportsProtected: h.executions.SupportsProtected, ResolveSecret: resolveSecret, Now: receipts.Clock.Now})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(runtime.Close)
+	archive.mu.Lock()
+	archive.resolve = runtime.ResolveArchive
+	archive.mu.Unlock()
+	transition.Evidence, transition.ResolveSecret = runtime.Evidence(), resolveSecret
+	policy := model.AuditPolicy{Profile: "enhanced", Nodes: []string{sshGWServerID}, RuntimeSeconds: 3600, RetentionHours: 24, Destination: receipts.Config.Endpoint, CredentialRef: credentialRef, TrustKeyIDs: []string{receipts.Config.SigningKeyID}, QualificationSHA256: receipts.Config.QualificationSHA256}
+	change, err := json.Marshal(model.SecurityChangePayload{Kind: "bootstrap", Policy: &policy, Nominations: nominations})
+	if err != nil {
+		t.Fatal(err)
+	}
+	proposal := authorization.Proposal{Reason: "Synthetic native execution qualification", ExpectedVersion: 1, Change: change}
+	preview, err := authorization.Normalize(proposal)
+	if err != nil {
+		t.Fatal(err)
+	}
+	proof := func(user, action, digest string) string {
+		p, err := h.store.IssueStepup(user, "native-session-"+user, action, digest, service.Now())
+		if err != nil {
+			t.Fatal(err)
+		}
+		return p
+	}
+	request, err := service.Request(ids[0], "native-session-"+ids[0], proof(ids[0], authorization.ActionRequest, preview.Digest), proposal)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, id := range ids[1:] {
+		if _, err := service.Approve(request.ID, id, "native-session-"+id, proof(id, authorization.ActionApprove, request.Digest)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	request, err = service.Apply(context.Background(), request.ID, ids[0], "native-session-"+ids[0], proof(ids[0], authorization.ActionApply, request.Digest), transition)
+	if err != nil {
+		t.Fatal(err)
+	}
+	state, err := h.store.GetPolicyState()
+	if err != nil || request.State != "applied" || len(request.Approvals) != 2 || request.IntentRef == "" || request.CommitRef == "" || request.ResultRef == "" || state.Active.RequestID != request.ID || !authorization.EnrollmentMarkerMatches(transition, state) {
+		t.Fatal("native policy lacks a completed quorum, verified evidence or exact outside-DB marker")
+	}
+	if err := service.CheckAnchor(context.Background(), transition); err != nil {
+		t.Fatal("native policy lacks independent external continuity:", err)
+	}
+}
+
 func (h *protectedNativeHarness) command(ctx context.Context, command string, input io.Reader) *exec.Cmd {
 	cmd := exec.CommandContext(ctx, cliBinaryPath, "--hub", h.hubURL, "ssh", sshGWServerName, "--", command)
 	cmd.Env = append(os.Environ(), "XDG_CONFIG_HOME="+h.configRoot, "VEYPORT_TOKEN="+h.token, "DBUS_SESSION_BUS_ADDRESS=unix:path=/nonexistent-vey-test-keyring")
@@ -338,9 +468,14 @@ func TestProtectedNativeVEYExactReceiptAndRejectedReceiptsCannotCreateMarker(t *
 	for _, mode := range []string{"valid", "wrong-binding", "wrong-actor", "expired", "replay", "partition", "lost-reply"} {
 		t.Run(mode, func(t *testing.T) {
 			h.archive.setMode(mode)
+			before := h.archive.admissionCount()
+			beforeMode := h.archive.modeCount(mode)
 			marker := filepath.Join(dir, mode)
 			script := []byte("printf x >> '" + marker + "'\nprintf verified\nexit 42\n")
 			out, _, code := h.run(t, "/bin/sh -s", script)
+			if h.archive.admissionCount() != before+1 || h.archive.modeCount(mode) != beforeMode+1 {
+				t.Fatal("receipt case did not reach its specific independently verified archive mode")
+			}
 			if mode == "valid" {
 				if code != 42 || string(out) != "verified" {
 					t.Fatalf("valid receipt failed:%q/%d", out, code)

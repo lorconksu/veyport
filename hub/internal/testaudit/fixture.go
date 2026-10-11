@@ -178,13 +178,35 @@ func qualification(bucket string, seconds uint64) auditingest.Qualification {
 }
 
 func New(t testing.TB, clock *Clock) *Fixture {
+	return newWithSigningKey(t, clock, nil)
+}
+
+// NewWithSigningKey lets a native integration test inject signed receipt faults
+// using the same synthetic trust key as this TLS service. It is test support;
+// callers still use the real scoped clients, qualification and verifier.
+func NewWithSigningKey(t testing.TB, clock *Clock, key *ecdsa.PrivateKey) *Fixture {
+	t.Helper()
+	if key == nil || key.Curve != elliptic.P256() || key.D == nil || key.D.Sign() <= 0 || key.D.Cmp(key.Params().N) >= 0 || !key.Curve.IsOnCurve(key.X, key.Y) {
+		t.Fatal("synthetic receipt signer must be a valid standard P-256 key")
+	}
+	x, y := key.Curve.ScalarBaseMult(key.D.Bytes())
+	if x.Cmp(key.X) != 0 || y.Cmp(key.Y) != 0 {
+		t.Fatal("synthetic receipt signer public and private keys differ")
+	}
+	return newWithSigningKey(t, clock, key)
+}
+
+func newWithSigningKey(t testing.TB, clock *Clock, key *ecdsa.PrivateKey) *Fixture {
 	t.Helper()
 	if clock == nil {
 		clock = NewClock()
 	}
-	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
-	if err != nil {
-		t.Fatal(err)
+	var err error
+	if key == nil {
+		key, err = ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+		if err != nil {
+			t.Fatal(err)
+		}
 	}
 	caKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	if err != nil {

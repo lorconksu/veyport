@@ -88,6 +88,7 @@ type sshGWHarness struct {
 	pending    *grpcserver.PendingRequests
 	terminals  *grpcserver.TerminalSessions
 	executions *grpcserver.ExecutionSessions
+	gateway    *sshgw.Server
 	userCA     *userca.UserCA
 	hostKey    ssh.Signer
 	caCert     *x509.Certificate
@@ -184,6 +185,7 @@ func startSSHGWHarnessWithOptions(t *testing.T, configure func(*sshgw.Config)) *
 		configure(&sshConfig)
 	}
 	sshSrv := sshgw.New(sshConfig)
+	h.gateway = sshSrv
 	go func() { _ = sshSrv.Start() }()
 
 	t.Cleanup(func() {
