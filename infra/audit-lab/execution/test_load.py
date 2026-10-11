@@ -133,6 +133,22 @@ class LoadFixture(unittest.TestCase):
         for changes in ({'roles': ['admin', 'security-approver']}, {'person_id': 'enrolled-person'}, {'role': 'viewer'}, {'capabilities': []}):
             self.assertFalse(load.operational({**user, **changes}))
 
+    def test_existing_provisioner_uses_totp_challenge_response_contract(self):
+        calls = []
+        def request(path, body=None, token='', expected=200, method=None):
+            calls.append((path, expected))
+            if path == '/api/auth/login':
+                self.assertEqual(expected, 202)
+                return {'totp_token': 'synthetic-challenge'}
+            self.assertEqual(path, '/api/auth/login/totp')
+            self.assertEqual(expected, 200)
+            return {'access_token': 'synthetic-session'}
+        state = {'last_mfa_at': 1}
+        bootstrap = {'users': {'officer': {'username': 'synthetic-officer', 'password': 'private-password'}}}
+        with mock.patch.object(load.q, 'request', side_effect=request), mock.patch.object(load.q, 'fresh_code', return_value='synthetic-code'):
+            self.assertEqual(load.login_provisioner(bootstrap, state), 'synthetic-session')
+        self.assertEqual(calls, [('/api/auth/login', 202), ('/api/auth/login/totp', 200)])
+
     def test_normal_user_setup_uses_only_password_mfa_and_operational_role(self):
         created = {}
         requests = []
@@ -141,6 +157,7 @@ class LoadFixture(unittest.TestCase):
             nonlocal current
             requests.append((path, body))
             if path == '/api/users':
+                self.assertEqual(expected, 201)
                 current = ('a' if not created else 'b') * 8 + '-1234-1234-1234-' + '0' * 12
                 created[current] = body['username']
                 return {'user': {'id': current}, 'temporary_password': 'private-temporary-password'}
@@ -148,6 +165,7 @@ class LoadFixture(unittest.TestCase):
                 identity = path.split('search=')[1]
                 return {'principals': [{'id': identity, 'username': created[identity], 'roles': ['admin'], 'person_id': 'user:' + identity}]}
             if path == '/api/auth/login':
+                self.assertEqual(expected, 200)  # temporary-password setup token.
                 return {'setup_token': 'test-setup'}
             if path == '/api/auth/totp/setup':
                 return {'secret': 'TESTSEED'}
@@ -199,7 +217,7 @@ class LoadFixture(unittest.TestCase):
         success = mock.Mock(returncode=42, stdout=b'isolated-verified', stderr=b'isolated-stderr')
         def remote(host, command, raw=b''):
             calls.append((host, command, raw))
-            return b'x' if 'if test -f' in command else b''
+            return b'x' if b"operation = 'read'" in raw else b''
         def cli(person, arguments, *args):
             if arguments == ['ssh-cert']:
                 return {}
@@ -216,6 +234,22 @@ class LoadFixture(unittest.TestCase):
         self.assertIn('ip daddr 10.10.1.60 tcp dport 8443 reject', partition[0].decode())
         self.assertEqual([host for host, command, _ in calls if 'nft' in command], ['hub', 'hub'])
         self.assertEqual(calls[-1][:2], ('hub', 'sudo -n nft delete table inet veyport_lab_receipt_fault'))
+
+    def test_execution_markers_keep_private_permissions_and_refuse_other_paths(self):
+        with mock.patch.object(load.q, 'remote', return_value=b'x') as remote:
+            for path in ('/tmp', '/tmp/veyport-isolated-invalid', '/tmp/veyport-isolated-' + 'a' * 24 + ';id'):
+                with self.assertRaises(RuntimeError):
+                    load.q.execution_marker(path, 'cleanup')
+            remote.assert_not_called()
+            marker = '/tmp/veyport-isolated-' + 'a' * 24
+            self.assertEqual(load.q.execution_marker(marker, 'read'), b'x')
+            self.assertEqual(remote.call_args.args[:2], ('agent', 'sudo -n python3 -'))
+            source = remote.call_args.args[2].decode()
+            compile(source, '<fixture-marker>', 'exec')
+            self.assertIn('os.O_NOFOLLOW', source)
+            self.assertIn('info.st_uid != 0', source)
+            self.assertIn('os.read(fd, 2)', source)
+            self.assertNotIn('chmod', source)
 
     def test_production_compact_receipt_verifies_signature_exact_binding_and_manifest(self):
         # Representative production storage format. The two digest constants

@@ -48,7 +48,7 @@ def login_provisioner(bootstrap, state):
     officer = dict(bootstrap['users']['officer'])
     officer['used_slot'] = max(officer.get('used_slot', 0), int(time.time() // 30))
     private_state = {'users': {'provisioner': officer}, 'last_mfa_at': state.get('last_mfa_at', 0)}
-    password = q.request('/api/auth/login', {'username': officer['username'], 'password': officer['password']})
+    password = q.request('/api/auth/login', {'username': officer['username'], 'password': officer['password']}, expected=202)
     # Keep the existing helper's pacing and replay protection, but write only
     # rate-limit timing to the separate load fixture, never officer credentials.
     original_persist = q.persist

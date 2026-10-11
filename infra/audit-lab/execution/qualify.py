@@ -313,6 +313,30 @@ def verify_stored_receipt(row):
     return {'execution_id': row['id'], 'record_sha256': row['admission_record_sha256'], 'receipt_sha256': hashlib.sha256(token.encode()).hexdigest(), 'manifest_version': manifest['version_id'], 'signature_verified': True}
 
 
+def execution_marker(path, operation):
+    if not re.fullmatch(r'/tmp/veyport-isolated-[0-9a-f]{24}', path) or operation not in ('read', 'cleanup'):
+        raise RuntimeError('Refused marker operation outside exact execution fixture')
+    source = """import os,stat,sys
+path = %r
+operation = %r
+try:
+ fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+except FileNotFoundError:
+ raise SystemExit(0)
+try:
+ info = os.fstat(fd)
+ if not stat.S_ISREG(info.st_mode) or info.st_uid != 0 or stat.S_IMODE(info.st_mode) != 0o600:
+  raise SystemExit('Execution marker ownership/type rejected')
+ if operation == 'read':
+  sys.stdout.buffer.write(os.read(fd, 2))
+ else:
+  os.unlink(path)
+finally:
+ os.close(fd)
+""" % (path, operation)
+    return remote('agent', 'sudo -n python3 -', source.encode())
+
+
 def execution_matrix(state):
     cli('officer', ['ssh-cert'])
     evidence = []
@@ -323,7 +347,7 @@ def execution_matrix(state):
             remote('hub', 'sudo -n nft -f -', b'table inet veyport_lab_receipt_fault {\n  chain output {\n    type filter hook output priority -5; policy accept;\n    ip daddr 10.10.1.60 tcp dport 8443 reject\n  }\n}\n')
         try:
             result = cli('officer', ['ssh', 'lab-encrypted-target', '--', '/bin/sh -s'], script, None)
-            present = remote('agent', 'if test -f ' + marker + '; then cat ' + marker + '; fi')
+            present = execution_marker(marker, 'read')
             if mode == 'receipt-outage':
                 if result.returncode == 0 or present:
                     raise RuntimeError('Receipt outage launched protected remote side effect')
@@ -334,10 +358,12 @@ def execution_matrix(state):
                 wait_for('confirmed completion evidence', lambda: database("SELECT evidence_state FROM executions ORDER BY created_at DESC LIMIT 1")[0]['evidence_state'] == 'confirmed')
                 row = database("SELECT id,actor_id,actor_person_id,actor_name,actor_provider,actor_subject,node_id,node_name,command_sha256,command_length,script_sha256,script_length,policy_version,policy_sha256,preparation,admission_event_id,admission_record_sha256,admission_receipt,created_at,(SELECT json_extract(payload,'$.retention_hours') FROM audit_policy_versions WHERE version=executions.policy_version) AS retention_hours FROM executions ORDER BY created_at DESC LIMIT 1")[0]
                 evidence.append({'case': mode, 'exact_once_marker': True, 'exit_code': 42, **verify_stored_receipt(row)})
-            remote('agent', 'rm -f -- ' + marker)
         finally:
-            if mode == 'receipt-outage':
-                remote('hub', 'sudo -n nft delete table inet veyport_lab_receipt_fault')
+            try:
+                execution_marker(marker, 'cleanup')
+            finally:
+                if mode == 'receipt-outage':
+                    remote('hub', 'sudo -n nft delete table inet veyport_lab_receipt_fault')
     print('Actual encrypted whole-script transport and signed receipts passed; receipt partition launched no process', flush=True)
     return evidence
 
