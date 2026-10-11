@@ -7,9 +7,10 @@ set -eu
 # Unlike the agent installer (install.sh), this script takes no arguments:
 # the hub renders its own base URL into the one-liner via text/template, and
 # there is no token to pass — the CLI authenticates later via `vey login`
-# (specs/006-cli-install-script/proposal.md). It is also deliberately not
-# `curl | sudo sh`: the CLI does not need root, so a user-level install is
-# the default and sudo is only offered, never assumed.
+# (specs/006-cli-install-script/proposal.md). The install destination is always
+# /usr/local/bin. If that directory requires sudo, an interactive caller can
+# authorize it; a piped caller must rerun explicitly with sudo. The installer
+# never selects another destination or automatically elevates a piped caller.
 #
 # POSIX sh only (this is piped to `sh`, which may be dash on Debian/Ubuntu):
 # no bashisms, no arrays, no [[ ]], no `local`.
@@ -93,8 +94,23 @@ if command -v vey >/dev/null 2>&1; then
   OLD_VERSION=$("$OLD_PATH" --version 2>/dev/null || true)
 fi
 
-# --- Install: prefer /usr/local/bin, offer sudo, else fall back to user bin ---
+# Printed commands must remain valid POSIX syntax for paths containing spaces
+# or apostrophes. This only formats instructions; it never edits shell profiles.
+quote_for_sh() {
+  printf "'"
+  printf '%s' "$1" | sed "s/'/'\\\\''/g"
+  printf "'"
+}
+
+# --- Install only in /usr/local/bin; refuse when permission is unavailable ---
 INSTALL_DIR="/usr/local/bin"
+
+sudo_required() {
+  printf 'ERROR: %s is not writable; installation there requires sudo.\n' "$INSTALL_DIR" >&2
+  echo "Rerun the installer explicitly with sudo:" >&2
+  printf '    curl -fsSL %s | sudo sh\n' "$(quote_for_sh "${BASE_URL}/install/cli.sh")" >&2
+  exit 1
+}
 
 if [ -w "$INSTALL_DIR" ]; then
   install -m 0755 "${WORK_DIR}/vey" "${INSTALL_DIR}/vey"
@@ -103,28 +119,16 @@ elif command -v sudo >/dev/null 2>&1 && [ -t 0 ]; then
   if sudo install -m 0755 "${WORK_DIR}/vey" "${INSTALL_DIR}/vey"; then
     :
   else
-    echo "==> sudo install failed; falling back to \$HOME/.local/bin"
-    INSTALL_DIR="${HOME}/.local/bin"
-    mkdir -p "$INSTALL_DIR"
-    install -m 0755 "${WORK_DIR}/vey" "${INSTALL_DIR}/vey"
+    echo "ERROR: sudo install failed; installation stopped." >&2
+    sudo_required
   fi
 else
-  INSTALL_DIR="${HOME}/.local/bin"
-  mkdir -p "$INSTALL_DIR"
-  install -m 0755 "${WORK_DIR}/vey" "${INSTALL_DIR}/vey"
+  sudo_required
 fi
 
-# Report an absolute destination even when HOME was given as a relative path.
+# Report the absolute installed destination.
 INSTALL_DIR=$(CDPATH= cd -P "$INSTALL_DIR" && pwd -P)
 INSTALLED_PATH="${INSTALL_DIR}/vey"
-
-# Printed commands must remain valid POSIX syntax for paths containing spaces
-# or apostrophes. This only formats instructions; it never edits shell profiles.
-quote_for_sh() {
-  printf "'"
-  printf '%s' "$1" | sed "s/'/'\\\\''/g"
-  printf "'"
-}
 
 # `vey --version` prints "vey vX.Y.Z-..."; use its output verbatim rather
 # than prefixing another "vey" (T-verify finding: "Installed vey vey ...").

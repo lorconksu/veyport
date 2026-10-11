@@ -80,9 +80,9 @@ for the current request-based session activity model.
 Enhanced command evidence covers the submitted command string or complete
 supported stdin script. It does not attest every internal shell instruction,
 fetched program, child-process action, or remote output; command execution is not
-a sandbox. The prototype identity is version `2.0.50-prototype.2` and immutable
-tag `prototype-ssh-passthrough.2`; stable `2.0.49` does not include this
-feature. Before installing, check the [prototype release page](https://github.com/lorconksu/veyport/releases/tag/prototype-ssh-passthrough.2)
+a sandbox. The prototype identity is version `2.0.50-prototype.3` and immutable
+tag `prototype-ssh-passthrough.3`; stable `2.0.49` does not include this
+feature. Before installing, check the [prototype release page](https://github.com/lorconksu/veyport/releases/tag/prototype-ssh-passthrough.3)
 for an actually published release and its required assets. If they are absent,
 the prototype is unavailable. Use the Hub and CLI from the same source revision
 with a compatible agent. Resolve the immutable OCI tag to its published digest

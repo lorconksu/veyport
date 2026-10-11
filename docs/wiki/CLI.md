@@ -77,9 +77,9 @@ deadline is 120 seconds.
 Stdout, stderr, and remote exit results remain separate. Exit 255 can represent
 either a remote result or an SSH transport failure; commands are not automatically
 retried after uncertain outcomes. Remote output is not part of the command
-evidence. The prototype identity is version `2.0.50-prototype.2` and immutable
-tag `prototype-ssh-passthrough.2`; stable `2.0.49` does not include this
-feature. Before installing, check the [prototype release page](https://github.com/lorconksu/veyport/releases/tag/prototype-ssh-passthrough.2)
+evidence. The prototype identity is version `2.0.50-prototype.3` and immutable
+tag `prototype-ssh-passthrough.3`; stable `2.0.49` does not include this
+feature. Before installing, check the [prototype release page](https://github.com/lorconksu/veyport/releases/tag/prototype-ssh-passthrough.3)
 for an actually published release and its required assets. If they are absent,
 the prototype is unavailable. Use the Hub and CLI from the same source revision
 with a compatible agent. Resolve the immutable OCI tag to its published digest
@@ -87,21 +87,27 @@ and verify the source revision.
 
 ## Install
 
-The quickest path is the Hub-served install script — one command on Linux and macOS (it detects your platform, verifies the checksum, and installs to `/usr/local/bin`, falling back to `~/.local/bin` when it can't write there):
+The quickest path is the Hub-served install script — one command on Linux and macOS (it detects your platform, verifies the checksum, and installs to `/usr/local/bin/vey`):
 
 ```bash
 curl -fsSL https://hub.example.com/install/cli.sh | sh
 ```
 
-The installer replaces the binary at its reported destination: `/usr/local/bin/vey` when writable (or after an interactive `sudo` install), otherwise `~/.local/bin/vey`. A copy earlier in `PATH` can still be selected by the bare `vey` command, so check resolution after installing:
+If your account cannot write to `/usr/local/bin`, rerun the installer with `sudo`:
+
+```bash
+curl -fsSL https://hub.example.com/install/cli.sh | sudo sh
+```
+
+The installer stops with instructions if it cannot install there. A different copy earlier in `PATH` can still be selected by the bare `vey` command, so check resolution after installing:
 
 ```bash
 type -a vey          # Bash/Zsh: list every copy found on PATH
 command -v vey       # show the copy the shell will run
-"/path/printed/by/installer/vey" --version
+/usr/local/bin/vey --version
 ```
 
-If `command -v` points to another copy, put the reported install directory earlier in `PATH`, remove the stale copy if appropriate, and refresh the shell's command cache (`hash -r` in Bash, `rehash` in Zsh, or start a new shell). The same one-liner is available in the web UI under **Install CLI** on the dashboard.
+If `command -v` points to another copy, put `/usr/local/bin` earlier in `PATH`, remove the stale copy if appropriate, and refresh the shell's command cache (`hash -r` in Bash, `rehash` in Zsh, or start a new shell). The same one-liner is available in the web UI under **Install CLI** on the dashboard.
 
 ### Manual install (verify by hand)
 

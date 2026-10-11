@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/sha256"
+	"errors"
 	"fmt"
 	"log"
 	"net/http"
@@ -16,6 +17,7 @@ import (
 	"text/template"
 	"time"
 
+	"github.com/creack/pty"
 	"github.com/wyiu/veyport/hub"
 )
 
@@ -194,7 +196,7 @@ func newInstallerProcessFixture(t *testing.T) installerProcessFixture {
 	t.Helper()
 	root := t.TempDir()
 	f := installerProcessFixture{
-		home: filepath.Join(root, "home with 'quote"), systemBin: filepath.Join(root, "system-bin"),
+		home: filepath.Join(root, "home with 'quote"), systemBin: filepath.Join(root, "system bin with 'quote"),
 		tools: filepath.Join(root, "tools"), scratch: filepath.Join(root, "scratch"),
 		payload: filepath.Join(root, "payload"), checksum: filepath.Join(root, "checksum"),
 		sudoCalled: filepath.Join(root, "sudo-called"), requestLog: filepath.Join(root, "requests"),
@@ -253,6 +255,18 @@ func writeInstallerExecutable(t *testing.T, destination, version string) {
 
 func (f installerProcessFixture) run(t *testing.T, pathValue, osName, arch string) string {
 	t.Helper()
+	out, err := f.runProcess(t, pathValue, osName, arch, false)
+	if err != nil {
+		t.Fatalf("private installer process: %v\n%s", err, out)
+	}
+	if _, err := os.Stat(f.sudoCalled); !os.IsNotExist(err) {
+		t.Fatal("piped installer attempted sudo")
+	}
+	return out
+}
+
+func (f installerProcessFixture) runProcess(t *testing.T, pathValue, osName, arch string, interactive bool) (string, error) {
+	t.Helper()
 	sh, err := exec.LookPath("sh")
 	if err != nil {
 		t.Fatal(err)
@@ -262,21 +276,29 @@ func (f installerProcessFixture) run(t *testing.T, pathValue, osName, arch strin
 	defer cancel()
 	cmd := exec.CommandContext(ctx, sh, "-s")
 	cmd.Stdin = strings.NewReader(script) // Piped stdin is deliberately not a TTY.
+	if interactive {
+		master, terminal, err := pty.Open()
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer master.Close()
+		defer terminal.Close()
+		scriptPath := filepath.Join(f.tools, "installer.sh")
+		if err := os.WriteFile(scriptPath, []byte(script), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		cmd = exec.CommandContext(ctx, sh, scriptPath)
+		cmd.Stdin = terminal // Exercise the real [ -t 0 ] interactive branch.
+	}
 	cmd.Env = append(os.Environ(), "HOME="+f.home, "PATH="+pathValue, "TMPDIR="+f.scratch,
 		"VEYPORT_TEST_SYSTEM_BIN="+f.systemBin, "VEYPORT_TEST_PAYLOAD_FILE="+f.payload,
 		"VEYPORT_TEST_CHECKSUM_FILE="+f.checksum, "VEYPORT_TEST_SUDO_CALLED="+f.sudoCalled,
 		"VEYPORT_TEST_REQUEST_LOG="+f.requestLog, "VEYPORT_TEST_OS="+osName, "VEYPORT_TEST_ARCH="+arch)
 	out, err := cmd.CombinedOutput()
-	if err != nil {
-		t.Fatalf("private installer process: %v\n%s", err, out)
-	}
-	if _, err := os.Stat(f.sudoCalled); !os.IsNotExist(err) {
-		t.Fatal("piped installer attempted sudo")
-	}
 	if entries, err := os.ReadDir(f.scratch); err != nil || len(entries) != 0 {
 		t.Fatalf("installer left download scratch files: %v %v", entries, err)
 	}
-	return string(out)
+	return string(out), err
 }
 
 func assertInstallerNextStep(t *testing.T, output, pathValue string) {
@@ -297,14 +319,78 @@ func assertInstallerNextStep(t *testing.T, output, pathValue string) {
 	}
 }
 
-func TestInstallCLIScript_ShadowedFallbackReportsActualDestination(t *testing.T) {
+func TestInstallCLIScript_UnwritableSystemDirectoryStopsWithoutFallback(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("requires ordinary user permission checks for a non-writable system directory")
+	}
+	for _, existingUserCopy := range []bool{false, true} {
+		t.Run(fmt.Sprintf("existing-user-copy=%t", existingUserCopy), func(t *testing.T) {
+			f := newInstallerProcessFixture(t)
+			old := filepath.Join(f.systemBin, "vey")
+			writeInstallerExecutable(t, old, installerOldVersion)
+			oldBytes, err := os.ReadFile(old)
+			if err != nil {
+				t.Fatal(err)
+			}
+			userPath := filepath.Join(f.userBin(), "vey")
+			var userBytes []byte
+			if existingUserCopy {
+				writeInstallerExecutable(t, userPath, installerOldVersion)
+				userBytes, err = os.ReadFile(userPath)
+			} else {
+				err = os.RemoveAll(filepath.Join(f.home, ".local"))
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := os.Chmod(f.systemBin, 0o555); err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { _ = os.Chmod(f.systemBin, 0o755) })
+			pathValue := f.tools + ":" + f.systemBin + ":" + f.userBin() + ":" + os.Getenv("PATH")
+			out, runErr := f.runProcess(t, pathValue, "Linux", "x86_64", false)
+			assertInstallerPermissionRefusal(t, out, runErr)
+			if _, err := os.Stat(f.sudoCalled); !os.IsNotExist(err) {
+				t.Fatal("piped installer attempted automatic sudo")
+			}
+			unchanged, err := os.ReadFile(old)
+			if err != nil || !bytes.Equal(oldBytes, unchanged) {
+				t.Fatal("permission refusal modified the existing system executable")
+			}
+			if existingUserCopy {
+				unchanged, err = os.ReadFile(userPath)
+				if err != nil || !bytes.Equal(userBytes, unchanged) {
+					t.Fatal("permission refusal modified the existing user executable")
+				}
+			} else if _, err := os.Stat(filepath.Join(f.home, ".local")); !os.IsNotExist(err) {
+				t.Fatal("permission refusal created a fallback install directory")
+			}
+		})
+	}
+}
+
+func assertInstallerPermissionRefusal(t *testing.T, output string, err error) {
+	t.Helper()
+	var exitError *exec.ExitError
+	if !errors.As(err, &exitError) || exitError.ExitCode() == 0 {
+		t.Fatalf("installer must fail rather than choose another location: %v\n%s", err, output)
+	}
+	if !strings.Contains(output, "requires sudo") || !strings.Contains(output, "curl -fsSL 'https://hub.example/install/cli.sh' | sudo sh") {
+		t.Fatalf("permission refusal lacks explicit safely quoted sudo guidance:\n%s", output)
+	}
+	if strings.Contains(output, "==> Installed") || strings.Contains(output, "==> Upgraded") || strings.Contains(output, "Next step:") {
+		t.Fatalf("permission refusal reported successful installation:\n%s", output)
+	}
+}
+
+func TestInstallCLIScript_FailedInteractiveSudoStopsWithoutFallback(t *testing.T) {
 	if os.Geteuid() == 0 {
 		t.Skip("requires ordinary user permission checks for a non-writable system directory")
 	}
 	f := newInstallerProcessFixture(t)
 	old := filepath.Join(f.systemBin, "vey")
 	writeInstallerExecutable(t, old, installerOldVersion)
-	before, err := os.ReadFile(old)
+	oldBytes, err := os.ReadFile(old)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -313,12 +399,35 @@ func TestInstallCLIScript_ShadowedFallbackReportsActualDestination(t *testing.T)
 	}
 	t.Cleanup(func() { _ = os.Chmod(f.systemBin, 0o755) })
 	pathValue := f.tools + ":" + f.systemBin + ":" + f.userBin() + ":" + os.Getenv("PATH")
+	out, runErr := f.runProcess(t, pathValue, "Linux", "x86_64", true)
+	assertInstallerPermissionRefusal(t, out, runErr)
+	if _, err := os.Stat(f.sudoCalled); err != nil || !strings.Contains(out, "sudo install failed") {
+		t.Fatalf("did not exercise an actual failed interactive sudo attempt: %v\n%s", err, out)
+	}
+	unchanged, err := os.ReadFile(old)
+	if err != nil || !bytes.Equal(oldBytes, unchanged) {
+		t.Fatal("failed sudo modified the existing system executable")
+	}
+	if _, err := os.Stat(filepath.Join(f.userBin(), "vey")); !os.IsNotExist(err) {
+		t.Fatal("failed sudo created a fallback executable")
+	}
+}
+
+func TestInstallCLIScript_ShadowedSystemInstallReportsActualDestination(t *testing.T) {
+	f := newInstallerProcessFixture(t)
+	old := filepath.Join(f.userBin(), "vey")
+	writeInstallerExecutable(t, old, installerOldVersion)
+	before, err := os.ReadFile(old)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pathValue := f.tools + ":" + f.userBin() + ":" + f.systemBin + ":" + os.Getenv("PATH")
 	out := f.run(t, pathValue, "Linux", "x86_64")
-	installed, err := os.ReadFile(filepath.Join(f.userBin(), "vey"))
+	installed, err := os.ReadFile(filepath.Join(f.systemBin, "vey"))
 	payload, payloadErr := os.ReadFile(f.payload)
 	unchanged, oldErr := os.ReadFile(old)
 	if err != nil || payloadErr != nil || oldErr != nil || !bytes.Equal(installed, payload) || !bytes.Equal(before, unchanged) {
-		t.Fatal("fallback did not preserve the shadowing old executable and install the exact verified new bytes")
+		t.Fatal("system install did not preserve the shadowing executable and install the exact verified new bytes")
 	}
 	if strings.Contains(out, "==> Upgraded:") {
 		t.Fatalf("reported an upgrade although PATH still selects the untouched old executable:\n%s", out)
@@ -326,15 +435,15 @@ func TestInstallCLIScript_ShadowedFallbackReportsActualDestination(t *testing.T)
 	if !strings.Contains(out, "PATH resolves vey to") || !strings.Contains(out, old) || !strings.Contains(out, installerOldVersion) {
 		t.Fatalf("missing actual shadowed PATH/version diagnostic:\n%s", out)
 	}
-	if !strings.Contains(out, "Installed "+installerNewVersion) || !strings.Contains(out, filepath.Join(f.userBin(), "vey")) {
+	if !strings.Contains(out, "Installed "+installerNewVersion) || !strings.Contains(out, filepath.Join(f.systemBin, "vey")) {
 		t.Fatalf("missing exact installed destination/version:\n%s", out)
 	}
 	if strings.Contains(out, "    vey --hub") || !strings.Contains(out, "hash -r") {
 		t.Fatalf("next step would still invoke the old PATH command or lacks shell-cache remediation:\n%s", out)
 	}
 	assertInstallerNextStep(t, out, pathValue)
-	// The displayed export must be executable POSIX syntax even for a HOME
-	// containing spaces and an apostrophe. It must select the new bytes.
+	// The displayed export must be executable POSIX syntax even for an install
+	// directory containing spaces and an apostrophe. It must select the new bytes.
 	var exportLine string
 	for _, line := range strings.Split(out, "\n") {
 		if strings.HasPrefix(strings.TrimSpace(line), "export PATH=") {
