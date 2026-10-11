@@ -1009,11 +1009,12 @@ function FileViewerContent({
 // HighlightedCodeBlock renders pre-sanitized hljs HTML.
 // highlight.js escapes all user text and only produces <span class="hljs-..."> wrappers.
 // sanitizeHljsHtml() strips any non-span tags as a defense-in-depth measure.
+// The chain is covered by lib/__tests__/file-viewer.test.ts canary assertions.
 function HighlightedCodeBlock({ html }: Readonly<{ html: string }>) {
   // NOTE: html here is sanitized output from sanitizeHljsHtml() — safe to render.
   return (
     <pre className="p-4 text-sm font-mono leading-relaxed overflow-x-auto">
-      <code className="hljs" dangerouslySetInnerHTML={{ __html: html }} />
+      <code className="hljs" dangerouslySetInnerHTML={{ /* nosemgrep: typescript.react.security.audit.react-dangerouslysetinnerhtml.react-dangerouslysetinnerhtml */ __html: html }} />
     </pre>
   )
 }

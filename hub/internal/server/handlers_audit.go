@@ -531,8 +531,10 @@ func validateJSONBlob(data string, maxBytes int64) error {
 	if int64(len(data)) > maxBytes {
 		return fmt.Errorf("json blob too large")
 	}
-	var decoded interface{}
-	return json.Unmarshal([]byte(data), &decoded)
+	if !json.Valid([]byte(data)) {
+		return fmt.Errorf("invalid json blob")
+	}
+	return nil
 }
 
 func sqliteAuditTimeFormat(value string) string {

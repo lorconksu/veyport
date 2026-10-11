@@ -76,7 +76,7 @@ vi.mock('@/lib/api', () => ({
 }))
 
 vi.mock('@/lib/auth', async importOriginal => ({
-  ...await importOriginal<typeof import('@/lib/auth')>(),
+  ...await importOriginal() as typeof import('@/lib/auth'),
   getCSRFToken: vi.fn(() => 'test-csrf-token'),
 }))
 
@@ -88,7 +88,7 @@ vi.mock('@/hooks/use-auth', () => ({
 
 const mockNavigate = vi.fn()
 vi.mock('react-router-dom', async (importOriginal) => {
-  const actual = await importOriginal<typeof import('react-router-dom')>()
+  const actual = await importOriginal() as typeof import('react-router-dom')
   return {
     ...actual,
     useNavigate: () => mockNavigate,

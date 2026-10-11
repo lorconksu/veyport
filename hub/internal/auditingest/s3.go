@@ -108,7 +108,10 @@ func (a *S3Archive) Put(ctx context.Context, key string, data []byte, retain tim
 	if len(data) > auditrecord.MaxAttachmentBytes || a.ready(ctx) != nil {
 		return auditrecord.ObjectRef{}, ErrUnavailable
 	}
-	checksum := md5.Sum(data)
+	// Object Lock's Content-MD5 is a wire integrity checksum, not audit trust:
+	// https://docs.aws.amazon.com/AmazonS3/latest/API/API_PutObject.html
+	// Exact immutable refs use SHA256; receipts use ES256. See s3_test.go.
+	checksum := md5.Sum(data) // nosemgrep: go.lang.security.audit.crypto.use_of_weak_crypto.use-of-md5
 	// Bucket default COMPLIANCE retention avoids granting the writer the ability
 	// to mutate existing version retention. Exact post-write checks enforce retain.
 	out, err := a.api.PutObject(ctx, &s3.PutObjectInput{Bucket: aws.String(a.config.Bucket), Key: aws.String(key), Body: bytes.NewReader(data), ContentLength: aws.Int64(int64(len(data))), ContentMD5: aws.String(base64.StdEncoding.EncodeToString(checksum[:])), ContentType: aws.String("application/octet-stream"), Metadata: map[string]string{"sha256": auditrecord.Hash(data), "retain-until": retain.UTC().Format(time.RFC3339Nano)}, IfNoneMatch: aws.String("*"), ServerSideEncryption: types.ServerSideEncryptionAwsKms, SSEKMSKeyId: aws.String(a.config.KMSKeyID)})

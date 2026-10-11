@@ -45,6 +45,9 @@ func setAuthCookies(w http.ResponseWriter, accessToken, refreshToken string) {
 	})
 
 	csrfToken := generateCSRFToken()
+	// The double-submit CSRF token must be readable by the browser. Access and
+	// refresh cookies remain HttpOnly; cookies_test.go checks both distinctions.
+	// nosemgrep: go.lang.security.audit.net.cookie-missing-httponly.cookie-missing-httponly
 	http.SetCookie(w, &http.Cookie{
 		Name:     cookieCSRF,
 		Value:    csrfToken,
@@ -61,25 +64,29 @@ func setAuthCookies(w http.ResponseWriter, accessToken, refreshToken string) {
 // session drop them on logout.
 func clearAuthCookies(w http.ResponseWriter) {
 	for _, name := range []string{cookieAccess, legacyCookieAccess} {
-		http.SetCookie(w, &http.Cookie{ // NOSONAR — clearing cookie (MaxAge=-1); HttpOnly not relevant for deletion
+		http.SetCookie(w, &http.Cookie{
 			Name:     name,
 			Path:     "/",
 			MaxAge:   -1,
+			HttpOnly: true,
 			Secure:   true,
 			SameSite: http.SameSiteStrictMode,
 		})
 	}
 	for _, name := range []string{cookieRefresh, legacyCookieRefresh} {
-		http.SetCookie(w, &http.Cookie{ // NOSONAR — clearing cookie (MaxAge=-1); HttpOnly not relevant for deletion
+		http.SetCookie(w, &http.Cookie{
 			Name:     name,
 			Path:     "/api/auth/refresh",
 			MaxAge:   -1,
+			HttpOnly: true,
 			Secure:   true,
 			SameSite: http.SameSiteStrictMode,
 		})
 	}
 	for _, name := range []string{cookieCSRF, legacyCookieCSRF} {
-		http.SetCookie(w, &http.Cookie{ // NOSONAR — clearing cookie (MaxAge=-1); CSRF cookie intentionally not HttpOnly (double-submit pattern)
+		// Clear the intentionally browser-readable CSRF cookie, matching issuance.
+		// nosemgrep: go.lang.security.audit.net.cookie-missing-httponly.cookie-missing-httponly
+		http.SetCookie(w, &http.Cookie{
 			Name:     name,
 			Path:     "/",
 			MaxAge:   -1,

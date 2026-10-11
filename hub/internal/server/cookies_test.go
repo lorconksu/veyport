@@ -90,6 +90,10 @@ func TestClearAuthCookies(t *testing.T) {
 		if c.MaxAge != -1 {
 			t.Errorf("cookie %q MaxAge = %d, want -1", c.Name, c.MaxAge)
 		}
+		wantHTTPOnly := c.Name != cookieCSRF && c.Name != legacyCookieCSRF
+		if c.HttpOnly != wantHTTPOnly {
+			t.Errorf("cookie %q deletion HttpOnly=%v, want %v", c.Name, c.HttpOnly, wantHTTPOnly)
+		}
 	}
 
 	// Each cookie name we expect to clear should be present exactly once.
