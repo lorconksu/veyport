@@ -4,6 +4,7 @@ import { Download, Info, Save, ShieldAlert } from 'lucide-react'
 import { apiFetch } from '@/lib/api'
 import { useAuth } from '@/hooks/use-auth'
 import { hasCapability } from '@/lib/auth'
+import { ExecutionInvestigation } from '@/pages/execution-investigation'
 import type {
   AuditCatalogResponse,
   AuditDetectionsResponse,
@@ -327,6 +328,8 @@ export function AuditLogsPage() {
           </div>
         </div>
       </div>
+
+      <ExecutionInvestigation />
 
       <div className="grid gap-4 md:grid-cols-4">
         <div className="bg-surface border border-border rounded p-4">
