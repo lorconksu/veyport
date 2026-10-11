@@ -173,6 +173,60 @@ func TestSessionRefreshRefusesRevokedAuthorityBeforeDurableSpend(t *testing.T) {
 	}
 }
 
+func TestRecoverySessionPublishesOnlyItsAuthenticatedInitialPasswordState(t *testing.T) {
+	t.Run("initial_issue_without_refresh_permission", func(t *testing.T) {
+		s := testStore(t)
+		u := refreshStoreOwner(t, s)
+		if _, err := s.DB().Exec("UPDATE users SET must_change_password=1 WHERE id=?", u.ID); err != nil {
+			t.Fatal(err)
+		}
+		u, err := s.GetUserByID(u.ID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		sid := refreshStoreSession(t, s, u)
+		issued := strings.Repeat("a", 64)
+		if err := s.RotateSessionRefresh(context.Background(), u, sid, "", issued, refreshTime, time.Hour); err != nil {
+			t.Fatalf("authenticated mandatory-change sign-in: %v", err)
+		}
+		if err := s.RotateSessionRefresh(context.Background(), u, sid, issued, strings.Repeat("b", 64), refreshTime.Add(time.Minute), time.Hour); !errors.Is(err, store.ErrSessionRefreshRejected) {
+			t.Fatalf("unfinished recovery rotated refresh authority: %v", err)
+		}
+		var current string
+		if err := s.DB().QueryRow("SELECT refresh_token_sha256 FROM sessions WHERE id=?", sid).Scan(&current); err != nil || current != issued {
+			t.Fatal("rejected recovery refresh spent the issued token")
+		}
+	})
+	for _, initial := range []bool{false, true} {
+		name := "recovery_started_after_authentication"
+		if initial {
+			name = "recovery_completed_after_authentication"
+		}
+		t.Run(name, func(t *testing.T) {
+			s := testStore(t)
+			u := refreshStoreOwner(t, s)
+			if _, err := s.DB().Exec("UPDATE users SET must_change_password=? WHERE id=?", initial, u.ID); err != nil {
+				t.Fatal(err)
+			}
+			u, err := s.GetUserByID(u.ID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			sid := refreshStoreSession(t, s, u)
+			if _, err := s.DB().Exec("UPDATE users SET must_change_password=? WHERE id=?", !initial, u.ID); err != nil {
+				t.Fatal(err)
+			}
+			if err := s.RotateSessionRefresh(context.Background(), u, sid, "", strings.Repeat("a", 64), refreshTime, time.Hour); !errors.Is(err, store.ErrSessionRefreshRejected) {
+				t.Fatalf("stale authenticated password state issued a session pair: %v", err)
+			}
+			var current string
+			if err := s.DB().QueryRow("SELECT refresh_token_sha256 FROM sessions WHERE id=?", sid).Scan(&current); err != nil || current != "" {
+				t.Fatal("refused issuance published a refresh digest")
+			}
+		})
+	}
+}
+
 func TestSessionRefreshEnforcesOwnerAndExactSessionLimits(t *testing.T) {
 	for _, tc := range []struct {
 		name       string

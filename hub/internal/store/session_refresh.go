@@ -20,6 +20,8 @@ var ErrSessionRefreshRejected = errors.New("refresh token is no longer current")
 // Existing sessions with no digest may adopt their first valid signed refresh
 // after migration; the UPDATE serializes that adoption with every other spend.
 // An empty previous digest is used only when issuing a new sign-in's tokens.
+// An authenticated recovery sign-in can publish its first pair while mandatory
+// password change is pending; it cannot refresh that pair before completion.
 func (s *Store) RotateSessionRefresh(ctx context.Context, user *model.User, sessionID, previous, next string, now time.Time, idle time.Duration) error {
 	if user == nil || user.ID == "" || sessionID == "" || !auditrecord.ValidHash(next) ||
 		(previous != "" && (!auditrecord.ValidHash(previous) || previous == next)) {
@@ -39,9 +41,10 @@ func (s *Store) RotateSessionRefresh(ctx context.Context, user *model.User, sess
 		AND (?<=0 OR last_seen_at>=?)
 		AND (refresh_token_sha256=? OR refresh_token_sha256='')
 		AND EXISTS (SELECT 1 FROM users WHERE id=? AND token_generation=? AND security_revision=?
-		    AND disabled_at IS NULL AND totp_enabled=1 AND must_change_password=0)`,
+		    AND disabled_at IS NULL AND totp_enabled=1 AND must_change_password=?
+		    AND (? OR must_change_password=0))`,
 		next, stamp, stamp, sessionID, user.ID, stamp, idle.Nanoseconds(), threshold,
-		previous, user.ID, user.TokenGeneration, user.SecurityRevision)
+		previous, user.ID, user.TokenGeneration, user.SecurityRevision, user.MustChangePassword, previous == "")
 	if err != nil {
 		return fmt.Errorf("rotate session refresh: %w", err)
 	}

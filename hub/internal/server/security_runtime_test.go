@@ -518,7 +518,7 @@ func TestGovernanceHTTPSecretPreflightLeavesApprovedChangeRetryable(t *testing.T
 func TestGovernanceHTTPProtectedPasswordAndMFARecoveryUsesRealApprovedArchive(t *testing.T) {
 	h := newGovernanceHTTP(t)
 	payload := h.bootstrapPayload()
-	payload.Nominations = append(payload.Nominations, model.SecurityNomination{UserID: "viewer", PersonID: "synthetic-person-reader", Roles: []model.Role{model.RoleOriginalReader}, Verification: "Synthetic test original reader, never staging approval"})
+	payload.Nominations = append(payload.Nominations, model.SecurityNomination{UserID: "viewer", PersonID: "synthetic-person-reader", Roles: []model.Role{model.RoleOriginalReader, model.RoleSecurityOfficer}, Verification: "Synthetic test recovery principal, never staging approval"})
 	h.apply(t, h.approve(t, h.request(t, payload, 1)), 200)
 	temporary, replacement := "SyntheticTemporary@1234", "SyntheticReplacement@1234"
 	ref := h.secret(t, "password", temporary)
@@ -536,6 +536,16 @@ func TestGovernanceHTTPProtectedPasswordAndMFARecoveryUsesRealApprovedArchive(t 
 	var login model.AuthResponse
 	decodeResult(t, response, &login)
 	h.tokens["viewer"] = login.AccessToken
+	if !login.User.MustChangePassword {
+		t.Fatal("approved recovery lost mandatory password completion")
+	}
+	h.call(t, "POST", "/api/auth/refresh", "viewer", model.RefreshRequest{RefreshToken: login.RefreshToken}, 401)
+	h.call(t, "POST", "/api/executions/not-a-read-permit/original-access/preview", "viewer", map[string]any{"purpose": "Recovery is not an original-read permit", "records": []string{"script"}}, 403)
+	previewBytes := h.call(t, "POST", "/api/security/changes/preview", "viewer", authorization.Proposal{Reason: "Unfinished recovery cannot mutate governance", ExpectedVersion: 3, Change: mustMarshal(t, model.SecurityChangePayload{Kind: "policy", Policy: &h.policy})}, 200)
+	var preview authorization.Preview
+	decodeResult(t, previewBytes, &preview)
+	proof := h.stepup(t, "viewer", authorization.ActionRequest, preview.Digest, "")
+	h.call(t, "POST", "/api/security/changes", "viewer", map[string]any{"reason": preview.Proposal.Reason, "expected_version": preview.Proposal.ExpectedVersion, "change": json.RawMessage(preview.Proposal.Change), "step_up_proof": proof}, 409)
 	response = h.call(t, "PUT", "/api/auth/password", "viewer", model.ChangePasswordRequest{CurrentPassword: temporary, NewPassword: replacement}, 200)
 	current, err := h.s.store.GetUserByID("viewer")
 	if err != nil || current.MustChangePassword || !auth.ComparePassword(current.PasswordHash, replacement) {

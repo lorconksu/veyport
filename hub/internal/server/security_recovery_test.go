@@ -133,6 +133,17 @@ func TestSecurityApprovedPasswordRecoveryWithExistingMFA(t *testing.T) {
 	if login.Code != 200 || json.Unmarshal(login.Body.Bytes(), &signed) != nil {
 		t.Fatalf("recovery MFA login: %d %s", login.Code, login.Body.String())
 	}
+	if !signed.User.MustChangePassword || signed.AccessToken == "" || signed.RefreshToken == "" {
+		t.Fatal("authenticated recovery did not issue its mandatory-rotation session")
+	}
+	refreshed := securityCall(s, "POST", "/api/auth/refresh", "", mustMarshal(t, model.RefreshRequest{RefreshToken: signed.RefreshToken}))
+	if refreshed.Code != 401 {
+		t.Fatalf("unfinished recovery refreshed its session: %d", refreshed.Code)
+	}
+	original := securityCall(s, "POST", "/api/executions/not-a-read-permit/original-access/preview", signed.AccessToken, mustMarshal(t, map[string]any{"purpose": "Recovery must not grant original access", "records": []string{"script"}}))
+	if original.Code != 403 {
+		t.Fatalf("unfinished recovery used original-reader authority: %d", original.Code)
+	}
 	rotated := securityCall(s, "PUT", "/api/auth/password", signed.AccessToken, mustMarshal(t, model.ChangePasswordRequest{CurrentPassword: temporary, NewPassword: replacement}))
 	if rotated.Code != 200 {
 		t.Fatalf("approved mandatory rotation: %d %s", rotated.Code, rotated.Body.String())
