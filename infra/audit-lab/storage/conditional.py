@@ -58,6 +58,7 @@ request=AWSRequest(method='PUT',url='https://10.10.1.62:8333/'+q.BUCKET+'/'+lost
 S3SigV4Auth(Credentials(c['access_key'],c['secret_key']),'s3','us-east-1').add_auth(request)
 wire=('PUT /'+q.BUCKET+'/'+lost_key+' HTTP/1.1\r\n'+''.join(k+': '+v+'\r\n' for k,v in request.headers.items())+'\r\n').encode()+lost_body
 context=ssl.create_default_context(cafile=str(q.PRIVATE/'ca.crt'))
+context.minimum_version=ssl.TLSVersion.TLSv1_2
 with socket.create_connection(('10.10.1.62',8333),timeout=5) as tcp:
     with context.wrap_socket(tcp,server_hostname='10.10.1.62') as tls:
         tls.sendall(wire)

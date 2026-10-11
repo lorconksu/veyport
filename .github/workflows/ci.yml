@@ -16,6 +16,9 @@ on:
       GITLEAKS_LICENSE:
         required: false
 
+permissions:
+  contents: read
+
 jobs:
   unit:
     runs-on: ubuntu-latest
