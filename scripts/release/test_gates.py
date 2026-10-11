@@ -69,6 +69,7 @@ with (r/'calls').open('a') as f: f.write(json.dumps(sys.argv[1:])+'\\n')
 args=sys.argv[1:]
 if args[0]=='inspect':
  destination=args[-1]
+ if not destination.startswith('docker://'): print('invalid Docker transport reference',file=sys.stderr);sys.exit(2)
  mode=os.environ['REGISTRY_MODE']
  copied=(r/destination.rsplit(':',1)[0].replace('/','_')).exists()
  if mode=='auth': print('unauthorized: authentication required',file=sys.stderr);sys.exit(1)
@@ -76,6 +77,7 @@ if args[0]=='inspect':
  if mode=='mismatch': sys.stdout.buffer.write(b'{}');sys.exit(0)
  sys.stdout.buffer.write((r/'manifest').read_bytes())
 elif args[0]=='copy':
+ if not args[-1].startswith('docker://') or not args[-2].startswith(('docker://','oci-archive:')): print('invalid copy transport reference',file=sys.stderr);sys.exit(2)
  (r/args[-1].rsplit(':',1)[0].replace('/','_')).touch()
 else: sys.exit(2)
 """)
@@ -127,6 +129,10 @@ if os.environ['TAG_MODE']=='create-lostreply': print('private-upstream-canary',f
             self.assertEqual(len(copies), 3)
             self.assertTrue(all("--all" in call and "--preserve-digests" in call for call in copies))
             self.assertTrue(all(call[-1].endswith(":prototype-ssh-passthrough.1") for call in copies))
+            self.assertEqual({tuple(call[-2:]) for call in copies}, {
+                ("oci-archive:" + str(delivery / (target + ".oci.tar")), "docker://docker.io/yiucloud/" + repository + ":prototype-ssh-passthrough.1")
+                for target, repository in (("veyport", "veyport"), ("audit-ingest", "veyport-audit-ingest"), ("audit-export", "veyport-audit-export"))
+            })
             result, calls = run("match")
             self.assertEqual(result.returncode, 0, result.stderr)
             self.assertFalse(any(call[0] == "copy" for call in calls))
@@ -139,6 +145,15 @@ if os.environ['TAG_MODE']=='create-lostreply': print('private-upstream-canary',f
                 result, calls = run("match", "match", prototype)
                 self.assertEqual(result.returncode, 0, result.stderr)
                 self.assertFalse((root / "git-create-request.json").exists())
+                if not prototype:
+                    copies = [call for call in calls if call[0] == "copy"]
+                    self.assertEqual(len(copies), 9)
+                    self.assertTrue(all("--all" in call and "--preserve-digests" in call for call in copies))
+                    self.assertEqual({tuple(call[-2:]) for call in copies}, {
+                        ("docker://docker.io/yiucloud/" + repository + "@" + digest, "docker://docker.io/yiucloud/" + repository + ":" + channel)
+                        for repository in ("veyport", "veyport-audit-ingest", "veyport-audit-export")
+                        for channel in ("2.0.50", "2.0", "latest")
+                    })
                 result, calls = run("match", "annotated", prototype)
                 self.assertEqual(result.returncode, 0, result.stderr)
                 self.assertFalse((root / "git-create-request.json").exists())

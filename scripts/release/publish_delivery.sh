@@ -15,7 +15,7 @@ for target in veyport audit-ingest audit-export; do
   destination="docker.io/$repository:$tag"
   expected="$(cat "$delivery/reports/$target.digest")"
   error_file="$(mktemp)"
-  if existing="$(skopeo inspect --raw "docker:$destination" 2>"$error_file" | sha256sum | awk '{print "sha256:" $1}')"; then
+  if existing="$(skopeo inspect --raw "docker://$destination" 2>"$error_file" | sha256sum | awk '{print "sha256:" $1}')"; then
     # An existing immutable tag is reusable only when it already has these bytes.
     test "$existing" = "$expected"
   else
@@ -25,15 +25,15 @@ for target in veyport audit-ingest audit-export; do
       echo "registry could not establish immutable tag absence" >&2
       exit 1
     fi
-    skopeo copy --all --preserve-digests "oci-archive:$delivery/$target.oci.tar" "docker:$destination"
+    skopeo copy --all --preserve-digests "oci-archive:$delivery/$target.oci.tar" "docker://$destination"
   fi
   rm -f "$error_file"
-  actual="$(skopeo inspect --raw "docker:$destination" | sha256sum | awk '{print "sha256:" $1}')"
+  actual="$(skopeo inspect --raw "docker://$destination" | sha256sum | awk '{print "sha256:" $1}')"
   test "$actual" = "$expected"
   printf '%s@%s\n' "docker.io/$repository" "$actual" >> "$delivery/published-images.txt"
   if [ "$prototype" = false ]; then
     for channel in "$version" "${version%.*}" latest; do
-      skopeo copy --all --preserve-digests "docker:docker.io/$repository@$actual" "docker:docker.io/$repository:$channel"
+      skopeo copy --all --preserve-digests "docker://docker.io/$repository@$actual" "docker://docker.io/$repository:$channel"
     done
   fi
 done
