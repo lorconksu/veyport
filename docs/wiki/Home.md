@@ -34,9 +34,9 @@ Standard mode keeps these local audit features standalone. Enhanced command
 evidence is an opt-in prototype with external receipt/archive requirements and
 separate operational limits; it is not enabled by installing Veyport alone. See
 [[CLI]], [[SSH Gateway]], [[Audit Logs]], and [[Architecture]] for the feature
-boundary and prototype identity: version `2.0.50-prototype.1`, immutable tag
-`prototype-ssh-passthrough.1`. Stable `2.0.49` does not include this feature.
-Before installing, check the [prototype release page](https://github.com/lorconksu/veyport/releases/tag/prototype-ssh-passthrough.1)
+boundary and prototype identity: version `2.0.50-prototype.2`, immutable tag
+`prototype-ssh-passthrough.2`. Stable `2.0.49` does not include this feature.
+Before installing, check the [prototype release page](https://github.com/lorconksu/veyport/releases/tag/prototype-ssh-passthrough.2)
 for an actually published release and its required assets. If they are absent,
 the prototype is unavailable. Use a Hub and CLI from the same source revision
 and a compatible agent. Resolve the immutable OCI tag to its published digest

@@ -42,9 +42,9 @@ agents; no external audit service is required. Enhanced command evidence is an
 optional prototype and needs its separately qualified receipt and encrypted
 archive services. Do not enable it by supplying an arbitrary archive URL. See
 [[Architecture]] for the prototype's guarantees and limits. Its identity is
-version `2.0.50-prototype.1` and immutable tag `prototype-ssh-passthrough.1`;
+version `2.0.50-prototype.2` and immutable tag `prototype-ssh-passthrough.2`;
 stable `2.0.49` does not include this feature. Before installing, check the
-[prototype release page](https://github.com/lorconksu/veyport/releases/tag/prototype-ssh-passthrough.1)
+[prototype release page](https://github.com/lorconksu/veyport/releases/tag/prototype-ssh-passthrough.2)
 for an actually published release and its required assets. If they are absent,
 the prototype is unavailable. Use the Hub and CLI from the same source revision
 with a compatible agent. Resolve the immutable OCI tag to its published digest
