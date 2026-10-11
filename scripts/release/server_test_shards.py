@@ -104,7 +104,9 @@ def run_shard(root, output, inventory, index, timeout):
     for old in (profile, folder / "shard.json"):
         old.unlink(missing_ok=True)
     atomic_json(folder / "plan.json", inventory)
-    command = ["go", "test", "-json", "-race", "-count=1", f"-timeout={timeout}s", "-covermode=atomic", f"-coverprofile={profile.resolve()}", "-run", run_expression(inventory["shards"][index]), "./internal/server"]
+    # HTTP tests exercise live store/authorization/runtime controls. Measure
+    # those dependencies with the same scope as the integration coverage job.
+    command = ["go", "test", "-json", "-race", "-count=1", f"-timeout={timeout}s", "-covermode=atomic", "-coverpkg=./internal/...", f"-coverprofile={profile.resolve()}", "-run", run_expression(inventory["shards"][index]), "./internal/server"]
     started = time.monotonic()
     with log.open("w") as stream:
         process = subprocess.Popen(command, cwd=root / "hub", stdout=stream, stderr=subprocess.STDOUT, start_new_session=True)

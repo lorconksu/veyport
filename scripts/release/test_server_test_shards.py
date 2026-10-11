@@ -3,6 +3,7 @@ from pathlib import Path
 import re
 import tempfile
 import unittest
+from unittest import mock
 
 import server_test_shards as shards
 
@@ -63,6 +64,53 @@ class ServerShardTests(unittest.TestCase):
         output = root / "merged.out"
         shards.merge(root, directory, output, inventory, [additional])
         self.assertEqual(shards.read_profile(output), {f"{shards.PACKAGE}/server.go:1.1,2.1": (2, 7)})
+
+    def test_run_measures_dependencies_without_changing_selected_test_authority(self):
+        root, directory, inventory = self.fixture()
+        before = shards.canonical(inventory)
+        selected = inventory["shards"][0]
+        dependency = "github.com/wyiu/veyport/hub/internal/store/security.go:1.1,2.1"
+
+        def execute(command, *, cwd, stdout, stderr, start_new_session):
+            self.assertEqual(cwd, root / "hub")
+            self.assertIn("-coverpkg=./internal/...", command)
+            self.assertIn("-race", command)
+            self.assertIn("-count=1", command)
+            self.assertIn("-timeout=1800s", command)
+            self.assertIn("-covermode=atomic", command)
+            self.assertEqual(command[command.index("-run") + 1], shards.run_expression(selected))
+            self.assertEqual(command[-1], "./internal/server")
+            self.assertEqual(stderr, shards.subprocess.STDOUT)
+            self.assertTrue(start_new_session)
+            profile = Path(next(arg.removeprefix("-coverprofile=") for arg in command if arg.startswith("-coverprofile=")))
+            profile.write_text(f"mode: atomic\n{shards.PACKAGE}/server.go:1.1,2.1 2 1\n{dependency} 3 2\n")
+            for name in selected:
+                stdout.write(json.dumps({"Package": shards.PACKAGE, "Test": name, "Action": "pass"}) + "\n")
+            stdout.write(json.dumps({"Package": shards.PACKAGE, "Action": "pass"}) + "\n")
+            return mock.Mock(wait=mock.Mock(return_value=0))
+
+        with mock.patch.object(shards.subprocess, "Popen", side_effect=execute):
+            shards.run_shard(root, directory, inventory, 0, 1800)
+        self.assertEqual(shards.canonical(inventory), before)
+        evidence = json.loads((directory / "shard-0" / "shard.json").read_text())
+        self.assertEqual(evidence["completed"], {name: "pass" for name in selected})
+        self.assertEqual(shards.read_profile(directory / "shard-0" / "coverage.out")[dependency], (3, 2))
+
+    def test_merge_keeps_dependency_hits_from_http_tests_and_unit_tests(self):
+        root, directory, inventory = self.fixture()
+        dependency = "github.com/wyiu/veyport/hub/internal/store/security.go:1.1,2.1"
+        for index in range(len(inventory["shards"])):
+            folder = directory / f"artifact-{index}"
+            profile = folder / "coverage.out"
+            profile.write_text(profile.read_text() + f"{dependency} 3 {index + 1}\n")
+            evidence = json.loads((folder / "shard.json").read_text())
+            evidence["profile_sha256"] = shards.digest(profile.read_bytes())
+            shards.atomic_json(folder / "shard.json", evidence)
+        units = root / "units.out"
+        units.write_text(f"mode: atomic\n{dependency} 3 5\n")
+        output = root / "combined.out"
+        shards.merge(root, directory, output, inventory, [units])
+        self.assertEqual(shards.read_profile(output)[dependency], (3, 11))
 
     def test_merge_refuses_missing_duplicate_stale_and_modified_evidence(self):
         for fault in ("missing", "duplicate", "source", "inventory", "profile", "execution"):
