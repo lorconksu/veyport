@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "verified_at": "2026-10-11T07:07:55.053046+00:00",
+  "verified_at": "2026-10-11T07:22:26.350253+00:00",
   "endpoint": "https://10.10.1.60:8443",
   "issuer": "https://10.10.1.60:8443",
   "audience": "veyport-audit-lab",
@@ -8,8 +8,8 @@
   "signing_public_key_sha256": "cb248a263880556896d9d08749f8d2069adb537740445ae6bbcc6510cda0a818",
   "ca_certificate_sha256": "ba0fa6c1bd8d70f48bad5a721d92979f87ae62a0a18d639d9ac0d4c8c66e934f",
   "binaries": {
-    "veyport-audit-ingest": "07891121411b3a4d25fc606bacf42012102650267013e45ccffba9db07643434",
-    "veyport-audit-export": "92da088e3bec1aadab7026b13cdcb2c1ff678a4104f786a2efbfe18341f9ddf2"
+    "veyport-audit-ingest": "f4f780e7241603c46a5470d28c68f8df46c7599130fa5bfa80d2ca2f8f49853a",
+    "veyport-audit-export": "0a89b9e268262d34d36890353523a299462fef917d07f910d026df8c66e0aa74"
   },
   "readiness": {
     "ready": true,
@@ -36,5 +36,13 @@
     "Local tested feature build, not a published release artifact",
     "One receipt guest; shared hypervisor administrator trust boundary",
     "Manual LUKS unlock after reboot"
-  ]
+  ],
+  "go_version": "1.26.9",
+  "vulnerability_preflight": {
+    "scanner": "grype0.110.0",
+    "database_built": "2026-10-10T06:30:01Z",
+    "matches_per_binary": 0,
+    "ignored_matches_per_binary": 0,
+    "scope": "Go receipt and export binaries; final release/container checks remain required"
+  }
 }
