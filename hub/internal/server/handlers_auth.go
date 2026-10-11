@@ -2,6 +2,7 @@ package server
 
 import (
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"log"
 	"net/http"
@@ -342,9 +343,7 @@ func (s *Server) handleLoginTOTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	accessToken, refreshToken, err := auth.GenerateSessionTokenPair(
-		s.jwtSecret, user.ID, string(user.Role), user.TokenGeneration, sess.ID,
-	)
+	accessToken, refreshToken, err := s.issueSessionTokens(r.Context(), user, sess.ID, "", s.now())
 	if err != nil {
 		respondError(w, http.StatusInternalServerError, errFailedToGenerateTokens)
 		return
@@ -415,25 +414,20 @@ func (s *Server) handleRefresh(w http.ResponseWriter, r *http.Request) {
 	// checks and counts as activity. A refresh token minted before this
 	// feature carries no session and is refused here, which is the one-time
 	// re-sign-in at upgrade (009 FR-002, FR-003, R10).
-	if sessionErr := s.sessionAccessError(claims); sessionErr != nil {
+	if sessionErr := s.checkSessionAccess(claims, false); sessionErr != nil {
 		respondError(w, http.StatusUnauthorized, sessionErr.Error())
 		return
 	}
 
-	// Increment token generation to prevent reuse of this refresh token
-	newGen, err := s.store.IncrementTokenGeneration(user.ID)
-	if err != nil {
-		respondError(w, http.StatusInternalServerError, "failed to rotate token generation")
-		return
-	}
-
 	// Use user.Role from DB, not claims.Role from the old token. The rotation
-	// stays inside the same session and never touches its absolute expiry
-	// (009 FR-002).
-	accessToken, refreshToken, err := auth.GenerateSessionTokenPair(
-		s.jwtSecret, user.ID, string(user.Role), newGen, claims.SessionID,
-	)
+	// spends only this session's refresh digest. Earlier access tokens and
+	// other sessions stay valid; explicit revocation still checks generation.
+	accessToken, refreshToken, err := s.issueSessionTokens(r.Context(), user, claims.SessionID, refreshTokenStr, s.now())
 	if err != nil {
+		if errors.Is(err, store.ErrSessionRefreshRejected) {
+			respondError(w, http.StatusUnauthorized, "invalid or expired refresh token")
+			return
+		}
 		respondError(w, http.StatusInternalServerError, errFailedToGenerateTokens)
 		return
 	}
@@ -676,9 +670,7 @@ func (s *Server) handleTOTPEnable(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Generate full access tokens now that 2FA is enabled
-	accessToken, refreshToken, err := auth.GenerateSessionTokenPair(
-		s.jwtSecret, user.ID, string(user.Role), user.TokenGeneration, sess.ID,
-	)
+	accessToken, refreshToken, err := s.issueSessionTokens(r.Context(), user, sess.ID, "", s.now())
 	if err != nil {
 		respondError(w, http.StatusInternalServerError, errFailedToGenerateTokens)
 		return

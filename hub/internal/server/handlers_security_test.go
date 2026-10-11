@@ -87,8 +87,8 @@ func TestSecurityPreviewStrictJSONAndActionBoundMFASurvivesRefresh(t *testing.T)
 		t.Fatalf("real refresh: %d %s", response.Code, response.Body.String())
 	}
 	after, _ := s.store.GetUserByID(u.ID)
-	if after.SecurityRevision != before.SecurityRevision || after.TokenGeneration == before.TokenGeneration {
-		t.Fatal("refresh changed security authority revision")
+	if after.SecurityRevision != before.SecurityRevision || after.TokenGeneration != before.TokenGeneration {
+		t.Fatal("routine refresh changed security or user revocation authority")
 	}
 	if err := s.store.ConsumeStepup(result.Proof, u.ID, sid, authorization.ActionApprove, preview.Digest, s.now()); err == nil {
 		t.Fatal("proof moved to approval")

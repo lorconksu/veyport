@@ -402,8 +402,8 @@ func TestNativeSSHExecutionSurvivesRoutineBrowserRefresh(t *testing.T) {
 		t.Fatalf("refresh: status=%d body=%s err=%v", response.StatusCode, responseBody, readErr)
 	}
 	after, err := h.store.GetUserByID(actor)
-	if err != nil || after.TokenGeneration <= current.TokenGeneration {
-		t.Fatal("refresh did not rotate browser token generation")
+	if err != nil || after.TokenGeneration != current.TokenGeneration {
+		t.Fatal("routine browser refresh changed user-wide revocation generation")
 	}
 	tail, readErr := io.ReadAll(stdout)
 	err = command.Wait()

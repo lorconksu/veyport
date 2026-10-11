@@ -344,7 +344,7 @@ func TestAccountLifecycle_RestoredAccountRegainsEveryPath(t *testing.T) {
 			if rec := f.bearer(t, "GET", testMePath, f.apiToken); rec.Code != http.StatusOK {
 				t.Fatalf("api token after restore: %d: %s", rec.Code, rec.Body.String())
 			}
-			// Refresh rotates the generation, so it runs after the tokens above.
+			// Restoring an account also restores its still-current session refresh.
 			if rec := f.refresh(t); rec.Code != http.StatusOK {
 				t.Fatalf("refresh after restore: %d: %s", rec.Code, rec.Body.String())
 			}
