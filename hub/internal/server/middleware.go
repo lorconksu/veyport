@@ -291,6 +291,7 @@ func (s *Server) corsMiddleware(next http.Handler) http.Handler {
 
 // rateLimiter tracks login attempts per IP.
 type rateLimiter struct {
+	now      func() time.Time
 	mu       sync.Mutex
 	attempts map[string][]time.Time
 	limit    int
@@ -334,6 +335,9 @@ func (rl *rateLimiter) allow(ip string) bool {
 	defer rl.mu.Unlock()
 
 	now := time.Now()
+	if rl.now != nil {
+		now = rl.now()
+	}
 	cutoff := now.Add(-rl.window)
 
 	// Filter expired entries

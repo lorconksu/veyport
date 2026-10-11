@@ -324,7 +324,7 @@ func (s *Server) handleLoginTOTP(w http.ResponseWriter, r *http.Request) {
 		totpSecret = &decrypted
 	}
 
-	if totpSecret == nil || !auth.ValidateTOTPWithReplay(s.totpCache, user.ID, *totpSecret, req.Code) {
+	if totpSecret == nil || !auth.ValidateTOTPWithReplayAt(s.totpCache, user.ID, *totpSecret, req.Code, s.now()) {
 		s.recordTOTPFailure(r, user)
 		respondError(w, http.StatusUnauthorized, "invalid TOTP code")
 		return
@@ -617,7 +617,7 @@ func (s *Server) handleTOTPEnable(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if !auth.ValidateTOTPWithReplay(s.totpCache, userID, *totpSecretForValidation, req.Code) {
+	if !auth.ValidateTOTPWithReplayAt(s.totpCache, userID, *totpSecretForValidation, req.Code, s.now()) {
 		respondError(w, http.StatusUnauthorized, "invalid TOTP code")
 		return
 	}

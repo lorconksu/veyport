@@ -19,7 +19,8 @@ import (
 
 type recoveryEvidence struct{ anchor authorization.PolicyAnchor }
 
-func (e *recoveryEvidence) Ready(context.Context, model.AuditPolicy) error { return nil }
+func (e *recoveryEvidence) Ready(context.Context, model.AuditPolicy) error   { return nil }
+func (e *recoveryEvidence) Qualify(context.Context, model.AuditPolicy) error { return nil }
 func (e *recoveryEvidence) Preserve(_ context.Context, raw []byte) (string, error) {
 	_, record, err := auditrecord.ExpectedFor(raw)
 	if err != nil {

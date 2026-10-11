@@ -79,7 +79,8 @@ type fakeEvidence struct {
 	anchorErr error
 }
 
-func (e *fakeEvidence) Ready(context.Context, model.AuditPolicy) error { return nil }
+func (e *fakeEvidence) Ready(context.Context, model.AuditPolicy) error   { return nil }
+func (e *fakeEvidence) Qualify(context.Context, model.AuditPolicy) error { return nil }
 func (e *fakeEvidence) Preserve(_ context.Context, raw []byte) (string, error) {
 	e.mu.Lock()
 	defer e.mu.Unlock()

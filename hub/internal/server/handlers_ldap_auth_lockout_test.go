@@ -9,7 +9,6 @@ import (
 	"time"
 
 	ldap "github.com/go-ldap/ldap/v3"
-	"github.com/wyiu/veyport/hub/internal/auth"
 	"github.com/wyiu/veyport/hub/internal/lockout"
 	"github.com/wyiu/veyport/hub/internal/model"
 )
@@ -209,10 +208,7 @@ func TestLDAPLockout_SuccessAfterExpiryResetsCounter(t *testing.T) {
 		t.Fatal("expected the directory to be consulted once the lock expired")
 	}
 
-	code, err := auth.GenerateValidCode(secret)
-	if err != nil {
-		t.Fatalf("generate totp code: %v", err)
-	}
+	code := validTOTPCode(t, secret, s.now())
 	if rec := attemptTOTP(t, s, totpToken, code); rec.Code != http.StatusOK {
 		t.Fatalf("expected 200 completing sign-in, got %d: %s", rec.Code, rec.Body.String())
 	}

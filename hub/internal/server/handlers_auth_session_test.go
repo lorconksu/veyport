@@ -38,7 +38,7 @@ func signInWith(t *testing.T, s *Server, user *model.User, totpSecret, userAgent
 
 	req := httptest.NewRequest("POST", testLoginTOTPPath, mustJSON(t, model.LoginTOTPRequest{
 		TOTPToken: totpToken,
-		Code:      validTOTPCode(t, totpSecret),
+		Code:      validTOTPCode(t, totpSecret, s.now()),
 	}))
 	req.RemoteAddr = "198.51.100.4:44321"
 	if userAgent != "" {
@@ -196,7 +196,7 @@ func TestSession_FirstLoginTOTPEnableCreatesSession(t *testing.T) {
 	}
 
 	req := httptest.NewRequest("POST", "/api/auth/totp/enable", mustJSON(t, model.TOTPEnableRequest{
-		Code: validTOTPCode(t, plaintext),
+		Code: validTOTPCode(t, plaintext, s.now()),
 	}))
 	req.Header.Set("Authorization", testBearerPrefix+setupToken)
 	req.Header.Set("User-Agent", sessionTestCLIAgent)

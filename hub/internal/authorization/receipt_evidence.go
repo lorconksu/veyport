@@ -3,6 +3,7 @@ package authorization
 import (
 	"context"
 	"encoding/json"
+	"strings"
 	"time"
 
 	"github.com/wyiu/veyport/hub/internal/auditgate"
@@ -17,8 +18,9 @@ type ReceiptEvidence struct {
 	Ingest         *auditgate.Client
 	Admin          *auditgate.Client
 	Verifier       *auditgate.Verifier
-	TransportReady bool
+	TransportReady func(context.Context, model.AuditPolicy) error
 	PolicyReady    func(context.Context, model.AuditPolicy) error
+	CandidateTest  func(context.Context, model.AuditPolicy) error
 	Now            func() time.Time
 }
 
@@ -29,10 +31,31 @@ func (e *ReceiptEvidence) now() time.Time {
 	return time.Now().UTC()
 }
 func (e *ReceiptEvidence) Ready(ctx context.Context, p model.AuditPolicy) error {
-	if e == nil || !e.TransportReady || e.Ingest == nil || e.Admin == nil || e.Verifier == nil || e.PolicyReady == nil {
+	if e == nil || e.TransportReady == nil || e.Ingest == nil || e.Admin == nil || e.Verifier == nil || e.PolicyReady == nil {
 		return ErrNotReady
 	}
+	if err := e.TransportReady(ctx, p); err != nil {
+		return err
+	}
 	return e.PolicyReady(ctx, p)
+}
+
+// GovernanceReady checks the fixed qualified authority independently of agent,
+// gateway and execution destination availability. It never preserves records.
+func (e *ReceiptEvidence) GovernanceReady(ctx context.Context) error {
+	if e == nil || e.Ingest == nil || e.Admin == nil || e.Verifier == nil || e.PolicyReady == nil {
+		return ErrNotReady
+	}
+	return e.PolicyReady(ctx, model.AuditPolicy{Profile: "standard"})
+}
+
+// Qualify is an explicit activation write test. Read-only readiness calls never
+// create retained records; every execution still requires its own admission.
+func (e *ReceiptEvidence) Qualify(ctx context.Context, p model.AuditPolicy) error {
+	if e == nil || e.CandidateTest == nil {
+		return ErrNotReady
+	}
+	return e.CandidateTest(ctx, p)
 }
 func (e *ReceiptEvidence) Preserve(ctx context.Context, raw []byte) (string, error) {
 	if e == nil || e.Ingest == nil || e.Admin == nil || e.Verifier == nil {
@@ -41,6 +64,9 @@ func (e *ReceiptEvidence) Preserve(ctx context.Context, raw []byte) (string, err
 	expected, envelope, err := auditrecord.ExpectedFor(raw)
 	if err != nil {
 		return "", err
+	}
+	if strings.HasPrefix(envelope.EventType, "policy.") {
+		expected.MinRetainUntil = envelope.OccurredAt.Add(3650 * 24 * time.Hour)
 	}
 	receipt, err := e.Ingest.Preserve(ctx, raw, nil)
 	if err != nil {

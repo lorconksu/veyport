@@ -139,7 +139,7 @@ func TestSecurityPolicyDetailsAndActualReadiness(t *testing.T) {
 	s := testServer(t)
 	_, viewer, _, _ := quickSecurityUser(t, s, "readiness-viewer", model.RoleViewer)
 	_, admin, _, _ := quickSecurityUser(t, s, "readiness-admin", model.RoleAdmin)
-	s.securityTransition.Evidence = &authorization.ReceiptEvidence{TransportReady: false}
+	s.securityTransition.Evidence = &authorization.ReceiptEvidence{}
 	s.securityDestinationTester = acceptingSecurityTester{}
 	response := securityCall(s, "GET", "/api/audit-policy", viewer, nil)
 	if response.Code != 200 || strings.Contains(response.Body.String(), "credential_ref") || strings.Contains(response.Body.String(), "destination") {

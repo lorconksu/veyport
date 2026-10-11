@@ -23,6 +23,7 @@ type Evidence interface {
 	Preserve(context.Context, []byte) (string, error)
 	Anchor(context.Context, string) (PolicyAnchor, error)
 	Ready(context.Context, model.AuditPolicy) error
+	Qualify(context.Context, model.AuditPolicy) error
 }
 type PolicyAnchor struct {
 	InstallationID string
@@ -82,7 +83,7 @@ func readMarker(path string) (EnrollmentMarker, error) {
 		return m, err
 	}
 	defer root.Close()
-	f, err := root.OpenFile(filepath.Base(path), os.O_RDONLY|syscall.O_NOFOLLOW, 0)
+	f, err := root.OpenFile(filepath.Base(path), os.O_RDONLY|syscall.O_NOFOLLOW|syscall.O_NONBLOCK, 0)
 	if err != nil {
 		return m, err
 	}
@@ -150,6 +151,17 @@ func writeMarker(path string, m EnrollmentMarker) error {
 	return dir.Sync()
 }
 func (s *Service) CheckAnchor(ctx context.Context, cfg TransitionConfig) error {
+	err := s.ValidateAnchor(ctx, cfg)
+	if err != nil {
+		_ = s.Store.RequirePolicyRecovery()
+	}
+	return err
+}
+
+// ValidateAnchor checks continuity without mutating policy state. It is safe for
+// bounded read-only readiness; enforcement startup uses CheckAnchor to freeze
+// access when the same validation fails.
+func (s *Service) ValidateAnchor(ctx context.Context, cfg TransitionConfig) error {
 	state, err := s.Store.GetPolicyState()
 	if err != nil {
 		return err
@@ -162,7 +174,6 @@ func (s *Service) CheckAnchor(ctx context.Context, cfg TransitionConfig) error {
 			err = ErrRecovery
 		}
 		if err != nil {
-			_ = s.Store.RequirePolicyRecovery()
 			return ErrRecovery
 		}
 		return nil
@@ -175,22 +186,35 @@ func (s *Service) CheckAnchor(ctx context.Context, cfg TransitionConfig) error {
 	if errors.Is(err, os.ErrNotExist) && !enrolled {
 		return nil
 	}
-	fail := func() error { _ = s.Store.RequirePolicyRecovery(); return ErrRecovery }
-	if err != nil || cfg.Evidence == nil || m.InstallationID != cfg.InstallationID {
-		return fail()
+	if err != nil || cfg.Evidence == nil || m.InstallationID != cfg.InstallationID || m.Version != state.Active.Version || m.SHA256 != state.Active.SHA256 {
+		return ErrRecovery
 	}
 	anchor, err := cfg.Evidence.Anchor(ctx, m.InstallationID)
 	if err != nil || anchor.InstallationID != m.InstallationID || anchor.Version < m.Version || anchor.Version < state.Active.Version {
-		return fail()
+		return ErrRecovery
 	}
 	valid := anchor.Version == state.Active.Version && anchor.SHA256 == state.Active.SHA256
 	if state.Pending != nil && anchor.Version == state.Pending.Version && anchor.SHA256 == state.Pending.SHA256 && anchor.RequestID == state.PendingChange {
 		valid = true
 	}
 	if !valid {
-		return fail()
+		return ErrRecovery
 	}
 	return nil
+}
+
+// EnrollmentMarkerMatches reports actual outside-database marker evidence.
+// Absence before initial enrollment is false and is not an enforcement failure;
+// governance_enrolled in the policy response distinguishes that applicability.
+func EnrollmentMarkerMatches(cfg TransitionConfig, state model.PolicyState) bool {
+	m, err := readMarker(cfg.EnrollmentPath)
+	if err != nil || m.InstallationID != cfg.InstallationID {
+		return false
+	}
+	if m.Version == state.Active.Version && m.SHA256 == state.Active.SHA256 {
+		return true
+	}
+	return state.Pending != nil && m.Version == state.Pending.Version && m.SHA256 == state.Pending.SHA256
 }
 func (s *Service) Apply(ctx context.Context, id, user, session, proof string, cfg TransitionConfig) (model.SecurityChange, error) {
 	c, err := s.Store.GetSecurityChange(id)
@@ -241,6 +265,12 @@ func (s *Service) Apply(ctx context.Context, id, user, session, proof string, cf
 	if err != nil {
 		return c, err
 	}
+	// Resolve immutable secret references and validate prepared settings before
+	// an intent is archived or a pending transition is installed. Prepared values
+	// are transient; only the exact approved references are retained as evidence.
+	if _, err = prepareTransitionPayload(p, cfg); err != nil {
+		return c, err
+	}
 	candidate := state.Active.Policy
 	if p.Policy != nil {
 		candidate = *p.Policy
@@ -250,6 +280,9 @@ func (s *Service) Apply(ctx context.Context, id, user, session, proof string, cf
 	}
 	if candidate.Profile == "enhanced" {
 		if err = cfg.Evidence.Ready(ctx, candidate); err != nil {
+			return c, err
+		}
+		if err = cfg.Evidence.Qualify(ctx, candidate); err != nil {
 			return c, err
 		}
 	}
@@ -302,24 +335,9 @@ func (s *Service) ReconcileChange(ctx context.Context, id string, cfg Transition
 	if err != nil {
 		return c, err
 	}
-	if p.Recovery != nil && p.Recovery.Operation == "password-reset" {
-		if cfg.ResolveSecret == nil {
-			return c, ErrNotReady
-		}
-		kind, value, err := cfg.ResolveSecret(p.Recovery.SecretRef)
-		if err != nil || kind != "password" {
-			return c, ErrNotReady
-		}
-		p.Recovery.PreparedPasswordHash = value
-	}
-	if p.LDAP != nil {
-		if cfg.PrepareChange == nil {
-			return c, ErrNotReady
-		}
-		p, err = cfg.PrepareChange(p)
-		if err != nil {
-			return c, err
-		}
+	p, err = prepareTransitionPayload(p, cfg)
+	if err != nil {
+		return c, err
 	}
 	// Never re-run already activated role, identity or recovery side effects.
 	if state.Active.Version == c.ExpectedVersion {
@@ -356,6 +374,26 @@ func (s *Service) ReconcileChange(ctx context.Context, id string, cfg Transition
 		return c, err
 	}
 	return s.Store.GetSecurityChange(id)
+}
+
+func prepareTransitionPayload(p model.SecurityChangePayload, cfg TransitionConfig) (model.SecurityChangePayload, error) {
+	if p.Recovery != nil && p.Recovery.Operation == "password-reset" {
+		if cfg.ResolveSecret == nil {
+			return p, ErrNotReady
+		}
+		kind, value, err := cfg.ResolveSecret(p.Recovery.SecretRef)
+		if err != nil || kind != "password" {
+			return p, ErrNotReady
+		}
+		p.Recovery.PreparedPasswordHash = value
+	}
+	if p.LDAP != nil {
+		if cfg.PrepareChange == nil {
+			return p, ErrNotReady
+		}
+		return cfg.PrepareChange(p)
+	}
+	return p, nil
 }
 
 func (s *Service) checkPendingRecovery(ctx context.Context, c model.SecurityChange, state model.PolicyState, old model.PolicyVersion, cfg TransitionConfig) error {

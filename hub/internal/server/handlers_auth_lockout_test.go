@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/pquerna/otp/totp"
 	"github.com/wyiu/veyport/hub/internal/auth"
 	"github.com/wyiu/veyport/hub/internal/lockout"
 	"github.com/wyiu/veyport/hub/internal/model"
@@ -261,7 +262,7 @@ func TestLockout_CompletedSignInResetsCounter(t *testing.T) {
 
 	totpToken := primaryLoginTOTPToken(t, s, user.Username, lockoutTestPassword)
 
-	code, err := auth.GenerateValidCode(secret)
+	code, err := totp.GenerateCode(secret, s.now())
 	if err != nil {
 		t.Fatalf("generate totp code: %v", err)
 	}
@@ -352,7 +353,7 @@ func TestLockout_TOTPStageLocksAndRefusesValidCode(t *testing.T) {
 		t.Fatalf("expected count 3 from code-stage failures, got %d", locked.FailedLoginCount)
 	}
 
-	code, err := auth.GenerateValidCode(secret)
+	code, err := totp.GenerateCode(secret, s.now())
 	if err != nil {
 		t.Fatalf("generate totp code: %v", err)
 	}

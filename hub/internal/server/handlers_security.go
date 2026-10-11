@@ -61,7 +61,11 @@ func (s *Server) securityReadAllowed(user string) bool {
 		return true
 	}
 	state, err := s.store.GetPolicyState()
-	return err == nil && state.Active.Policy.Profile == "standard" && e.Can("security.bootstrap")
+	if err != nil || state.Active.Policy.Profile != "standard" || !e.Can("security.bootstrap") {
+		return false
+	}
+	enrolled, err := s.store.GovernanceEnrolled()
+	return err == nil && !enrolled
 }
 func (s *Server) handleAuditPolicy(w http.ResponseWriter, r *http.Request) {
 	e, err := s.securityService().Effective(UserIDFromContext(r.Context()))
@@ -74,17 +78,30 @@ func (s *Server) handleAuditPolicy(w http.ResponseWriter, r *http.Request) {
 		securityError(w, err)
 		return
 	}
-	if !s.securityReadAllowed(e.UserID) {
-		respondJSON(w, http.StatusOK, map[string]any{"version": state.Active.Version, "profile": state.Active.Policy.Profile, "state": state.State, "capabilities": e.Capabilities})
+	enrolled, err := s.store.GovernanceEnrolled()
+	if err != nil {
+		securityError(w, err)
 		return
 	}
-	ready := false
+	if !s.securityReadAllowed(e.UserID) {
+		respondJSON(w, http.StatusOK, map[string]any{"version": state.Active.Version, "profile": state.Active.Policy.Profile, "state": state.State, "capabilities": e.Capabilities, "governance_enrolled": enrolled})
+		return
+	}
+	ready, governanceReady := false, false
 	if s.securityTransition.Evidence != nil {
 		ctx, cancel := context.WithTimeout(r.Context(), 2*time.Second)
-		ready = s.securityTransition.Evidence.Ready(ctx, state.Active.Policy) == nil
+		governance := make(chan bool, 1)
+		go func() {
+			checker, ok := s.securityTransition.Evidence.(interface{ GovernanceReady(context.Context) error })
+			governance <- ok && checker.GovernanceReady(ctx) == nil && s.securityService().ValidateAnchor(ctx, s.securityTransition) == nil
+		}()
+		if state.Active.Policy.Profile == "enhanced" {
+			ready = s.securityTransition.Evidence.Ready(ctx, state.Active.Policy) == nil
+		}
+		governanceReady = <-governance
 		cancel()
 	}
-	respondJSON(w, http.StatusOK, map[string]any{"policy": state.Active, "state": state.State, "pending": state.Pending, "capabilities": e.Capabilities, "credential_set": state.Active.Policy.CredentialRef != "", "readiness": map[string]bool{"governance": true, "archive_and_transport": ready, "enrollment_marker": s.securityTransition.EnrollmentPath != ""}})
+	respondJSON(w, http.StatusOK, map[string]any{"policy": state.Active, "state": state.State, "pending": state.Pending, "capabilities": e.Capabilities, "governance_enrolled": enrolled, "credential_set": state.Active.Policy.CredentialRef != "", "readiness": map[string]bool{"governance": governanceReady, "archive_and_transport": ready, "enrollment_marker": authorization.EnrollmentMarkerMatches(s.securityTransition, state)}})
 }
 func (s *Server) handleSecurityPreview(w http.ResponseWriter, r *http.Request) {
 	if !s.securityReadAllowed(UserIDFromContext(r.Context())) {
@@ -157,7 +174,7 @@ func (s *Server) handleSecurityStepup(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	secret, err := s.decryptTOTPSecret(*user.TOTPSecret)
-	if err != nil || !auth.ValidateTOTPWithReplay(s.totpCache, userID, secret, req.Code) {
+	if err != nil || !auth.ValidateTOTPWithReplayAt(s.totpCache, userID, secret, req.Code, s.now()) {
 		securityError(w, store.ErrStepup)
 		return
 	}
@@ -277,7 +294,14 @@ func (s *Server) testAuthority(user string) bool {
 		return false
 	}
 	state, err := s.store.GetPolicyState()
-	return e.Can("security.test") || err == nil && state.Active.Policy.Profile == "standard" && e.Can("security.bootstrap")
+	if e.Can("security.test") {
+		return true
+	}
+	if err != nil || state.Active.Policy.Profile != "standard" || !e.Can("security.bootstrap") {
+		return false
+	}
+	enrolled, err := s.store.GovernanceEnrolled()
+	return err == nil && !enrolled
 }
 func (s *Server) handleSecuritySecret(w http.ResponseWriter, r *http.Request) {
 	user := UserIDFromContext(r.Context())
@@ -366,11 +390,17 @@ func (s *Server) populateAuthority(user *model.User) {
 }
 
 func (s *Server) resolveSecuritySecret(ref string) (string, string, error) {
-	b, err := s.store.SecuritySecret(ref)
+	return ResolveSecuritySecret(s.store, s.storageKey, ref)
+}
+
+// ResolveSecuritySecret exposes immutable encrypted credential references only
+// to the backend runtime. There is no HTTP counterpart that reads their values.
+func ResolveSecuritySecret(st *store.Store, storageKey, ref string) (string, string, error) {
+	b, err := st.SecuritySecret(ref)
 	if err != nil {
 		return "", "", err
 	}
-	raw, err := auth.Decrypt(b, auth.DeriveKey(s.storageKey))
+	raw, err := auth.Decrypt(b, auth.DeriveKey(storageKey))
 	if err != nil {
 		return "", "", err
 	}
