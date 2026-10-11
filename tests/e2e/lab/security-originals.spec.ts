@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto'
 import { expect, test } from '@playwright/test'
-import { confirmFresh, HUB, login, privateFixture, trustedContext } from './private-fixture'
+import { confirmFresh, freshCode, HUB, login, privateFill, privateFixture, trustedContext } from './private-fixture'
 
 test('actual historical original access requires an approved reader role, exact purpose/descriptor MFA and one-use download', async () => {
   test.skip(process.env.VEYPORT_LAB_PHASE !== 'originals', 'Explicit actual post-execution lab phase required')
@@ -50,9 +50,13 @@ test('actual historical original access requires an approved reader role, exact 
     await expect(officer.getByRole('dialog')).toContainText('Investigate isolated synthetic historical execution')
     let consumedURL = ''
     officer.on('request', request => { if (new URL(request.url()).pathname.startsWith('/api/audit-originals/')) consumedURL = request.url() })
-    const received = officer.waitForEvent('download')
-    await confirmFresh(officer, 'officer')
-    const download = await received
+    // Preparation may wait for TOTP/rate-limit spacing. Start the bounded
+    // download listener afterward, before the action that consumes fresh MFA.
+    await privateFill(officer.getByLabel('Fresh MFA code'), freshCode('officer'))
+    const [download] = await Promise.all([
+      officer.waitForEvent('download', { timeout: 35_000 }),
+      officer.getByRole('button', { name: 'Confirm with fresh MFA' }).click(),
+    ])
     const stream = await download.createReadStream()
     if (!stream) throw new Error('Original response stream unavailable')
     const hash = createHash('sha256')
