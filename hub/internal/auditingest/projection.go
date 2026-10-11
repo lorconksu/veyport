@@ -119,6 +119,12 @@ func Project(raw []byte, ref ExportReference) (Projection, error) {
 		p.RequestID = e.Details.RequestID
 		p.ExitCode = e.Details.ExitCode
 		switch e.Details.State {
+		case "synthetic-readiness-no-process":
+			if e.EventType == auditrecord.ExecutionLifecycle && len(e.Command) == 0 && len(e.Attachments) == 0 {
+				p.ProcessState = "synthetic_readiness_not_applicable"
+				p.UID, p.GID = nil, nil
+				p.RunAs = ""
+			}
 		case "prepared", "admitted", "started", "running", "completed", "failed", "cancelled", "denied", "interrupted", "unconfirmed", "unknown", "not_started", "exited", "refused", "uncertain":
 			p.ProcessState = e.Details.State
 		}
