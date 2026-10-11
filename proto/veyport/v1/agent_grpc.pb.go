@@ -20,6 +20,7 @@ const _ = grpc.SupportPackageIsVersion9
 
 const (
 	AgentService_Connect_FullMethodName = "/veyport.v1.AgentService/Connect"
+	AgentService_Execute_FullMethodName = "/veyport.v1.AgentService/Execute"
 )
 
 // AgentServiceClient is the client API for AgentService service.
@@ -28,6 +29,8 @@ const (
 type AgentServiceClient interface {
 	// Bidirectional stream — agent connects, Hub sends commands, agent responds
 	Connect(ctx context.Context, opts ...grpc.CallOption) (grpc.BidiStreamingClient[AgentMessage, HubMessage], error)
+	// Dedicated enrolled-node mTLS connection; never the enrollment control path.
+	Execute(ctx context.Context, opts ...grpc.CallOption) (grpc.BidiStreamingClient[ExecutionAgentMessage, ExecutionHubMessage], error)
 }
 
 type agentServiceClient struct {
@@ -51,12 +54,27 @@ func (c *agentServiceClient) Connect(ctx context.Context, opts ...grpc.CallOptio
 // This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
 type AgentService_ConnectClient = grpc.BidiStreamingClient[AgentMessage, HubMessage]
 
+func (c *agentServiceClient) Execute(ctx context.Context, opts ...grpc.CallOption) (grpc.BidiStreamingClient[ExecutionAgentMessage, ExecutionHubMessage], error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	stream, err := c.cc.NewStream(ctx, &AgentService_ServiceDesc.Streams[1], AgentService_Execute_FullMethodName, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	x := &grpc.GenericClientStream[ExecutionAgentMessage, ExecutionHubMessage]{ClientStream: stream}
+	return x, nil
+}
+
+// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
+type AgentService_ExecuteClient = grpc.BidiStreamingClient[ExecutionAgentMessage, ExecutionHubMessage]
+
 // AgentServiceServer is the server API for AgentService service.
 // All implementations must embed UnimplementedAgentServiceServer
 // for forward compatibility.
 type AgentServiceServer interface {
 	// Bidirectional stream — agent connects, Hub sends commands, agent responds
 	Connect(grpc.BidiStreamingServer[AgentMessage, HubMessage]) error
+	// Dedicated enrolled-node mTLS connection; never the enrollment control path.
+	Execute(grpc.BidiStreamingServer[ExecutionAgentMessage, ExecutionHubMessage]) error
 	mustEmbedUnimplementedAgentServiceServer()
 }
 
@@ -69,6 +87,9 @@ type UnimplementedAgentServiceServer struct{}
 
 func (UnimplementedAgentServiceServer) Connect(grpc.BidiStreamingServer[AgentMessage, HubMessage]) error {
 	return status.Error(codes.Unimplemented, "method Connect not implemented")
+}
+func (UnimplementedAgentServiceServer) Execute(grpc.BidiStreamingServer[ExecutionAgentMessage, ExecutionHubMessage]) error {
+	return status.Error(codes.Unimplemented, "method Execute not implemented")
 }
 func (UnimplementedAgentServiceServer) mustEmbedUnimplementedAgentServiceServer() {}
 func (UnimplementedAgentServiceServer) testEmbeddedByValue()                      {}
@@ -98,6 +119,13 @@ func _AgentService_Connect_Handler(srv interface{}, stream grpc.ServerStream) er
 // This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
 type AgentService_ConnectServer = grpc.BidiStreamingServer[AgentMessage, HubMessage]
 
+func _AgentService_Execute_Handler(srv interface{}, stream grpc.ServerStream) error {
+	return srv.(AgentServiceServer).Execute(&grpc.GenericServerStream[ExecutionAgentMessage, ExecutionHubMessage]{ServerStream: stream})
+}
+
+// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
+type AgentService_ExecuteServer = grpc.BidiStreamingServer[ExecutionAgentMessage, ExecutionHubMessage]
+
 // AgentService_ServiceDesc is the grpc.ServiceDesc for AgentService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -109,6 +137,12 @@ var AgentService_ServiceDesc = grpc.ServiceDesc{
 		{
 			StreamName:    "Connect",
 			Handler:       _AgentService_Connect_Handler,
+			ServerStreams: true,
+			ClientStreams: true,
+		},
+		{
+			StreamName:    "Execute",
+			Handler:       _AgentService_Execute_Handler,
 			ServerStreams: true,
 			ClientStreams: true,
 		},

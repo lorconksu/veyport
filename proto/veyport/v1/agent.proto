@@ -5,6 +5,8 @@ option go_package = "github.com/wyiu/veyport/proto/veyport/v1";
 service AgentService {
   // Bidirectional stream — agent connects, Hub sends commands, agent responds
   rpc Connect(stream AgentMessage) returns (stream HubMessage);
+  // Dedicated enrolled-node mTLS connection; never the enrollment control path.
+  rpc Execute(stream ExecutionAgentMessage) returns (stream ExecutionHubMessage);
 }
 
 // Messages from Agent → Hub
@@ -25,6 +27,9 @@ message AgentMessage {
     TerminalExit terminal_exit = 20;
     ReEnrollRequest reenroll_request = 21;
     ReEnrollProof reenroll_proof = 22;
+    ExecutionCapabilities execution_capabilities = 30;
+    ExecutionPrepared execution_prepared = 31;
+    ExecutionStatus execution_status = 32;
   }
 }
 
@@ -48,6 +53,10 @@ message HubMessage {
     TerminalClose terminal_close = 21;
     ReEnrollApproved reenroll_approved = 22;
     ReEnrollDenied reenroll_denied = 23;
+    ExecutionPrepare execution_prepare = 30;
+    ExecutionAttachRequest execution_attach = 31;
+    ExecutionCancel execution_cancel = 32;
+    ExecutionStatusRequest execution_status_request = 33;
   }
 }
 
@@ -72,6 +81,7 @@ message RegisterAgent {
   bytes node_pubkey = 7;
   string enroll_fingerprint = 8;
   bytes node_transport_pubkey = 9;
+  ExecutionCapabilities execution_capabilities = 10;
 }
 
 message RegisterAck {
@@ -251,4 +261,131 @@ message ReEnrollProof {
 
 message ReEnrollDenied {
   string reason = 1;
+}
+
+// v1 bounds: 32KiB command, 64KiB data frame, 2MiB application buffers,
+// 8 shared terminal/exec slots per node, 60s preparation, 60min runtime,
+// 5s TERM grace, 60s blocked-delivery deadline (quiet commands have no timeout).
+message ExecutionCapabilities {
+  uint32 protocol_version = 1;
+  bool standard_exec = 2;
+  bool protected_script = 3;
+  string boot_id = 4;
+}
+message ExecutionLimits {
+  uint32 max_frame_bytes = 1;
+  uint32 max_buffer_bytes = 2;
+  uint32 runtime_seconds = 3;
+  uint32 term_grace_seconds = 4;
+  uint32 blocked_consumer_seconds = 5;
+}
+message ExecutionBinding {
+  string execution_id = 1;
+  string node_id = 2;
+  string preparation_id = 3;
+  string boot_id = 4;
+  int64 expires_unix_milli = 5;
+}
+message ExecutionIdentity {
+  string username = 1;
+  uint32 uid = 2;
+  uint32 gid = 3;
+  repeated uint32 groups = 4;
+  bytes groups_sha256 = 5;
+  string home = 6;
+  string shell = 7;
+  string cwd = 8;
+  bytes identity_sha256 = 9;
+}
+message ExecutionPrepare {
+  string execution_id = 1;
+  string node_id = 2;
+  string run_as_user = 3;
+  string command = 4;
+  string cwd = 5;
+  ExecutionLimits limits = 6;
+  // Reserved for enhanced admission; unsupported until capability is advertised.
+  bool enhanced = 7;
+  bytes script_sha256 = 8;
+  uint64 script_length = 9;
+}
+message ExecutionPrepared {
+  string execution_id = 1;
+  ExecutionBinding binding = 2;
+  ExecutionIdentity identity = 3;
+  bytes command_sha256 = 4;
+  ExecutionLimits limits = 5;
+  string error = 6;
+}
+message ExecutionAttachRequest {
+  ExecutionBinding binding = 1;
+  bytes ticket = 2;
+}
+message ExecutionCancel {
+  ExecutionBinding binding = 1;
+  string reason = 2;
+}
+message ExecutionStatusRequest {
+  string execution_id = 1;
+}
+message ExecutionStatus {
+  string execution_id = 1;
+  ExecutionBinding binding = 2;
+  string state = 3;
+  string reason = 4;
+  ExecutionResult result = 5;
+}
+message ExecutionAgentMessage {
+  oneof payload {
+    ExecutionAttachRequest attach = 1;
+    ExecutionStarted started = 2;
+    ExecutionStartFailed start_failed = 3;
+    ExecutionData stdout = 4;
+    ExecutionData stderr = 5;
+    ExecutionOutputEOF output_eof = 6;
+    ExecutionResult result = 7;
+    ExecutionStatus status = 8;
+  }
+}
+message ExecutionHubMessage {
+  oneof payload {
+    ExecutionAttached attached = 1;
+    ExecutionStart start = 2;
+    ExecutionData input = 3;
+    ExecutionInputEOF input_eof = 4;
+    ExecutionScriptChunk script_chunk = 5;
+    ExecutionScriptEOF script_eof = 6;
+    ExecutionCancel cancel = 7;
+  }
+}
+message ExecutionAttached { ExecutionBinding binding = 1; }
+message ExecutionStart {
+  ExecutionBinding binding = 1;
+  bytes command_sha256 = 2;
+  bytes identity_sha256 = 3;
+  ExecutionLimits limits = 4;
+  string policy_version = 5;
+  bytes admission_receipt = 6;
+}
+message ExecutionStarted { ExecutionBinding binding = 1; }
+message ExecutionStartFailed {
+  ExecutionBinding binding = 1;
+  string state = 2;
+  string reason = 3;
+}
+// Sequences begin at 0 independently for each stdin/stdout/stderr stream.
+message ExecutionData { uint64 sequence = 1; bytes data = 2; }
+message ExecutionInputEOF { uint64 sequence = 1; }
+enum ExecutionOutput { EXECUTION_OUTPUT_UNSPECIFIED = 0; EXECUTION_OUTPUT_STDOUT = 1; EXECUTION_OUTPUT_STDERR = 2; }
+message ExecutionOutputEOF { ExecutionOutput output = 1; uint64 sequence = 2; }
+message ExecutionScriptChunk { uint64 offset = 1; bytes data = 2; }
+message ExecutionScriptEOF { uint64 length = 1; bytes sha256 = 2; }
+message ExecutionResult {
+  ExecutionBinding binding = 1;
+  string state = 2;
+  int32 exit_code = 3;
+  string signal = 4;
+  string reason = 5;
+  bool stdout_complete = 6;
+  bool stderr_complete = 7;
 }
