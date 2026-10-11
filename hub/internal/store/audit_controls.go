@@ -1,6 +1,8 @@
 package store
 
 import (
+	"context"
+	"database/sql"
 	"fmt"
 	"strconv"
 	"time"
@@ -54,7 +56,26 @@ func (s *Store) GetAuditSettings() model.AuditSettings {
 }
 
 func (s *Store) UpdateAuditSettings(settings model.AuditSettings) error {
-	values := map[string]string{
+	values := AuditSettingsConfig(settings)
+	return s.withImmediateTx(func(ctx context.Context, conn *sql.Conn) error {
+		var allowed bool
+		if err := conn.QueryRowContext(ctx, "SELECT state='standard' AND pending_version IS NULL AND NOT EXISTS(SELECT 1 FROM audit_policy_versions WHERE json_extract(payload,'$.profile')='enhanced') FROM audit_policy_state WHERE id=1").Scan(&allowed); err != nil {
+			return err
+		}
+		if !allowed {
+			return ErrProtectedChange
+		}
+		for key, value := range values {
+			if _, err := conn.ExecContext(ctx, "INSERT INTO _config(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value", key, value); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+}
+
+func AuditSettingsConfig(settings model.AuditSettings) map[string]string {
+	return map[string]string{
 		configAuditRetentionDays:                strconv.Itoa(settings.RetentionDays),
 		configAuditReviewReminderDays:           strconv.Itoa(settings.ReviewReminderDays),
 		configAuthPasswordHistoryCount:          strconv.Itoa(settings.PasswordHistoryCount),
@@ -63,12 +84,6 @@ func (s *Store) UpdateAuditSettings(settings model.AuditSettings) error {
 		configAuditRegistrationFailureThreshold: strconv.Itoa(settings.Thresholds.RegistrationFailuresPerHour),
 		configAuditPrivilegedActionThreshold:    strconv.Itoa(settings.Thresholds.PrivilegedActionsPerHour),
 	}
-	for key, value := range values {
-		if err := s.SetConfig(key, value); err != nil {
-			return err
-		}
-	}
-	return nil
 }
 
 func (s *Store) noteAuditFailure(err error) {

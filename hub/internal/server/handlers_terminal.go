@@ -11,6 +11,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/wyiu/veyport/hub/internal/account"
+	"github.com/wyiu/veyport/hub/internal/authorization"
 	"github.com/wyiu/veyport/hub/internal/grpcserver"
 	"github.com/wyiu/veyport/hub/internal/lockout"
 	"github.com/wyiu/veyport/hub/internal/model"
@@ -355,7 +356,11 @@ func AuthorizeTerminalExecution(st *store.Store, userID, serverID string) (strin
 		return "", ErrTerminalNotAuthorized
 	}
 
-	if user.Role == model.RoleAdmin {
+	effective, err := authorization.New(st).Effective(user.ID)
+	if err != nil {
+		return "", ErrTerminalNotAuthorized
+	}
+	if effective.HasRole(model.RoleAdmin) {
 		return ldapExecutionUsername(user), nil
 	}
 
@@ -382,6 +387,10 @@ func AuthorizeTerminalExecution(st *store.Store, userID, serverID string) (strin
 // AuthorizeTerminalExecution: it maps each authorization outcome to the status
 // code and message the web terminal expects.
 func (s *Server) resolveTerminalExecutionUser(w http.ResponseWriter, r *http.Request, serverID string) (string, bool) {
+	if err := authorization.New(s.store).GuardInteractive(UserIDFromContext(r.Context()), serverID); err != nil {
+		respondError(w, http.StatusForbidden, err.Error())
+		return "", false
+	}
 	executionUser, err := AuthorizeTerminalExecution(s.store, UserIDFromContext(r.Context()), serverID)
 	if err != nil {
 		respondError(w, terminalAuthzStatus(err), terminalAuthzMessage(err))
@@ -430,6 +439,12 @@ func ldapExecutionUsername(user *model.User) string {
 }
 
 func (s *Server) requireTerminalSession(w http.ResponseWriter, r *http.Request, serverID, sessionID string) (grpcserver.TerminalSessionInfo, bool) {
+	if r.Method != "DELETE" {
+		if err := s.securityService().GuardInteractive(UserIDFromContext(r.Context()), serverID); err != nil {
+			respondError(w, http.StatusForbidden, err.Error())
+			return grpcserver.TerminalSessionInfo{}, false
+		}
+	}
 	if s.terminalSessions == nil {
 		respondError(w, http.StatusInternalServerError, errTerminalServiceUnavailable)
 		return grpcserver.TerminalSessionInfo{}, false

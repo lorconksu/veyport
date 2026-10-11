@@ -10,6 +10,7 @@ import (
 	"golang.org/x/crypto/ssh"
 
 	"github.com/wyiu/veyport/hub/internal/account"
+	"github.com/wyiu/veyport/hub/internal/authorization"
 	"github.com/wyiu/veyport/hub/internal/lockout"
 	"github.com/wyiu/veyport/hub/internal/model"
 	"github.com/wyiu/veyport/hub/internal/server"
@@ -234,6 +235,10 @@ func (s *Server) runShell(sshConn *ssh.ServerConn, ch ssh.Channel, cols, rows ui
 	// The single shared authorization decision (research R5). An authorized
 	// LOCAL admin legitimately yields an EMPTY execution user, which means
 	// "the agent's default RunAsUser" — success, not failure.
+	if err := authorization.New(s.cfg.Store).GuardInteractive(user.ID, srv.ID); err != nil {
+		s.refuseShell(ch, user.ID, srv.ID, ip, "enhanced policy requires protected command execution", err.Error())
+		return
+	}
 	executionUser, err := server.AuthorizeTerminalExecution(s.cfg.Store, user.ID, srv.ID)
 	if err != nil {
 		s.refuseShell(ch, user.ID, srv.ID, ip,

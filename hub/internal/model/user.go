@@ -41,6 +41,10 @@ type User struct {
 	TOTPSecret            *string      `json:"-"`
 	TOTPEnabled           bool         `json:"totp_enabled"`
 	TokenGeneration       int          `json:"-"`
+	SecurityRevision      int          `json:"-"`
+	Roles                 []Role       `json:"roles"`
+	Capabilities          []string     `json:"capabilities"`
+	PersonID              string       `json:"person_id,omitempty"`
 	Avatar                *string      `json:"avatar"`
 	MustChangePassword    bool         `json:"must_change_password,omitempty"`
 	TempPasswordExpiresAt *time.Time   `json:"temp_password_expires_at,omitempty"`

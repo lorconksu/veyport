@@ -40,6 +40,20 @@ func (s *Server) routes() http.Handler {
 	mux.Handle("PUT /api/auth/avatar", loggingMiddleware(s.authMiddleware(auth.TokenTypeAccess, s.interactiveOnly(http.HandlerFunc(s.handleUpdateAvatar)))))
 	mux.Handle("POST /api/auth/totp/disable", loggingMiddleware(s.authMiddleware(auth.TokenTypeAccess, s.interactiveOnly(s.adminOnly(http.HandlerFunc(s.handleTOTPDisable))))))
 
+	// Independent security governance. All mutations require an interactive session.
+	mux.Handle("GET /api/audit-policy", loggingMiddleware(s.authMiddleware(auth.TokenTypeAccess, http.HandlerFunc(s.handleAuditPolicy))))
+	mux.Handle("POST /api/audit-policy/test", loggingMiddleware(s.authMiddleware(auth.TokenTypeAccess, s.interactiveOnly(http.HandlerFunc(s.handleAuditPolicyTest)))))
+	mux.Handle("POST /api/security/changes/preview", loggingMiddleware(s.authMiddleware(auth.TokenTypeAccess, s.interactiveOnly(http.HandlerFunc(s.handleSecurityPreview)))))
+	mux.Handle("POST /api/security/step-up", loggingMiddleware(totpLimiter.middleware(s.authMiddleware(auth.TokenTypeAccess, s.interactiveOnly(http.HandlerFunc(s.handleSecurityStepup))))))
+	mux.Handle("POST /api/security/secrets", loggingMiddleware(s.authMiddleware(auth.TokenTypeAccess, s.interactiveOnly(http.HandlerFunc(s.handleSecuritySecret)))))
+	mux.Handle("POST /api/security/changes", loggingMiddleware(s.authMiddleware(auth.TokenTypeAccess, s.interactiveOnly(http.HandlerFunc(s.handleSecurityRequest)))))
+	mux.Handle("GET /api/security/changes", loggingMiddleware(s.authMiddleware(auth.TokenTypeAccess, http.HandlerFunc(s.handleSecurityList))))
+	mux.Handle("GET /api/security/changes/{id}", loggingMiddleware(s.authMiddleware(auth.TokenTypeAccess, http.HandlerFunc(s.handleSecurityGet))))
+	mux.Handle("POST /api/security/changes/{id}/approve", loggingMiddleware(s.authMiddleware(auth.TokenTypeAccess, s.interactiveOnly(http.HandlerFunc(s.handleSecurityApprove)))))
+	mux.Handle("POST /api/security/changes/{id}/apply", loggingMiddleware(s.authMiddleware(auth.TokenTypeAccess, s.interactiveOnly(http.HandlerFunc(s.handleSecurityApply)))))
+
+	mux.Handle("POST /api/security/changes/{id}/reconcile", loggingMiddleware(s.authMiddleware(auth.TokenTypeAccess, s.interactiveOnly(http.HandlerFunc(s.handleSecurityReconcile)))))
+
 	// Self-service session management (feature 009): a person managing their
 	// own sessions, so an API token — which is not a session — is refused.
 	mux.Handle("GET /api/auth/sessions", loggingMiddleware(s.authMiddleware(auth.TokenTypeAccess, s.interactiveOnly(http.HandlerFunc(s.handleMySessions)))))

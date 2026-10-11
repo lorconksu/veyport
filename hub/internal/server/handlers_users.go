@@ -32,6 +32,10 @@ func (s *Server) handleListUsers(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleUpdateUserRole(w http.ResponseWriter, r *http.Request) {
 	targetID := r.PathValue("id")
+	if err := s.securityService().GuardMutation(targetID); err != nil {
+		securityError(w, err)
+		return
+	}
 	if targetID == "" {
 		respondError(w, http.StatusBadRequest, errMissingUserID)
 		return
@@ -105,6 +109,10 @@ func (s *Server) handleUpdateUserRole(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleDeleteUser(w http.ResponseWriter, r *http.Request) {
 	targetID := r.PathValue("id")
+	if err := s.securityService().GuardMutation(targetID); err != nil {
+		securityError(w, err)
+		return
+	}
 	if targetID == "" {
 		respondError(w, http.StatusBadRequest, errMissingUserID)
 		return
@@ -381,6 +389,10 @@ func (s *Server) endDisabledUserSessions(r *http.Request, adminID, targetID stri
 // it. Enabling one's own account is allowed: it can only widen access, and an
 // administrator whose account was disabled by a peer has no session to protect.
 func (s *Server) enableAccount(w http.ResponseWriter, r *http.Request, adminID, targetID string) {
+	if err := s.securityService().GuardMutation(targetID); err != nil {
+		securityError(w, err)
+		return
+	}
 	wasDisabled, err := s.store.EnableUser(targetID, s.now())
 	switch {
 	case userNotFound(err):
@@ -406,6 +418,10 @@ func (s *Server) enableAccount(w http.ResponseWriter, r *http.Request, adminID, 
 // action cannot be used to postpone dormancy.
 func (s *Server) handleUnlockUser(w http.ResponseWriter, r *http.Request) {
 	targetID := r.PathValue("id")
+	if err := s.securityService().GuardMutation(targetID); err != nil {
+		securityError(w, err)
+		return
+	}
 	if targetID == "" {
 		respondError(w, http.StatusBadRequest, errMissingUserID)
 		return
@@ -436,6 +452,10 @@ func (s *Server) handleUnlockUser(w http.ResponseWriter, r *http.Request) {
 // administrator — including when a concurrent demotion lands first.
 func (s *Server) handleSetDormancyExempt(w http.ResponseWriter, r *http.Request) {
 	targetID := r.PathValue("id")
+	if err := s.securityService().GuardMutation(targetID); err != nil {
+		securityError(w, err)
+		return
+	}
 	if targetID == "" {
 		respondError(w, http.StatusBadRequest, errMissingUserID)
 		return

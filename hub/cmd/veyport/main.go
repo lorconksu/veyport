@@ -18,6 +18,7 @@ import (
 	"golang.org/x/crypto/ssh"
 
 	hub "github.com/wyiu/veyport/hub"
+	"github.com/wyiu/veyport/hub/internal/authorization"
 	"github.com/wyiu/veyport/hub/internal/ca"
 	"github.com/wyiu/veyport/hub/internal/connmgr"
 	"github.com/wyiu/veyport/hub/internal/grpcserver"
@@ -54,6 +55,7 @@ func runServer() error {
 	grpcExternalAddr := flag.String("grpc-external-addr", "", "external gRPC address for agent install commands (e.g. hub.example.com:9443)")
 	agentBinDir := flag.String("agent-bin-dir", "./bin", "directory containing agent binaries")
 	sshAddr := flag.String("ssh-addr", sshconfig.DefaultAddr, "SSH gateway listen address")
+	securityStateDir := flag.String("security-state-dir", "", "private persistent security state directory (default beside database)")
 	flag.Parse()
 
 	// Detect legacy aerodocs.db when the configured veyport.db doesn't exist on the
@@ -68,6 +70,13 @@ func runServer() error {
 		return fmt.Errorf("open database: %w", err)
 	}
 	defer st.Close()
+	if *securityStateDir == "" {
+		*securityStateDir = filepath.Join(filepath.Dir(*dbPath), ".veyport-security")
+	}
+	installationID, err := authorization.InitInstallation(*securityStateDir)
+	if err != nil {
+		return fmt.Errorf("initialize durable security state: %w", err)
+	}
 
 	// Effective SSH gateway configuration; consumed by both the REST handlers
 	// (certificate issuance) and the gateway listener below.
@@ -108,24 +117,25 @@ func runServer() error {
 	executionSessions := grpcserver.NewExecutionSessions(terminalSessions, cm)
 
 	srv := server.New(server.Config{
-		Addr:             *addr,
-		Store:            st,
-		JWTSecret:        jwtSecret,
-		StorageKey:       storageKey,
-		IsDev:            *dev,
-		FrontendFS:       &hub.FrontendFS,
-		AgentBinDir:      *agentBinDir,
-		GRPCAddr:         *grpcAddr,
-		GRPCExternalAddr: *grpcExternalAddr,
-		GRPCCACertSHA256: grpcCAPin,
-		ConnMgr:          cm,
-		Pending:          pending,
-		LogSessions:      logSessions,
-		TerminalSessions: terminalSessions,
-		Notifier:         notifier,
-		UserCA:           userCA,
-		SSHHostKey:       hostKey,
-		SSHConfig:        sshCfg,
+		SecurityTransition: authorization.TransitionConfig{InstallationID: installationID, EnrollmentPath: filepath.Join(*securityStateDir, "enhanced-enrollment.json")},
+		Addr:               *addr,
+		Store:              st,
+		JWTSecret:          jwtSecret,
+		StorageKey:         storageKey,
+		IsDev:              *dev,
+		FrontendFS:         &hub.FrontendFS,
+		AgentBinDir:        *agentBinDir,
+		GRPCAddr:           *grpcAddr,
+		GRPCExternalAddr:   *grpcExternalAddr,
+		GRPCCACertSHA256:   grpcCAPin,
+		ConnMgr:            cm,
+		Pending:            pending,
+		LogSessions:        logSessions,
+		TerminalSessions:   terminalSessions,
+		Notifier:           notifier,
+		UserCA:             userCA,
+		SSHHostKey:         hostKey,
+		SSHConfig:          sshCfg,
 	})
 
 	// Extract hostname from external gRPC address for TLS SAN
