@@ -269,7 +269,6 @@ func (s *Server) serve(lis net.Listener) error {
 			_ = conn.Close()
 			continue
 		}
-		s.wg.Add(1)
 		go func() {
 			defer s.wg.Done()
 			defer s.untrackConn(conn)
@@ -356,6 +355,9 @@ func (s *Server) trackConn(conn net.Conn) bool {
 		return false
 	}
 	s.conns[conn] = struct{}{}
+	// Reserve the handler before releasing the admission lock. Stop closes
+	// admission under this same lock before waiting for all reserved work.
+	s.wg.Add(1)
 	return true
 }
 
