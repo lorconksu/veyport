@@ -14,6 +14,8 @@ import (
 	"github.com/wyiu/veyport/hub/internal/auditingest"
 )
 
+var version = "dev"
+
 func main() {
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
@@ -27,8 +29,13 @@ func run(ctx context.Context, args []string, output io.Writer) error {
 	flags.SetOutput(output)
 	config := flags.String("config", "", "private exporter configuration path")
 	once := flags.Bool("once", false, "export one bounded page")
+	showVersion := flags.Bool("version", false, "print version and exit")
 	if flags.Parse(args) != nil || flags.NArg() != 0 {
 		return auditingest.ErrUnavailable
+	}
+	if *showVersion {
+		fmt.Fprintln(output, version)
+		return nil
 	}
 	worker, err := auditingest.LoadExporter(*config)
 	if err != nil {

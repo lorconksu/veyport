@@ -1,7 +1,8 @@
-.PHONY: dev-hub dev-web dev-web-lan build test clean proto
+.PHONY: dev-hub dev-web dev-web-lan build build-web embed-web build-hub build-agent build-vey build-audit artifact-manifest test test-hub test-agent test-cli test-proto vet clean proto
 
-# Version stamped into CLI binaries via -ldflags -X main.version=$(VERSION)
+# All binaries share the same linker-stamped version.
 VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
+REVISION ?= $(shell git rev-parse HEAD)
 
 # Development (run these in separate terminals)
 dev-hub:
@@ -20,22 +21,32 @@ proto:
 	       proto/veyport/v1/agent.proto
 
 # Build production binary (frontend embedded)
-build: build-web embed-web proto build-agent build-hub build-vey
+build: artifact-manifest
 
 build-web:
 	cd web && npm run build
 
-embed-web:
+embed-web: build-web
 	rm -rf hub/web/dist
 	mkdir -p hub/web
 	cp -r web/dist hub/web/dist
 
-build-hub:
-	cd hub && go build -o ../bin/veyport ./cmd/veyport/
+build-hub: embed-web proto
+	cd hub && go build -ldflags "-X github.com/wyiu/veyport/hub/internal/server.Version=$(VERSION)" -o ../bin/veyport ./cmd/veyport/
 
-build-agent:
-	cd agent && GOOS=linux GOARCH=amd64 go build -o ../bin/veyport-agent-linux-amd64 ./cmd/veyport-agent/
-	cd agent && GOOS=linux GOARCH=arm64 go build -o ../bin/veyport-agent-linux-arm64 ./cmd/veyport-agent/
+build-agent: proto
+	cd agent && CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -ldflags "-X main.version=$(VERSION)" -o ../bin/veyport-agent-linux-amd64 ./cmd/veyport-agent/
+	cd agent && CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -ldflags "-X main.version=$(VERSION)" -o ../bin/veyport-agent-linux-arm64 ./cmd/veyport-agent/
+
+# Optional archive services are artifacts; the default deployment starts none.
+build-audit: proto
+	cd hub && CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -ldflags "-X main.version=$(VERSION)" -o ../bin/veyport-audit-ingest-linux-amd64 ./cmd/veyport-audit-ingest/
+	cd hub && CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -ldflags "-X main.version=$(VERSION)" -o ../bin/veyport-audit-ingest-linux-arm64 ./cmd/veyport-audit-ingest/
+	cd hub && CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -ldflags "-X main.version=$(VERSION)" -o ../bin/veyport-audit-export-linux-amd64 ./cmd/veyport-audit-export/
+	cd hub && CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -ldflags "-X main.version=$(VERSION)" -o ../bin/veyport-audit-export-linux-arm64 ./cmd/veyport-audit-export/
+
+artifact-manifest: build-hub build-agent build-vey build-audit
+	python3 scripts/release/artifacts.py --directory bin --version "$(VERSION)" --revision "$(REVISION)" --smoke
 
 # vey CLI connector: cross-compiled, CGO-disabled, version-stamped binaries.
 # Max size (plan.md performance goal): 15 MB per platform.
@@ -56,13 +67,25 @@ build-vey:
 	done
 
 # Test
-test: test-hub test-agent
+test: test-hub test-agent test-cli test-proto
 
 test-hub:
 	cd hub && go test ./...
 
 test-agent:
 	cd agent && go test ./...
+
+test-cli:
+	cd cli && go test ./...
+
+test-proto:
+	cd proto && go test ./...
+
+vet:
+	cd hub && go vet ./...
+	cd agent && go vet ./...
+	cd cli && go vet ./...
+	cd proto && go vet ./...
 
 clean:
 	rm -rf bin/ web/dist/ hub/web/dist/ hub/veyport

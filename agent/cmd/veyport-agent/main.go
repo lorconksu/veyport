@@ -17,7 +17,9 @@ import (
 	"github.com/wyiu/veyport/agent/internal/sysinfo"
 )
 
-const version = "0.1.0"
+// version is stamped into the binary and advertised on agent registration.
+var version = "0.1.0"
+
 const defaultConfigPath = "/etc/veyport/agent.conf"
 const defaultCertDir = "/etc/veyport/tls/"
 const defaultDropzoneDir = "/tmp/veyport-dropzone"
@@ -40,7 +42,12 @@ func main() {
 	selfUnregister := flag.Bool("self-unregister", false, "connect to Hub, request deletion of this server, then exit")
 	insecureFlag := flag.Bool("insecure", false, "disable TLS (for development only)")
 	allowedPathsFlag := flag.String("allowed-paths", "", "comma-separated list of allowed filesystem paths")
+	showVersion := flag.Bool("version", false, "print version and exit")
 	flag.Parse()
+	if *showVersion {
+		fmt.Println(version)
+		return
+	}
 
 	if *selfUnregister {
 		runSelfUnregister(*configPath, *insecureFlag)

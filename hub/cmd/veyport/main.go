@@ -61,7 +61,12 @@ func runServer() error {
 	securityStateDir := flag.String("security-state-dir", "", "private persistent security state directory (default beside database)")
 	auditRuntimePath := flag.String("audit-runtime-config", "", "private operator-pinned audit runtime configuration (optional in Standard)")
 	executionSpoolDir := flag.String("execution-spool-dir", "", "private pre-provisioned encrypted filesystem directory for protected execution input")
+	showVersion := flag.Bool("version", false, "print version and exit")
 	flag.Parse()
+	if *showVersion {
+		fmt.Println(server.Version)
+		return nil
+	}
 
 	// Detect legacy aerodocs.db when the configured veyport.db doesn't exist on the
 	// same volume; refuse to start rather than silently presenting the fresh-install

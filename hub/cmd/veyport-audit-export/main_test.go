@@ -19,6 +19,13 @@ import (
 	"github.com/wyiu/veyport/hub/internal/auditrecord"
 )
 
+func TestVersionDoesNotLoadPrivateConfiguration(t *testing.T) {
+	var out bytes.Buffer
+	if err := run(context.Background(), []string{"--version", "--config", "/missing/private/config"}, &out); err != nil || strings.TrimSpace(out.String()) != version {
+		t.Fatal("side-effect-free version unavailable")
+	}
+}
+
 func TestConfigErrorsAreGeneric(t *testing.T) {
 	var out bytes.Buffer
 	for _, args := range [][]string{{"--config", "/missing/private/config"}, {"--unknown"}, {"extra"}} {

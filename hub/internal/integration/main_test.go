@@ -13,6 +13,8 @@ import (
 var agentBinaryPath string
 var cliBinaryPath string
 
+const agentBinaryVersion = "2.0.50-prototype.1"
+
 // agentCovDir is the directory where the agent binary writes coverage data
 // (via the GOCOVERDIR env var). Converted to text format after tests complete.
 var agentCovDir string
@@ -32,7 +34,7 @@ func TestMain(m *testing.M) {
 
 	// Build from the agent directory (hub/internal/integration → repo root → agent)
 	agentDir := filepath.Join("..", "..", "..", "agent")
-	cmd := exec.Command("go", "build", "-cover", "-o", agentBinaryPath, "./cmd/veyport-agent/")
+	cmd := exec.Command("go", "build", "-cover", "-ldflags", "-X main.version="+agentBinaryVersion, "-o", agentBinaryPath, "./cmd/veyport-agent/")
 	cmd.Dir = agentDir
 	cmd.Env = append(os.Environ(), "CGO_ENABLED=0")
 	out, err := cmd.CombinedOutput()

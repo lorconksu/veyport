@@ -5,21 +5,35 @@ on:
     branches: [main]
   pull_request:
     branches: [main]
+  workflow_call:
+    secrets:
+      DOCKERHUB_USERNAME:
+        required: false
+      DOCKERHUB_TOKEN:
+        required: false
+      SONAR_TOKEN:
+        required: false
+      GITLEAKS_LICENSE:
+        required: false
 
 jobs:
   test:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          fetch-depth: 0
 
-      - uses: actions/setup-go@v6
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
         with:
           go-version-file: hub/go.mod
           cache-dependency-path: |
             hub/go.sum
             agent/go.sum
+            cli/go.sum
+            proto/go.sum
 
-      - uses: actions/setup-node@v6
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
         with:
           node-version: 25
           cache: npm
@@ -31,26 +45,52 @@ jobs:
       - name: TypeScript check
         run: cd web && npx tsc --noEmit
 
+      - name: Lint changed frontend code
+        run: python3 scripts/release/lint_changed.py
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
+
+      - name: Frontend production build
+        run: cd web && npm run build
+
       - name: Frontend tests with coverage
         run: cd web && npx vitest run --coverage
 
-      - name: Create frontend embed stub
-        run: mkdir -p hub/web/dist && touch hub/web/dist/index.html
+      - name: Embed production frontend
+        run: mkdir -p hub/web/dist && cp -a web/dist/. hub/web/dist/
+
+      - name: Vet all Go modules
+        run: make vet
+
+      - name: Validate workflows
+        run: |
+          bash scripts/release/install_tools.sh actionlint "$RUNNER_TEMP/release-tools"
+          "$RUNNER_TEMP/release-tools/actionlint"
+
+      - name: Release helper tests
+        run: python3 -m unittest discover -s scripts/release -p "test_*.py"
 
       - name: Hub tests with coverage
-        run: cd hub && go test ./internal/... -coverprofile=../coverage-hub.out -covermode=atomic
+        run: |
+          cd hub
+          listed="$(go list ./internal/...)"
+          mapfile -t packages < <(printf '%s\n' "$listed" | awk '!/\/internal\/integration$/')
+          go test -race "${packages[@]}" -coverprofile=../coverage-hub.out -covermode=atomic
 
       - name: Hub command tests with coverage
-        run: cd hub && go test ./cmd/veyport -coverprofile=../coverage-hub-cmd.out -covermode=atomic
+        run: cd hub && go test -race ./cmd/... -coverprofile=../coverage-hub-cmd.out -covermode=atomic
 
       - name: Agent tests with coverage
-        run: cd agent && go test ./... -coverprofile=../coverage-agent.out -covermode=atomic
+        run: cd agent && go test -race ./... -coverprofile=../coverage-agent.out -covermode=atomic
 
       - name: CLI vet
         run: cd cli && go vet ./...
 
       - name: CLI tests with coverage
-        run: cd cli && go test ./... -coverprofile=../coverage-cli.out -covermode=atomic
+        run: cd cli && go test -race ./... -coverprofile=../coverage-cli.out -covermode=atomic
+
+      - name: Handwritten shared protocol tests with coverage
+        run: cd proto && go test -race ./... -coverprofile=../coverage-proto.out -covermode=atomic
 
       - name: Build CLI binary (linux/amd64)
         run: cd cli && go build -o ../bin/vey-linux-amd64 ./cmd/vey
@@ -59,7 +99,7 @@ jobs:
         run: ./bin/vey-linux-amd64 --version
 
       - name: Upload coverage artifacts
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: coverage
           path: |
@@ -67,23 +107,26 @@ jobs:
             coverage-hub-cmd.out
             coverage-agent.out
             coverage-cli.out
+            coverage-proto.out
             web/coverage/lcov.info
 
   integration:
     needs: test
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
-      - uses: actions/setup-go@v6
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
         with:
           go-version-file: hub/go.mod
           cache-dependency-path: |
             hub/go.sum
             agent/go.sum
+            cli/go.sum
+            proto/go.sum
       - name: Create frontend embed stub
         run: mkdir -p hub/web/dist && touch hub/web/dist/index.html
       - name: Integration tests with coverage
-        run: cd hub && go test ./internal/integration/ -v -timeout 120s -coverprofile=../coverage-integration.out -covermode=atomic -coverpkg=./internal/...
+        run: cd hub && go test -race ./internal/integration/ -v -timeout 120s -coverprofile=../coverage-integration.out -covermode=atomic -coverpkg=./internal/...
 
       - name: Report agent binary coverage
         if: always()
@@ -96,7 +139,7 @@ jobs:
           fi
 
       - name: Upload integration coverage
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: coverage-integration
           path: |
@@ -107,12 +150,12 @@ jobs:
     needs: test
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
 
       # Authenticated pulls avoid Docker Hub throttling; skipped gracefully
       # when secrets are unavailable (Dependabot/fork runs).
       - name: Log in to Docker Hub
-        uses: docker/login-action@v4
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4
         continue-on-error: true
         with:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
@@ -127,9 +170,9 @@ jobs:
     needs: test
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
 
-      - uses: actions/setup-node@v6
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
         with:
           node-version: 25
 
@@ -139,7 +182,7 @@ jobs:
       # Authenticated pulls avoid Docker Hub throttling; skipped gracefully
       # when secrets are unavailable (Dependabot/fork runs).
       - name: Log in to Docker Hub
-        uses: docker/login-action@v4
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4
         continue-on-error: true
         with:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
@@ -153,7 +196,7 @@ jobs:
 
       - name: Upload artifacts on failure
         if: failure()
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: playwright-report
           path: tests/e2e/test-results/
@@ -162,19 +205,19 @@ jobs:
     needs: [test, integration]
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
           fetch-depth: 0
 
-      - uses: actions/download-artifact@v8
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
         with:
           name: coverage
 
-      - uses: actions/download-artifact@v8
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
         with:
           name: coverage-integration
 
-      - uses: SonarSource/sonarqube-scan-action@v7
+      - uses: SonarSource/sonarqube-scan-action@c7ee0f9df90b7aa20e8dcf9695dcfe2e7da5b4f2 # v7
         with:
           args: >
             -Dsonar.qualitygate.wait=true
@@ -185,46 +228,51 @@ jobs:
 
   sast:
     runs-on: ubuntu-latest
-    continue-on-error: true
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: '3.13'
 
       - name: Install Semgrep
-        run: pip3 install semgrep
+        run: pip3 install semgrep==1.180.0
 
-      - name: Semgrep SAST scan
+      - name: Semgrep SAST gate
         run: |
-          echo "### Semgrep SAST Scan" >> "$GITHUB_STEP_SUMMARY"
-          semgrep scan --config p/golang --config p/typescript --config p/owasp-top-ten --sarif -o semgrep.sarif . 2>&1 | tee semgrep-output.txt || true
-          if [ -f semgrep.sarif ]; then
-            FINDINGS=$(python3 -c "import sys,json; d=json.load(open('semgrep.sarif')); print(len(d.get('runs',[{}])[0].get('results',[])))" 2>/dev/null || echo "unknown")
-            echo "Findings: **${FINDINGS}**" >> "$GITHUB_STEP_SUMMARY"
-          fi
-          echo '```' >> "$GITHUB_STEP_SUMMARY"
-          tail -20 semgrep-output.txt >> "$GITHUB_STEP_SUMMARY"
-          echo '```' >> "$GITHUB_STEP_SUMMARY"
+          set -euo pipefail
+          semgrep scan --strict --timeout 30 --config p/golang --config p/typescript --config p/owasp-top-ten --sarif -o semgrep.sarif . 2>&1 | tee semgrep-output.txt
+          python3 scripts/release/check_scan.py semgrep semgrep.sarif
+
+      - name: Upload SAST evidence
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: semgrep-results
+          path: |
+            semgrep.sarif
+            semgrep-output.txt
 
   secret-scan:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
           fetch-depth: 0
 
-      - name: Install Gitleaks
+      - name: Install verified Gitleaks
         run: |
-          VERSION=v8.30.1
-          curl -sSfL "https://github.com/gitleaks/gitleaks/releases/download/${VERSION}/gitleaks_${VERSION#v}_linux_x64.tar.gz" | tar -xz gitleaks
-          sudo install -m 0755 gitleaks /usr/local/bin/gitleaks
+          bash scripts/release/install_tools.sh gitleaks "$RUNNER_TEMP/release-tools"
+          echo "$RUNNER_TEMP/release-tools" >> "$GITHUB_PATH"
 
       - name: Gitleaks secret scan
         env:
           GITLEAKS_LICENSE: ${{ secrets.GITLEAKS_LICENSE }}
-        run: gitleaks git . --report-format sarif --report-path gitleaks-results.sarif --exit-code 1
+        run: gitleaks git . --redact --report-format sarif --report-path gitleaks-results.sarif --exit-code 1
 
       - name: Upload Gitleaks artifact
         if: always()
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: gitleaks-results
           path: gitleaks-results.sarif
@@ -233,41 +281,45 @@ jobs:
     needs: test
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
 
-      - uses: actions/setup-go@v6
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
         with:
           go-version-file: hub/go.mod
           cache-dependency-path: |
             hub/go.sum
             agent/go.sum
+            cli/go.sum
+            proto/go.sum
 
-      - uses: actions/setup-node@v6
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
         with:
           node-version: 25
 
       - name: Install govulncheck
-        run: go install golang.org/x/vuln/cmd/govulncheck@latest
+        run: go install golang.org/x/vuln/cmd/govulncheck@v1.9.0
 
       - name: Create frontend embed stub
         run: mkdir -p hub/web/dist && touch hub/web/dist/index.html
 
-      - name: govulncheck (Hub)
+      - name: govulncheck all four source modules
         run: |
-          echo "### govulncheck - Hub" >> "$GITHUB_STEP_SUMMARY"
-          echo '```' >> "$GITHUB_STEP_SUMMARY"
-          cd hub && govulncheck ./... 2>&1 | tee -a "$GITHUB_STEP_SUMMARY"
-          echo '```' >> "$GITHUB_STEP_SUMMARY"
+          set -euo pipefail
+          mkdir -p source-vulnerability-results
+          for module in hub agent cli proto; do
+            (cd "$module" && govulncheck -show verbose ./...) 2>&1 | tee "source-vulnerability-results/$module.txt"
+          done
 
-      - name: govulncheck (Agent)
-        run: |
-          echo "### govulncheck - Agent" >> "$GITHUB_STEP_SUMMARY"
-          echo '```' >> "$GITHUB_STEP_SUMMARY"
-          cd agent && govulncheck ./... 2>&1 | tee -a "$GITHUB_STEP_SUMMARY"
-          echo '```' >> "$GITHUB_STEP_SUMMARY"
+      - name: Upload source vulnerability evidence
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: source-vulnerability-results
+          path: source-vulnerability-results/
 
       - name: npm audit (Frontend)
         run: |
+          set -euo pipefail
           echo "### npm audit - Frontend" >> "$GITHUB_STEP_SUMMARY"
           echo '```' >> "$GITHUB_STEP_SUMMARY"
           cd web && npm ci --ignore-scripts && npm audit --audit-level=high 2>&1 | tee -a "$GITHUB_STEP_SUMMARY"
@@ -284,7 +336,7 @@ jobs:
       group: auto-release-main
       cancel-in-progress: false
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
           fetch-depth: 0
 

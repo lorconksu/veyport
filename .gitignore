@@ -37,6 +37,7 @@ specs/
 # Coverage
 coverage-*.out
 web/coverage/
+frontend-lint-results.json
 
 # Internal documentation (stored in Confluence)
 docs-internal/
