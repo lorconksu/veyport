@@ -13,6 +13,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/wyiu/veyport/agent/internal/execution"
+	"github.com/wyiu/veyport/agent/internal/sessionlimit"
 	pb "github.com/wyiu/veyport/proto/veyport/v1"
 )
 
@@ -434,5 +436,46 @@ func TestParseGroupIDs(t *testing.T) {
 	want := []string{"1545800010", "1545800009", "1545800008"}
 	if !reflect.DeepEqual(groupIDs, want) {
 		t.Fatalf("groupIDs = %#v, want %#v", groupIDs, want)
+	}
+}
+
+func TestTerminalAndExecutionShareOneAtomicNodeBudget(t *testing.T) {
+	t.Setenv("SHELL", requireShell(t))
+	budget := sessionlimit.New(1)
+	terminalManager := NewManagerWithBudget(make(chan *pb.AgentMessage, 16), budget)
+	t.Cleanup(terminalManager.CloseAll)
+	journal, err := execution.OpenJournal(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	executionManager, err := execution.NewManager(execution.Config{NodeID: "node", Journal: journal, Budget: budget})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(executionManager.Close)
+	request := &pb.ExecutionPrepare{ExecutionId: "reserved", NodeId: "node", Command: "exit 0"}
+	prepared := executionManager.Prepare(request)
+	if prepared.Error != "" {
+		t.Fatal(prepared.Error)
+	}
+	if err := terminalManager.Open("full", 80, 24, "", ""); err == nil {
+		t.Fatal("terminal bypassed execution reservation")
+	}
+	if err := executionManager.Cancel(&pb.ExecutionCancel{Binding: prepared.Binding}); err != nil {
+		t.Fatal(err)
+	}
+	if err := terminalManager.Open("terminal", 80, 24, "", ""); err != nil {
+		t.Fatal(err)
+	}
+	request.ExecutionId = "while-terminal"
+	if prepared := executionManager.Prepare(request); prepared.Error == "" {
+		t.Fatal("execution bypassed terminal reservation")
+	}
+	if err := terminalManager.Close("terminal"); err != nil {
+		t.Fatal(err)
+	}
+	request.ExecutionId = "released"
+	if prepared := executionManager.Prepare(request); prepared.Error != "" {
+		t.Fatal(prepared.Error)
 	}
 }

@@ -9,14 +9,14 @@ import (
 	"os/exec"
 	osuser "os/user"
 	"path/filepath"
-	"strconv"
-	"strings"
 	"sync"
 	"syscall"
 	"time"
 
 	"github.com/creack/pty"
 
+	"github.com/wyiu/veyport/agent/internal/executionidentity"
+	"github.com/wyiu/veyport/agent/internal/sessionlimit"
 	pb "github.com/wyiu/veyport/proto/veyport/v1"
 )
 
@@ -48,6 +48,7 @@ type session struct {
 	tty       *os.File
 	exited    chan struct{}
 	closeOnce sync.Once
+	budget    *sessionlimit.Budget
 }
 
 type executionIdentity struct {
@@ -62,13 +63,19 @@ type Manager struct {
 	sendCh    chan<- *pb.AgentMessage
 	done      chan struct{}
 	closeOnce sync.Once
+	budget    *sessionlimit.Budget
 }
 
 func NewManager(sendCh chan<- *pb.AgentMessage) *Manager {
+	return NewManagerWithBudget(sendCh, sessionlimit.New(maxSessions))
+}
+
+func NewManagerWithBudget(sendCh chan<- *pb.AgentMessage, budget *sessionlimit.Budget) *Manager {
 	return &Manager{
 		sessions: make(map[string]*session),
 		sendCh:   sendCh,
 		done:     make(chan struct{}),
+		budget:   budget,
 	}
 }
 
@@ -82,6 +89,16 @@ func (m *Manager) Open(sessionID string, cols, rows uint32, cwd, runAsUser strin
 	if err := m.validateOpenSlot(sessionID); err != nil {
 		return err
 	}
+
+	if !m.budget.Acquire() {
+		return fmt.Errorf("too many active terminal sessions")
+	}
+	registered := false
+	defer func() {
+		if !registered {
+			m.budget.Release()
+		}
+	}()
 
 	shell, err := resolveShell()
 	if err != nil {
@@ -117,6 +134,7 @@ func (m *Manager) Open(sessionID string, cols, rows uint32, cwd, runAsUser strin
 		return err
 	}
 
+	registered = true
 	go m.readLoop(s)
 	go m.waitLoop(s)
 
@@ -327,7 +345,11 @@ func (m *Manager) Send(msg *pb.AgentMessage) bool {
 func (m *Manager) closeSession(s *session, signalProcess bool) {
 	s.closeOnce.Do(func() {
 		m.mu.Lock()
+		_, existed := m.sessions[s.id]
 		delete(m.sessions, s.id)
+		if existed {
+			m.budget.Release()
+		}
 		m.mu.Unlock()
 
 		if signalProcess && s.cmd.Process != nil {
@@ -398,117 +420,30 @@ func executionIdentityForRunAs(runAsUser string) (*executionIdentity, error) {
 	if runAsUser == "" {
 		return nil, nil
 	}
-	if err := validateRunAsUsername(runAsUser); err != nil {
-		return nil, err
-	}
-
-	u, groupIDs, err := lookupRunAsIdentity(runAsUser)
+	resolver := executionidentity.Resolver{LookupUser: lookupOSUser, LookupGroups: lookupOSUserGroups, LookupNSSUser: lookupNSSUser, LookupNSSGroups: lookupNSSGroupIDs}
+	identity, err := resolver.ResolveNamed(runAsUser)
 	if err != nil {
-		return nil, fmt.Errorf("terminal execution user not available")
-	}
-	uid, err := strconv.ParseUint(u.Uid, 10, 32)
-	if err != nil {
-		return nil, fmt.Errorf("terminal execution user has invalid uid")
-	}
-	gid, err := strconv.ParseUint(u.Gid, 10, 32)
-	if err != nil {
-		return nil, fmt.Errorf("terminal execution user has invalid gid")
-	}
-
-	groups := make([]uint32, 0, len(groupIDs))
-	for _, groupID := range groupIDs {
-		parsed, err := strconv.ParseUint(groupID, 10, 32)
-		if err != nil {
-			return nil, fmt.Errorf("terminal execution user has invalid group")
+		if err.Error() == "invalid execution user" {
+			return nil, fmt.Errorf("invalid terminal execution user")
 		}
-		groups = append(groups, uint32(parsed))
+		return nil, fmt.Errorf("terminal %s", err)
 	}
-
-	return &executionIdentity{
-		credential: &syscall.Credential{
-			Uid:    uint32(uid),
-			Gid:    uint32(gid),
-			Groups: groups,
-		},
-		username: u.Username,
-		homeDir:  u.HomeDir,
-	}, nil
-}
-
-func lookupRunAsIdentity(runAsUser string) (*osuser.User, []string, error) {
-	u, err := lookupOSUser(runAsUser)
-	if err == nil {
-		groupIDs, groupErr := lookupOSUserGroups(u)
-		if groupErr == nil {
-			return u, groupIDs, nil
-		}
-		if groupIDs, groupErr = lookupNSSGroupIDs(runAsUser); groupErr == nil {
-			return u, groupIDs, nil
-		}
-		return nil, nil, fmt.Errorf("terminal execution user groups not available")
-	}
-
-	u, err = lookupNSSUser(runAsUser)
-	if err != nil {
-		return nil, nil, err
-	}
-	groupIDs, err := lookupNSSGroupIDs(runAsUser)
-	if err != nil {
-		return nil, nil, fmt.Errorf("terminal execution user groups not available")
-	}
-	return u, groupIDs, nil
+	return &executionIdentity{credential: identity.Credential(), username: identity.Username, homeDir: identity.Home}, nil
 }
 
 func lookupUserWithGetent(username string) (*osuser.User, error) {
-	output, err := exec.Command(getentPath, "passwd", username).Output()
-	if err != nil {
-		return nil, err
-	}
-	line := strings.TrimSpace(string(output))
-	if idx := strings.IndexByte(line, '\n'); idx >= 0 {
-		line = line[:idx]
-	}
-	return parseGetentPasswdLine(line)
+	return executionidentity.LookupUserWithGetent(username)
 }
-
 func parseGetentPasswdLine(line string) (*osuser.User, error) {
-	fields := strings.Split(line, ":")
-	if len(fields) < 7 || fields[0] == "" || fields[2] == "" || fields[3] == "" {
-		return nil, fmt.Errorf("invalid passwd entry")
-	}
-	return &osuser.User{
-		Username: fields[0],
-		Uid:      fields[2],
-		Gid:      fields[3],
-		Name:     fields[4],
-		HomeDir:  fields[5],
-	}, nil
+	return executionidentity.ParsePasswd(line)
 }
-
 func lookupGroupIDsWithID(username string) ([]string, error) {
-	output, err := exec.Command(idPath, "-G", "--", username).Output()
-	if err != nil {
-		return nil, err
-	}
-	return parseGroupIDs(string(output))
+	return executionidentity.LookupGroupIDsWithID(username)
 }
-
-func parseGroupIDs(output string) ([]string, error) {
-	groupIDs := strings.Fields(output)
-	if len(groupIDs) == 0 {
-		return nil, fmt.Errorf("no groups found")
-	}
-	return groupIDs, nil
-}
-
+func parseGroupIDs(output string) ([]string, error) { return executionidentity.ParseGroups(output) }
 func validateRunAsUsername(username string) error {
-	if username == "" || len(username) > 128 || username[0] == '-' {
+	if err := executionidentity.ValidateUsername(username); err != nil {
 		return fmt.Errorf("invalid terminal execution user")
-	}
-	for _, r := range username {
-		if !((r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') || r == '_' || r == '-' || r == '.' || r == '@') {
-			return fmt.Errorf("invalid terminal execution user")
-		}
 	}
 	return nil
 }

@@ -33,6 +33,7 @@ import (
 	"github.com/wyiu/veyport/agent/internal/heartbeat"
 	"github.com/wyiu/veyport/agent/internal/logtailer"
 	"github.com/wyiu/veyport/agent/internal/nodekey"
+	"github.com/wyiu/veyport/agent/internal/sessionlimit"
 	"github.com/wyiu/veyport/agent/internal/terminal"
 	pb "github.com/wyiu/veyport/proto/veyport/v1"
 )
@@ -973,15 +974,16 @@ func (c *Client) sendRegisterAndRecvAck(stream pb.AgentService_ConnectClient, cs
 	if err := stream.Send(&pb.AgentMessage{
 		Payload: &pb.AgentMessage_Register{
 			Register: &pb.RegisterAgent{
-				Token:               c.token,
-				Hostname:            c.hostname,
-				IpAddress:           c.ipAddress,
-				Os:                  c.os,
-				AgentVersion:        c.agentVersion,
-				Csr:                 csrDER,
-				NodePubkey:          pubBytes,
-				EnrollFingerprint:   fingerprint,
-				NodeTransportPubkey: transportPubBytes,
+				Token:                 c.token,
+				Hostname:              c.hostname,
+				IpAddress:             c.ipAddress,
+				Os:                    c.os,
+				AgentVersion:          c.agentVersion,
+				Csr:                   csrDER,
+				NodePubkey:            pubBytes,
+				EnrollFingerprint:     fingerprint,
+				NodeTransportPubkey:   transportPubBytes,
+				ExecutionCapabilities: &pb.ExecutionCapabilities{ProtocolVersion: 1, StandardExec: false, ProtectedScript: false},
 			},
 		},
 	}); err != nil {
@@ -1154,6 +1156,9 @@ func (c *Client) startRecvLoop(stream pb.AgentService_ConnectClient, sendCh chan
 		terminalMgr = managers[0]
 	}
 
+	return c.startRecvLoopForSession(stream, sendCh, terminalMgr, nil)
+}
+func (c *Client) startRecvLoopForSession(stream pb.AgentService_ConnectClient, sendCh chan<- *pb.AgentMessage, terminalMgr *terminal.Manager, executions *executionTransport) <-chan error {
 	recvErr := make(chan error, 1)
 	go func() {
 		for {
@@ -1165,6 +1170,9 @@ func (c *Client) startRecvLoop(stream pb.AgentService_ConnectClient, sendCh chan
 			if err != nil {
 				recvErr <- err
 				return
+			}
+			if executions != nil && executions.handle(msg) {
+				continue
 			}
 			// File upload chunks must be sequential to avoid race conditions.
 			// Other messages can be handled concurrently.
@@ -1179,6 +1187,9 @@ func (c *Client) startRecvLoop(stream pb.AgentService_ConnectClient, sendCh chan
 }
 
 func (c *Client) connectAndStream(ctx context.Context) error {
+	sessionCtx, cancelSession := context.WithCancel(ctx)
+	defer cancelSession()
+	ctx = sessionCtx
 	if c.reconnectCh == nil {
 		c.reconnectCh = make(chan struct{}, 1)
 	}
@@ -1206,7 +1217,23 @@ func (c *Client) connectAndStream(ctx context.Context) error {
 	log.Printf("connected to hub at %s", c.hubAddr)
 
 	sendCh := make(chan *pb.AgentMessage, 16)
-	terminalMgr := terminal.NewManager(sendCh)
+	budget := sessionlimit.New(8)
+	terminalMgr := terminal.NewManagerWithBudget(sendCh, budget)
+	executions, execErr := c.newExecutionTransport(ctx, budget, sendCh, cancelSession)
+	if execErr != nil {
+		log.Printf("noninteractive execution unavailable: %v", execErr)
+	}
+	capabilities := &pb.ExecutionCapabilities{ProtocolVersion: 1}
+	if executions != nil {
+		capabilities = executions.manager.Capabilities()
+	}
+	if err := stream.Send(&pb.AgentMessage{Payload: &pb.AgentMessage_ExecutionCapabilities{ExecutionCapabilities: capabilities}}); err != nil {
+		terminalMgr.CloseAll()
+		if executions != nil {
+			executions.close()
+		}
+		return fmt.Errorf("send execution capabilities: %w", err)
+	}
 	defer func() {
 		c.tailSessionsMu.Lock()
 		for id, stop := range c.tailSessions {
@@ -1214,7 +1241,11 @@ func (c *Client) connectAndStream(ctx context.Context) error {
 			delete(c.tailSessions, id)
 		}
 		c.tailSessionsMu.Unlock()
+		cancelSession()
 		terminalMgr.CloseAll()
+		if executions != nil {
+			executions.close()
+		}
 		c.dropzone.Cleanup()
 	}()
 	hbStop := make(chan struct{})
@@ -1222,7 +1253,7 @@ func (c *Client) connectAndStream(ctx context.Context) error {
 	go heartbeat.StartTicker(c.serverID, 10*time.Second, sendCh, hbStop)
 	go c.startCertRenewalTicker(10*time.Second, sendCh, hbStop)
 
-	recvErr := c.startRecvLoop(stream, sendCh, terminalMgr)
+	recvErr := c.startRecvLoopForSession(stream, sendCh, terminalMgr, executions)
 
 	for {
 		select {
