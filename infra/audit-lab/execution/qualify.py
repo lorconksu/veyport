@@ -65,8 +65,9 @@ def fresh_code(state, person):
     while True:
         now = time.time()
         slot = int(now // 30)
-        # Exercise the real shared rate limiter and replay guard without resets.
-        if slot > user.get('used_slot', 0) and now >= state.get('last_mfa_at', 0) + 13:
+        # Login and protected step-up share a three-attempt/minute IP limit.
+        # Keep all synthetic people below that real limit without resetting it.
+        if slot > user.get('used_slot', 0) and now >= state.get('last_mfa_at', 0) + 23:
             break
         time.sleep(1)
     secret = base64.b32decode(user['totp_secret'] + '=' * (-len(user['totp_secret']) % 8))

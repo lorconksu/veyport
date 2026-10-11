@@ -39,6 +39,8 @@ export async function trustedContext(): Promise<{ context: BrowserContext; close
   let context: BrowserContext
   try { context = await firefox.launchPersistentContext(profile, { headless: true, ignoreHTTPSErrors: false, acceptDownloads: true }) }
   catch { fs.rmSync(profile, { recursive: true, force: true }); throw new Error('Trusted isolated Firefox launch failed') }
+  context.setDefaultTimeout(20_000)
+  context.setDefaultNavigationTimeout(30_000)
   return { context, close: async () => { try { await context.close() } finally { fs.rmSync(profile, { recursive: true, force: true }) } } }
 }
 export async function login(page: Page, person: Person): Promise<void> {
@@ -52,9 +54,24 @@ export async function login(page: Page, person: Person): Promise<void> {
   await page.waitForURL(`${HUB}/`)
 }
 export async function confirmFresh(page: Page, person: Person): Promise<void> {
-  await privateFill(page.getByLabel('Fresh MFA code'), freshCode(person))
-  await page.getByRole('button', { name: 'Confirm with fresh MFA' }).click()
-  await page.getByRole('dialog').waitFor({ state: 'hidden' })
+  let status: number | undefined
+  const recordStatus = (response: import('@playwright/test').Response) => {
+    const pathname = new URL(response.url()).pathname
+    if (pathname === '/api/security/step-up' || /^\/api\/security\/changes\/[a-zA-Z0-9_-]+\/(?:approve|apply)$/.test(pathname)) status = response.status()
+  }
+  page.on('response', recordStatus)
+  try {
+    await privateFill(page.getByLabel('Fresh MFA code'), freshCode(person))
+    await page.getByRole('button', { name: 'Confirm with fresh MFA' }).click()
+    await page.waitForFunction(() => {
+      const dialog = document.querySelector('[role="dialog"]')
+      return !dialog || !!dialog.querySelector('[role="alert"]')
+    }, undefined, { timeout: 35_000 })
+    if (await page.getByRole('dialog').getByRole('alert').count()) throw new Error('Refused')
+  } catch {
+    // Do not include request bodies, proof values, private inputs or call logs.
+    throw new Error(`Fresh MFA operation did not complete; last protected HTTP status=${status ?? 'unavailable'}`)
+  } finally { page.off('response', recordStatus) }
 }
 export async function safeStatus(page: Page, pathname: string): Promise<number> {
   if (!/^\/api\/[a-zA-Z0-9_/?=&.-]+$/.test(pathname)) throw new Error('Safe lab status route required')

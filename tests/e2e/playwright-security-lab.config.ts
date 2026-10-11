@@ -10,5 +10,5 @@ export default defineConfig({
   fullyParallel: false,
   reporter: 'line',
   outputDir: '../../output/playwright/security-lab',
-  use: { baseURL: 'https://10.10.1.59:8443', trace: 'off', screenshot: 'off', video: 'off', ignoreHTTPSErrors: false },
+  use: { baseURL: 'https://10.10.1.59:8443', actionTimeout: 20_000, navigationTimeout: 30_000, trace: 'off', screenshot: 'off', video: 'off', ignoreHTTPSErrors: false },
 })
