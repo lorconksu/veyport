@@ -209,7 +209,11 @@ func (s *Service) reconcile(ctx context.Context, e auditrecord.Expected, envelop
 	if (!historical && (m.SigningKeyID != s.config.Signer.KeyID || m.QualificationSHA256 != archive.Qualification().Digest)) || m.Envelope.SHA256 != e.RecordSHA256 || m.Envelope.Bytes <= 0 || len(m.Attachments) != len(envelope.Attachments) || ref.SHA256 != auditrecord.Hash(raw) || ref.Bytes != int64(len(raw)) || !m.ExpiresAt.After(m.IssuedAt.Time) || m.ExpiresAt.Sub(m.IssuedAt.Time) > s.config.ReceiptTTL || m.RetainUntil.Before(m.ExpiresAt.Time) {
 		return auditrecord.Receipt{}, ErrUnavailable
 	}
-	if !historical && !s.config.Now().Before(m.ExpiresAt.Time) {
+	// A retained read intent can be confirmed after its permit expires. Keep it
+	// outside the renewable historical branch below: its original iat/nbf/exp
+	// remain fixed, and ReadOriginal still requires a currently valid receipt.
+	// Admission expiry remains a hard boundary for any executable authority.
+	if envelope.EventType == auditrecord.ExecutionAdmission && !s.config.Now().Before(m.ExpiresAt.Time) {
 		return auditrecord.Receipt{}, ErrUnavailable
 	}
 	if envelope.EventType == auditrecord.ExecutionAdmission && m.ExpiresAt.After(envelope.Execution.PreparedUntil) {
