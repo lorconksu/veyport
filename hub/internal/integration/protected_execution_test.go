@@ -392,7 +392,24 @@ func TestProtectedNativeVEYReadinessOutagePreservesRedactedDenial(t *testing.T) 
 	if err := json.Unmarshal(raw, &denial); err != nil || denial.EventType != auditrecord.ExecutionDenial || denial.Execution != nil || denial.Details.Submission == nil || denial.Details.Submission.NodeID != sshGWServerID || denial.Details.Submission.CommandSHA256 != auditrecord.Hash([]byte(command)) || denial.Details.Submission.CommandBytes != int64(len(command)) || len(denial.Command) != 0 || len(denial.Attachments) != 0 || bytes.Contains(raw, []byte(marker)) {
 		t.Fatal("readiness denial lost correlation or retained a raw command")
 	}
+	// Make the outage attempt deterministic. A wake must not bypass the
+	// production one-minute retry delay; the old ten-second expectation raced
+	// whether the first worker attempt preceded archive restoration.
+	var attempts int
+	var nextAttempt string
+	waitFor(t, "outage denial retry backoff", func() bool {
+		err := h.h.store.DB().QueryRow(`SELECT attempts,next_attempt_at FROM execution_evidence_recovery WHERE event_id=?`, id+".completion").Scan(&attempts, &nextAttempt)
+		return err == nil && attempts > 0
+	})
+	next, err := time.Parse("2006-01-02 15:04:05", nextAttempt)
+	if err != nil || !next.After(time.Now()) {
+		t.Fatalf("failed denial preservation did not back off: attempts=%d next=%s", attempts, nextAttempt)
+	}
+	t.Logf("outage denial attempts=%d next_attempt_at=%s; making only restored event due", attempts, nextAttempt)
 	h.archive.setMode("valid")
+	if _, err := h.h.store.DB().Exec(`UPDATE execution_evidence_recovery SET next_attempt_at='2000-01-01' WHERE event_id=?`, id+".completion"); err != nil {
+		t.Fatal(err)
+	}
 	if _, _, code := h.run(t, "true", nil); code != 0 {
 		t.Fatal("restored archive did not admit an independent command")
 	}
