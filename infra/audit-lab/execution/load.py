@@ -267,7 +267,7 @@ def snapshot(directory):
 def output_script(marker, name, size, exit_code, gated=False):
     script = 'umask 077\nprintf \'%s\' "$$" > ' + marker + '/' + name + '\n'
     if gated:
-        script += 'i=0; until test -f ' + marker + '/release; do i=$((i+1)); test "$i" -lt 250 || exit 90; sleep 0.1; done\n'
+        script += 'i=0; until test -f ' + marker + '/release; do i=$((i+1)); test "$i" -lt 450 || exit 90; sleep 0.1; done\n'
     offset = sum(name.encode()) % 256
     script += "python3 - <<'PY'\nimport sys\nsys.stdout.buffer.write(bytes((i+" + str(offset) + ")%256 for i in range(256))*" + str(size // 256) + ")\nsys.stderr.buffer.write(" + repr((name + '\0stderr').encode()) + ")\nPY\nexit " + str(exit_code) + '\n'
     return script.encode()
@@ -308,6 +308,29 @@ def confirmed(commands, state):
     return evidence
 
 
+def start_gated_commands(marker, directory, commands, timeout=40):
+    # The independent receipt service has four nonblocking HTTP slots shared by
+    # readiness and preservation. Running-process capacity is eight. Stage each
+    # unique admission once while earlier processes remain gated; never retry a
+    # rejected command or adjust either service's resource budget.
+    deadline = time.monotonic() + timeout
+    eight = []
+    for index in range(8):
+        if time.monotonic() >= deadline:
+            raise RuntimeError('Staged load admissions exceeded bounded deadline')
+        name = 'parallel-' + str(index)
+        command = lab_command(ACTORS[index // 4], output_script(marker, name, 4 << 20, index + 1, True), directory, name)
+        eight.append(command)
+        commands.append(command)
+        def started():
+            if any(previous.process.poll() is not None for previous in eight):
+                raise RuntimeError('Unique load admission ended before eight processes were ready; no retry')
+            current = snapshot(marker)
+            return all(current['processes'].get(previous.name, {}).get('state') not in (None, 'Z') for previous in eight)
+        q.wait_for('unique staged admission ' + name, started, timeout=min(10, deadline - time.monotonic()))
+    return eight
+
+
 def matrix(state, directory, report):
     marker = '/tmp/veyport-load-' + secrets.token_hex(12)
     marker_operation(marker, 'create')
@@ -316,11 +339,9 @@ def matrix(state, directory, report):
     commands = []
     try:
         report['phase'] = 'eight-simultaneous-commands'
-        eight = []
-        for index in range(8):
-            command = lab_command(ACTORS[index // 4], output_script(marker, 'parallel-' + str(index), 4 << 20, index + 1, True), directory, 'parallel-' + str(index))
-            eight.append(command)
-            commands.append(command)
+        report['admission_mode'] = 'staged once; eight running processes before release'
+        report['receipt_http_request_limit'] = 4
+        eight = start_gated_commands(marker, directory, commands)
         def all_started():
             current = snapshot(marker)
             return all(current['processes'].get(c.name, {}).get('state') not in (None, 'Z') and c.process.poll() is None for c in eight)

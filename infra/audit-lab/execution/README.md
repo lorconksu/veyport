@@ -108,8 +108,16 @@ with `passed:false`; account cleanup must complete before `passed:true` is writt
 
 Eight complete `/bin/sh -s` scripts wait on one unique lab-only start barrier:
 four commands per actor respect the actor limit, while all eight share the node
-limit. One bounded remote snapshot must observe all eight live process markers
-before release. Each returns a
+limit. Each unique command is submitted once, and its real process marker must
+appear before the next admission is submitted. Earlier processes stay gated.
+The independent receipt service has four shared, nonblocking HTTP request slots
+for readiness, preservation and metadata; that admission throughput budget is
+separate from eight running processes. A simultaneous eight-admission burst can
+be refused safely and is retained separately as failed overload evidence.
+Staging has a forty-second total deadline and each complete script has a
+forty-five-second barrier bound within the existing sixty-second runtime policy.
+One bounded remote snapshot must observe all eight live process markers before
+release. Each returns a
 distinct 4 MiB binary stream, a binary stderr marker and its own exit code. A
 separate 8 MiB stream has its local stdout reader withheld for eight seconds;
 the quiet command must finish during that interval, and every slow-stream byte

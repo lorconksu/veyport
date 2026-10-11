@@ -28,15 +28,26 @@ class LoadFixture(unittest.TestCase):
             directory = Path(temporary)
             commands = []
             try:
-                for index in range(8):
-                    name = 'parallel-' + str(index)
-                    script = load.output_script(str(directory), name, 64 << 10, index + 1, True)
-                    commands.append(load.Command(['/bin/sh', '-s'], os.environ, script, directory, name, load.ACTORS[index // 4]))
-                deadline = time.monotonic() + 5
-                while not all((directory / c.name).exists() for c in commands):
-                    if time.monotonic() > deadline:
-                        self.fail('Eight local fixture processes did not reach barrier')
-                    time.sleep(0.01)
+                submitted = []
+                def command(actor, script, output_directory, name):
+                    self.assertTrue(all((directory / previous.name).exists() and previous.process.poll() is None for previous in submitted))
+                    # Actual local complete scripts, smaller binary output for
+                    # this tooling test; no simulated remote admission retry.
+                    script = load.output_script(str(directory), name, 64 << 10, len(submitted) + 1, True)
+                    current = load.Command(['/bin/sh', '-s'], os.environ, script, output_directory, name, actor)
+                    submitted.append(current)
+                    return current
+                def snapshot(marker):
+                    return {'processes': {current.name: {'state': 'S'} for current in submitted if (directory / current.name).exists() and current.process.poll() is None}}
+                def wait(description, check, timeout):
+                    deadline = time.monotonic() + timeout
+                    while not check():
+                        if time.monotonic() >= deadline:
+                            self.fail('Staged local fixture process did not reach barrier')
+                        time.sleep(0.01)
+                with mock.patch.object(load, 'lab_command', side_effect=command) as launch, mock.patch.object(load, 'snapshot', side_effect=snapshot), mock.patch.object(load.q, 'wait_for', side_effect=wait):
+                    self.assertEqual(load.start_gated_commands(str(directory), directory, commands, timeout=5), commands)
+                self.assertEqual(launch.call_count, 8)
                 self.assertTrue(all(c.process.poll() is None for c in commands))
                 (directory / 'release').touch()
                 load.collect(commands, timeout=5)
@@ -50,6 +61,24 @@ class LoadFixture(unittest.TestCase):
             finally:
                 for command in commands:
                     command.close()
+
+    def test_rejected_staged_admission_is_never_retried_or_followed_by_more_submissions(self):
+        rejected = mock.Mock(name='rejected-command')
+        rejected.process.poll.return_value = 3
+        commands = []
+        def wait(description, check, timeout):
+            self.assertGreater(timeout, 0)
+            check()
+        with mock.patch.object(load, 'lab_command', return_value=rejected) as launch, mock.patch.object(load, 'snapshot') as snapshot, mock.patch.object(load.q, 'wait_for', side_effect=wait):
+            with self.assertRaisesRegex(RuntimeError, 'no retry'):
+                load.start_gated_commands('/tmp/veyport-load-' + 'a' * 24, Path('/unused'), commands)
+            self.assertEqual(launch.call_count, 1)
+            snapshot.assert_not_called()
+            self.assertEqual(commands, [rejected])
+        with mock.patch.object(load, 'lab_command') as launch:
+            with self.assertRaisesRegex(RuntimeError, 'bounded deadline'):
+                load.start_gated_commands('/tmp/veyport-load-' + 'a' * 24, Path('/unused'), [], timeout=0)
+            launch.assert_not_called()
 
     def test_quiet_command_completes_while_large_consumer_is_paused_and_drains_exactly(self):
         with tempfile.TemporaryDirectory() as temporary:
