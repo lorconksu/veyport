@@ -3,6 +3,7 @@ import { useSearchParams } from 'react-router-dom'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { Upload, X } from 'lucide-react'
 import { useAuth } from '@/hooks/use-auth'
+import { assignedRoles, hasCapability } from '@/lib/auth'
 import { apiFetch } from '@/lib/api'
 import { getAvatarColor, setAvatarColor as persistAvatarColor, AVATAR_COLORS } from '@/lib/avatar'
 import { validatePassword } from '@/lib/password'
@@ -369,7 +370,7 @@ function ProfileTab() {
           </div>
           <div className="flex justify-between">
             <span className="text-text-muted">Role</span>
-            <span className="text-text-primary capitalize">{user?.role}</span>
+            <span className="text-text-primary capitalize">{assignedRoles(user).join(', ')}</span>
           </div>
           <div className="flex justify-between">
             <span className="text-text-muted">2FA</span>
@@ -911,7 +912,7 @@ function UsersTab() {
 
 export function SettingsPage() {
   const { user } = useAuth()
-  const isAdmin = user?.role === 'admin'
+  const isAdmin = hasCapability(user, 'operations.admin')
   const [searchParams, setSearchParams] = useSearchParams()
   const tabFromUrl = searchParams.get('tab')
 

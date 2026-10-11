@@ -3,6 +3,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Download, Info, Save, ShieldAlert } from 'lucide-react'
 import { apiFetch } from '@/lib/api'
 import { useAuth } from '@/hooks/use-auth'
+import { hasCapability } from '@/lib/auth'
 import type {
   AuditCatalogResponse,
   AuditDetectionsResponse,
@@ -242,7 +243,7 @@ export function AuditLogsPage() {
   const showingTo = Math.min(offset + PAGE_SIZE, total)
   const catalogEntries = catalog?.entries ?? []
   const latestReview = reviews?.reviews?.[0]
-  const canManageControls = user?.role === 'admin'
+  const canManageControls = hasCapability(user, 'operations.admin')
 
   const updateSettingsField = <K extends keyof AuditSettings>(key: K, value: AuditSettings[K]) => {
     setSettingsForm(prev => prev ? { ...prev, [key]: value } : prev)

@@ -6,6 +6,7 @@ import { apiFetch } from '@/lib/api'
 import { relativeTime } from '@/lib/time'
 import { statusDot } from '@/lib/server-utils'
 import { useAuth } from '@/hooks/use-auth'
+import { hasCapability } from '@/lib/auth'
 import { AddServerModal } from '@/pages/add-server-modal'
 import { InstallCliModal } from '@/pages/install-cli-modal'
 import { useAllServers } from '@/hooks/use-servers'
@@ -39,7 +40,7 @@ async function parallelLimit<T>(
 export function DashboardPage() {
   const { user } = useAuth()
   const queryClient = useQueryClient()
-  const isAdmin = user?.role === 'admin'
+  const isAdmin = hasCapability(user, 'operations.admin')
 
   const [statusFilter, setStatusFilter] = useState<string | undefined>()
   const [searchTerm, setSearchTerm] = useState('')

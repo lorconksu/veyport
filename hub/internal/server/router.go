@@ -49,6 +49,7 @@ func (s *Server) routes() http.Handler {
 	mux.Handle("POST /api/security/changes", loggingMiddleware(s.authMiddleware(auth.TokenTypeAccess, s.interactiveOnly(http.HandlerFunc(s.handleSecurityRequest)))))
 	mux.Handle("GET /api/security/changes", loggingMiddleware(s.authMiddleware(auth.TokenTypeAccess, http.HandlerFunc(s.handleSecurityList))))
 	mux.Handle("GET /api/security/changes/{id}", loggingMiddleware(s.authMiddleware(auth.TokenTypeAccess, http.HandlerFunc(s.handleSecurityGet))))
+	mux.Handle("GET /api/security/principals", loggingMiddleware(s.authMiddleware(auth.TokenTypeAccess, http.HandlerFunc(s.handleSecurityPrincipals))))
 	mux.Handle("POST /api/security/changes/{id}/approve", loggingMiddleware(s.authMiddleware(auth.TokenTypeAccess, s.interactiveOnly(http.HandlerFunc(s.handleSecurityApprove)))))
 	mux.Handle("POST /api/security/changes/{id}/apply", loggingMiddleware(s.authMiddleware(auth.TokenTypeAccess, s.interactiveOnly(http.HandlerFunc(s.handleSecurityApply)))))
 

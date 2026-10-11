@@ -3,6 +3,7 @@ import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom'
 import { QueryClientProvider } from '@tanstack/react-query'
 import { queryClient } from '@/lib/query-client'
 import { AuthProvider, useAuth } from '@/hooks/use-auth'
+import { hasCapability } from '@/lib/auth'
 import { AuthLayout } from '@/layouts/auth-layout'
 import { AppShell } from '@/layouts/app-shell'
 
@@ -39,7 +40,7 @@ function ProtectedRoute({ children }: Readonly<{ children: React.ReactNode }>) {
 function AuditRoute({ children }: Readonly<{ children: React.ReactNode }>) {
   const { user } = useAuth()
 
-  if (user?.role !== 'admin' && user?.role !== 'auditor') {
+  if (!hasCapability(user, 'audit.read')) {
     return <Navigate to="/" replace />
   }
 

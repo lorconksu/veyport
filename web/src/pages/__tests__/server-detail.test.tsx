@@ -75,7 +75,8 @@ vi.mock('@/lib/api', () => ({
   denyReEnroll: vi.fn(),
 }))
 
-vi.mock('@/lib/auth', () => ({
+vi.mock('@/lib/auth', async importOriginal => ({
+  ...await importOriginal<typeof import('@/lib/auth')>(),
   getCSRFToken: vi.fn(() => 'test-csrf-token'),
 }))
 
