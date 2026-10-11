@@ -54,6 +54,11 @@ type Client struct {
 	// default transport (nil), which means default Go TLS verification
 	// against the OS trust store — never overridden here.
 	HTTP *http.Client
+
+	// MaxResponseBytes optionally bounds decoded successful responses. Zero
+	// retains the existing streaming/default behavior; security commands set
+	// a finite limit before using this client.
+	MaxResponseBytes int64
 }
 
 // NewClient builds a Client for baseURL with the given bearer token (may be
@@ -137,8 +142,25 @@ func (c *Client) do(ctx context.Context, method, path string, query url.Values, 
 		return nil
 	}
 
-	if err := json.NewDecoder(resp.Body).Decode(out); err != nil && err != io.EOF {
+	var reader io.Reader = resp.Body
+	if c.MaxResponseBytes > 0 {
+		raw, err := io.ReadAll(io.LimitReader(resp.Body, c.MaxResponseBytes+1))
+		if err != nil {
+			return mapTransportErr(err)
+		}
+		if int64(len(raw)) > c.MaxResponseBytes {
+			return cmdutil.NewCodedError(cmdutil.ExitError, errors.New("hub response exceeds the configured size limit"))
+		}
+		reader = bytes.NewReader(raw)
+	}
+	decoder := json.NewDecoder(reader)
+	if err := decoder.Decode(out); err != nil && (err != io.EOF || c.MaxResponseBytes > 0) {
 		return cmdutil.NewCodedError(cmdutil.ExitError, fmt.Errorf("decoding hub response: %w", err))
+	}
+	if c.MaxResponseBytes > 0 {
+		if _, err := decoder.Token(); err != io.EOF {
+			return cmdutil.NewCodedError(cmdutil.ExitError, errors.New("hub response contains trailing data"))
+		}
 	}
 	return nil
 }

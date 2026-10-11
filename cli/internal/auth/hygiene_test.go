@@ -657,6 +657,7 @@ func hygieneScenarios() []scenario {
 		// --- vey audit -------------------------------------------------
 		{name: "audit/export-forbidden", run: scenarioAuditExportForbidden},
 		{name: "audit/export-ok", run: scenarioAuditExportOK},
+		{name: "security/write-only-secret-reflection", run: scenarioSecuritySecretReflection},
 
 		// --- vey ssh-cert ----------------------------------------------
 		{name: "ssh-cert/issue", run: scenarioSSHCertIssue},
@@ -679,6 +680,20 @@ func hygieneScenarios() []scenario {
 		{name: "refresh/hub-error-reflects-token", run: scenarioRefreshHubErrorReflectsToken},
 		{name: "refresh/rate-limited-reflects-token", run: scenarioRefreshRateLimitedReflectsToken},
 	}
+}
+
+func scenarioSecuritySecretReflection(t *testing.T, e *env) {
+	e.seedSession(t)
+	e.hub.handle("POST /api/security/secrets", func(w http.ResponseWriter, r *http.Request) {
+		var body map[string]string
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		writeHubError(w, http.StatusForbidden, "rejected write-only value "+body["value"])
+	})
+	path := filepath.Join(t.TempDir(), "private-input")
+	if err := os.WriteFile(path, []byte(sentinelPassword), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	e.run(t, "security write-only reflection", commands.RunSecurity, cmdutil.ExitForbidden, "secret", "--kind", "password", "--value-file", path)
 }
 
 func scenarioLoginHappyPath(t *testing.T, e *env) {

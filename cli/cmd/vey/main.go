@@ -47,6 +47,8 @@ Commands:
   files cat      print a remote file to stdout
   logs tail      stream a remote log file
   audit export   stream the audit log export
+  security       request, review, approve and apply protected security changes
+                 run 'vey security --help' for MFA and exact-digest usage
 
 SSH command examples:
   vey ssh bastion1 -- 'uname -a'

@@ -158,7 +158,7 @@ func TestRun_Help(t *testing.T) {
 // rejection. The unambiguous signal is the literal "unknown command"
 // message, which main.go emits only on a Registry miss.
 func TestRun_KnownCommandsDispatch(t *testing.T) {
-	for _, name := range []string{"login", "logout", "status", "servers", "files", "logs", "audit"} {
+	for _, name := range []string{"login", "logout", "status", "servers", "files", "logs", "audit", "security"} {
 		t.Run(name, func(t *testing.T) {
 			_, stderr := captureOutput(t, func() {
 				run([]string{"--hub", "https://hub.example.com", "--json", name})
