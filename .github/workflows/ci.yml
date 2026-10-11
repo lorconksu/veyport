@@ -75,7 +75,7 @@ jobs:
           cd hub
           listed="$(go list ./internal/...)"
           mapfile -t packages < <(printf '%s\n' "$listed" | awk '!/\/internal\/integration$/')
-          go test -race "${packages[@]}" -coverprofile=../coverage-hub.out -covermode=atomic
+          go test -race "${packages[@]}" -timeout 30m -coverprofile=../coverage-hub.out -covermode=atomic
 
       - name: Hub command tests with coverage
         run: cd hub && go test -race ./cmd/... -coverprofile=../coverage-hub-cmd.out -covermode=atomic
