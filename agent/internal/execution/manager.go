@@ -412,7 +412,7 @@ func (m *Manager) Start(ctx context.Context, start *pb.ExecutionStart) (*Run, er
 		return nil, fmt.Errorf("launch outcome could not be durably recorded")
 	}
 	runCtx, cancel := context.WithTimeout(ctx, time.Duration(p.response.Limits.RuntimeSeconds)*time.Second)
-	r := &Run{enhanced: p.enhanced, script: p.script, scriptReader: scriptReader, binding: proto.Clone(binding).(*pb.ExecutionBinding), cmd: cmd, stdin: stdin, stdout: stdout, stderr: stderr, input: make(chan inputFrame, queueFrames), output: make(chan *pb.ExecutionAgentMessage, queueFrames), ctx: runCtx, cancel: func() { cancel(); launchCancel() }, done: make(chan struct{}), processExited: make(chan struct{}), inputStopped: make(chan struct{}), manager: m, grace: m.grace, blocked: m.blocked}
+	r := &Run{enhanced: p.enhanced, script: p.script, scriptReader: scriptReader, scriptLength: p.scriptLength, scriptHash: append([]byte(nil), p.scriptHash...), binding: proto.Clone(binding).(*pb.ExecutionBinding), cmd: cmd, stdin: stdin, stdout: stdout, stderr: stderr, input: make(chan inputFrame, queueFrames), output: make(chan *pb.ExecutionAgentMessage, queueFrames), ctx: runCtx, cancel: func() { cancel(); launchCancel() }, done: make(chan struct{}), processExited: make(chan struct{}), inputStopped: make(chan struct{}), manager: m, grace: m.grace, blocked: m.blocked}
 	m.mu.Lock()
 	m.runs[binding.ExecutionId] = r
 	m.mu.Unlock()
@@ -528,11 +528,15 @@ type Run struct {
 	enhanced                       bool
 	script                         protectedinput.File
 	scriptReader                   io.ReadCloser
+	scriptLength                   uint64
+	scriptHash                     []byte
+	scriptReaderClose              sync.Once
 	cancelOnce                     sync.Once
 	reasonMu                       sync.Mutex
 	reason                         string
 	integrityMu                    sync.Mutex
 	stdoutComplete, stderrComplete bool
+	protectedInputFailed           bool
 }
 
 func (r *Run) Messages() <-chan *pb.ExecutionAgentMessage { return r.output }
@@ -622,9 +626,9 @@ func (r *Run) inputLoop() {
 	defer r.stdin.Close()
 	if r.enhanced {
 		if r.scriptReader != nil {
-			defer r.scriptReader.Close()
+			defer r.closeScriptReader()
 			defer r.script.Close()
-			_, _ = io.Copy(r.stdin, r.scriptReader)
+			r.copyProtectedInput()
 		}
 		return
 	}
@@ -640,6 +644,67 @@ func (r *Run) inputLoop() {
 		case <-r.ctx.Done():
 			return
 		case <-r.done:
+			return
+		}
+	}
+}
+
+func (r *Run) closeScriptReader() {
+	if r.scriptReader != nil {
+		r.scriptReaderClose.Do(func() { _ = r.scriptReader.Close() })
+	}
+}
+
+// Sealing and the pre-launch hash check do not guarantee that the backing
+// encrypted file remains readable. A source fault must stop owned work and
+// survive in its result, even when a valid prefix has already had effects.
+// A shell deliberately closing stdin is different: its real exit is valid and
+// does not require it to consume every admitted byte.
+func (r *Run) copyProtectedInput() {
+	digest := sha256.New()
+	var length uint64
+	buf := make([]byte, MaxFrameBytes)
+	emptyReads := 0
+	fail := func() {
+		r.integrityMu.Lock()
+		r.protectedInputFailed = true
+		r.integrityMu.Unlock()
+		r.Cancel("protected_input_incomplete")
+	}
+	for {
+		n, readErr := r.scriptReader.Read(buf)
+		if n > 0 {
+			emptyReads = 0
+			length += uint64(n)
+			_, _ = digest.Write(buf[:n])
+		} else if readErr == nil {
+			emptyReads++
+		}
+		if r.ctx.Err() != nil {
+			return
+		}
+		if errors.Is(readErr, os.ErrClosed) || errors.Is(readErr, io.ErrClosedPipe) {
+			select {
+			case <-r.processExited:
+				return // A completed shell does not need to consume its unread tail.
+			default:
+			}
+		}
+		if (readErr != nil && !errors.Is(readErr, io.EOF)) || length > r.scriptLength || emptyReads >= 100 || (errors.Is(readErr, io.EOF) && (length != r.scriptLength || !bytes.Equal(digest.Sum(nil), r.scriptHash))) {
+			fail()
+			return
+		}
+		if n > 0 {
+			written, err := r.stdin.Write(buf[:n])
+			if err != nil {
+				return
+			}
+			if written != n {
+				fail()
+				return
+			}
+		}
+		if errors.Is(readErr, io.EOF) {
 			return
 		}
 	}
@@ -820,6 +885,7 @@ func (r *Run) lifecycle() {
 		select {
 		case <-r.ctx.Done():
 			r.terminate()
+			r.closeScriptReader()
 			_ = r.stdin.Close()
 			_ = r.stdout.Close()
 			_ = r.stderr.Close()
@@ -845,6 +911,14 @@ func (r *Run) lifecycle() {
 	waitErr := r.cmd.Wait()
 	r.signalMu.Unlock()
 	<-watcherDone
+	if r.enhanced {
+		// Closing a process's stdin releases any pending write. Wait for the
+		// source outcome before persisting the process result so a quick exit
+		// cannot race a truncated or failed protected-input read.
+		_ = r.stdin.Close()
+		r.closeScriptReader()
+		<-r.inputStopped
+	}
 	result := &pb.ExecutionResult{Binding: r.binding, State: "exited", ExitCode: 0, StdoutComplete: r.stdoutComplete, StderrComplete: r.stderrComplete}
 	if backgroundCleaned {
 		result.Reason = "background_descendants_terminated"
@@ -871,6 +945,13 @@ func (r *Run) lifecycle() {
 		if result.Reason == "" {
 			result.Reason = "runtime_or_transport_expired"
 		}
+	}
+	r.integrityMu.Lock()
+	inputFailed := r.protectedInputFailed
+	r.integrityMu.Unlock()
+	if inputFailed {
+		result.State = "cancelled"
+		result.Reason = "protected_input_incomplete"
 	}
 	if !result.StdoutComplete || !result.StderrComplete {
 		if result.State == "exited" {
