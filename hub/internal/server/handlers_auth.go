@@ -793,6 +793,7 @@ func (s *Server) handleChangePassword(w http.ResponseWriter, r *http.Request) {
 		respondError(w, http.StatusInternalServerError, "failed to update password")
 		return
 	}
+	s.endShellsByUser(userID, "Authentication credentials changed; sign in again.")
 	_ = s.store.AddPasswordHistory(userID, hash)
 	_ = s.store.TrimPasswordHistory(userID, settings.PasswordHistoryCount)
 
@@ -872,6 +873,7 @@ func (s *Server) handleTOTPDisable(w http.ResponseWriter, r *http.Request) {
 		respondError(w, http.StatusInternalServerError, "failed to disable TOTP")
 		return
 	}
+	s.endShellsByUser(req.UserID, "Authentication credentials changed; sign in again.")
 
 	// Admin-initiated TOTP removal is a security-sensitive auth-factor change;
 	// invalidate the target user's existing sessions and API tokens so any

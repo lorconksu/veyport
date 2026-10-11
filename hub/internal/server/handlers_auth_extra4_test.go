@@ -11,6 +11,11 @@ import (
 func TestHandleChangePassword_Success(t *testing.T) {
 	s := testServer(t)
 	token := registerAndGetAdminToken(t, s)
+	actor, err := s.store.GetUserByUsername("admin")
+	if err != nil {
+		t.Fatal(err)
+	}
+	events := executionForCredentialRevocationTest(t, s, actor.ID)
 
 	req := httptest.NewRequest("PUT", testPasswordPath, mustJSON(t, map[string]string{
 		"current_password": testPassword,
@@ -23,6 +28,7 @@ func TestHandleChangePassword_Success(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("expected 200 for successful password change, got %d: %s", rec.Code, rec.Body.String())
 	}
+	requireCredentialRevokedExecution(t, events)
 }
 
 // TestHandleChangePassword_WeakNewPassword verifies 400 for weak new password.

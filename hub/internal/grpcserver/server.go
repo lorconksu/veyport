@@ -42,6 +42,7 @@ type Config struct {
 	Pending                *PendingRequests
 	LogSessions            *LogSessions
 	TerminalSessions       *TerminalSessions
+	ExecutionSessions      *ExecutionSessions
 	CACert                 *x509.Certificate
 	CAKey                  *ecdsa.PrivateKey
 	Notifier               *notify.Notifier
@@ -61,6 +62,9 @@ func New(cfg Config) *Server {
 	}
 	if cfg.TerminalSessions == nil {
 		cfg.TerminalSessions = NewTerminalSessions()
+	}
+	if cfg.ExecutionSessions == nil {
+		cfg.ExecutionSessions = NewExecutionSessions(cfg.TerminalSessions, cfg.ConnMgr)
 	}
 	flushInterval := cfg.HeartbeatFlushInterval
 	if flushInterval <= 0 {
@@ -128,6 +132,7 @@ func New(cfg Config) *Server {
 		pending:          s.pending,
 		logSessions:      s.logSessions,
 		terminals:        s.terminals,
+		executions:       cfg.ExecutionSessions,
 		hbCoalescer:      hbCoalescer,
 		caCert:           cfg.CACert,
 		caKey:            cfg.CAKey,
@@ -160,6 +165,9 @@ func (s *Server) Start() error {
 }
 
 func (s *Server) Stop() {
+	for _, node := range s.connMgr.ActiveServerIDs() {
+		s.handler.executions.EndAll(node, "hub shutting down")
+	}
 	if s.hbCoalescer != nil {
 		s.hbCoalescer.FlushAll()
 	}

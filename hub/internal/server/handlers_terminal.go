@@ -10,7 +10,9 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/wyiu/veyport/hub/internal/account"
 	"github.com/wyiu/veyport/hub/internal/grpcserver"
+	"github.com/wyiu/veyport/hub/internal/lockout"
 	"github.com/wyiu/veyport/hub/internal/model"
 	"github.com/wyiu/veyport/hub/internal/store"
 	pb "github.com/wyiu/veyport/proto/veyport/v1"
@@ -346,6 +348,10 @@ var (
 func AuthorizeTerminalExecution(st *store.Store, userID, serverID string) (string, error) {
 	user, err := st.GetUserByID(userID)
 	if err != nil {
+		return "", ErrTerminalNotAuthorized
+	}
+	status := account.Evaluate(account.InputFromUser(user), time.Now().UTC(), lockout.Load(st.GetConfig))
+	if _, refuse := account.Refusal(status); refuse {
 		return "", ErrTerminalNotAuthorized
 	}
 

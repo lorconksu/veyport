@@ -19,6 +19,11 @@ const (
 )
 
 var AuditCatalog = []AuditCatalogEntry{
+	{Action: AuditExecutionSubmitted, Label: "Command submitted", Category: auditCategorySSHGateway, Outcome: AuditOutcomeSuccess, ActorType: AuditActorTypeUser, ResourceType: "execution"},
+	{Action: AuditExecutionPrepared, Label: "Command identity prepared", Category: auditCategorySSHGateway, Outcome: AuditOutcomeSuccess, ActorType: AuditActorTypeUser, ResourceType: "execution"},
+	{Action: AuditExecutionDispatched, Label: "Command dispatched", Category: auditCategorySSHGateway, Outcome: AuditOutcomeSuccess, ActorType: AuditActorTypeUser, ResourceType: "execution"},
+	{Action: AuditExecutionFinished, Label: "Command completed", Category: auditCategorySSHGateway, Outcome: AuditOutcomeSuccess, ActorType: AuditActorTypeUser, ResourceType: "execution"},
+	{Action: AuditExecutionRefused, Label: "Command refused", Category: auditCategorySSHGateway, Outcome: AuditOutcomeFailure, ActorType: AuditActorTypeUser, ResourceType: "execution"},
 	{Action: AuditUserLogin, Label: "User login", Category: "Authentication", Outcome: AuditOutcomeSuccess, ActorType: AuditActorTypeUser, ResourceType: "user"},
 	{Action: AuditUserLoginFailed, Label: "User login failed", Category: "Authentication", Outcome: AuditOutcomeFailure, ActorType: AuditActorTypeAnonymous, ResourceType: "user"},
 	{Action: AuditUserLoginTOTPFailed, Label: "User TOTP failed", Category: "Authentication", Outcome: AuditOutcomeFailure, ActorType: AuditActorTypeUser, ResourceType: "user"},

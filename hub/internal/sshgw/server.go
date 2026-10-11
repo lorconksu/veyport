@@ -1,8 +1,7 @@
 // Package sshgw implements the Veyport SSH gateway: a hardened SSH listener
 // that authenticates operators by short-lived user certificate and bridges an
-// interactive PTY to a fleet agent over the existing hub↔agent terminal
-// channel. The hub stays on the data path, so every byte remains observable
-// and no new agent capability is required (feature 005-ssh-gateway).
+// interactive PTY over the terminal channel or a noninteractive command over
+// a separate lossless enrolled-node execution stream.
 //
 // The gateway owns no state of its own: TerminalSessions, ConnManager,
 // PendingRequests and Store are injected so it shares the exact machinery the
@@ -84,7 +83,8 @@ type Config struct {
 	// ConnMgr is the shared agent connection manager.
 	ConnMgr *connmgr.ConnManager
 	// Pending is the shared request/response correlation registry.
-	Pending *grpcserver.PendingRequests
+	Pending    *grpcserver.PendingRequests
+	Executions *grpcserver.ExecutionSessions
 
 	// Addr is the listen address (sshconfig.Config.Addr).
 	Addr string
@@ -107,6 +107,9 @@ type Config struct {
 	// OpenTimeout bounds the wait for TerminalOpenAck.
 	// Zero means DefaultOpenTimeout.
 	OpenTimeout time.Duration
+	// ExecutionConsumerTimeout can shorten the default one-minute blocked
+	// write budget. It never imposes an idle timeout on quiet commands.
+	ExecutionConsumerTimeout time.Duration
 }
 
 // Server is the SSH gateway listener. The zero value is not usable; build one

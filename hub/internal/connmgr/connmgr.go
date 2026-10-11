@@ -1,6 +1,7 @@
 package connmgr
 
 import (
+	"context"
 	"fmt"
 	"sync"
 	"time"
@@ -9,11 +10,16 @@ import (
 )
 
 type AgentConn struct {
-	ServerID string
-	Stream   pb.AgentService_ConnectServer
-	LastSeen time.Time
-	SendMu   sync.Mutex
+	ServerID  string
+	Stream    pb.AgentService_ConnectServer
+	LastSeen  time.Time
+	SendMu    sync.Mutex
+	done      chan struct{}
+	closeOnce sync.Once
 }
+
+func (c *AgentConn) Done() <-chan struct{} { return c.done }
+func (c *AgentConn) Close()                { c.closeOnce.Do(func() { close(c.done) }) }
 
 type ConnManager struct {
 	mu      sync.RWMutex
@@ -26,19 +32,30 @@ func New() *ConnManager {
 	}
 }
 
-func (cm *ConnManager) Register(serverID string, stream pb.AgentService_ConnectServer) {
+// Register returns the exact installed generation, even if a concurrent
+// reconnect replaces it before the caller starts watching Done.
+func (cm *ConnManager) Register(serverID string, stream pb.AgentService_ConnectServer) *AgentConn {
 	cm.mu.Lock()
 	defer cm.mu.Unlock()
-	cm.streams[serverID] = &AgentConn{
+	if previous := cm.streams[serverID]; previous != nil {
+		previous.Close()
+	}
+	connection := &AgentConn{
 		ServerID: serverID,
 		Stream:   stream,
 		LastSeen: time.Now(),
+		done:     make(chan struct{}),
 	}
+	cm.streams[serverID] = connection
+	return connection
 }
 
 func (cm *ConnManager) Unregister(serverID string) {
 	cm.mu.Lock()
 	defer cm.mu.Unlock()
+	if conn := cm.streams[serverID]; conn != nil {
+		conn.Close()
+	}
 	delete(cm.streams, serverID)
 }
 
@@ -49,6 +66,7 @@ func (cm *ConnManager) UnregisterIfCurrent(serverID string, stream pb.AgentServi
 	if !ok || conn.Stream != stream {
 		return false
 	}
+	conn.Close()
 	delete(cm.streams, serverID)
 	return true
 }
@@ -98,4 +116,35 @@ func (cm *ConnManager) SendToAgent(serverID string, msg *pb.HubMessage) error {
 	conn.SendMu.Lock()
 	defer conn.SendMu.Unlock()
 	return conn.Stream.Send(msg)
+}
+
+// SendToAgentContext bounds a control send. Timeout closes the registered
+// Connect handler, which cancels the underlying gRPC stream and its blocked
+// sender. Callers reserve execution capacity before using this method.
+func (cm *ConnManager) SendToAgentContext(ctx context.Context, serverID string, msg *pb.HubMessage) error {
+	conn := cm.GetConn(serverID)
+	if conn == nil {
+		return fmt.Errorf("agent not connected: %s", serverID)
+	}
+	result := make(chan error, 1)
+	go func() {
+		conn.SendMu.Lock()
+		defer conn.SendMu.Unlock()
+		select {
+		case <-conn.Done():
+			result <- fmt.Errorf("agent disconnected: %s", serverID)
+			return
+		default:
+		}
+		result <- conn.Stream.Send(msg)
+	}()
+	select {
+	case err := <-result:
+		return err
+	case <-ctx.Done():
+		conn.Close()
+		return ctx.Err()
+	case <-conn.Done():
+		return fmt.Errorf("agent disconnected: %s", serverID)
+	}
 }

@@ -19,6 +19,60 @@ func TestRegisterAndGetConn(t *testing.T) {
 	}
 }
 
+func TestRegisterReturnsOwnGenerationAcrossConcurrentReconnects(t *testing.T) {
+	cm := New()
+	const count = 128
+	type registration struct {
+		stream *mockStream
+		conn   *AgentConn
+	}
+	start := make(chan struct{})
+	registered := make(chan registration, count)
+	for range count {
+		go func() {
+			stream := &mockStream{}
+			<-start
+			registered <- registration{stream: stream, conn: cm.Register("node", stream)}
+		}()
+	}
+	close(start)
+	connections := make([]*AgentConn, 0, count)
+	for range count {
+		r := <-registered
+		if r.conn == nil || r.conn.Stream != r.stream {
+			t.Fatal("handler captured another reconnect's generation")
+		}
+		connections = append(connections, r.conn)
+	}
+	current := cm.GetConn("node")
+	for _, conn := range connections {
+		select {
+		case <-conn.Done():
+			if conn == current {
+				t.Fatal("current generation unexpectedly closed")
+			}
+		default:
+			if conn != current {
+				t.Fatal("original handler did not observe its replaced generation closing")
+			}
+		}
+		if conn != current && cm.UnregisterIfCurrent("node", conn.Stream) {
+			t.Fatal("original handler removed the newer generation")
+		}
+	}
+	if cm.GetConn("node") != current {
+		t.Fatal("original handler cleanup changed the current generation")
+	}
+	cm.Unregister("node")
+	for _, conn := range connections {
+		select {
+		case <-conn.Done():
+		default:
+			t.Fatal("unregistered generation retained a handler")
+		}
+	}
+}
+
 func TestGetConn_NotFound(t *testing.T) {
 	cm := New()
 	conn := cm.GetConn("nonexistent")

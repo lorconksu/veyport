@@ -72,6 +72,10 @@ func New(dbPath string) (*Store, error) {
 	}
 
 	st := &Store{db: db}
+	if err := st.ReconcileExecutions(); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("reconcile executions: %w", err)
+	}
 	if health, err := st.GetAuditHealth(); err == nil {
 		st.auditDegraded = health.Degraded
 	}

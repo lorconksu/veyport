@@ -1,6 +1,7 @@
 package grpcserver
 
 import (
+	"context"
 	"crypto/ecdsa"
 	"crypto/rand"
 	"crypto/sha256"
@@ -36,6 +37,7 @@ type Handler struct {
 	pending     *PendingRequests
 	logSessions *LogSessions
 	terminals   *TerminalSessions
+	executions  *ExecutionSessions
 	hbCoalescer *HeartbeatCoalescer
 	caCert      *x509.Certificate
 	caKey       *ecdsa.PrivateKey
@@ -76,7 +78,7 @@ func (h *Handler) Connect(stream pb.AgentService_ConnectServer) error {
 	}
 
 	serverID := handshake.serverID
-	h.connMgr.Register(serverID, stream)
+	connection := h.connMgr.Register(serverID, stream)
 
 	// Use stored IP (set during handshake with agent-reported IP) for logging
 	agentIP := h.peerAddr(stream)
@@ -86,8 +88,32 @@ func (h *Handler) Connect(stream pb.AgentService_ConnectServer) error {
 	h.onAgentConnected(serverID, agentIP)
 	defer h.onAgentDisconnected(serverID, stream)
 
+	incoming := make(chan controlReceive, 1)
+	go func() {
+		for {
+			msg, err := stream.Recv()
+			select {
+			case incoming <- controlReceive{msg, err}:
+			case <-connection.Done():
+				return
+			case <-stream.Context().Done():
+				return
+			}
+			if err != nil {
+				return
+			}
+		}
+	}()
 	for {
-		msg, err := stream.Recv()
+		var received controlReceive
+		select {
+		case received = <-incoming:
+		case <-connection.Done():
+			return nil
+		case <-stream.Context().Done():
+			return stream.Context().Err()
+		}
+		msg, err := received.msg, received.err
 		if err == io.EOF {
 			log.Printf("agent stream closed (EOF): %s", serverID)
 			return nil
@@ -96,11 +122,25 @@ func (h *Handler) Connect(stream pb.AgentService_ConnectServer) error {
 			log.Printf("agent stream error: %s — %v", serverID, err)
 			return err
 		}
-		if err := h.routeAgentMessage(serverID, stream, msg); err != nil {
+		routeResult := make(chan error, 1)
+		go func() { routeResult <- h.routeAgentMessage(serverID, stream, msg) }()
+		select {
+		case err = <-routeResult:
+		case <-connection.Done():
+			return nil
+		case <-stream.Context().Done():
+			return stream.Context().Err()
+		}
+		if err != nil {
 			log.Printf("agent message route error: %s — %v", serverID, err)
 			return err
 		}
 	}
+}
+
+type controlReceive struct {
+	msg *pb.AgentMessage
+	err error
 }
 
 // verifyCertCN checks that the mTLS client certificate CN matches the server ID.
@@ -183,6 +223,9 @@ func (h *Handler) onAgentDisconnected(serverID string, stream pb.AgentService_Co
 	}
 	if h.terminals != nil {
 		h.terminals.EndAll(serverID, -1, "agent disconnected")
+	}
+	if h.executions != nil {
+		h.executions.EndAll(serverID, "agent disconnected")
 	}
 	log.Printf("agent disconnected: %s", serverID)
 }
@@ -403,6 +446,23 @@ func (h *Handler) routeAgentMessage(serverID string, stream pb.AgentService_Conn
 		h.deliverTerminalData(serverID, p.TerminalData.SessionId, p.TerminalData.Data)
 	case *pb.AgentMessage_TerminalExit:
 		h.deliverTerminalExit(serverID, p.TerminalExit.SessionId, p.TerminalExit.ExitCode, p.TerminalExit.Error)
+	case *pb.AgentMessage_ExecutionCapabilities:
+		if h.executions != nil {
+			if node, err := h.executionNode(stream.Context()); err == nil && node == serverID {
+				h.executions.SetCapabilities(serverID, stream, p.ExecutionCapabilities)
+			}
+		}
+	case *pb.AgentMessage_ExecutionPrepared:
+		if h.executions != nil {
+			prepared := p.ExecutionPrepared
+			if !h.executions.DeliverPrepared(serverID, stream, prepared) && prepared != nil && prepared.Binding != nil && prepared.Binding.NodeId == serverID && prepared.Binding.ExecutionId == prepared.ExecutionId && !h.executions.hasExecution(serverID, prepared.ExecutionId) {
+				ctx, cancel := context.WithTimeout(stream.Context(), 2*time.Second)
+				_ = h.connMgr.SendToAgentContext(ctx, serverID, &pb.HubMessage{Payload: &pb.HubMessage_ExecutionCancel{ExecutionCancel: &pb.ExecutionCancel{Binding: prepared.Binding, Reason: "submission no longer active"}}})
+				cancel()
+			}
+		}
+	case *pb.AgentMessage_ExecutionStatus:
+		// Status is reconciliation metadata, never authority to retry Start.
 	default:
 		log.Printf("unhandled message type from %s: %T", serverID, p)
 	}

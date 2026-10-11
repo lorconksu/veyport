@@ -9,8 +9,9 @@ import (
 // Terminal kinds distinguish the transport a shell arrived on. They are the
 // values surfaced in the sessions list.
 const (
-	TerminalKindWeb = "web"
-	TerminalKindSSH = "ssh"
+	TerminalKindWeb  = "web"
+	TerminalKindSSH  = "ssh"
+	TerminalKindExec = "exec"
 )
 
 // activityThrottle is how often a stream of output is allowed to move a
@@ -107,21 +108,33 @@ func (ts *TerminalSessions) Register(serverID, sessionID, userID, executionUser 
 	if _, exists := ts.sessions[key]; exists {
 		return nil, false
 	}
-	ch := make(chan TerminalEvent, 256)
-	now := ts.nowFunc()
-	s := &terminalSession{
-		serverID:      serverID,
-		sessionID:     sessionID,
-		userID:        userID,
-		executionUser: executionUser,
-		kind:          TerminalKindWeb,
-		startedAt:     now,
-		lastActivity:  now,
-		ch:            ch,
-	}
+	s := &terminalSession{serverID: serverID, sessionID: sessionID, userID: userID, executionUser: executionUser, kind: TerminalKindWeb}
 	for _, opt := range opts {
 		opt(s)
 	}
+	// Reservation and registration share this lock so simultaneous web, SSH
+	// shell and execution submissions cannot exceed a common budget.
+	var actor, node, total int
+	for _, active := range ts.sessions {
+		if active.closed {
+			continue
+		}
+		if active.kind == TerminalKindExec {
+			total++
+		}
+		if active.kind == TerminalKindExec && active.userID == userID {
+			actor++
+		}
+		if active.serverID == serverID {
+			node++
+		}
+	}
+	if node >= 8 || (s.kind == TerminalKindExec && (actor >= 4 || total >= 32)) {
+		return nil, false
+	}
+	ch := make(chan TerminalEvent, 256)
+	now := ts.nowFunc()
+	s.ch, s.startedAt, s.lastActivity = ch, now, now
 	ts.sessions[key] = s
 	return ch, true
 }

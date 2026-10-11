@@ -105,6 +105,7 @@ func runServer() error {
 	pending := grpcserver.NewPendingRequests()
 	logSessions := grpcserver.NewLogSessions()
 	terminalSessions := grpcserver.NewTerminalSessions()
+	executionSessions := grpcserver.NewExecutionSessions(terminalSessions, cm)
 
 	srv := server.New(server.Config{
 		Addr:             *addr,
@@ -131,17 +132,18 @@ func runServer() error {
 	grpcExternalHost := resolveGRPCExternalHost(*grpcExternalAddr)
 
 	grpcSrv := grpcserver.New(grpcserver.Config{
-		Addr:             *grpcAddr,
-		ExternalHostname: grpcExternalHost,
-		Store:            st,
-		ConnMgr:          cm,
-		Pending:          pending,
-		LogSessions:      logSessions,
-		TerminalSessions: terminalSessions,
-		CACert:           caCert,
-		CAKey:            caKey,
-		Notifier:         notifier,
-		StorageKey:       storageKey,
+		Addr:              *grpcAddr,
+		ExternalHostname:  grpcExternalHost,
+		Store:             st,
+		ConnMgr:           cm,
+		Pending:           pending,
+		LogSessions:       logSessions,
+		TerminalSessions:  terminalSessions,
+		ExecutionSessions: executionSessions,
+		CACert:            caCert,
+		CAKey:             caKey,
+		Notifier:          notifier,
+		StorageKey:        storageKey,
 	})
 
 	// The gateway shares the CA, host key and terminal machinery with the HTTP
@@ -149,14 +151,15 @@ func runServer() error {
 	// the gateway presents, and an SSH session must land in the same terminal
 	// registry the web terminal uses.
 	sshSrv := sshgw.New(sshgw.Config{
-		Store:     st,
-		UserCA:    userCA,
-		HostKey:   hostKey,
-		Terminals: terminalSessions,
-		ConnMgr:   cm,
-		Pending:   pending,
-		Addr:      sshCfg.Addr,
-		Enabled:   sshCfg.Enabled,
+		Store:      st,
+		UserCA:     userCA,
+		HostKey:    hostKey,
+		Terminals:  terminalSessions,
+		ConnMgr:    cm,
+		Pending:    pending,
+		Executions: executionSessions,
+		Addr:       sshCfg.Addr,
+		Enabled:    sshCfg.Enabled,
 	})
 
 	// Wire the gRPC handler into the HTTP server so the re-enroll approve
