@@ -102,14 +102,18 @@ describe('security workflow HTTP bindings', () => {
     await expect(requestSecurityChange(preview, 'proof-CANARY')).rejects.toThrow('expired [redacted]')
   })
 
-  it('refreshes only the session and preserves action bytes when access expires', async () => {
-    mockFetch.mockResolvedValueOnce(response({}, 401))
-      .mockImplementationOnce(async () => { document.cookie = 'veyport_csrf=renewed-csrf'; return response({}) })
-      .mockResolvedValueOnce(response({ proof: 'bound-proof' }))
-    await securityStepUp('security.apply', digest, '123456', 'change-5')
-    expect(mockFetch.mock.calls[1][0]).toBe('/api/auth/refresh')
-    expect(mockFetch.mock.calls[2][1]?.body).toBe(mockFetch.mock.calls[0][1]?.body)
-    expect((mockFetch.mock.calls[2][1]?.headers as Headers).get('X-CSRF-Token')).toBe('renewed-csrf')
+  it('returns an expired session without refreshing or replaying one-use MFA and decisions', async () => {
+    for (const operation of [
+      () => securityStepUp('security.apply', digest, '123456', 'change-5'),
+      () => requestSecurityChange(preview, 'request-proof'),
+      () => approveSecurityChange({ id: 'change-5', digest }, 'approval-proof'),
+      () => applySecurityChange({ id: 'change-5', digest }, 'apply-proof'),
+    ]) {
+      mockFetch.mockResolvedValueOnce(response({ error: 'interactive session expired' }, 401))
+      await expect(operation()).rejects.toMatchObject({ status: 401 })
+    }
+    expect(mockFetch).toHaveBeenCalledTimes(4)
+    expect(mockFetch.mock.calls.some(call => call[0] === '/api/auth/refresh')).toBe(false)
   })
 
   it('returns only a write-only reference while preserving uploaded secret bytes', async () => {

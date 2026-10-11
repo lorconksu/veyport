@@ -1,6 +1,7 @@
 import { useRef, useState } from 'react'
 import { useMutation, useQuery } from '@tanstack/react-query'
 import { useAuth } from '@/hooks/use-auth'
+import { canDecideChange } from '@/lib/security-authority'
 import { canBootstrapSecurity, canViewSecurity, hasCapability } from '@/lib/auth'
 import { getAuditPolicy, listSecurityChanges, listSecurityPrincipals, previewSecurityChange } from '@/lib/security-api'
 import type { AuditPolicy, AuditPolicyResponse, SecurityChange, SecurityNomination, SecurityPreview, SecurityProposal, SecurityPrincipal } from '@/types/security'
@@ -238,9 +239,9 @@ function ApprovalsPanel({ actions }: { actions: SecuritySettingsActions }) {
             {change.approvals && change.approvals.length > 0 && <ul className="text-xs text-text-secondary space-y-1" aria-label="Independent-person approvals">{change.approvals.map((approval, index) => <li key={`${approval.person_id}:${index}`}>{approval.person_id} · {approval.user_id} · {new Date(approval.approved_at).toLocaleString()}{approval.invalidated_at ? ' · invalidated' : ''}</li>)}</ul>}
             <p className="text-xs text-text-muted break-all">Digest: {change.digest}</p>
             <pre className="text-xs text-text-secondary whitespace-pre-wrap break-all">{JSON.stringify(change.change, null, 2)}</pre>
-            {(change.state === 'requested' || change.state === 'partially_approved') && canApprove && <button type="button" disabled={!actions.onApprove} onClick={() => actions.onApprove?.(change)} className="mr-2 text-xs border border-border rounded px-3 py-2 disabled:opacity-50">Approve request</button>}
-            {change.state === 'approved' && canApply && <button type="button" disabled={!actions.onApply} onClick={() => actions.onApply?.(change)} className="mr-2 text-xs border border-border rounded px-3 py-2 disabled:opacity-50">Apply request</button>}
-            {change.state === 'applying' && canApply && <button type="button" disabled={!actions.onReconcile} onClick={() => actions.onReconcile?.(change)} className="text-xs border border-border rounded px-3 py-2 disabled:opacity-50">Reconcile apply</button>}
+            {canDecideChange(user, change, 'approve') && <button type="button" disabled={!actions.onApprove} onClick={() => actions.onApprove?.(change)} className="mr-2 text-xs border border-border rounded px-3 py-2 disabled:opacity-50">Approve request</button>}
+            {canDecideChange(user, change, 'apply') && <button type="button" disabled={!actions.onApply} onClick={() => actions.onApply?.(change)} className="mr-2 text-xs border border-border rounded px-3 py-2 disabled:opacity-50">Apply request</button>}
+            {canDecideChange(user, change, 'reconcile') && <button type="button" disabled={!actions.onReconcile} onClick={() => actions.onReconcile?.(change)} className="text-xs border border-border rounded px-3 py-2 disabled:opacity-50">Reconcile apply</button>}
           </article>
         ))}
       </div>

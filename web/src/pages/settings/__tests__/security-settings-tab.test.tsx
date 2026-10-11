@@ -141,7 +141,7 @@ describe('SecuritySettingsTab', () => {
   it('keeps selected safe principals visible when nominees come from different pages', async () => {
     mocks.user = { id: 'bootstrap-admin', username: 'initial-admin', person_id: 'person-admin', role: 'admin', totp_enabled: true, capabilities: ['security.bootstrap'] }
     mocks.getAuditPolicy.mockResolvedValue({ ...policyResponse, governance_enrolled: false })
-    mocks.listSecurityPrincipals.mockImplementation(async (limit: number, offset: number, search: string) => ({
+    mocks.listSecurityPrincipals.mockImplementation(async (limit: number, offset: number) => ({
       principals: Array.from({ length: offset === 0 ? 50 : 2 }, (_, index) => ({ id: `safe-${offset + index}`, username: `safe-person-${offset + index}`, person_id: `person-${offset + index}`, roles: ['viewer'], totp_enabled: true })),
       total: 52, limit, offset,
     }))

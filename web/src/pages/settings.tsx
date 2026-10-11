@@ -19,7 +19,7 @@ import { SessionsModal, SessionsTable } from '@/pages/sessions-modal'
 import { isShell } from '@/lib/sessions'
 import { firstMutationError, mutationErrorMessage } from '@/lib/mutation'
 import { getAuditPolicy } from '@/lib/security-api'
-import { SecuritySettingsTab } from '@/pages/settings/security-settings-tab'
+import { SecurityWorkspace } from '@/pages/settings/security-workflow'
 
 /** u.status when present; otherwise derives from `locked_until` (007 fallback, still exercised by pre-008 fixtures). */
 function effectiveStatus(u: User): AccountStatus {
@@ -924,9 +924,11 @@ export function SettingsPage() {
   const showSecurity = canViewSecurity(user, securityPolicyQuery.data)
   const [searchParams, setSearchParams] = useSearchParams()
   const tabFromUrl = searchParams.get('tab')
+  const requestId = searchParams.get('request') ?? ''
+  const specificReview = /^[a-zA-Z0-9_-]{1,128}$/.test(requestId)
 
   const resolveTab = (): 'profile' | 'users' | 'directory' | 'notifications' | 'alerts' | 'security' => {
-    if (tabFromUrl === 'security' && showSecurity) return 'security'
+    if (tabFromUrl === 'security' && (showSecurity || specificReview)) return 'security'
     if (tabFromUrl === 'users' && isAdmin) return 'users'
     if (tabFromUrl === 'directory' && isAdmin) return 'directory'
     if (tabFromUrl === 'notifications' && isAdmin) return 'notifications'
@@ -1027,7 +1029,7 @@ export function SettingsPage() {
       {activeTab === 'users' && isAdmin && <UsersTab />}
       {activeTab === 'directory' && isAdmin && <DirectoryTab />}
       {activeTab === 'notifications' && isAdmin && <NotificationsTab />}
-      {activeTab === 'security' && showSecurity && <SecuritySettingsTab />}
+      {activeTab === 'security' && (showSecurity || specificReview) && <SecurityWorkspace broadAccess={showSecurity} requestId={specificReview ? requestId : ''} onRequestId={id => setSearchParams({ tab: 'security', request: id }, { replace: true })} />}
       {activeTab === 'alerts' && <PreferencesTab />}
     </div>
   )

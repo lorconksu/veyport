@@ -1,4 +1,4 @@
-import { apiFetch, ApiError } from './api'
+import { apiFetch, apiFetchOnce, ApiError } from './api'
 import type {
   AuditPolicy, AuditPolicyResponse, SecurityAction, SecurityChange, SecurityChangesPage,
   SecurityCredentialReference, SecurityPreview, SecurityPrincipalsPage, SecurityProposal,
@@ -14,9 +14,9 @@ function requireDigest(digest: string): void {
   if (!/^[a-f0-9]{64}$/.test(digest)) throw new Error('Exact security proposal digest required')
 }
 
-async function securityPost<T>(path: string, body: unknown, secrets: string[] = []): Promise<T> {
+async function securityPost<T>(path: string, body: unknown, secrets: string[] = [], signal?: AbortSignal): Promise<T> {
   try {
-    return await apiFetch<T>(path, { method: 'POST', body: JSON.stringify(body) })
+    return await apiFetchOnce<T>(path, { method: 'POST', body: JSON.stringify(body), cache: 'no-store', signal })
   } catch (error) {
     throw redactedSecurityError(error, secrets)
   }
@@ -38,28 +38,28 @@ export function getAuditPolicy(signal?: AbortSignal): Promise<AuditPolicyRespons
   return apiFetch('/audit-policy', { signal, cache: 'no-store' })
 }
 
-export function testAuditPolicy(policy: AuditPolicy): Promise<{ ready: boolean }> {
-  return securityPost('/audit-policy/test', policy)
+export function testAuditPolicy(policy: AuditPolicy, signal?: AbortSignal): Promise<{ ready: boolean }> {
+  return securityPost('/audit-policy/test', policy, [], signal)
 }
 
-export function createSecuritySecret(kind: 'destination' | 'password', value: string): Promise<SecurityCredentialReference> {
+export function createSecuritySecret(kind: 'destination' | 'password', value: string, signal?: AbortSignal): Promise<SecurityCredentialReference> {
   if (!value || new TextEncoder().encode(value).length > 8192) throw new Error('Bounded write-only secret required')
-  return securityPost('/security/secrets', { kind, value }, [value])
+  return securityPost('/security/secrets', { kind, value }, [value], signal)
 }
 
-export function previewSecurityChange(proposal: SecurityProposal): Promise<SecurityPreview> {
+export function previewSecurityChange(proposal: SecurityProposal, signal?: AbortSignal): Promise<SecurityPreview> {
   if (!proposal.reason.trim() || new TextEncoder().encode(proposal.reason).length > 2048 || !Number.isSafeInteger(proposal.expected_version) || proposal.expected_version < 1) {
     throw new Error('Reason and explicit expected policy version required')
   }
-  return securityPost('/security/changes/preview', proposal)
+  return securityPost('/security/changes/preview', proposal, [], signal)
 }
 
-export function requestSecurityChange(preview: SecurityPreview, proof: string): Promise<SecurityChange> {
+export function requestSecurityChange(preview: SecurityPreview, proof: string, signal?: AbortSignal): Promise<SecurityChange> {
   requireDigest(preview.digest)
   if (!proof) throw new Error('Fresh request MFA proof required')
   // Use the returned typed proposal exactly. The hub recomputes its canonical
   // digest and consumes only a proof bound to this action/session/proposal.
-  return securityPost('/security/changes', { ...preview.proposal, step_up_proof: proof }, [proof])
+  return securityPost('/security/changes', { ...preview.proposal, step_up_proof: proof }, [proof], signal)
 }
 
 export function listSecurityChanges(limit = 50, offset = 0, signal?: AbortSignal): Promise<SecurityChangesPage> {
@@ -71,31 +71,31 @@ export function getSecurityChange(id: string, signal?: AbortSignal): Promise<Sec
   return apiFetch(changePath(id), { signal, cache: 'no-store' })
 }
 
-export function securityStepUp(action: SecurityAction, digest: string, code: string, changeId?: string): Promise<SecurityStepupResponse> {
+export function securityStepUp(action: SecurityAction, digest: string, code: string, changeId?: string, signal?: AbortSignal): Promise<SecurityStepupResponse> {
   requireDigest(digest)
   if (!['security.request', 'security.approve', 'security.apply'].includes(action)) throw new Error('Invalid security action')
   if (!/^\d{6}$/.test(code)) throw new Error('Fresh six-digit MFA code required')
   if (action !== 'security.request' && !changeId) throw new Error('Exact change ID required for approval/apply MFA')
   if (changeId) changePath(changeId)
-  return securityPost('/security/step-up', { action, digest, code, ...(changeId ? { change_id: changeId } : {}) }, [code])
+  return securityPost('/security/step-up', { action, digest, code, ...(changeId ? { change_id: changeId } : {}) }, [code], signal)
 }
 
-export function approveSecurityChange(change: Pick<SecurityChange, 'id' | 'digest'>, proof: string): Promise<SecurityChange> {
-  return mutateSecurityChange(change, proof, 'approve')
+export function approveSecurityChange(change: Pick<SecurityChange, 'id' | 'digest'>, proof: string, signal?: AbortSignal): Promise<SecurityChange> {
+  return mutateSecurityChange(change, proof, 'approve', signal)
 }
 
-export function applySecurityChange(change: Pick<SecurityChange, 'id' | 'digest'>, proof: string): Promise<SecurityChange> {
-  return mutateSecurityChange(change, proof, 'apply')
+export function applySecurityChange(change: Pick<SecurityChange, 'id' | 'digest'>, proof: string, signal?: AbortSignal): Promise<SecurityChange> {
+  return mutateSecurityChange(change, proof, 'apply', signal)
 }
 
-function mutateSecurityChange(change: Pick<SecurityChange, 'id' | 'digest'>, proof: string, action: 'approve' | 'apply'): Promise<SecurityChange> {
+function mutateSecurityChange(change: Pick<SecurityChange, 'id' | 'digest'>, proof: string, action: 'approve' | 'apply', signal?: AbortSignal): Promise<SecurityChange> {
   requireDigest(change.digest)
   if (!proof) throw new Error('Fresh action-bound MFA proof required')
-  return securityPost(`${changePath(change.id)}/${action}`, { step_up_proof: proof }, [proof])
+  return securityPost(`${changePath(change.id)}/${action}`, { step_up_proof: proof }, [proof], signal)
 }
 
-export function reconcileSecurityChange(id: string): Promise<SecurityChange> {
-  return securityPost(`${changePath(id)}/reconcile`, undefined)
+export function reconcileSecurityChange(id: string, signal?: AbortSignal): Promise<SecurityChange> {
+  return securityPost(`${changePath(id)}/reconcile`, undefined, [], signal)
 }
 
 export function listSecurityPrincipals(limit = 50, offset = 0, search = '', signal?: AbortSignal): Promise<SecurityPrincipalsPage> {

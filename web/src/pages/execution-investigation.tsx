@@ -57,6 +57,7 @@ export function ExecutionInvestigation({ onRequestOriginal }: ExecutionInvestiga
                 <span className="text-xs text-text-muted">{new Date(execution.created_at).toLocaleString()}</span>
               </div>
               <dl className="grid gap-x-4 gap-y-1 sm:grid-cols-2 text-xs">
+                <Info label="Execution ID" value={execution.id} mono />
                 <Info label="Actor" value={`${execution.actor_name || execution.actor_id} (${execution.actor_id})`} />
                 <Info label="OS identity" value={execution.preparation ? `${execution.preparation.identity.username} · UID ${execution.preparation.identity.uid} · GID ${execution.preparation.identity.gid}` : 'Unavailable (identity was not prepared)'} />
                 <Info label="Node" value={`${execution.node_name || execution.node_id} (${execution.node_id})`} />

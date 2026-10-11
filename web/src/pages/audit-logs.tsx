@@ -1,10 +1,10 @@
-import { useState, useMemo, useCallback, useEffect } from 'react'
+import { useState, useMemo, useCallback } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Download, Info, Save, ShieldAlert } from 'lucide-react'
 import { apiFetch } from '@/lib/api'
 import { useAuth } from '@/hooks/use-auth'
 import { hasCapability } from '@/lib/auth'
-import { ExecutionInvestigation } from '@/pages/execution-investigation'
+import { OriginalAccessInvestigation } from '@/pages/original-access-workflow'
 import type {
   AuditCatalogResponse,
   AuditDetectionsResponse,
@@ -35,7 +35,7 @@ export function AuditLogsPage() {
   const [offset, setOffset] = useState(0)
   const [savedFilterName, setSavedFilterName] = useState('')
   const [reviewNotes, setReviewNotes] = useState('')
-  const [settingsForm, setSettingsForm] = useState<AuditSettings | null>(null)
+  const [settingsDraft, setSettingsDraft] = useState<{ source: AuditSettings; value: AuditSettings } | null>(null)
 
   const buildParams = () => {
     const params = new URLSearchParams()
@@ -101,11 +101,7 @@ export function AuditLogsPage() {
     queryFn: async () => (await apiFetch<AuditFlagsResponse>('/audit-logs/flags')) ?? { flags: [] },
   })
 
-  useEffect(() => {
-    if (settings) {
-      setSettingsForm(settings)
-    }
-  }, [settings])
+  const settingsForm = settingsDraft && settingsDraft.source === settings ? settingsDraft.value : settings
 
   const exportMutation = useMutation({
     mutationFn: () => apiFetch<AuditExportResponse>(`/audit-logs/export?${buildParams()}`),
@@ -195,7 +191,7 @@ export function AuditLogsPage() {
     },
   })
 
-  const users = usersData?.users ?? []
+  const users = useMemo(() => usersData?.users ?? [], [usersData])
   const hasActiveFilters = filters.action || filters.userId || filters.outcome || filters.from || filters.to
 
   const clearFilters = () => {
@@ -247,17 +243,11 @@ export function AuditLogsPage() {
   const canManageControls = hasCapability(user, 'operations.admin')
 
   const updateSettingsField = <K extends keyof AuditSettings>(key: K, value: AuditSettings[K]) => {
-    setSettingsForm(prev => prev ? { ...prev, [key]: value } : prev)
+    if (settings && settingsForm) setSettingsDraft({ source: settings, value: { ...settingsForm, [key]: value } })
   }
 
   const updateThresholdField = (key: keyof AuditSettings['thresholds'], value: number) => {
-    setSettingsForm(prev => prev ? {
-      ...prev,
-      thresholds: {
-        ...prev.thresholds,
-        [key]: value,
-      },
-    } : prev)
+    if (settings && settingsForm) setSettingsDraft({ source: settings, value: { ...settingsForm, thresholds: { ...settingsForm.thresholds, [key]: value } } })
   }
 
   return (
@@ -329,7 +319,7 @@ export function AuditLogsPage() {
         </div>
       </div>
 
-      <ExecutionInvestigation />
+      <OriginalAccessInvestigation />
 
       <div className="grid gap-4 md:grid-cols-4">
         <div className="bg-surface border border-border rounded p-4">
