@@ -31,13 +31,36 @@ import (
 )
 
 type Clock struct {
-	mu  sync.RWMutex
-	now time.Time
+	mu     sync.RWMutex
+	now    time.Time
+	live   bool
+	offset time.Duration
 }
 
-func NewClock() *Clock                   { return &Clock{now: time.Now().UTC()} }
-func (c *Clock) Now() time.Time          { c.mu.RLock(); defer c.mu.RUnlock(); return c.now }
-func (c *Clock) Advance(d time.Duration) { c.mu.Lock(); c.now = c.now.Add(d); c.mu.Unlock() }
+func NewClock() *Clock { return &Clock{now: time.Now().UTC()} }
+
+// NewRealClock follows wall time for tests that exercise a production worker's
+// time.Now calls. NewClock remains fixed until Advance for deterministic tests.
+func NewRealClock() *Clock { return &Clock{live: true} }
+
+func (c *Clock) Now() time.Time {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	if c.live {
+		return time.Now().UTC().Add(c.offset)
+	}
+	return c.now
+}
+
+func (c *Clock) Advance(d time.Duration) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.live {
+		c.offset += d
+		return
+	}
+	c.now = c.now.Add(d)
+}
 
 type archived struct {
 	ref auditrecord.ObjectRef
