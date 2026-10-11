@@ -41,10 +41,15 @@ That means:
 - Interactive PTY and no-PTY execution use separate protocol paths; command streams have bounded buffering and explicit results.
 - Authorization and target identity are checked live. A valid SSH certificate does not grant terminal or command authority by itself.
 
-This command mode is part of the `011-cli-command-passthrough` feature branch and
-proposed `2.0.50-prototype.1` build. That version is not published. Standard
-command execution has no external audit-service dependency. Enhanced is opt-in
-and requires a qualified external receipt/archive configuration.
+The prototype identity is version `2.0.50-prototype.1` and immutable tag
+`prototype-ssh-passthrough.1`; stable `2.0.49` does not include this feature.
+Before installing, check the [prototype release page](https://github.com/lorconksu/veyport/releases/tag/prototype-ssh-passthrough.1)
+for an actually published release and its required assets. If they are absent,
+the prototype is unavailable. Use the Hub and CLI from the same source revision
+with a compatible agent. Resolve the immutable OCI tag to its published digest
+and verify the source revision.
+Standard command execution has no external audit-service dependency. Enhanced
+is opt-in and requires a qualified external receipt/archive configuration.
 
 ![Overview diagram](../screenshots/diagram-ssh-gateway-d1757e51.png)
 

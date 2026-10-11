@@ -19,7 +19,7 @@ complete supported script, not all remote process activity.
 - Provides a file tree browser to navigate the remote filesystem from your browser
 - Streams live log tailing with grep filtering directly in the browser
 - Opens browser-based terminal sessions for admins and authorized LDAP users
-- Provides feature-branch no-PTY command passthrough with `vey ssh <node> -- '<command>'` ([[CLI]]; not yet in a published release)
+- Provides no-PTY command passthrough with `vey ssh <node> -- '<command>'` in the prototype described below ([[CLI]])
 - Supports drag-and-drop file transfers via the Dropzone uploader
 - Records local audit metadata for supported account, server, file, terminal, and governance actions
 - Requires two-factor authentication for every account - no exceptions
@@ -34,8 +34,13 @@ Standard mode keeps these local audit features standalone. Enhanced command
 evidence is an opt-in prototype with external receipt/archive requirements and
 separate operational limits; it is not enabled by installing Veyport alone. See
 [[CLI]], [[SSH Gateway]], [[Audit Logs]], and [[Architecture]] for the feature
-boundary and current `2.0.50-prototype.1` branch status. No release has been
-published for this feature.
+boundary and prototype identity: version `2.0.50-prototype.1`, immutable tag
+`prototype-ssh-passthrough.1`. Stable `2.0.49` does not include this feature.
+Before installing, check the [prototype release page](https://github.com/lorconksu/veyport/releases/tag/prototype-ssh-passthrough.1)
+for an actually published release and its required assets. If they are absent,
+the prototype is unavailable. Use a Hub and CLI from the same source revision
+and a compatible agent. Resolve the immutable OCI tag to its published digest
+and verify the source revision.
 
 ---
 

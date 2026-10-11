@@ -246,12 +246,18 @@ Terminal endpoints require an interactive browser session. CLI-created API token
 
 ### `vey ssh node -- command` is refused or hangs while sending input
 
-Command mode is available on the matching `011-cli-command-passthrough`
-feature-branch Hub and CLI, not on a published stable build. Use one command
-string after `--`, for example `vey ssh web01 -- 'uname -a'`; do not split one
-command across multiple shell arguments. The mode has no PTY and starts OpenSSH
-in BatchMode. It does not ask for a terminal password or open an interactive
-shell. Check that the target agent advertises execution support and is online.
+Command mode uses prototype version `2.0.50-prototype.1` and immutable tag
+`prototype-ssh-passthrough.1`; stable `2.0.49` does not include it. Before
+installing, check the [prototype release page](https://github.com/lorconksu/veyport/releases/tag/prototype-ssh-passthrough.1)
+for an actually published release and its required assets. If they are absent,
+the prototype is unavailable. Use the Hub and CLI from the same source revision
+with a compatible agent. Resolve the immutable OCI tag to its published digest
+and verify the source revision. Use one command string after `--`, for example
+`vey ssh web01 -- 'uname -a'`; do not
+split one command across multiple shell arguments. The mode has no PTY and
+starts OpenSSH in BatchMode. It does not ask for a terminal password or open an
+interactive shell. Check that the target agent advertises execution support and
+is online.
 
 In Enhanced mode, redirected stdin must be empty unless the command is exactly
 `bash -s`, `/bin/bash -s`, `sh -s`, or `/bin/sh -s`. For a script, send the entire
