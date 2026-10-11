@@ -57,6 +57,47 @@ describe('SecuritySettingsTab', () => {
     expect(mocks.previewSecurityChange).toHaveBeenCalledWith(expect.objectContaining({ expected_version: 3, reason: 'Rotate archive policy' }))
   })
 
+  it('shows a preview failure and lets the operator recover with a fresh preview', async () => {
+    mocks.previewSecurityChange.mockRejectedValueOnce(new Error('Policy changed on the server'))
+    renderTab()
+    fireEvent.change(await screen.findByLabelText('Reason'), { target: { value: 'Rotate archive policy' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Preview request' }))
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('Preview failed. Policy changed on the server')
+    expect(screen.queryByText('Digest: preview-digest')).not.toBeInTheDocument()
+
+    fireEvent.change(screen.getByLabelText('Reason'), { target: { value: 'Review current archive policy' } })
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: 'Preview request' }))
+
+    expect(await screen.findByText('Digest: preview-digest')).toBeInTheDocument()
+    expect(mocks.previewSecurityChange).toHaveBeenLastCalledWith(expect.objectContaining({ reason: 'Review current archive policy' }))
+  })
+
+  it('previews the selected profile and normalized policy fields, then invalidates that preview after an edit', async () => {
+    renderTab()
+    fireEvent.change(await screen.findByLabelText('Profile'), { target: { value: 'enhanced' } })
+    fireEvent.change(screen.getByLabelText('Actor IDs (comma separated)'), { target: { value: ' actor-a, actor-b ' } })
+    fireEvent.change(screen.getByLabelText('Node IDs (comma separated)'), { target: { value: ' node-x, node-y ' } })
+    fireEvent.change(screen.getByLabelText('Runtime limit (seconds)'), { target: { value: '600' } })
+    fireEvent.change(screen.getByLabelText('Retention (hours)'), { target: { value: '48' } })
+    fireEvent.change(screen.getByLabelText('Reason'), { target: { value: 'Expand verified audit coverage' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Preview request' }))
+
+    expect(await screen.findByText('Digest: preview-digest')).toBeInTheDocument()
+    expect(mocks.previewSecurityChange).toHaveBeenLastCalledWith(expect.objectContaining({
+      expected_version: 3,
+      reason: 'Expand verified audit coverage',
+      change: { kind: 'policy', policy: expect.objectContaining({
+        profile: 'enhanced', actors: ['actor-a', 'actor-b'], nodes: ['node-x', 'node-y'], runtime_seconds: 600, retention_hours: 48,
+      }) },
+    }))
+
+    fireEvent.change(screen.getByLabelText('Retention (hours)'), { target: { value: '72' } })
+    expect(screen.queryByText('Digest: preview-digest')).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Request this change' })).not.toBeInTheDocument()
+  })
+
   it('builds a valid three-person Enhanced bootstrap for the actual bootstrap-only requester', async () => {
     mocks.user = { id: 'bootstrap-admin', username: 'initial-admin', person_id: 'person-admin', role: 'admin', totp_enabled: true, capabilities: ['security.bootstrap'] }
     mocks.getAuditPolicy.mockResolvedValue({ ...policyResponse, governance_enrolled: false, state: 'standard', policy: { ...policyResponse.policy, policy: { ...policyResponse.policy.policy, profile: 'standard' } }, readiness: { governance: false, archive_and_transport: false, enrollment_marker: false } })

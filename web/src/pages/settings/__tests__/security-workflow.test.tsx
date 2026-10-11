@@ -191,6 +191,24 @@ it('opens a typed request ID without placing proof or MFA material in its naviga
   fireEvent.click(screen.getByText('Open request'))
   expect(view.onRequestId).toHaveBeenCalledWith('change-typed')
 })
+it('shows protected principal requests only while broad access and request authority are present', async () => {
+  m.user = principal('officer', ['security.request'])
+  const policyResponse = { state: 'standard', governance_enrolled: true, policy: { version: 1, policy }, pending: null }
+  m.getAuditPolicy = vi.fn().mockResolvedValue(policyResponse)
+  m.listSecurityPrincipals = vi.fn().mockResolvedValue({ principals: [], total: 0, limit: 50, offset: 0 })
+  const view = setup(true, '')
+
+  expect(await screen.findByRole('heading', { name: 'Protected principal request' })).toBeInTheDocument()
+  expect(screen.getByLabelText('Protected operation')).toBeInTheDocument()
+
+  m.user = principal('officer')
+  view.rerender(<QueryClientProvider client={view.client}><SecurityWorkspace broadAccess requestId="" onRequestId={view.onRequestId} /></QueryClientProvider>)
+  expect(screen.queryByRole('heading', { name: 'Protected principal request' })).not.toBeInTheDocument()
+
+  m.user = principal('officer', ['security.request'])
+  view.rerender(<QueryClientProvider client={view.client}><SecurityWorkspace broadAccess={false} requestId="" onRequestId={view.onRequestId} /></QueryClientProvider>)
+  expect(screen.queryByRole('heading', { name: 'Protected principal request' })).not.toBeInTheDocument()
+})
 it('shows reconciliation uncertainty without replaying it', async () => {
   m.user = principal('officer', ['security.apply'])
   m.getSecurityChange.mockResolvedValue({ ...original, change: { kind: 'policy', policy }, state: 'applying', expires_at: '2000-01-01T00:00:00Z' })
