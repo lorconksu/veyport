@@ -91,6 +91,11 @@ func (s *Server) handleIssueSSHCertificate(w http.ResponseWriter, r *http.Reques
 		respondError(w, http.StatusNotFound, errUserNotFound)
 		return
 	}
+	if user.MustChangePassword {
+		s.auditSSHCertRefused(r, userID, "password change required")
+		respondError(w, http.StatusForbidden, "password change required before SSH access")
+		return
+	}
 
 	// A disabled or dormant account gets no new certificate: issuance is the
 	// one moment the hub can shorten the window in which a still-valid

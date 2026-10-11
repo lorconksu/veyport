@@ -373,7 +373,7 @@ var (
 // agent interprets as its default RunAsUser.
 func AuthorizeTerminalExecution(st *store.Store, userID, serverID string) (string, error) {
 	user, err := st.GetUserByID(userID)
-	if err != nil {
+	if err != nil || user.MustChangePassword {
 		return "", ErrTerminalNotAuthorized
 	}
 	status := account.Evaluate(account.InputFromUser(user), time.Now().UTC(), lockout.Load(st.GetConfig))
