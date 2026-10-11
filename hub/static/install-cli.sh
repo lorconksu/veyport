@@ -85,10 +85,12 @@ echo "    checksum OK."
 
 chmod +x "${WORK_DIR}/vey"
 
-# --- Detect an existing install (for the upgrade message) ---
+# --- Detect the existing PATH command (for accurate installation reporting) ---
+OLD_PATH=""
 OLD_VERSION=""
 if command -v vey >/dev/null 2>&1; then
-  OLD_VERSION=$(vey --version 2>/dev/null || true)
+  OLD_PATH=$(command -v vey)
+  OLD_VERSION=$("$OLD_PATH" --version 2>/dev/null || true)
 fi
 
 # --- Install: prefer /usr/local/bin, offer sudo, else fall back to user bin ---
@@ -112,27 +114,48 @@ else
   install -m 0755 "${WORK_DIR}/vey" "${INSTALL_DIR}/vey"
 fi
 
+# Report an absolute destination even when HOME was given as a relative path.
+INSTALL_DIR=$(CDPATH= cd -P "$INSTALL_DIR" && pwd -P)
 INSTALLED_PATH="${INSTALL_DIR}/vey"
 
-case ":${PATH}:" in
-  *":${INSTALL_DIR}:"*) ;;
-  *)
-    echo ""
-    echo "NOTE: ${INSTALL_DIR} is not on your PATH. Add this to your shell profile:"
-    echo "    export PATH=\"${INSTALL_DIR}:\$PATH\""
-    ;;
-esac
+# Printed commands must remain valid POSIX syntax for paths containing spaces
+# or apostrophes. This only formats instructions; it never edits shell profiles.
+quote_for_sh() {
+  printf "'"
+  printf '%s' "$1" | sed "s/'/'\\\\''/g"
+  printf "'"
+}
 
 # `vey --version` prints "vey vX.Y.Z-..."; use its output verbatim rather
 # than prefixing another "vey" (T-verify finding: "Installed vey vey ...").
 NEW_VERSION=$("$INSTALLED_PATH" --version 2>/dev/null || echo "vey (version unknown)")
 
 echo ""
-if [ -n "$OLD_VERSION" ]; then
+if [ "$OLD_PATH" = "$INSTALLED_PATH" ] && [ -n "$OLD_VERSION" ]; then
   echo "==> Upgraded: ${OLD_VERSION} -> ${NEW_VERSION}"
 else
   echo "==> Installed ${NEW_VERSION}"
 fi
+printf '    Installed at: %s\n' "$INSTALLED_PATH"
+
+# Installing into a directory already on PATH does not make it the first
+# match. Refresh this child shell's lookup, then report the command it selects.
+# A parent shell may also have an alias, function or cached command of its own.
+hash -r 2>/dev/null || true
+PATH_VEY=$(command -v vey 2>/dev/null || true)
+if [ "$PATH_VEY" != "$INSTALLED_PATH" ]; then
+  echo ""
+  if [ -n "$PATH_VEY" ]; then
+    PATH_VERSION=$("$PATH_VEY" --version 2>/dev/null || echo "version unknown")
+    printf 'NOTE: PATH resolves vey to %s (%s).\n' "$PATH_VEY" "$PATH_VERSION"
+  else
+    printf 'NOTE: %s is not on your PATH.\n' "$INSTALL_DIR"
+  fi
+  echo "Use the installed path below, or select it in your current shell:"
+  printf '    export PATH=%s:"$PATH"\n' "$(quote_for_sh "$INSTALL_DIR")"
+  echo "    hash -r"
+fi
+echo "If your shell still selects another vey, check its aliases/functions and run hash -r."
 echo ""
 echo "Next step:"
-echo "    vey --hub ${BASE_URL} login"
+printf '    %s --hub %s login\n' "$(quote_for_sh "$INSTALLED_PATH")" "$(quote_for_sh "$BASE_URL")"

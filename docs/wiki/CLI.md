@@ -93,7 +93,15 @@ The quickest path is the Hub-served install script — one command on Linux and 
 curl -fsSL https://hub.example.com/install/cli.sh | sh
 ```
 
-Re-running the same command upgrades an existing install in place. The same one-liner is available in the web UI under **Install CLI** on the dashboard.
+The installer replaces the binary at its reported destination: `/usr/local/bin/vey` when writable (or after an interactive `sudo` install), otherwise `~/.local/bin/vey`. A copy earlier in `PATH` can still be selected by the bare `vey` command, so check resolution after installing:
+
+```bash
+type -a vey          # Bash/Zsh: list every copy found on PATH
+command -v vey       # show the copy the shell will run
+"/path/printed/by/installer/vey" --version
+```
+
+If `command -v` points to another copy, put the reported install directory earlier in `PATH`, remove the stale copy if appropriate, and refresh the shell's command cache (`hash -r` in Bash, `rehash` in Zsh, or start a new shell). The same one-liner is available in the web UI under **Install CLI** on the dashboard.
 
 ### Manual install (verify by hand)
 
