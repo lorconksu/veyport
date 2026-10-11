@@ -1,16 +1,23 @@
 # Isolated production-runtime execution checks
 
-This tooling addresses only the owner-authorized `.59` hub and `.64` enrolled
-target. It never installs into staging and never changes receipt, ELK, archive
-or key-service guests. Receipt ingestion creates retained synthetic records in
-the existing separately qualified `.60` service. The three principals and their
-person IDs are explicitly synthetic; their votes are test fixtures and represent
-no human or owner approvals.
+This tooling qualifies the owner-authorized `.59` hub and `.64` enrolled target
+against the separately deployed `.60` receipt service. It never installs into
+staging and never changes the receipt, ELK, archive or key-service guests. The
+six-VM prototype topology is `.59` Hub, `.60` receipt/export, `.61` ELK, `.62`
+archive, `.63` OpenBao, and `.64` target; `.65` through `.69` are unused. The
+three principals and their person IDs are explicitly synthetic; their votes are
+test fixtures and represent no human or owner approvals.
 
-The initial report qualifies API, CLI and native execution transport. It makes
-no browser/UI claim: the hub build embeds the currently available `hub/web/dist`.
-Browser qualification requires rebuilding the final reviewed frontend before
-the corresponding hub build and redeployment.
+`qualification.json` is the historical API/CLI/native execution report; it does
+not claim browser/UI qualification. Separate actual browser checks performed a
+three-person bootstrap and verified an original download after the production
+frontend was rebuilt and redeployed. Their pass records are kept in local-only
+qualification evidence and are not linked from this public runbook. The
+checked-in native and load reports describe commit
+`23e5294926571491f9980f9c4cada5667fa55f61`; the 2026-10-11 pre-publication
+deployment checkpoint records local Hub commit
+`e7f7c8cb1b62ec8c57dac1dc6a09986d9d875cd2`. These dated prototype qualifications
+do not mean final release source or the eventual published artifact is deployed.
 
 After the reviewed backend checkpoint and patched dependency gates, build and
 deploy native binaries using Go 1.26.9:
@@ -19,10 +26,16 @@ deploy native binaries using Go 1.26.9:
 python3 infra/audit-lab/execution/deploy.py
 python3 infra/audit-lab/execution/deploy.py --build --apply
 python3 infra/audit-lab/execution/qualify.py
+# Fresh, never-enrolled lab only: prepare for manual browser bootstrap.
 python3 infra/audit-lab/execution/qualify.py --apply --prepare-only
-# Run the actual browser bootstrap after rebuilding/redeploying reviewed web UI.
+# Complete first-time browser bootstrap in the UI, then qualify the lab.
 python3 infra/audit-lab/execution/qualify.py --apply
 ```
+
+Do not repeat `--prepare-only` or the first-time browser bootstrap on an
+already-enrolled lab. Qualification reruns preserve user identities, enrollment
+markers and external anchors; they use the existing policy and may submit the
+bounded same-profile revision described below.
 
 Deployment preserves SQLite databases, agent certificates, installation IDs,
 enrollment markers and all external versions. The installer rejects an existing
@@ -110,10 +123,12 @@ Eight complete `/bin/sh -s` scripts wait on one unique lab-only start barrier:
 four commands per actor respect the actor limit, while all eight share the node
 limit. Each unique command is submitted once, and its real process marker must
 appear before the next admission is submitted. Earlier processes stay gated.
-The independent receipt service has four shared, nonblocking HTTP request slots
-for readiness, preservation and metadata; that admission throughput budget is
-separate from eight running processes. A simultaneous eight-admission burst can
-be refused safely and is retained separately as failed overload evidence.
+The independent `.60` receipt service has four shared, nonblocking HTTP request
+slots for readiness, preservation and metadata; that admission throughput budget
+is separate from eight running processes. A simultaneous eight-admission burst
+can be refused safely and is retained separately as failed overload evidence in
+`burst-qualification.json`; that record is distinct from the passed
+staged-concurrency report in `load-qualification.json`.
 Staging has a forty-second total deadline and each complete script has a
 forty-five-second barrier bound within the existing sixty-second runtime policy.
 One bounded remote snapshot must observe all eight live process markers before
