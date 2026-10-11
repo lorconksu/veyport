@@ -103,6 +103,11 @@ expired — sign in again"** (timed out) or **"session ended — sign in again"*
 and a browser is returned to this sign-in page. The `vey` CLI prints the same message and exits
 with its authentication-failure status; run `vey login` again.
 
+Routine token refresh replaces the refresh token for the session that made the request. It does
+not sign out other browser, CLI, or device sessions, and an access token that has not expired
+remains valid. Logout, session expiry, account or security changes, and explicit revocation still
+end the sessions they apply to.
+
 ### Why was I signed out?
 
 - **You were idle past the timeout.** The session's idle clock (default 15 minutes) ran out.

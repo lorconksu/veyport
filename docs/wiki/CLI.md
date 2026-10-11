@@ -21,6 +21,7 @@
 8. [Exit Codes](#exit-codes)
 9. [TLS](#tls)
 10. [Scripting Notes](#scripting-notes)
+11. [Command passthrough](#command-passthrough)
 
 ---
 
@@ -28,9 +29,11 @@
 
 `vey` is a Go binary that talks to the same Hub REST API the web dashboard uses (`Authorization: Bearer <token>`, JSON bodies, `Cache-Control: no-store`). There is no cookie handling and no CSRF token — Bearer requests bypass CSRF the same way a CLI-created API token does. Every request carries `User-Agent: vey/<version>`, which is how the hub tells an interactive `vey login` session apart from a browser when it records a server-side session (see [Session awareness](#session-awareness), below).
 
-`vey` currently covers fleet visibility, remote file/log access, audit export, and — as of the SSH gateway feature — native interactive shell access via `vey ssh-cert` / `vey ssh`. There is still no REST-driven `vey terminal` command mirroring the browser's SSE-based terminal stream; use the web dashboard's terminal (see [[Server Detail]]) for that specific flow, or `vey ssh` for a real terminal from your own machine (see [[SSH Gateway]]).
+`vey` covers fleet visibility, remote file/log access, audit export, native interactive SSH, and (on the `011-cli-command-passthrough` feature branch) no-PTY command passthrough and protected security administration. There is still no REST-driven `vey terminal` command mirroring the browser's SSE-based terminal stream; use the web dashboard's terminal (see [[Server Detail]]) for that specific flow, or `vey ssh` for a terminal from your own machine (see [[SSH Gateway]]).
 
 ![Overview diagram](../screenshots/diagram-cli-5d7a06d9.png)
+
+![Command execution and evidence diagram](../screenshots/diagram-command-execution-011.png)
 
 ## Connect to a server
 
@@ -52,6 +55,32 @@ Some released builds, including **2.0.43**, omit `ssh-cert` and `ssh` from
 `vey --help` even though both commands are available. Run them directly as shown
 above. Re-run `vey ssh-cert` if the stored certificate expires. See [[SSH Gateway]]
 for gateway configuration and connection troubleshooting.
+
+### Command passthrough
+
+The feature-branch command mode submits exactly one opaque command after `--`:
+
+```bash
+vey ssh web01 -- 'uname -a'
+# Standard profile only: Enhanced rejects arbitrary nonempty stdin.
+printf 'hello\n' | vey ssh web01 -- 'cat'
+```
+
+The client invokes OpenSSH directly and does not run the command in a local
+shell. Command mode has no PTY. With no redirected input, stdin is EOF. Standard
+mode streams redirected stdin. Enhanced mode requires empty stdin except for the
+exact forms `bash -s`, `/bin/bash -s`, `sh -s`, and `/bin/sh -s`, which accept a
+complete finite script before preparation and launch. Script arguments and mixed
+script/data stdin are not supported. The script cap is 16 MiB and its submission
+deadline is 120 seconds.
+
+Stdout, stderr, and remote exit results remain separate. Exit 255 can represent
+either a remote result or an SSH transport failure; commands are not automatically
+retried after uncertain outcomes. Remote output is not part of the command
+evidence. The command mode and security CLI described here belong to the
+`011-cli-command-passthrough` feature branch and proposed `2.0.50-prototype.1`
+build, which is not a published release. Use a CLI from the matching feature
+source.
 
 ## Install
 
@@ -210,6 +239,9 @@ touching any other session.
   below).
 - **`vey logout`** now genuinely ends the server-side session, not just the locally-stored
   credentials - see [Command Reference](#command-reference).
+- **Refresh is session-scoped:** the Hub atomically rotates the current session's refresh token.
+  Other sessions and still-valid access tokens are unaffected; logout, expiry, account or security
+  changes, and explicit revocation continue to end the sessions they apply to.
 - **A session ended or timed out elsewhere** (an administrator's action, "Sign out other
   sessions" from a browser, or the idle/absolute limit) is indistinguishable from any other
   authentication failure to `vey`: the next command exits with the authentication-failure status
@@ -277,11 +309,48 @@ Provisions or refreshes your SSH credential for the SSH gateway. Generates (or r
 
 ### `vey ssh <server>`
 
-Opens a native interactive SSH session to a fleet server through the Hub's SSH gateway. `<server>` resolves the same way as `vey servers get` (unique name/ID → connect; ambiguous → exit 2 listing candidates; unknown → exit 5). Checks for a valid, unexpired certificate up front (missing/expired → guidance to run `vey ssh-cert`, exit 3), pre-configures host verification from the cached gateway fingerprint (no blind trust-on-first-use), and execs your machine's own `ssh` client — it never edits `~/.ssh/config`. Exits with whatever status code the underlying `ssh` process returns. v1 is an interactive shell only: no `exec`, no `scp`/`sftp`, no port/agent forwarding, no Windows support. Full details, the manual `ssh` equivalent, and the `user+server` addressing scheme: [[SSH Gateway]].
+Opens a native interactive SSH session to a fleet server through the Hub's SSH gateway. `<server>` resolves the same way as `vey servers get` (unique name/ID → connect; ambiguous → exit 2 listing candidates; unknown → exit 5). Checks for a valid, unexpired certificate up front (missing/expired → guidance to run `vey ssh-cert`, exit 3), pre-configures host verification from the cached gateway fingerprint (no blind trust-on-first-use), and execs your machine's own `ssh` client — it never edits `~/.ssh/config`. Exits with whatever status code the underlying `ssh` process returns. For the feature-branch command form, see the next entry. `scp`/`sftp`, forwarding, and Windows clients are not supported. Full details and the `user+server` addressing scheme: [[SSH Gateway]].
+
+### `vey ssh <server> -- '<command>'`
+
+Runs exactly one command string without a PTY. OpenSSH BatchMode is used;
+terminal stdin is EOF unless redirected. Standard mode forwards redirected stdin.
+Enhanced mode permits stdin only for the exact four shell script forms shown
+above, and collects the full script before launch. The CLI preserves stdout and
+stderr separately and propagates the remote result without automatic retries.
+
+### `vey security`
+
+Feature-branch prototype commands:
+
+```text
+vey security request --change FILE|- --reason TEXT --expected-version N [--totp-file FILE|-]
+vey security list [--limit N] [--offset N]
+vey security status [CHANGE_ID]
+vey security approve CHANGE_ID --digest SHA256 [--totp-file FILE|-]
+vey security apply CHANGE_ID --digest SHA256 [--totp-file FILE|-]
+vey security reconcile CHANGE_ID
+vey security secret --kind destination|password [--value-file FILE|-]
+```
+
+`status` without an ID returns policy, readiness, and live capabilities; with an
+ID it returns that exact request, digest, expiry, and votes. `list` is bounded to
+one page (limit 1–100). A request file contains one typed change, not a wrapper;
+every request needs a reason and positive expected policy version. Inspect the
+exact preview and digest before step-up or approval. The baseline is one requester
+and two independent approvers tied to distinct verified people. Admin status does
+not grant security authority.
+
+Mutation requires the selected stored interactive CLI session and fresh
+action-bound TOTP. API tokens cannot perform step-up or protected mutations. Clear
+`VEYPORT_TOKEN` and configured token overrides to select the session. Proofs stay
+in memory. Secret values are write-only, uploaded separately, and represented in
+changes only by immutable references; do not put them in change files, reasons,
+or shell history. See [[Settings]] and [[API Reference]].
 
 ### Not yet supported
 
-A REST-driven `vey terminal` command mirroring the browser's SSE-based terminal stream (superseded in practice by `vey ssh`, above), creating/listing/revoking API tokens from the CLI, and any admin mutation (creating/deleting users or servers) are out of scope for this version of `vey`. Use the web dashboard or `veyport admin ...` on the Hub host for those.
+A REST-driven `vey terminal` command mirroring the browser's SSE-based terminal stream, `scp`/`sftp`, port forwarding, arbitrary Enhanced stdin, script arguments, and general user/server administration commands are not included. Command evidence covers the submitted command or complete supported script, not all internal shell instructions, dynamically fetched programs, child process actions, or remote output. This is not a sandbox or full host process telemetry.
 
 ## Exit Codes
 

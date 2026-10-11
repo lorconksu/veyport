@@ -4,11 +4,18 @@ The Settings page is accessible from the sidebar. The available tabs depend on y
 
 - **Profile** - available to every user
 - **Alerts** - available to every user
+- **Security** - visible to users with the live `security.read` capability, or an administrator with initial `security.bootstrap` authority while the active profile is unenrolled Standard
 - **Users** - admin only
 - **Directory** - admin only
 - **Notifications** - admin only
 
 Auditors do not get the admin-only Settings tabs, but they do have access to the [[Audit Logs]] page in the main sidebar.
+
+Tabs and actions use current server capabilities. The Security tab is not shown
+because someone has an Admin label alone. A bootstrap-nominated reviewer who
+does not hold global security capabilities must open the exact authorized request
+ID; nomination does not grant the broad Security tab, policy view, or principal
+search.
 
 ---
 
@@ -197,15 +204,34 @@ New users cannot choose their own password during account creation - they must u
 
 ### Changing a User's Role
 
-In the user list, click the role badge next to a user's name. A dropdown appears letting you switch between roles. The change takes effect immediately and the user's current session will reflect the new role on their next API request.
+In the user list, click the role badge next to a user's name to change one of the
+three **operational roles** below. These assignments govern ordinary fleet
+operations and take effect on the user's next API request. They do not assign a
+security-governance role or grant a protected-policy capability.
 
-**Admin** - Full access. Can add and delete servers, manage users, configure notifications, and manage audit settings.
+**Admin** - Operational administration. Can add and delete servers, manage
+ordinary users, and configure notifications and Standard audit settings. Admin
+does not imply authority to approve Enhanced policy changes, assign protected
+security roles, or read archived originals.
 
 **Auditor** - Read-only operational access plus access to [[Audit Logs]] for exports, reviews, detections, saved filters, and flagged events.
 
 **Viewer** - Read-only operational access. Can view the fleet dashboard and server details but cannot make changes. Specific per-server and per-path permissions can be configured separately.
 
 > **Note:** You cannot change your own role. Another admin must do it for you.
+
+Security roles (`security-officer`, `security-approver`, and `original-reader`),
+stable person links, quorum rules, Enhanced policy, destinations, trust keys,
+retention, and recovery that could let an operator impersonate a protected
+principal use the **Auditing and Approvals** workflow. A security officer can
+request and apply eligible changes, an approver can review and independently
+approve eligible requests, and an original reader can investigate executions and
+request controlled original access. None of those assignments implies the other
+roles; every action still checks live capability and the active policy. Changes
+require an exact preview and reason, fresh action-bound MFA, and independent
+approval under the active policy. Direct Users-tab role edits cannot alter
+protected security assignments or linked identities. Suspending an account can
+reduce access and invalidate its votes; it never creates governance authority.
 
 ### Disabling a User's 2FA
 
@@ -218,6 +244,10 @@ If a user has lost access to their authenticator app, an admin can reset their T
 5. Click **Confirm**
 
 The user's TOTP is cleared. The next time they log in, they will be taken through the TOTP setup flow again before getting access.
+
+If the account is a protected security principal, an ordinary admin reset is
+refused. Use the protected recovery request with the required quorum so credential
+or MFA changes cannot be used to impersonate a security officer or approver.
 
 ### Deleting a User
 
@@ -342,3 +372,51 @@ Available event types include:
 Toggle each event on or off. Changes are saved automatically.
 
 > **Note:** Email notifications require a working SMTP configuration in the Notifications tab. If SMTP is not configured, alerts will be silently skipped.
+
+---
+
+## Auditing and Approvals (feature branch)
+
+The `011-cli-command-passthrough` feature branch adds a capability-gated Security
+area to Settings. Its availability comes from live server capabilities; an
+operator Admin role does not imply security authority. Standard installations
+continue to work without an external archive service.
+
+The page reports server readiness and the active policy version. “Not applicable”
+means a check does not apply to the active profile or before enrollment; it is
+different from a readiness failure. Readiness indicators come from the Hub and
+external qualification state, not from a browser-side guess. A successful
+destination test creates a synthetic readiness record and starts no command.
+
+For initial enrollment, the requester must nominate themselves as the security
+officer and nominate two other distinct verified people as approvers. The initial
+profile must be Enhanced. Record the real person IDs and operator verification
+evidence for all nominees; do not invent identities or count multiple accounts
+for one person as independent approval. Every nominee must have completed MFA.
+Bootstrap does not become active merely because a draft is complete: the exact
+request still needs a preview, fresh action-bound MFA, independent approval, and
+successful application.
+
+Active policy changes show the exact proposed fields, reason, expected version,
+and digest before a request can be submitted. Editing the draft invalidates its
+preview; get a new preview before requesting. Requests expire, stale or changed
+versions are refused, and edits invalidate prior approvals. The current policy
+remains enforced until the protected transition is committed. The requester plus
+two independent distinct-person approvers form the baseline quorum. Admins and
+API tokens do not receive implicit approval rights.
+
+The draft can refer to an archive destination, immutable credential reference,
+trust-key IDs, and qualification hash. Credential material itself is never read
+back or placed in a diff; it is uploaded through a separate write-only flow. Keep
+destination credentials and TOTP codes out of change reasons and ordinary notes.
+Standard profile readiness marks archive/transport as not applicable rather than
+suggesting it is an active requirement. The enrollment marker remains an explicit
+readiness signal.
+
+Approvals list exact request revisions and paginates bounded pages. A nominated
+bootstrap approver may not have global security-list permissions. The request
+must be opened by its exact authorized request ID; nomination does not grant broad
+policy, principal-list, or security capabilities. See [[Audit Logs]] for execution
+investigation and controlled original access, and [[API Reference]] for the
+request/API contract. This feature branch and proposed `2.0.50-prototype.1` are not
+a published release.

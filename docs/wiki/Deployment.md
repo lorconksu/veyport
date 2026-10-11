@@ -84,6 +84,14 @@ Replace `latest` with a specific version tag to avoid unexpected upgrades:
 image: yiucloud/veyport:vX.Y.Z
 ```
 
+The `011-cli-command-passthrough` feature currently proposes
+`2.0.50-prototype.1`; it is not published as a release image. Do not substitute
+that value for a real available tag or pull `latest` expecting this feature.
+Prototype deployments must use the reviewed immutable artifact for the matching
+feature source, verify its OCI revision/digest, and keep the CLI and Hub from the
+same source revision. Do not point an existing deployment at a feature image
+without following the owner-approved staging and rollback procedure.
+
 ---
 
 ## Running Behind Traefik
@@ -618,6 +626,21 @@ docker compose up -d
 ```
 
 New migrations (if any) run automatically on startup.
+
+Do not use this generic latest/tag upgrade procedure for an unreleased feature
+branch. For the command-passthrough prototype, preserve a consistent SQLite and
+configuration backup, retain the current image for rollback, verify the exact
+prototype image digest/revision, and confirm that every target agent supports the
+new execution protocol before testing command mode. Legacy agents must retain
+interactive compatibility; do not replace unrelated production agents solely to
+exercise the prototype. The project owner controls staging deployment and release.
+
+Enhanced audit is optional. Standard Hub operation requires no receipt, archive,
+key service, or ELK service. Enabling Enhanced requires the separately qualified
+receipt/archive services and fixed trust configuration; do not point a candidate
+destination at an arbitrary user-supplied endpoint. The repository's isolated
+lab runbooks under `infra/audit-lab/` describe its private test topology and are
+not general production deployment instructions.
 
 ### Bare-metal
 

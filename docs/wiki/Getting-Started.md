@@ -37,6 +37,13 @@ docker compose up -d
 
 The Hub listens on port `8081` for the web UI and REST API, and on port `9090` for agent gRPC connections. If you are exposing agents over TLS or through a reverse proxy, follow [[Deployment]] and [[Proxy Configuration]] for the correct `9443` external gRPC setup.
 
+The Standard profile needs only the Hub, its SQLite data volume, and connected
+agents; no external audit service is required. Enhanced command evidence is an
+optional feature-branch prototype and needs its separately qualified receipt and
+encrypted archive services. Do not enable it by supplying an arbitrary archive
+URL. See [[Architecture]] for the prototype's guarantees and limits. The proposed
+`2.0.50-prototype.1` version is not a published release.
+
 ---
 
 ## Step 1: Open Veyport in Your Browser

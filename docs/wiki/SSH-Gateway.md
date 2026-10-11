@@ -19,26 +19,32 @@
 3. [Enrollment: `vey ssh-cert`](#enrollment-vey-ssh-cert)
 4. [Connecting: `vey ssh <server>`](#connecting-vey-ssh-server)
    - [Which OS account runs the shell?](#which-os-account-runs-the-shell)
-5. [The manual `ssh` form and the `user+server` login name](#the-manual-ssh-form-and-the-userserver-login-name)
-6. [Host-key pinning](#host-key-pinning)
-7. [Certificate lifetime and re-issuance](#certificate-lifetime-and-re-issuance)
-8. [Not supported in this release](#not-supported-in-this-release)
-9. [Exit codes](#exit-codes)
-10. [Sessions and administrator termination](#sessions-and-administrator-termination)
-11. [Troubleshooting](#troubleshooting)
-12. [Hub configuration](#hub-configuration)
+5. [No-PTY command mode](#no-pty-command-mode)
+6. [The manual `ssh` form and the `user+server` login name](#the-manual-ssh-form-and-the-userserver-login-name)
+7. [Host-key pinning](#host-key-pinning)
+8. [Certificate lifetime and re-issuance](#certificate-lifetime-and-re-issuance)
+9. [Not supported](#not-supported)
+10. [Exit codes](#exit-codes)
+11. [Sessions and administrator termination](#sessions-and-administrator-termination)
+12. [Troubleshooting](#troubleshooting)
+13. [Hub configuration](#hub-configuration)
 
 ---
 
 ## Overview
 
-Veyport's SSH gateway lets an operator run `ssh` directly against a fleet server, using their real terminal instead of the browser-based [[Server Detail]] terminal. The critical design choice is that the gateway is **hub-terminated**: your SSH client talks to the Hub, not to the target server. The Hub authenticates you, re-checks your authorization against live state, and then bridges your session to the target over the same hub↔agent gRPC terminal channel the web terminal already uses.
+Veyport's SSH gateway lets an operator connect to a fleet server through the Hub instead of connecting to the node's own SSH daemon. Interactive `vey ssh <server>` opens a PTY; the feature-branch command form `vey ssh <server> -- '<command>'` submits one command without a PTY. The Hub authenticates the request, rechecks live authorization, prepares the target OS identity, and brokers execution over the enrolled agent's outbound gRPC stream.
 
 That means:
 
-- Every SSH session is observable and audited exactly like a web terminal session — the Hub never becomes a blind relay.
-- No new capability is added to the agent. The gateway is entirely a Hub-side feature; it reuses the agent's existing terminal protocol.
-- Authorization (who may open a shell on which server, and as which OS user) is decided by the same rule the web terminal uses, evaluated fresh on every connection — not cached in the certificate.
+- The Hub is on the execution path and records command lifecycle metadata. Under Enhanced, a command starts only after its intent is preserved by the external receipt authority and encrypted archive.
+- Interactive PTY and no-PTY execution use separate protocol paths; command streams have bounded buffering and explicit results.
+- Authorization and target identity are checked live. A valid SSH certificate does not grant terminal or command authority by itself.
+
+This command mode is part of the `011-cli-command-passthrough` feature branch and
+proposed `2.0.50-prototype.1` build. That version is not published. Standard
+command execution has no external audit-service dependency. Enhanced is opt-in
+and requires a qualified external receipt/archive configuration.
 
 ![Overview diagram](../screenshots/diagram-ssh-gateway-d1757e51.png)
 
@@ -95,6 +101,38 @@ vey --hub https://hub.example.com ssh web01
 5. Propagates the `ssh` client's exit status back to your shell.
 
 You get a full interactive PTY: full-screen editors, pagers, `htop`, and window resizing all work, because the Hub relays raw terminal bytes and `window-change` events end-to-end over the same channel the web terminal uses.
+
+## No-PTY command mode
+
+```bash
+vey ssh web01 -- 'uname -a'
+# Standard profile only: Enhanced rejects arbitrary nonempty stdin.
+printf 'hello\n' | vey ssh web01 -- 'cat'
+```
+
+Everything after `--` must be exactly one command-string argument. The CLI invokes
+OpenSSH directly; it does not execute the command through a local shell or join
+multiple arguments. It disables PTY allocation and interactive authentication.
+Without redirected input, stdin is EOF. Standard mode streams redirected stdin.
+
+In Enhanced mode the hub collects all stdin before preparation and admission.
+Only exact `bash -s`, `/bin/bash -s`, `sh -s`, or `/bin/sh -s` forms accept
+nonempty stdin. The whole script is limited to 16 MiB and 120 seconds, and is
+verified before any process starts. Other Enhanced commands must receive empty
+stdin. Script arguments and mixed script/data input are not supported. Standard
+accepts arbitrary streamed stdin.
+
+Stdout and stderr are separate binary-safe streams; their individual order is
+preserved, with no promised total ordering between the two. Remote exit status is
+propagated through SSH. Exit 255 can overlap a remote exit with a native SSH
+failure. Do not automatically retry after a connection loss or uncertain result.
+Browser refresh does not cancel a command; cancellation or live authority
+revocation does. Remote output is not archived as command evidence.
+
+Enhanced evidence covers the exact submitted command or complete supported
+script, not every internal shell instruction, downloaded program, child-process
+action, or remote output. Command execution is not a sandbox and does not provide
+full host process telemetry.
 
 ## Which OS account runs the shell?
 
@@ -159,17 +197,21 @@ Certificates are short-lived — **~12 hours by default**, tunable per hub (see 
 - A certificate expiring **mid-session does not drop that session**; only new connection attempts are re-checked against the certificate's validity, which matches standard SSH behavior.
 - Re-run `vey ssh-cert` any time to refresh — it keeps your existing keypair and simply asks the Hub for a new certificate. There's no reason not to re-run it liberally; it's cheap and rate-limited generously (10/min).
 
-## Not supported in this release
+## Not supported
 
-The gateway is an **interactive shell only** in v1. The following are refused cleanly at the SSH protocol level, with an explanatory message, and without disturbing any other concurrent session on the same connection:
+The gateway does not provide these features:
 
 | Capability | Behavior |
 |---|---|
-| Remote command execution (`ssh host cmd`) | Refused — `exec` channel requests are rejected |
 | `scp` / `sftp` | Refused — the `subsystem` channel request is rejected |
 | Port forwarding (`-L` / `-R` / dynamic `-D`) | Refused — forwarding channel/global requests are rejected |
 | SSH agent forwarding (`-A`) | Refused — `auth-agent-req` is rejected |
 | Windows clients | Not tested or supported — use the web terminal instead |
+
+Command mode accepts one SSH exec request per channel. PTY requests, arbitrary
+environment variables, subsystems, forwarding, duplicate commands, and malformed
+or oversized requests are refused. This is not a general-purpose remote SSH
+server.
 
 If you need any of these, use the existing [[Server Detail]] file browser/log tailer for file access, or the browser terminal for anything the interactive shell can't cover.
 

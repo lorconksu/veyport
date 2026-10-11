@@ -2,9 +2,16 @@
 
 ## What Are Audit Logs?
 
-Every action taken in Veyport is recorded in the audit log. Think of it as an activity history - a permanent record of who did what and when.
+Veyport keeps local audit metadata for security and operational actions. The
+optional Enhanced command profile adds externally preserved command-intent and
+policy evidence. The two stores have different availability, retention, and
+integrity properties; a local log row alone is not proof of external evidence.
 
-Audit log entries cannot be edited or deleted, even by admins. Each entry is protected by a transactional hash chain - every row includes a cryptographic hash that incorporates the previous entry's hash. This means any tampering (insertion, deletion, or modification of a row) breaks the chain and is detectable.
+The existing local action log uses its configured retention and local integrity
+checks. Enhanced original records are stored by exact immutable object version
+and accompanied by an external receipt. Neither mechanism protects against loss
+of the Hub host, its privileged operator, encryption keys, or the shared lab
+hypervisor. Review [[Architecture]] for the trust boundary.
 
 The audit log is visible to **admins and auditors**. Admins can also manage retention and threshold settings; auditors can review, export, filter, and flag events without changing those controls.
 
@@ -57,6 +64,43 @@ The audit log displays entries in pages. Use the navigation controls at the bott
 - **Page indicator** - Shows which page you are on and the total number of pages
 
 The log is sorted with the most recent entries first. Filters are preserved as you navigate between pages.
+
+## Execution investigation and original access
+
+The feature-branch **Executions** view is separate from the general local action
+log. It lists redacted execution metadata and lets authorized investigators filter
+by actor, node, prepared OS username, policy version, process state, and evidence
+state. Details distinguish the Veyport actor from the resolved OS identity. A
+missing preparation is shown as unavailable; UID `0` is shown as root only when
+the agent actually prepared UID `0`.
+
+Process outcome and evidence state are separate. For example, an execution may
+have an exit result while completion evidence is still unconfirmed. Pending
+reconciliation is not reported as success, and missing receipts do not imply a
+successful command. ELK, when configured, contains redacted searchable projections;
+its indexing acknowledgement is not an execution receipt. Search projection
+lag does not remove an already preserved archive record.
+
+Ordinary list/detail responses omit raw command/script bytes, remote output,
+receipt tokens, and storage locations. A hash or byte count is useful for
+correlation but does not let an investigator reconstruct the content.
+
+Original access is a separate capability, `audit.original.read`, and requires an
+interactive session, completed TOTP, a specific purpose, and a fresh
+action-bound proof. Select exactly one retained envelope or script for each
+request. Veyport shows its exact immutable version, digest, and length before
+confirmation. After required intent evidence is preserved, the Hub issues a
+one-use handle that expires within 60 seconds. The download rechecks current
+authority, does not follow redirects, and cannot be replayed or automatically
+retried. A failed or interrupted delivery must be treated as uncertain; it does
+not mean the investigator saved the bytes. The Hub response byte count is not
+proof of a file being saved on the client.
+
+Closing the dialog, losing authority, changing identity, or receiving a refusal
+clears pending local download state. Do not copy original content into routine
+notes, screenshots, or issue reports. Original access is retained as separately
+bounded evidence and does not recreate a download handle during recovery. See
+[[API Reference]] for exact endpoints and limits.
 
 ---
 
@@ -212,4 +256,23 @@ Reference]].
 | `audit.retention_executed` | An admin ran audit retention cleanup |
 | `audit.flag_created` | An admin or auditor flagged an audit event or filtered result set |
 
-Notification delivery attempts are shown in **Settings > Notifications**. They are stored in the notification delivery log rather than the immutable audit log action catalog.
+Notification delivery attempts are shown in **Settings > Notifications**. They are stored in the notification delivery log rather than the local action log.
+
+### Execution and policy evidence types
+
+Enhanced receipt records use separate event types in the external archive:
+
+| Event | Meaning |
+|---|---|
+| `execution.admission` | The submitted command intent and its prepared identity/policy binding were preserved before a protected process could start. It does not prove the process started or finished. |
+| `execution.lifecycle` | A process state transition or final outcome was recorded. A missing or unconfirmed event remains visible as an evidence problem. |
+| `execution.denial` | A protected execution was refused, with redacted metadata describing the denial. |
+| `policy.intent` | The exact approved security change intent was submitted to the fixed external authority before local mutation. |
+| `policy.commit` | The protected policy transition was committed. |
+| `policy.result` | The transition result or a reconciliation outcome was preserved. |
+| `policy.anchor` | Enrollment or continuity evidence for the active policy. |
+
+These event names identify external record types, not rows in the existing local
+Audit Logs table. Check the execution detail and evidence state before treating a
+process outcome as complete. See [[Settings]] for protected approvals and
+[[Architecture]] for the prototype's retention and trust limits.

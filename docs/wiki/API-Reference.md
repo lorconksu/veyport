@@ -346,7 +346,10 @@ Exchange a refresh token for a new access/refresh token pair.
 {}
 ```
 
-On success, the Hub rotates the refresh token and sets new `veyport_access`, `veyport_refresh`, and `veyport_csrf` cookies.
+On success, the Hub atomically rotates the refresh token for the session making this request and
+sets new `veyport_access`, `veyport_refresh`, and `veyport_csrf` cookies. Rotation does not
+invalidate independent sessions or access tokens that remain valid. Explicit logout, expiry,
+account or security changes, and session revocation retain their existing effects.
 
 **Error Cases:**
 - `401` - Invalid or expired refresh token
@@ -1008,6 +1011,94 @@ Audit viewing and workflow endpoints are available to **admins and auditors**. A
 - `POST /api/audit-logs/flags`
 - `GET /api/audit-logs/detections`
 - `GET /api/audit-users`
+
+### Protected security governance
+
+The feature-branch governance API uses live capabilities and a protected preview,
+step-up, approval, and apply flow. Operations `admin` is not a security role.
+Browser and CLI mutation calls require an interactive session; API tokens cannot
+provide fresh action-bound MFA.
+
+| Method and path | Purpose / authority |
+|---|---|
+| `GET /api/audit-policy` | Read active policy, readiness, and effective capabilities. Full details require security-read or valid initial-bootstrap authority. |
+| `POST /api/audit-policy/test` | Bounded explicit destination qualification test under the fixed operator-managed endpoint allowlist; it does not activate policy or run a command. |
+| `POST /api/security/secrets` | Write-only destination/password material; returns only an immutable `credential_ref` and set indicator. There is no read-back route. |
+| `POST /api/security/changes/preview` | Preview `{reason, expected_version, change}`; returns the canonical proposal and digest. |
+| `POST /api/security/step-up` | Bind fresh MFA to `security.request`, `security.approve`, or `security.apply`, exact digest, and (for approve/apply) exact change ID. |
+| `POST /api/security/changes` | Submit the returned proposal and action-bound `step_up_proof`. |
+| `GET /api/security/changes?limit=50&offset=0` | Bounded summaries for live security readers; list page limit is 1–100. |
+| `GET /api/security/changes/{id}` | Read one exact authorized request, including a request where the caller is specifically nominated. Nomination permits this request-scoped review only. |
+| `GET /api/security/principals?limit=50&offset=0&search=...` | Bounded safe principal selector for security readers or initial-bootstrap authority; search is limited and does not expose credentials or LDAP details. |
+| `POST /api/security/changes/{id}/approve` | Record one independent-person approval with a proof bound to this request and digest. |
+| `POST /api/security/changes/{id}/apply` | Apply an approved exact change using a current-version compare-and-swap and fresh proof. |
+| `POST /api/security/changes/{id}/reconcile` | Resume reconciliation of that existing application decision; it does not create a new decision or bypass quorum. |
+
+Changes are typed (`bootstrap`, `policy`, `role`, `person`, `recovery`,
+`audit-settings`, or `ldap`). Reasons and expected positive policy versions are
+required. The baseline quorum is the requester and two approvers linked to
+distinct verified person identities. Editing a request invalidates prior votes;
+stale, expired, revoked, or digest-mismatched approvals do not count. The server
+rechecks live authority at approval and application.
+
+Bootstrap nominations include the requester as officer and two other people as
+approvers, all with verified person IDs, operator evidence, and completed MFA.
+An initial nominee may still be an ordinary viewer without global
+`security.read` or `security.approve`. Such a nominee can review only the exact
+nominated request ID through the request-specific route; nomination never grants
+broad request listing, policy visibility, principal lookup, or global
+capabilities. Do not use global `/auth/me` capabilities to infer the rights for a
+particular nominated request.
+
+Credentials are uploaded separately and never appear in request diffs or policy
+readback. Credential-bearing URLs, private keys, and secret values do not belong
+in proposal files or reasons. A fresh proof authorizes only its action, request,
+and digest, and is not a reusable bearer token. See [[Settings]] and [[CLI]] for
+the operator workflows.
+
+### Execution investigation and controlled originals
+
+`GET /api/executions` and `GET /api/executions/{id}` require the live `audit.read`
+capability. They return redacted execution metadata: actor, target, hashes and
+lengths, policy version, process/evidence state, and prepared OS identity. An
+attempt refused before preparation has `preparation: null`. These responses
+exclude command/script bytes, output, receipt tokens, and archive references.
+List filters are `actor_id`, `node_id`, `os_user`, `policy_version`, `state`, and
+`evidence_state`; `limit` defaults to 50 and is capped at 100, with `offset`
+pagination.
+
+Original access requires a live interactive session with `audit.original.read`,
+enrolled MFA, and a fresh action-bound TOTP proof. Each request selects exactly
+one `envelope` or `script`, with a nonempty purpose of at most 1,024 UTF-8 bytes.
+
+| Method and path | Request / response |
+|---|---|
+| `POST /api/executions/{id}/original-access/preview` | `{purpose, records: [kind]}` → `{action, digest, records: [{kind, event_id, sha256, bytes, version_id}]}` |
+| `POST /api/executions/{id}/original-access/step-up` | Same selection plus `digest` and `code` → `{proof, expires_at}`; proof expires after five minutes |
+| `POST /api/executions/{id}/original-access` | Same selection plus `digest` and `step_up_proof` → `201 {handle, expires_at, download_url}` |
+| `GET /api/audit-originals/{handle}` | Downloads the selected exact archived version once; `Cache-Control: no-store, private` |
+
+The handle expires within 60 seconds, is bound to the actor and session, and is
+consumed durably before the archive opens. Permission, identity revision, and
+session validity are checked again before bytes are delivered. Do not retry a
+download automatically, including after a `401`, disconnect, or archive error;
+obtain a new preview, fresh MFA proof, and handle instead. API tokens cannot use
+the preview, step-up, authorization, or download routes.
+
+Required intent and start evidence must be preserved externally before original
+bytes are read. Results distinguish completed, interrupted, and unconfirmed
+delivery. `delivery.scope` is `hub_response`; `bytes_written: null` means the byte
+count is unknown. A completed result measures bytes accepted by the Hub response
+writer, without asserting that a client saved them. Archive/evidence failures
+return opaque `503` errors; missing permission, expired authority, or replay
+returns `403` (an expired login may return `401`).
+
+Local original-access metadata is bounded to 4,096 records, with confirmed or
+permanently incomplete history pruned after 30 days. Pending evidence is bounded
+to 1,024 records / 16 MiB, retried with a one-minute backoff for at most 24 hours.
+Capacity exhaustion refuses access; expired recovery becomes permanently
+incomplete and never recreates a download handle. The original objects retain
+their separately approved external retention.
 
 ### 16. GET /api/audit-logs
 

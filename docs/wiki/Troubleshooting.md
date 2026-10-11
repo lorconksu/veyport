@@ -244,6 +244,28 @@ LDAP terminal access requires both the terminal LDAP group and a root (`/`) assi
 
 Terminal endpoints require an interactive browser session. CLI-created API tokens are intentionally rejected so long-lived automation tokens cannot be used for interactive shell access.
 
+### `vey ssh node -- command` is refused or hangs while sending input
+
+Command mode is available on the matching `011-cli-command-passthrough`
+feature-branch Hub and CLI, not on a published stable build. Use one command
+string after `--`, for example `vey ssh web01 -- 'uname -a'`; do not split one
+command across multiple shell arguments. The mode has no PTY and starts OpenSSH
+in BatchMode. It does not ask for a terminal password or open an interactive
+shell. Check that the target agent advertises execution support and is online.
+
+In Enhanced mode, redirected stdin must be empty unless the command is exactly
+`bash -s`, `/bin/bash -s`, `sh -s`, or `/bin/sh -s`. For a script, send the entire
+finite file on stdin and finish within 120 seconds; the size limit is 16 MiB.
+Partial scripts do not run. A remote result of 255 can be indistinguishable from
+an SSH transport error, and the client does not retry commands automatically.
+Check the execution detail and evidence state before deciding whether to submit a
+new command. A disconnected client does not prove the remote process did not
+start.
+
+If Standard execution works but Enhanced admission fails, inspect Hub readiness
+and the exact receipt/archive error. An ELK search outage alone does not block a
+healthy archive receipt path; an archive, trust-key, or receipt failure does.
+
 ---
 
 ## Upload / Dropzone Issues

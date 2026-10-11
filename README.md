@@ -32,9 +32,9 @@
 
 Veyport gives you secure, day-to-day access to your servers through one self-hosted web interface. Browse remote file systems, stream logs in real time, open governed shell sessions, and transfer files without handing out SSH keys or bouncing between terminal sessions.
 
-It runs as a single binary with no external dependencies. The Hub embeds the full React frontend and uses SQLite for storage, so setup stays lightweight: no separate database, no extra services, and no runtime sprawl. Deploy it once and connect your agents.
+The Standard profile runs as a single binary with no external service dependencies. The Hub embeds the full React frontend and uses SQLite for local state. An opt-in Enhanced audit profile adds an external receipt and encrypted archive service for protected command admission; it is not required for ordinary fleet access.
 
-Veyport is built for home lab operators and small teams who need dependable access, clear audit trails, and tight operational control. Every action is logged, every user requires 2FA, and permissions are scoped per-server and per-path.
+Veyport is built for home lab operators and small teams who need dependable access, useful audit metadata, and tight operational control. Authenticated users must enroll in TOTP, and permissions are checked at the Hub and agent boundaries.
 
 Veyport is open source software licensed under the Apache License 2.0. The
 software license does not grant rights to the `Veyport` name or logos; see
@@ -49,7 +49,9 @@ for issue and pull-request expectations.
 - **Remote File Browser** — Browse remote file systems with syntax highlighting for 16 languages; resizable sidebar, refresh button, and binaries/forbidden paths shown but greyed out
 - **Secure File Transfers (Dropzone)** — Admin-only drag-and-drop chunked file uploads to a quarantined staging directory on the target server
 - **Email Notifications** — 8 configurable alert types (agent connect/disconnect, file uploads, login events, and more)
-- **Audit Logging** — Immutable record of security and workflow actions, including auth, server lifecycle, file access, terminal, API token, and audit-governance events
+- **Audit Logging** — Local audit metadata for security and workflow actions; optional Enhanced command evidence uses external admission receipts and encrypted originals
+- **Command Passthrough** — `vey ssh <node> -- '<command>'` runs one opaque command through the Hub without a PTY and keeps stdout, stderr, stdin, and exit results separate
+- **Optional Enhanced Audit** — External admission receipts and encrypted original evidence for covered commands, with redacted search projections kept separate
 - **2FA (TOTP)** — Mandatory TOTP-based two-factor authentication for all users, no exceptions
 - **Role-Based Access** — Admin, Auditor, and Viewer roles with per-server, per-path permissions enforced at both Hub and Agent layers
 - **LDAP Directory Integration** — Sign in against your existing directory (FreeIPA, OpenLDAP, AD) with group-to-role mapping, configured entirely from the admin UI with a built-in connection tester
@@ -64,7 +66,7 @@ Veyport uses a **Hub-and-Spoke** model. The Hub is the central server that hosts
 
 - **Hub** — Central Go server. Serves the web UI, exposes REST APIs, manages SQLite, and enforces authentication and permissions. Runs HTTP on `:8081`, agent gRPC on `:9090`, and an SSH gateway on `:2222` by default.
 - **Agent** — Lightweight Go binary on each remote server. Maintains a persistent bidirectional mTLS gRPC stream to the Hub, executing file, log, upload, and PTY terminal operations on demand.
-- **CLI (`vey`)** — Connects to the Hub over HTTPS for API operations and SSH certificates, then uses the native SSH client to reach a server through the Hub gateway and existing agent stream.
+- **CLI (`vey`)** — Connects to the Hub over HTTPS for API operations and SSH certificates, then uses native SSH for interactive PTY access or (on the feature branch) one no-PTY command through the Hub gateway and agent stream.
 - **Frontend** — React SPA embedded into the Hub binary via `go:embed`. Single-binary deployment with zero external dependencies.
 
 For the full architecture breakdown, see [Architecture](docs/wiki/Architecture.md).
@@ -74,6 +76,14 @@ admins inherit the agent account (**root** under the standard installer); LDAP
 users run as their mapped host account. See [SSH Gateway](docs/wiki/SSH-Gateway.md)
 for connection requirements and [Architecture](docs/wiki/Architecture.md#session-activity-and-lifetimes)
 for the current request-based session activity model.
+
+Enhanced command evidence covers the submitted command string or complete
+supported stdin script. It does not attest every internal shell instruction,
+fetched program, child-process action, or remote output; command execution is not
+a sandbox. This feature remains on the
+`011-cli-command-passthrough` feature branch, as described in the public
+[Architecture guide](docs/wiki/Architecture.md#command-execution-boundary), and is
+not part of a published release.
 
 ## Quick Start
 

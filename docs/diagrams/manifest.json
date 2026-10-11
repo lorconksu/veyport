@@ -1,5 +1,11 @@
 [
   {
+    "source": "docs/diagrams/diagram-command-execution-011.mmd",
+    "image": "docs/screenshots/diagram-command-execution-011.png",
+    "title": "Command Execution and Evidence",
+    "private": false
+  },
+  {
     "source": "docs/diagrams/diagram-deployment-aws-e315128f.mmd",
     "image": "docs/screenshots/diagram-deployment-aws-e315128f.png",
     "title": "AWS Deployment Architecture",
