@@ -74,7 +74,7 @@ def assert_created_actor(user, provisioner_token):
     # protected role/person binding before reenable, enrollment or cleanup.
     page = q.request('/api/security/principals?limit=10&search=' + user['id'], token=provisioner_token)
     matches = [person for person in page['principals'] if person['id'] == user['id']]
-    if len(matches) != 1 or matches[0]['username'] != user['username'] or set(matches[0]['roles']) != {'admin'} or matches[0]['person_id']:
+    if len(matches) != 1 or matches[0]['username'] != user['username'] or set(matches[0]['roles']) != {'admin'} or matches[0]['person_id'] not in ('', 'user:' + user['id']):
         raise RuntimeError('Extra load account acquired unrelated/protected authority')
 
 
@@ -91,7 +91,7 @@ def prepare_actors(state, provisioner_token):
             raise RuntimeError('Synthetic load identity is invalid')
         assert_created_actor(user, provisioner_token)
         if user.get('disabled'):
-            q.request('/api/users/' + user['id'] + '/status', {'disabled': False}, provisioner_token)
+            q.request('/api/users/' + user['id'] + '/status', {'disabled': False}, provisioner_token, method='PUT')
             user['disabled'] = False
             persist(state)
         if not user.get('complete'):
@@ -121,7 +121,7 @@ def disable_actors(state, provisioner_token):
         if user.get('username') != 'lab_synthetic_' + actor.replace('-', '_') or not re.fullmatch(r'[0-9a-f-]{36}', user['id']):
             raise RuntimeError('Refused cleanup of an unrelated principal')
         assert_created_actor(user, provisioner_token)
-        q.request('/api/users/' + user['id'] + '/status', {'disabled': True}, provisioner_token)
+        q.request('/api/users/' + user['id'] + '/status', {'disabled': True}, provisioner_token, method='PUT')
         user['disabled'] = True
         persist(state)
 

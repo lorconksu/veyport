@@ -40,7 +40,7 @@ def persist(state):
     os.replace(temporary, STATE_FILE)
 
 
-def request(path, body=None, token='', expected=200):
+def request(path, body=None, token='', expected=200, method=None):
     if not path.startswith('/api/'):
         raise RuntimeError('REST path outside lab API')
     headers = {'Content-Type': 'application/json'}
@@ -50,7 +50,7 @@ def request(path, body=None, token='', expected=200):
     context = ssl.create_default_context(cafile=str(PRIVATE / 'ca.crt'))
     opener = urllib.request.build_opener(urllib.request.ProxyHandler({}), NoRedirect(), urllib.request.HTTPSHandler(context=context))
     try:
-        response = opener.open(urllib.request.Request(HUB + path, raw, headers), timeout=15)
+        response = opener.open(urllib.request.Request(HUB + path, raw, headers, method=method), timeout=15)
     except urllib.error.HTTPError as error:
         response = error
     with response:
@@ -320,7 +320,7 @@ def execution_matrix(state):
         marker = '/tmp/veyport-isolated-' + secrets.token_hex(12)
         script = ("printf x >> '" + marker + "'\nprintf isolated-verified\nprintf isolated-stderr >&2\nexit 42\n").encode()
         if mode == 'receipt-outage':
-            remote('hub', 'sudo -n nft -f -', b'table inet veyport_lab_receipt_fault { chain output { type filter hook output priority -5; policy accept; ip daddr 10.10.1.60 tcp dport 8443 reject; } }\n')
+            remote('hub', 'sudo -n nft -f -', b'table inet veyport_lab_receipt_fault {\n  chain output {\n    type filter hook output priority -5; policy accept;\n    ip daddr 10.10.1.60 tcp dport 8443 reject\n  }\n}\n')
         try:
             result = cli('officer', ['ssh', 'lab-encrypted-target', '--', '/bin/sh -s'], script, None)
             present = remote('agent', 'if test -f ' + marker + '; then cat ' + marker + '; fi')

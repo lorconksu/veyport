@@ -137,7 +137,7 @@ class LoadFixture(unittest.TestCase):
         created = {}
         requests = []
         current = None
-        def request(path, body=None, token='', expected=200):
+        def request(path, body=None, token='', expected=200, method=None):
             nonlocal current
             requests.append((path, body))
             if path == '/api/users':
@@ -146,7 +146,7 @@ class LoadFixture(unittest.TestCase):
                 return {'user': {'id': current}, 'temporary_password': 'private-temporary-password'}
             if path.startswith('/api/security/principals?'):
                 identity = path.split('search=')[1]
-                return {'principals': [{'id': identity, 'username': created[identity], 'roles': ['admin'], 'person_id': ''}]}
+                return {'principals': [{'id': identity, 'username': created[identity], 'roles': ['admin'], 'person_id': 'user:' + identity}]}
             if path == '/api/auth/login':
                 return {'setup_token': 'test-setup'}
             if path == '/api/auth/totp/setup':
@@ -156,6 +156,7 @@ class LoadFixture(unittest.TestCase):
             if path == '/api/auth/me':
                 return {'id': current, 'role': 'admin', 'roles': ['admin'], 'person_id': 'user:' + current, 'capabilities': ['terminal.execute']}
             if path.endswith('/status'):
+                self.assertEqual(method, 'PUT')
                 return {'disabled': body['disabled']}
             raise AssertionError('Unexpected fixture API route')
         state = {}
@@ -165,9 +166,24 @@ class LoadFixture(unittest.TestCase):
             self.assertEqual(cli.call_args_list, [mock.call(actor, ['ssh-cert']) for actor in load.ACTORS])
             load.disable_actors(state, 'test-provisioner')
             self.assertTrue(all(state['users'][actor]['disabled'] for actor in load.ACTORS))
+            load.prepare_actors(state, 'test-provisioner')
+            self.assertTrue(all(not state['users'][actor]['disabled'] for actor in load.ACTORS))
             self.assertEqual(load.STATE_FILE.stat().st_mode & 0o777, 0o600)
         self.assertEqual([body['role'] for path, body in requests if path == '/api/users'], ['admin', 'admin'])
         self.assertFalse(any('/api/security/changes' in path or 'step-up' in path for path, _ in requests))
+
+    def test_explicit_status_method_reaches_normal_urllib_request(self):
+        response = mock.MagicMock(status=200)
+        response.__enter__.return_value = response
+        response.read.return_value = b'{"disabled":true}'
+        opener = mock.Mock()
+        opener.open.return_value = response
+        with mock.patch.object(load.q.ssl, 'create_default_context'), mock.patch.object(load.q.urllib.request, 'build_opener', return_value=opener):
+            load.q.request('/api/users/synthetic-user/status', {'disabled': True}, 'private-fixture-token', method='PUT')
+        request = opener.open.call_args.args[0]
+        self.assertEqual(request.get_method(), 'PUT')
+        self.assertEqual(json.loads(request.data), {'disabled': True})
+        self.assertEqual(opener.open.call_args.kwargs['timeout'], 15)
 
     def test_cleanup_refuses_new_protected_binding_before_status_mutation(self):
         user = {'id': 'a' * 8 + '-1234-1234-1234-' + '0' * 12, 'username': 'lab_synthetic_load_a'}
@@ -177,6 +193,29 @@ class LoadFixture(unittest.TestCase):
                 load.disable_actors({'users': {'load-a': user}}, 'test-provisioner')
             self.assertEqual(request.call_count, 1)
             self.assertIn('/api/security/principals?', request.call_args.args[0])
+
+    def test_outage_partition_uses_scoped_multiline_rule_and_cleans_up_after_failure(self):
+        calls = []
+        success = mock.Mock(returncode=42, stdout=b'isolated-verified', stderr=b'isolated-stderr')
+        def remote(host, command, raw=b''):
+            calls.append((host, command, raw))
+            return b'x' if 'if test -f' in command else b''
+        def cli(person, arguments, *args):
+            if arguments == ['ssh-cert']:
+                return {}
+            if any(command == 'sudo -n nft -f -' for _, command, _ in calls):
+                raise RuntimeError('synthetic CLI failure during outage')
+            return success
+        with mock.patch.object(load.q, 'remote', side_effect=remote), mock.patch.object(load.q, 'cli', side_effect=cli), mock.patch.object(load.q, 'wait_for'), mock.patch.object(load.q, 'database', return_value=[{}]), mock.patch.object(load.q, 'verify_stored_receipt', return_value={}):
+            with self.assertRaisesRegex(RuntimeError, 'during outage'):
+                load.q.execution_matrix({})
+        partition = [raw for host, command, raw in calls if command == 'sudo -n nft -f -']
+        self.assertEqual(len(partition), 1)
+        lines = partition[0].decode().splitlines()
+        self.assertEqual(lines[-2:], ['  }', '}'])
+        self.assertIn('ip daddr 10.10.1.60 tcp dport 8443 reject', partition[0].decode())
+        self.assertEqual([host for host, command, _ in calls if 'nft' in command], ['hub', 'hub'])
+        self.assertEqual(calls[-1][:2], ('hub', 'sudo -n nft delete table inet veyport_lab_receipt_fault'))
 
     def test_production_compact_receipt_verifies_signature_exact_binding_and_manifest(self):
         # Representative production storage format. The two digest constants
