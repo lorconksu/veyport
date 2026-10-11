@@ -99,6 +99,7 @@ jobs:
         run: printf '%s' "$REGISTRY_PASSWORD" | skopeo login --username "$REGISTRY_USERNAME" --password-stdin docker.io
       - name: Validate and publish scanned digests
         env:
+          GH_TOKEN: ${{ github.token }}
           VERSION: ${{ inputs.version }}
           TAG: ${{ inputs.tag }}
           PROTOTYPE: ${{ inputs.prototype }}
@@ -107,7 +108,7 @@ jobs:
           args=()
           if [ "$PROTOTYPE" = true ]; then args+=(--prototype); fi
           python3 scripts/release/metadata.py --version "$VERSION" --tag "$TAG" --revision "$GITHUB_SHA" --ref "$GITHUB_REF" "${args[@]}"
-          bash scripts/release/publish_delivery.sh "$RUNNER_TEMP/delivery" "$TAG" "$VERSION" "$PROTOTYPE"
+          bash scripts/release/publish_delivery.sh "$RUNNER_TEMP/delivery" "$TAG" "$VERSION" "$PROTOTYPE" "$GITHUB_SHA"
       - name: Create release with checksummed optional and core binaries
         env:
           GH_TOKEN: ${{ github.token }}
@@ -128,4 +129,5 @@ jobs:
           if [ "$PROTOTYPE" = true ]; then args+=(--prerelease); fi
           assets=()
           while IFS= read -r name; do assets+=("$delivery/bin/$name" "$delivery/bin/$name.sha256"); done < <(python3 -c 'import sys;sys.path.insert(0,"scripts/release");from artifacts import BINARIES;print("\n".join(BINARIES))')
-          gh release create "$TAG" --target "$GITHUB_SHA" --title "$VERSION" --notes-file "$delivery/release-notes.md" "${args[@]}" "${assets[@]}" "$delivery/bin/SHA256SUMS" "$delivery/bin/artifact-manifest.json" "$delivery/release-evidence.tar.gz"
+          python3 scripts/release/git_tag.py check "$TAG" "$GITHUB_SHA" "$GITHUB_REPOSITORY"
+          gh release create "$TAG" --verify-tag --title "$VERSION" --notes-file "$delivery/release-notes.md" "${args[@]}" "${assets[@]}" "$delivery/bin/SHA256SUMS" "$delivery/bin/artifact-manifest.json" "$delivery/release-evidence.tar.gz"

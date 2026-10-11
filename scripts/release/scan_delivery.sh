@@ -15,7 +15,7 @@ python3 scripts/release/go_binary_evidence.py "$delivery/bin" "$delivery/reports
 
 # The exact public binary set also includes arm64 and Darwin release assets.
 while IFS= read -r binary; do
-  grype "file:$delivery/bin/$binary" -o json > "$delivery/reports/$binary.grype.json"
+  grype "file:$delivery/bin/$binary" -o json > "$delivery/reports/$binary.binary.grype.json"
   python3 - "$delivery" "$binary" <<'PY'
 import json,sys
 from pathlib import Path
@@ -24,7 +24,7 @@ from check_scan import check
 root,binary=Path(sys.argv[1]),sys.argv[2]
 source=root/'bin'/binary
 mapping={str(source):(binary,str(source)), '/'+binary:(binary,str(source))}
-check(root/'reports'/(binary+'.grype.json'),'grype',root/'reports/go',mapping,root/'reports'/(binary+'.assessment.json'))
+check(root/'reports'/(binary+'.binary.grype.json'),'grype',root/'reports/go',mapping,root/'reports'/(binary+'.binary.assessment.json'))
 PY
 done < <(python3 -c 'import sys;sys.path.insert(0,"scripts/release");from artifacts import BINARIES;print("\n".join(BINARIES))')
 

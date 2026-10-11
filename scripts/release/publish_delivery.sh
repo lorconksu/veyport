@@ -5,8 +5,10 @@ delivery="${1:?verified public artifact directory required}"
 tag="${2:?validated immutable tag required}"
 version="${3:?validated version required}"
 prototype="${4:?true or false required}"
+revision="${5:?exact source revision required}"
 test "$prototype" = true || test "$prototype" = false
 (cd "$delivery" && sha256sum --check DELIVERY_SHA256SUMS)
+python3 "$(dirname "${BASH_SOURCE[0]}")/git_tag.py" ensure "$tag" "$revision" "${GITHUB_REPOSITORY:?repository required}"
 for target in veyport audit-ingest audit-export; do
   repository=yiucloud/veyport
   if [ "$target" != veyport ]; then repository="yiucloud/veyport-$target"; fi

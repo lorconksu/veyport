@@ -80,10 +80,41 @@ elif args[0]=='copy':
 else: sys.exit(2)
 """)
             fake.chmod(0o700)
-            env = {**os.environ, "PATH": str(tools) + os.pathsep + os.environ["PATH"], "REGISTRY_FIXTURE": str(root)}
-            def run(mode):
+            fake_git = tools / "git"
+            fake_git.write_text("""#!/usr/bin/env python3
+import os,pathlib,sys
+r=pathlib.Path(os.environ['REGISTRY_FIXTURE']);mode=os.environ.get('TAG_MODE','match')
+if mode=='outage': print('private-upstream-canary',file=sys.stderr);sys.exit(1)
+if mode=='absent' and not (r/'git-created').exists(): sys.exit(0)
+if mode.startswith('create-'):
+ if not (r/'git-created').exists(): sys.exit(0)
+ if mode=='create-outage': print('private-upstream-canary',file=sys.stderr);sys.exit(1)
+ if mode=='create-unconfirmed': sys.exit(0)
+ref=sys.argv[-2];sha='a'*40
+if mode in ('mismatch','create-wrong'): sha='b'*40
+if mode=='malformed': print('not-a-sha\\t'+ref);sys.exit(0)
+if mode=='orphan': print(sha+'\\t'+ref+'^{}');sys.exit(0)
+if mode=='duplicate': print(sha+'\\t'+ref)
+if mode=='unrelated': print(sha+'\\trefs/tags/unrelated');sys.exit(0)
+if mode=='annotated':
+ print('c'*40+'\\t'+ref);print(sha+'\\t'+ref+'^{}')
+else: print(sha+'\\t'+ref)
+""")
+            fake_git.chmod(0o700)
+            fake_gh = tools / "gh"
+            fake_gh.write_text("""#!/usr/bin/env python3
+import json,os,pathlib,sys
+r=pathlib.Path(os.environ['REGISTRY_FIXTURE']);payload=json.load(sys.stdin)
+if sys.argv[1:]!=['api','--method','POST','repos/fixture/repo/git/refs','--input','-'] or payload['sha']!='a'*40:sys.exit(2)
+(r/'git-create-request.json').write_text(json.dumps(payload));(r/'git-created').touch()
+if os.environ['TAG_MODE']=='create-lostreply': print('private-upstream-canary',file=sys.stderr);sys.exit(1)
+""")
+            fake_gh.chmod(0o700)
+            env = {**os.environ, "PATH": str(tools) + os.pathsep + os.environ["PATH"], "REGISTRY_FIXTURE": str(root), "GITHUB_REPOSITORY": "fixture/repo"}
+            def run(mode, tag_mode="match", prototype=True):
                 (root / "calls").write_text("")
-                result = subprocess.run(["bash", str(script), str(delivery), "prototype-ssh-passthrough.1", "2.0.50-prototype.1", "true"], env={**env, "REGISTRY_MODE": mode}, capture_output=True, timeout=5)
+                tag, version = ("prototype-ssh-passthrough.1", "2.0.50-prototype.1") if prototype else ("v2.0.50", "2.0.50")
+                result = subprocess.run(["bash", str(script), str(delivery), tag, version, str(prototype).lower(), "a" * 40], env={**env, "REGISTRY_MODE": mode, "TAG_MODE": tag_mode}, capture_output=True, timeout=5)
                 calls = [json.loads(line) for line in (root / "calls").read_text().splitlines()]
                 return result, calls
             for mode in ("auth", "mismatch"):
@@ -99,6 +130,33 @@ else: sys.exit(2)
             result, calls = run("match")
             self.assertEqual(result.returncode, 0, result.stderr)
             self.assertFalse(any(call[0] == "copy" for call in calls))
+            for prototype in (True, False):
+                for tag_mode in ("mismatch", "outage", "malformed", "orphan", "duplicate", "unrelated"):
+                    result, calls = run("match", tag_mode, prototype)
+                    self.assertNotEqual(result.returncode, 0)
+                    self.assertEqual(calls, [], "tag mismatch/outage reached registry publication")
+                    self.assertNotIn(b"private-upstream-canary", result.stderr)
+                result, calls = run("match", "match", prototype)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertFalse((root / "git-create-request.json").exists())
+                result, calls = run("match", "annotated", prototype)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertFalse((root / "git-create-request.json").exists())
+                expected_tag = "prototype-ssh-passthrough.1" if prototype else "v2.0.50"
+                for tag_mode in ("absent", "create-lostreply", "create-wrong", "create-outage", "create-unconfirmed"):
+                    result, calls = run("match", tag_mode, prototype)
+                    if tag_mode in ("absent", "create-lostreply"):
+                        self.assertEqual(result.returncode, 0, result.stderr)
+                    else:
+                        self.assertNotEqual(result.returncode, 0)
+                        self.assertEqual(calls, [], "unconfirmed creation reached registry publication")
+                    self.assertNotIn(b"private-upstream-canary", result.stderr)
+                    self.assertEqual(json.loads((root / "git-create-request.json").read_text()), {"ref": "refs/tags/" + expected_tag, "sha": "a" * 40})
+                    (root / "git-create-request.json").unlink()
+                    (root / "git-created").unlink()
+                result = subprocess.run(["python3", str(script.with_name("git_tag.py")), "check", expected_tag, "a" * 40, "fixture/repo"], env={**env, "TAG_MODE": "absent"}, capture_output=True, timeout=5)
+                self.assertNotEqual(result.returncode, 0)
+                self.assertFalse((root / "git-create-request.json").exists(), "release recheck created a missing tag")
             (delivery / "veyport.oci.tar").write_bytes(b"tampered after scan")
             result, calls = run("absent")
             self.assertNotEqual(result.returncode, 0)

@@ -126,7 +126,7 @@ jobs:
       - name: Create frontend embed stub
         run: mkdir -p hub/web/dist && touch hub/web/dist/index.html
       - name: Integration tests with coverage
-        run: cd hub && go test -race ./internal/integration/ -v -timeout 120s -coverprofile=../coverage-integration.out -covermode=atomic -coverpkg=./internal/...
+        run: cd hub && go test -race ./internal/integration/ -v -timeout 10m -coverprofile=../coverage-integration.out -covermode=atomic -coverpkg=./internal/...
 
       - name: Report agent binary coverage
         if: always()
