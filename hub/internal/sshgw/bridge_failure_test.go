@@ -2,6 +2,7 @@ package sshgw
 
 import (
 	"errors"
+	"io"
 	"strings"
 	"testing"
 
@@ -55,8 +56,25 @@ func TestBridgeAttachFailureRefuses(t *testing.T) {
 	done, _ := f.startBridge(ch, nil)
 	waitForDone(t, done, "bridge refusal after a failed attach")
 
-	if got := ch.errBuf.String(); !strings.Contains(got, "could not be attached") {
-		t.Errorf("stderr = %q, want an attach-failure explanation", got)
+	// Removing an interactive registration also closes its admission marker.
+	// The open-ack and closed-marker signals may both be ready; either refusal
+	// explains this removal, and neither may allow the bridge to relay input.
+	if got := ch.errBuf.String(); !strings.Contains(got, "could not be attached") && !strings.Contains(got, "terminal session is closed or its authorization changed") {
+		t.Errorf("stderr = %q, want an attach or closed-session explanation", got)
+	}
+	if got := ch.exitStatus(t); got != exitRefused {
+		t.Errorf("exit-status = %d, want %d", got, exitRefused)
+	}
+	if _, ok := f.terminals.Get(testServerID, f.openSessionID()); ok {
+		t.Error("refused attach retained its registration")
+	}
+	if _, err := ch.inW.Write([]byte("must not reach the agent")); !errors.Is(err, io.ErrClosedPipe) {
+		t.Errorf("refused attach still accepts client input: %v", err)
+	}
+	for _, msg := range f.agent.messages() {
+		if msg.GetTerminalInput() != nil {
+			t.Error("refused attach forwarded client input")
+		}
 	}
 	f.waitForAudit(model.AuditSSHSessionRefused)
 	if len(f.auditEntries(model.AuditSSHSessionOpened)) != 0 {
