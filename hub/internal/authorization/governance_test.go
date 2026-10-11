@@ -154,6 +154,9 @@ func fixtureGovernance(t *testing.T) (*Service, authorizationFixture) {
 		t.Fatal(err)
 	}
 	cfg := TransitionConfig{Evidence: evidence, EnrollmentPath: filepath.Join(dir, "enhanced-enrollment.json"), InstallationID: "test-installation"}
+	if err := service.ConfigureExecutionPolicy(cfg); err != nil {
+		t.Fatal(err)
+	}
 	return service, authorizationFixture{change: c, config: cfg, evidence: evidence, now: now}
 }
 

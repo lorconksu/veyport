@@ -171,7 +171,7 @@ func (s *Server) recheckExecutionPolicy(p execParams) error {
 	if err := s.recheckExecution(p); err != nil {
 		return err
 	}
-	current, err := authorization.New(s.cfg.Store).PolicyForExecution(p.userID, p.serverID)
+	current, err := s.securityService().PolicyForExecution(p.userID, p.serverID)
 	if err != nil {
 		return err
 	}

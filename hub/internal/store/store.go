@@ -17,6 +17,9 @@ type Store struct {
 
 	interactivePolicyMu        sync.Mutex
 	interactivePolicyObservers []func()
+	executionPolicyMu          sync.RWMutex
+	executionPolicyKey         string
+	executionPolicyValidator   func(model.PolicyState) error
 
 	auditStateMu    sync.Mutex
 	auditDegraded   bool

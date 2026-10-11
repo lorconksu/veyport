@@ -26,6 +26,9 @@ type SecurityDestinationTester interface {
 func (s *Server) securityService() *authorization.Service {
 	service := authorization.New(s.store)
 	service.Now = s.now
+	// Startup installs the same immutable binding in production. This repeated
+	// call also prevents a later constructor from replacing its authority.
+	_ = service.ConfigureExecutionPolicy(s.securityTransition)
 	return service
 }
 func decodeSecurity(r *http.Request, v any) error {

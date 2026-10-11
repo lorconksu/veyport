@@ -18,6 +18,11 @@ import (
 var ErrProtectedChange = errors.New("protected security change requires /api/security/changes")
 var ErrSecurityConflict = errors.New("security state changed; create a new request")
 var ErrStepup = errors.New("fresh action-bound interactive MFA required")
+var ErrPolicyIntegrity = errors.New("stored audit policy integrity check failed")
+
+// Migration 025 predates policy digests. Only its exact initial record may use
+// that legacy exception; an approved or later record always has a digest.
+const initialStandardPolicy = `{"profile":"standard","actors":[],"nodes":[],"runtime_seconds":3600,"retention_hours":24,"destination":"","credential_ref":"","trust_key_ids":[],"qualification_sha256":""}`
 
 func SecurityDigest(raw []byte) string { sum := sha256.Sum256(raw); return hex.EncodeToString(sum[:]) }
 func (s *Store) UserRoles(userID string) ([]model.Role, error) {
@@ -57,9 +62,32 @@ func (s *Store) GuardSecurityUserMutation(userID string) error {
 	return nil
 }
 func (s *Store) GovernanceEnrolled() (bool, error) {
-	var n int
-	err := s.db.QueryRow("SELECT COUNT(*) FROM audit_policy_versions WHERE json_extract(payload,'$.profile')='enhanced'").Scan(&n)
-	return n > 0, err
+	return governanceEnrolled(context.Background(), s.db)
+}
+
+func governanceEnrolled(ctx context.Context, db interface {
+	QueryContext(context.Context, string, ...any) (*sql.Rows, error)
+}) (bool, error) {
+	rows, err := db.QueryContext(ctx, "SELECT version,payload,digest,request_id FROM audit_policy_versions ORDER BY version")
+	if err != nil {
+		return false, err
+	}
+	defer rows.Close()
+	enrolled := false
+	for rows.Next() {
+		var p model.PolicyVersion
+		var raw []byte
+		if err := rows.Scan(&p.Version, &raw, &p.SHA256, &p.RequestID); err != nil {
+			return false, err
+		}
+		if err := decodePolicyVersion(&p, raw); err != nil {
+			return false, err
+		}
+		// Every legitimate post-initial version follows Enhanced bootstrap.
+		// An approved later Standard profile does not remove its governance.
+		enrolled = enrolled || p.Version > 1 || p.RequestID != "" || p.Policy.Profile == "enhanced"
+	}
+	return enrolled, rows.Err()
 }
 func (s *Store) GetPolicyState() (model.PolicyState, error) {
 	var state model.PolicyState
@@ -92,19 +120,76 @@ func (s *Store) GetPolicyState() (model.PolicyState, error) {
 	return state, nil
 }
 func (s *Store) GetPolicyVersion(version uint64) (model.PolicyVersion, error) {
+	return readPolicyVersion(s.db.QueryRow("SELECT payload,digest,request_id FROM audit_policy_versions WHERE version=?", version), version)
+}
+
+func readPolicyVersion(row *sql.Row, version uint64) (model.PolicyVersion, error) {
 	p := model.PolicyVersion{Version: version}
 	var raw []byte
-	err := s.db.QueryRow("SELECT payload,digest,request_id FROM audit_policy_versions WHERE version=?", version).Scan(&raw, &p.SHA256, &p.RequestID)
-	if err != nil {
+	if err := row.Scan(&raw, &p.SHA256, &p.RequestID); err != nil {
 		return p, err
 	}
-	if err = json.Unmarshal(raw, &p.Policy); err != nil {
-		return p, err
-	}
-	if p.SHA256 == "" {
-		p.SHA256 = SecurityDigest(raw)
+	if err := decodePolicyVersion(&p, raw); err != nil {
+		return model.PolicyVersion{}, err
 	}
 	return p, nil
+}
+
+func decodePolicyVersion(p *model.PolicyVersion, raw []byte) error {
+	digest := SecurityDigest(raw)
+	if p.SHA256 == "" {
+		if p.Version != 1 || p.RequestID != "" || string(raw) != initialStandardPolicy {
+			return ErrPolicyIntegrity
+		}
+		p.SHA256 = digest
+	} else if p.SHA256 != digest {
+		return ErrPolicyIntegrity
+	}
+	if err := json.Unmarshal(raw, &p.Policy); err != nil {
+		return ErrPolicyIntegrity
+	}
+	return nil
+}
+
+// InstallExecutionPolicyValidator binds this store to one immutable outside-DB
+// continuity authority. Later constructors cannot replace or clear that binding.
+func (s *Store) InstallExecutionPolicyValidator(key string, validate func(model.PolicyState) error) error {
+	if key == "" || validate == nil {
+		return ErrPolicyIntegrity
+	}
+	s.executionPolicyMu.Lock()
+	defer s.executionPolicyMu.Unlock()
+	if s.executionPolicyValidator != nil {
+		if s.executionPolicyKey != key {
+			return ErrPolicyIntegrity
+		}
+		return nil
+	}
+	s.executionPolicyKey = key
+	s.executionPolicyValidator = validate
+	return nil
+}
+
+// ValidateExecutionPolicy runs outside database transactions and the binding
+// mutex. Validators may perform local reads, but must never perform network I/O.
+func (s *Store) ValidateExecutionPolicy(state model.PolicyState) error {
+	s.executionPolicyMu.RLock()
+	validate := s.executionPolicyValidator
+	s.executionPolicyMu.RUnlock()
+	if validate != nil {
+		return validate(state)
+	}
+	raw, err := json.Marshal(state.Active.Policy)
+	if err != nil || state.Active.Version != 1 || state.Active.RequestID != "" || string(raw) != initialStandardPolicy || state.Active.SHA256 != SecurityDigest([]byte(initialStandardPolicy)) {
+		return ErrPolicyIntegrity
+	}
+	if state.Pending != nil || state.Previous != nil || state.PendingChange != "" || (state.State != "standard" && state.State != "setup_pending" && state.State != "recovery_required") {
+		return ErrPolicyIntegrity
+	}
+	if enrolled, err := s.GovernanceEnrolled(); err != nil || enrolled {
+		return ErrPolicyIntegrity
+	}
+	return nil
 }
 func (s *Store) IssueStepup(user, session, action, digest string, now time.Time) (string, error) {
 	if user == "" || session == "" || action == "" || len(digest) != 64 {
@@ -372,6 +457,9 @@ func (s *Store) beginSecurityApply(c model.SecurityChange, newPolicy model.Audit
 		return err
 	}
 	return s.withImmediateTx(func(ctx context.Context, conn *sql.Conn) error {
+		if _, err := readPolicyVersion(conn.QueryRowContext(ctx, "SELECT payload,digest,request_id FROM audit_policy_versions WHERE version=?", c.ExpectedVersion), c.ExpectedVersion); err != nil {
+			return err
+		}
 		var state, digest string
 		var expires int64
 		var stored []byte
@@ -425,6 +513,11 @@ func (s *Store) activateSecurityChange(c model.SecurityChange, p model.SecurityC
 		}
 		if id != c.ID || !pending.Valid || uint64(pending.Int64) != c.ExpectedVersion+1 {
 			return ErrSecurityConflict
+		}
+		for _, version := range []uint64{active, uint64(pending.Int64)} {
+			if _, err := readPolicyVersion(conn.QueryRowContext(ctx, "SELECT payload,digest,request_id FROM audit_policy_versions WHERE version=?", version), version); err != nil {
+				return err
+			}
 		}
 		if active == c.ExpectedVersion+1 {
 			return nil
@@ -557,10 +650,18 @@ func (s *Store) finishSecurityChange(id, resultRef string) error {
 		if active != pending {
 			return ErrSecurityConflict
 		}
+		policy, err := readPolicyVersion(conn.QueryRowContext(ctx, "SELECT payload,digest,request_id FROM audit_policy_versions WHERE version=?", active), active)
+		if err != nil {
+			return err
+		}
+		state := "standard"
+		if policy.Policy.Profile == "enhanced" {
+			state = "enhanced"
+		}
 		if _, err := conn.ExecContext(ctx, "UPDATE security_changes SET state='applied',result_ref=? WHERE id=? AND state='applying'", resultRef, id); err != nil {
 			return err
 		}
-		_, err := conn.ExecContext(ctx, "UPDATE audit_policy_state SET state=CASE WHEN (SELECT json_extract(payload,'$.profile') FROM audit_policy_versions WHERE version=active_version)='enhanced' THEN 'enhanced' ELSE 'standard' END,pending_version=NULL,pending_change='' WHERE id=1 AND pending_change=?", id)
+		_, err = conn.ExecContext(ctx, "UPDATE audit_policy_state SET state=?,pending_version=NULL,pending_change='' WHERE id=1 AND pending_change=?", state, id)
 		return err
 	})
 }

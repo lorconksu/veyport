@@ -59,10 +59,14 @@ func (s *Store) UpdateAuditSettings(settings model.AuditSettings) error {
 	values := AuditSettingsConfig(settings)
 	return s.withImmediateTx(func(ctx context.Context, conn *sql.Conn) error {
 		var allowed bool
-		if err := conn.QueryRowContext(ctx, "SELECT state='standard' AND pending_version IS NULL AND NOT EXISTS(SELECT 1 FROM audit_policy_versions WHERE json_extract(payload,'$.profile')='enhanced') FROM audit_policy_state WHERE id=1").Scan(&allowed); err != nil {
+		if err := conn.QueryRowContext(ctx, "SELECT state='standard' AND pending_version IS NULL FROM audit_policy_state WHERE id=1").Scan(&allowed); err != nil {
 			return err
 		}
-		if !allowed {
+		enrolled, err := governanceEnrolled(ctx, conn)
+		if err != nil {
+			return err
+		}
+		if !allowed || enrolled {
 			return ErrProtectedChange
 		}
 		for key, value := range values {

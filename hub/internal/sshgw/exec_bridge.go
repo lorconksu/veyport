@@ -14,7 +14,6 @@ import (
 	"unicode/utf8"
 
 	"github.com/google/uuid"
-	"github.com/wyiu/veyport/hub/internal/authorization"
 	"github.com/wyiu/veyport/hub/internal/grpcserver"
 	"github.com/wyiu/veyport/hub/internal/model"
 	"github.com/wyiu/veyport/hub/internal/server"
@@ -44,7 +43,7 @@ func (s *Server) authorizeExec(conn *ssh.ServerConn) (execParams, error) {
 	if err != nil {
 		return execParams{}, errors.New(authorizationMessage(err))
 	}
-	policy, err := authorization.New(s.cfg.Store).PolicyForExecution(user.ID, node.ID)
+	policy, err := s.securityService().PolicyForExecution(user.ID, node.ID)
 	if err != nil {
 		return execParams{}, err
 	}

@@ -29,8 +29,9 @@ const ActionApprove = "security.approve"
 const ActionApply = "security.apply"
 
 type Service struct {
-	Store *store.Store
-	Now   func() time.Time
+	Store                  *store.Store
+	Now                    func() time.Time
+	policyConfigurationErr error
 }
 
 func New(st *store.Store) *Service {
@@ -88,11 +89,18 @@ func (s *Service) Effective(userID string) (model.EffectiveCapabilities, error) 
 	return e, nil
 }
 func (s *Service) PolicyForExecution(actor, node string) (model.ExecutionPolicy, error) {
+	if s.policyConfigurationErr != nil {
+		return model.ExecutionPolicy{}, s.policyConfigurationErr
+	}
 	state, err := s.Store.GetPolicyState()
 	if err != nil {
 		return model.ExecutionPolicy{}, err
 	}
-	p := model.ExecutionPolicy{Version: state.Active.Version, SHA256: state.Active.SHA256, Enhanced: state.Active.Policy.Covers(actor, node), RuntimeSeconds: state.Active.Policy.RuntimeSeconds, RecoveryRequired: state.State == "recovery_required"}
+	p := model.ExecutionPolicy{Version: state.Active.Version, SHA256: state.Active.SHA256, RuntimeSeconds: state.Active.Policy.RuntimeSeconds, RecoveryRequired: state.State == "recovery_required"}
+	if err := s.Store.ValidateExecutionPolicy(state); err != nil {
+		return p, err
+	}
+	p.Enhanced = state.Active.Policy.Covers(actor, node)
 	if state.Pending != nil {
 		p.Enhanced = p.Enhanced || state.Pending.Policy.Covers(actor, node)
 		if state.Pending.Policy.RuntimeSeconds > 0 && (p.RuntimeSeconds <= 0 || state.Pending.Policy.RuntimeSeconds < p.RuntimeSeconds) {

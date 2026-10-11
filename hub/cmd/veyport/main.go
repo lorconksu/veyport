@@ -207,6 +207,7 @@ func runServer() error {
 	// the gateway presents, and an SSH session must land in the same terminal
 	// registry the web terminal uses.
 	sshSrv := sshgw.New(sshgw.Config{
+		SecurityTransition: authorization.TransitionConfig{InstallationID: transition.InstallationID, EnrollmentPath: transition.EnrollmentPath},
 		ProtectedExecution: protectedExecution,
 		Store:              st,
 		UserCA:             userCA,

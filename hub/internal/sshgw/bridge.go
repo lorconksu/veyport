@@ -12,7 +12,6 @@ import (
 	"github.com/google/uuid"
 	"golang.org/x/crypto/ssh"
 
-	"github.com/wyiu/veyport/hub/internal/authorization"
 	"github.com/wyiu/veyport/hub/internal/grpcserver"
 	"github.com/wyiu/veyport/hub/internal/model"
 	"github.com/wyiu/veyport/hub/internal/server"
@@ -90,7 +89,7 @@ func (s *Server) bridge(ch ssh.Channel, p bridgeParams) {
 	sessionID := uuid.NewString()
 
 	events, executionUser, err := s.cfg.Terminals.RegisterInteractive(s.cfg.Store, s.cfg.ConnMgr, p.serverID, sessionID, p.userID, func() (string, error) {
-		if err := authorization.New(s.cfg.Store).GuardInteractive(p.userID, p.serverID); err != nil {
+		if err := s.securityService().GuardInteractive(p.userID, p.serverID); err != nil {
 			return "", err
 		}
 		return server.AuthorizeTerminalExecution(s.cfg.Store, p.userID, p.serverID)

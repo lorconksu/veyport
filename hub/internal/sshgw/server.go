@@ -21,6 +21,7 @@ import (
 
 	"golang.org/x/crypto/ssh"
 
+	"github.com/wyiu/veyport/hub/internal/authorization"
 	"github.com/wyiu/veyport/hub/internal/connmgr"
 	"github.com/wyiu/veyport/hub/internal/grpcserver"
 	"github.com/wyiu/veyport/hub/internal/model"
@@ -73,6 +74,9 @@ var errUsernameFormat = errors.New("ssh username is not of the form <veyport-use
 type Config struct {
 	// Store is the hub datastore, used for live authorization and audit.
 	Store *store.Store
+	// SecurityTransition supplies the immutable local enrollment identity. The
+	// gateway performs no external archive calls while validating live policy.
+	SecurityTransition authorization.TransitionConfig
 	// UserCA is the trust root for user certificates. Nil disables the
 	// listener (corrupt-key case, FR-006).
 	UserCA *userca.UserCA
@@ -140,6 +144,12 @@ func New(cfg Config) *Server {
 	}
 }
 
+func (s *Server) securityService() *authorization.Service {
+	service := authorization.New(s.cfg.Store)
+	_ = service.ConfigureExecutionPolicy(s.cfg.SecurityTransition)
+	return service
+}
+
 // Start binds the listener and serves connections until Stop is called. It
 // blocks, mirroring grpcserver.Server.Start, so run it in a goroutine.
 //
@@ -147,6 +157,13 @@ func New(cfg Config) *Server {
 // without ever opening a port: the hub's REST and gRPC planes keep serving
 // (FR-006, FR-015). Only a genuine bind failure is returned as an error.
 func (s *Server) Start() error {
+	if s.cfg.Store != nil {
+		if err := authorization.New(s.cfg.Store).ConfigureExecutionPolicy(s.cfg.SecurityTransition); err != nil {
+			s.closeUnusedListener()
+			s.markReady()
+			return fmt.Errorf("configure execution policy continuity: %w", err)
+		}
+	}
 	s.startEvidenceRecovery()
 	lis, err := s.listen()
 	s.markReady()

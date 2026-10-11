@@ -10,7 +10,6 @@ import (
 	"golang.org/x/crypto/ssh"
 
 	"github.com/wyiu/veyport/hub/internal/account"
-	"github.com/wyiu/veyport/hub/internal/authorization"
 	"github.com/wyiu/veyport/hub/internal/lockout"
 	"github.com/wyiu/veyport/hub/internal/model"
 	"github.com/wyiu/veyport/hub/internal/server"
@@ -235,7 +234,7 @@ func (s *Server) runShell(sshConn *ssh.ServerConn, ch ssh.Channel, cols, rows ui
 	// Refuse obvious denials before admission. The bridge revalidates the live
 	// grant and policy under the registration lock and before each ordered send.
 	// An authorized LOCAL admin yields an empty user for the agent default.
-	if err := authorization.New(s.cfg.Store).GuardInteractive(user.ID, srv.ID); err != nil {
+	if err := s.securityService().GuardInteractive(user.ID, srv.ID); err != nil {
 		s.refuseShell(ch, user.ID, srv.ID, ip, "enhanced policy requires protected command execution", err.Error())
 		return
 	}

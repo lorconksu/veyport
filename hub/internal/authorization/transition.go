@@ -514,6 +514,9 @@ func (s *Service) archive(ctx context.Context, c model.SecurityChange, kind stri
 // failed attempt leaves covered access closed; operators may retry the exact
 // transition through the reconciliation API after restoring dependencies.
 func (s *Service) Startup(ctx context.Context, cfg TransitionConfig) error {
+	if err := s.ConfigureExecutionPolicy(cfg); err != nil {
+		return err
+	}
 	state, err := s.Store.GetPolicyState()
 	if err != nil {
 		return err
