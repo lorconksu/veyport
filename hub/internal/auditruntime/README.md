@@ -22,9 +22,11 @@ in `config.go`. They include the HTTPS endpoint, explicit allowed addresses for
 DNS names, issuer, audience, public ES256 key paths, private CA path, distinct
 originals and governance qualification SHA256 pins, and mTLS certificate/key
 paths. The fixed authority requires `clients.hub-ingest` and `clients.hub-admin`
-to be different certificates. `clients.hub-original-reader` and
-`clients.redactor-index` are recognized for compatibility but are not loaded or
-used by this runtime. No archive writer, KMS credential, or receipt signing
+to be different certificates. Optional `clients.hub-original-reader` supplies a
+separate mTLS principal for protected historical reads; it must differ from both
+administration and ingestion. Missing reader configuration makes original access
+unavailable. `clients.redactor-index` is recognized but is not loaded or used by
+the hub. No archive writer, KMS credential, or receipt signing
 private key belongs in the hub.
 
 All referenced files must be regular, service-owned, mode 0600 files without
@@ -43,6 +45,15 @@ reference; no read API exposes its value. A policy pins that reference, exact
 destination, signing key IDs, qualification hash, and required originals
 retention. `ResolveArchive` checks the exact stored policy version and digest
 without borrowing credentials or trust from a newer policy.
+
+`ResolveOriginalArchive` uses the execution's exact historical policy to resolve
+ingestion, administrative metadata and a separate original-reader client. It
+validates destination readiness and trust independently of agent availability,
+the SSH listener and encrypted execution spools. Access still requires its own
+fresh MFA, preserved read intent and one-use handle; historical evidence cannot
+renew an expired read permission. Clients use a bounded 32-entry cache keyed by
+the exact policy and decrypted credential digest. Every lookup resolves the
+immutable reference again, and eviction closes idle connections.
 
 `GET /api/audit-policy` performs bounded, read-only service and transport checks.
 Its `readiness.governance` checks the independently qualified fixed authority and

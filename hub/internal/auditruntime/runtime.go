@@ -225,6 +225,10 @@ func (r *Runtime) archive(p model.AuditPolicy) (auditgate.Gate, *endpoint, error
 		if err != nil {
 			return auditgate.Gate{}, nil, authorization.ErrNotReady
 		}
+		identitySHA := auditrecord.Hash(pair.Certificate[0])
+		if identitySHA == e.adminSHA || identitySHA == e.readerSHA {
+			return auditgate.Gate{}, nil, authorization.ErrNotReady
+		}
 		tlsConfig.Certificates = []tls.Certificate{pair}
 	}
 	// Cache only exact immutable policy, credential bytes and trust combinations.
@@ -274,6 +278,9 @@ func (r *Runtime) Close() {
 		e.ready.client.CloseIdleConnections()
 		if e.ingest != nil {
 			e.ingest.CloseIdleConnections()
+		}
+		if e.reader != nil {
+			e.reader.CloseIdleConnections()
 		}
 	}
 }

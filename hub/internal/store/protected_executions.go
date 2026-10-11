@@ -94,7 +94,7 @@ func (s *Store) QueueExecutionEvidence(raw []byte, minRetain time.Time) error {
 		return err
 	}
 	executionID := envelope.Details.CorrelationID
-	tx, cleanup, err := s.protectedTransaction(context.Background())
+	tx, cleanup, err := s.protectedWriteTransaction(context.Background(), "UPDATE execution_evidence_recovery SET attempts=attempts WHERE 0")
 	if err != nil {
 		return err
 	}
@@ -165,7 +165,7 @@ func (s *Store) DueExecutionEvidence(now time.Time, limit int) ([]ExecutionEvide
 	return result, rows.Err()
 }
 func (s *Store) ConfirmExecutionEvidence(eventID string) error {
-	tx, cleanup, err := s.protectedTransaction(context.Background())
+	tx, cleanup, err := s.protectedWriteTransaction(context.Background(), "UPDATE execution_evidence_recovery SET attempts=attempts WHERE 0")
 	if err != nil {
 		return err
 	}

@@ -64,13 +64,16 @@ type FileConfig struct {
 }
 
 type endpoint struct {
-	config   EndpointConfig
-	roots    *x509.CertPool
-	keys     map[string]*ecdsa.PublicKey
-	ingest   *auditgate.Client
-	admin    *auditgate.Client
-	verifier *auditgate.Verifier
-	ready    *readyClient
+	config    EndpointConfig
+	roots     *x509.CertPool
+	keys      map[string]*ecdsa.PublicKey
+	ingest    *auditgate.Client
+	admin     *auditgate.Client
+	reader    *auditgate.Client
+	adminSHA  string
+	readerSHA string
+	verifier  *auditgate.Verifier
+	ready     *readyClient
 }
 
 func readPrivate(path string, limit int64) ([]byte, error) {
@@ -195,6 +198,7 @@ func loadEndpoint(base string, c EndpointConfig, governance bool, now func() tim
 	if err != nil {
 		return nil, err
 	}
+	e.adminSHA = auditrecord.Hash(adminTLS.Certificates[0].Certificate[0])
 	adminConfig := e.clientConfig(adminTLS, "", e.verifier)
 	adminConfig.Now = now
 	e.admin, err = auditgate.NewClient(adminConfig)
@@ -205,12 +209,27 @@ func loadEndpoint(base string, c EndpointConfig, governance bool, now func() tim
 	if err != nil {
 		return nil, ErrConfiguration
 	}
+	if c.Clients.OriginalReader.CertificatePath != "" || c.Clients.OriginalReader.KeyPath != "" {
+		readerTLS, err := clientTLS(base, e.roots, c.Clients.OriginalReader)
+		if err != nil {
+			return nil, ErrConfiguration
+		}
+		e.readerSHA = auditrecord.Hash(readerTLS.Certificates[0].Certificate[0])
+		if e.readerSHA == e.adminSHA {
+			return nil, ErrConfiguration
+		}
+		e.reader, err = auditgate.NewClient(e.clientConfig(readerTLS, "", e.verifier))
+		if err != nil {
+			return nil, ErrConfiguration
+		}
+	}
 	if governance {
 		ingestTLS, err := clientTLS(base, e.roots, c.Clients.Ingest)
 		if err != nil {
 			return nil, err
 		}
-		if auditrecord.Hash(ingestTLS.Certificates[0].Certificate[0]) == auditrecord.Hash(adminTLS.Certificates[0].Certificate[0]) {
+		ingestSHA := auditrecord.Hash(ingestTLS.Certificates[0].Certificate[0])
+		if ingestSHA == e.adminSHA || ingestSHA == e.readerSHA {
 			return nil, ErrConfiguration
 		}
 		e.ingest, err = auditgate.NewClient(e.clientConfig(ingestTLS, "", e.verifier))

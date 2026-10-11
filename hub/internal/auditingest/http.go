@@ -134,7 +134,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	default:
-		if strings.HasPrefix(r.URL.Path, "/v1/records/") || strings.HasPrefix(r.URL.Path, "/v1/anchors/") {
+		if strings.HasPrefix(r.URL.Path, "/v1/records/") || strings.HasPrefix(r.URL.Path, "/v1/anchors/") || strings.HasPrefix(r.URL.Path, "/v1/manifests/") {
 			scope = ScopeAdmin
 			if r.Method != http.MethodGet {
 				w.WriteHeader(http.StatusMethodNotAllowed)
@@ -162,6 +162,10 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	if scope == ScopeAdmin {
 		w.Header().Set("Content-Type", "application/json")
+		if strings.HasPrefix(r.URL.Path, "/v1/manifests/") {
+			h.originalManifest(w, r)
+			return
+		}
 		if strings.HasPrefix(r.URL.Path, "/v1/records/") {
 			receipt, err := h.service.Lookup(r.Context(), strings.TrimPrefix(r.URL.Path, "/v1/records/"), r.URL.Query().Get("sha256"))
 			if err != nil {

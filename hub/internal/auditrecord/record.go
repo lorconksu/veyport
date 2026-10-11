@@ -97,6 +97,7 @@ type Attachment struct {
 
 // Details uses an explicit allowlist. It cannot smuggle arbitrary raw log fields.
 type Details struct {
+	Delivery              *OriginalDelivery  `json:"delivery,omitempty"`
 	Submission            *SubmissionBinding `json:"submission,omitempty"`
 	InstallationID        string             `json:"installation_id,omitempty"`
 	Requester             *Actor             `json:"requester,omitempty"`
@@ -113,6 +114,13 @@ type Details struct {
 	ApproverPersonIDs     []string           `json:"approver_person_ids,omitempty"`
 	ApprovedChange        []byte             `json:"approved_change,omitempty"`
 	Approvals             []ApprovalEvidence `json:"approvals,omitempty"`
+}
+
+// OriginalDelivery counts bytes accepted by the hub HTTP response writer. It
+// does not claim that a client persisted or even received those bytes.
+type OriginalDelivery struct {
+	BytesWritten *int64 `json:"bytes_written"`
+	Scope        string `json:"scope"`
 }
 
 type ApprovalEvidence struct {
@@ -244,6 +252,14 @@ func (e Envelope) Validate() error {
 	}
 	if e.Details != nil {
 		d := e.Details
+		if d.Delivery != nil {
+			if e.EventType != OriginalReadResult || e.Execution != nil || d.Delivery.Scope != "hub_response" || (d.State != "started" && d.State != "completed" && d.State != "interrupted" && d.State != "unconfirmed" && d.State != "expired") || (d.Delivery.BytesWritten == nil && d.State != "unconfirmed") {
+				return ErrSchema
+			}
+			if n := d.Delivery.BytesWritten; n != nil && (*n < 0 || *n > MaxAttachmentBytes || d.State == "started" && *n != 0) {
+				return ErrSchema
+			}
+		}
 		if d.Submission != nil {
 			x := d.Submission
 			if e.EventType != ExecutionDenial || !ValidID(x.NodeID) || !bounded(x.NodeName, 256) || !ValidHash(x.CommandSHA256) || x.CommandBytes < 1 || x.CommandBytes > MaxCommandBytes || x.ScriptBytes < 0 || x.ScriptBytes > MaxAttachmentBytes || (x.ScriptSHA256 != "" && !ValidHash(x.ScriptSHA256)) || (x.ScriptSHA256 == "" && x.ScriptBytes != 0) {

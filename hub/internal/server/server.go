@@ -39,6 +39,8 @@ type ReEnrollReleaser interface {
 }
 
 type Server struct {
+	originalAccess            OriginalAccessConfig
+	originalRecovery          *originalRecovery
 	securityTransition        authorization.TransitionConfig
 	securityDestinationTester SecurityDestinationTester
 	securityAllowedHosts      []string
@@ -101,6 +103,7 @@ func (s *Server) now() time.Time {
 }
 
 type Config struct {
+	OriginalAccess            OriginalAccessConfig
 	SecurityTransition        authorization.TransitionConfig
 	SecurityDestinationTester SecurityDestinationTester
 	SecurityAllowedHosts      []string
@@ -142,6 +145,7 @@ func New(cfg Config) *Server {
 	}
 
 	s := &Server{
+		originalAccess:            cfg.OriginalAccess,
 		securityTransition:        cfg.SecurityTransition,
 		securityDestinationTester: cfg.SecurityDestinationTester,
 		securityAllowedHosts:      append([]string(nil), cfg.SecurityAllowedHosts...),
@@ -193,6 +197,7 @@ func New(cfg Config) *Server {
 	}
 
 	s.startSessionPruner(sessionPruneInterval, sessionPruneRetention)
+	s.startOriginalRecovery()
 
 	return s
 }
@@ -245,6 +250,7 @@ func (s *Server) Start() error {
 }
 
 func (s *Server) Shutdown(ctx context.Context) error {
+	s.stopOriginalRecovery()
 	s.stopSessionPruner()
 	return s.httpServer.Shutdown(ctx)
 }

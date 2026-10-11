@@ -147,15 +147,18 @@ func runServer() error {
 	}
 	var destinationTester server.SecurityDestinationTester
 	var allowedAuditHosts []string
+	var originalAccess server.OriginalAccessConfig
 	if auditRuntime != nil {
 		destinationTester = auditRuntime
 		allowedAuditHosts = auditRuntime.AllowedHosts()
+		originalAccess.ResolveArchive = auditRuntime.ResolveOriginalArchive
 	}
 
 	srv := server.New(server.Config{
 		SecurityTransition:        transition,
 		SecurityDestinationTester: destinationTester,
 		SecurityAllowedHosts:      allowedAuditHosts,
+		OriginalAccess:            originalAccess,
 		Addr:                      *addr,
 		Store:                     st,
 		JWTSecret:                 jwtSecret,

@@ -55,6 +55,7 @@ func (s *Server) routes() http.Handler {
 	mux.Handle("POST /api/security/changes/{id}/apply", loggingMiddleware(s.authMiddleware(auth.TokenTypeAccess, s.interactiveOnly(http.HandlerFunc(s.handleSecurityApply)))))
 
 	mux.Handle("POST /api/security/changes/{id}/reconcile", loggingMiddleware(s.authMiddleware(auth.TokenTypeAccess, s.interactiveOnly(http.HandlerFunc(s.handleSecurityReconcile)))))
+	s.registerOriginalAccessRoutes(mux, totpLimiter)
 
 	// Self-service session management (feature 009): a person managing their
 	// own sessions, so an API token — which is not a session — is refused.

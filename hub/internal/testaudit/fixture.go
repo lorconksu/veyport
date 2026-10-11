@@ -203,12 +203,13 @@ func New(t testing.TB, clock *Clock) *Fixture {
 	_, _, serverPair := cert(2, true)
 	ingestCert, ingestKey, ingestPair := cert(3, false)
 	adminCert, adminKey, adminPair := cert(4, false)
+	readerCert, readerKey, readerPair := cert(5, false)
 	f := &Fixture{Clock: clock, Originals: &Archive{q: qualification("synthetic-originals", 2*86400), objects: map[string]archived{}}, Governance: &Archive{q: qualification("synthetic-governance", 3651*86400), objects: map[string]archived{}}}
 	service, err := auditingest.NewService(auditingest.ServiceConfig{Issuer: "synthetic-receipt", Audience: "synthetic-hub", Retention: 24 * time.Hour, GovernanceRetention: 3650 * 24 * time.Hour, ReceiptTTL: time.Minute, Timeout: 5 * time.Second, Concurrency: 4, Signer: auditingest.Signer{KeyID: "fixture-key", Key: key}, Archive: f.Originals, GovernanceArchive: f.Governance, Now: clock.Now})
 	if err != nil {
 		t.Fatal(err)
 	}
-	authenticator, err := auditingest.NewAuthenticator([]auditingest.Credential{{ID: "fixture-ingest", Scope: auditingest.ScopeIngest, CertificateSHA256: auditrecord.Hash(ingestPair.Certificate[0])}, {ID: "fixture-admin", Scope: auditingest.ScopeAdmin, CertificateSHA256: auditrecord.Hash(adminPair.Certificate[0])}})
+	authenticator, err := auditingest.NewAuthenticator([]auditingest.Credential{{ID: "fixture-ingest", Scope: auditingest.ScopeIngest, CertificateSHA256: auditrecord.Hash(ingestPair.Certificate[0])}, {ID: "fixture-admin", Scope: auditingest.ScopeAdmin, CertificateSHA256: auditrecord.Hash(adminPair.Certificate[0])}, {ID: "fixture-reader", Scope: auditingest.ScopeRead, CertificateSHA256: auditrecord.Hash(readerPair.Certificate[0])}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -287,7 +288,7 @@ func New(t testing.TB, clock *Clock) *Fixture {
 	if err != nil {
 		t.Fatal(err)
 	}
-	f.Config = auditruntime.EndpointConfig{Endpoint: f.Server.URL, AllowedAddresses: []string{"127.0.0.1"}, Issuer: "synthetic-receipt", Audience: "synthetic-hub", SigningKeyID: "fixture-key", SigningPublicKeyPath: write("signer.pem", pem.EncodeToMemory(&pem.Block{Type: "PUBLIC KEY", Bytes: public})), CAPath: write("ca.pem", caPEM), QualificationSHA256: f.Originals.q.Digest, GovernanceQualificationSHA256: f.Governance.q.Digest, Clients: auditruntime.ClientSet{Ingest: auditruntime.ClientFiles{CertificatePath: write("ingest.pem", ingestCert), KeyPath: write("ingest-key.pem", ingestKey)}, Admin: auditruntime.ClientFiles{CertificatePath: write("admin.pem", adminCert), KeyPath: write("admin-key.pem", adminKey)}}}
+	f.Config = auditruntime.EndpointConfig{Endpoint: f.Server.URL, AllowedAddresses: []string{"127.0.0.1"}, Issuer: "synthetic-receipt", Audience: "synthetic-hub", SigningKeyID: "fixture-key", SigningPublicKeyPath: write("signer.pem", pem.EncodeToMemory(&pem.Block{Type: "PUBLIC KEY", Bytes: public})), CAPath: write("ca.pem", caPEM), QualificationSHA256: f.Originals.q.Digest, GovernanceQualificationSHA256: f.Governance.q.Digest, Clients: auditruntime.ClientSet{Ingest: auditruntime.ClientFiles{CertificatePath: write("ingest.pem", ingestCert), KeyPath: write("ingest-key.pem", ingestKey)}, Admin: auditruntime.ClientFiles{CertificatePath: write("admin.pem", adminCert), KeyPath: write("admin-key.pem", adminKey)}, OriginalReader: auditruntime.ClientFiles{CertificatePath: write("reader.pem", readerCert), KeyPath: write("reader-key.pem", readerKey)}}}
 	f.Credential = auditruntime.DestinationCredential{CertificatePEM: string(ingestCert), PrivateKeyPEM: string(ingestKey)}
 	return f
 }

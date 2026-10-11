@@ -184,7 +184,22 @@ func (s *Service) ValidateAnchor(ctx context.Context, cfg TransitionConfig) erro
 		return dbErr
 	}
 	if errors.Is(err, os.ErrNotExist) && !enrolled {
-		return nil
+		if state.Active.Version != 1 || state.Active.Policy.Profile != "standard" {
+			return ErrRecovery
+		}
+		if cfg.Evidence == nil {
+			return nil // Standalone Standard has never configured external governance.
+		}
+		if !auditrecord.ValidID(cfg.InstallationID) {
+			return ErrRecovery
+		}
+		// Restoring an initial database and its absent marker must not erase an
+		// enrollment already recorded by this installation's fixed authority.
+		// Only its authenticated absence response permits initial Standard.
+		if _, anchorErr := cfg.Evidence.Anchor(ctx, cfg.InstallationID); errors.Is(anchorErr, auditgate.ErrAnchorNotFound) {
+			return nil
+		}
+		return ErrRecovery
 	}
 	if err != nil || cfg.Evidence == nil || m.InstallationID != cfg.InstallationID || m.Version != state.Active.Version || m.SHA256 != state.Active.SHA256 {
 		return ErrRecovery
