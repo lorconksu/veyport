@@ -1,0 +1,10 @@
+__pycache__/
+*.py[cod]
+.local/
+secrets/
+*.key
+*.token
+*.luks
+*.snapshot
+*.tar.gz
+*.gcm

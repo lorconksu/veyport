@@ -1,0 +1,21 @@
+{
+  "schema": 1,
+  "cluster": "home",
+  "tag": "veyport-audit-lab",
+  "bridge": "vmbr0",
+  "gateway": "10.10.1.1",
+  "dns": "10.10.1.12",
+  "searchdomain": "yiucloud.com",
+  "storage": "vm-storage",
+  "management_source": "10.10.1.95/32",
+  "ssh_user": "cloud-user",
+  "isolation": "Guest nftables default deny; private management endpoints on loopback; only explicit role paths on LAN. No cluster bridge modifications.",
+  "vms": [
+    {"name":"veyport-lab","vmid":118,"node":"proxmox1","template":9103,"address":"10.10.1.59/24","cores":2,"memory_mib":2048,"disk_gib":40},
+    {"name":"audit-ingest-lab","vmid":124,"node":"proxmox3","template":9303,"address":"10.10.1.60/24","cores":2,"memory_mib":2048,"disk_gib":40},
+    {"name":"elk-lab","vmid":120,"node":"proxmox2","template":9203,"address":"10.10.1.61/24","cores":4,"memory_mib":16384,"disk_gib":160},
+    {"name":"audit-store-lab","vmid":121,"node":"proxmox3","template":9303,"address":"10.10.1.62/24","cores":2,"memory_mib":4096,"disk_gib":140},
+    {"name":"audit-keys-lab","vmid":122,"node":"proxmox2","template":9203,"address":"10.10.1.63/24","cores":1,"memory_mib":2048,"disk_gib":32},
+    {"name":"audit-target-lab","vmid":123,"node":"proxmox1","template":9103,"address":"10.10.1.64/24","cores":1,"memory_mib":2048,"disk_gib":32}
+  ]
+}

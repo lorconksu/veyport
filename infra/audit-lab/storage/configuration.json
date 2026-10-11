@@ -1,0 +1,196 @@
+{
+  "archive_binary_sha256": "a784f8dc480f5c97e91f17efbdb761d9c1ca955dac0f6919bdfe0d53a2382c65",
+  "archive_packages": "cryptsetup\t2:2.7.0-1ubuntu4.2\nnftables\t1.0.9-1ubuntu0.1\nnginx\t1.24.0-2ubuntu7.18\nopenssl\t3.0.13-0ubuntu3.16\npostgresql-16\t16.15-0ubuntu0.24.04.1\n",
+  "archive_units": {
+    "nginx": "[Unit]\nConditionPathIsMountPoint=/srv/veyport\n[Service]\nMemorySwapMax=0\nExecStartPre=/usr/local/sbin/veyport-archive-volume-check\n",
+    "postgresql@16-audit": "[Unit]\nConditionPathIsMountPoint=/srv/veyport\n[Service]\nMemorySwapMax=0\nExecStartPre=/usr/local/sbin/veyport-archive-volume-check\n",
+    "veyport-seaweed-filer": "[Unit]\nDescription=Veyport lab SeaweedFS filer\nAfter=network-online.target postgresql@16-audit.service\nConditionPathIsMountPoint=/srv/veyport\n[Service]\nUser=veyport-seaweed\nGroup=veyport-seaweed\nCapabilityBoundingSet=\nAmbientCapabilities=\nProtectHome=true\nPrivateDevices=true\nRestrictNamespaces=true\nLockPersonality=true\nWorkingDirectory=/srv/veyport/config\nExecStartPre=/usr/local/sbin/veyport-archive-volume-check\nExecStart=/usr/local/bin/weed filer -ip=127.0.0.1 -ip.bind=127.0.0.1 -master=127.0.0.1:9333 -port=8888 -iam=false -exposeDirectoryData=false\nUMask=0077\nMemorySwapMax=0\nNoNewPrivileges=true\nPrivateTmp=true\nProtectSystem=strict\nReadWritePaths=/srv/veyport\nRestart=on-failure\n[Install]\nWantedBy=multi-user.target\n",
+    "veyport-seaweed-master": "[Unit]\nDescription=Veyport lab SeaweedFS master\nAfter=network-online.target postgresql@16-audit.service\nConditionPathIsMountPoint=/srv/veyport\n[Service]\nUser=veyport-seaweed\nGroup=veyport-seaweed\nCapabilityBoundingSet=\nAmbientCapabilities=\nProtectHome=true\nPrivateDevices=true\nRestrictNamespaces=true\nLockPersonality=true\nWorkingDirectory=/srv/veyport/config\nExecStartPre=/usr/local/sbin/veyport-archive-volume-check\nExecStart=/usr/local/bin/weed master -ip=127.0.0.1 -ip.bind=127.0.0.1 -mdir=/srv/veyport/data/master -volumeSizeLimitMB=1024 -defaultReplication=000\nUMask=0077\nMemorySwapMax=0\nNoNewPrivileges=true\nPrivateTmp=true\nProtectSystem=strict\nReadWritePaths=/srv/veyport\nRestart=on-failure\n[Install]\nWantedBy=multi-user.target\n",
+    "veyport-seaweed-s3": "[Unit]\nDescription=Veyport lab SeaweedFS s3\nAfter=network-online.target postgresql@16-audit.service\nConditionPathIsMountPoint=/srv/veyport\n[Service]\nUser=veyport-seaweed\nGroup=veyport-seaweed\nCapabilityBoundingSet=\nAmbientCapabilities=\nProtectHome=true\nPrivateDevices=true\nRestrictNamespaces=true\nLockPersonality=true\nWorkingDirectory=/srv/veyport/config\nExecStartPre=/usr/local/sbin/veyport-archive-volume-check\nExecStart=/usr/local/bin/weed s3 -ip.bind=127.0.0.1 -filer=127.0.0.1:8888 -port=8334 -config=/srv/veyport/config/s3.json -iam=false -port.iceberg=0 -port.lance=0 -allowDeleteBucketNotEmpty=false -autoCreateBucket=false -concurrentUploadLimitMB=64\nUMask=0077\nMemorySwapMax=0\nNoNewPrivileges=true\nPrivateTmp=true\nProtectSystem=strict\nReadWritePaths=/srv/veyport\nRestart=on-failure\n[Install]\nWantedBy=multi-user.target\n",
+    "veyport-seaweed-volume": "[Unit]\nDescription=Veyport lab SeaweedFS volume\nAfter=network-online.target postgresql@16-audit.service\nConditionPathIsMountPoint=/srv/veyport\n[Service]\nUser=veyport-seaweed\nGroup=veyport-seaweed\nCapabilityBoundingSet=\nAmbientCapabilities=\nProtectHome=true\nPrivateDevices=true\nRestrictNamespaces=true\nLockPersonality=true\nWorkingDirectory=/srv/veyport/config\nExecStartPre=/usr/local/sbin/veyport-archive-volume-check\nExecStart=/usr/local/bin/weed volume -ip=127.0.0.1 -ip.bind=127.0.0.1 -port=8080 -mserver=127.0.0.1:9333 -dir=/srv/veyport/data/volume -max=20 -fileSizeLimitMB=32\nUMask=0077\nMemorySwapMax=0\nNoNewPrivileges=true\nPrivateTmp=true\nProtectSystem=strict\nReadWritePaths=/srv/veyport\nRestart=on-failure\n[Install]\nWantedBy=multi-user.target\n"
+  },
+  "bucket_properties": {
+    "audit-governance": {
+      "encryption": {
+        "Rules": [
+          {
+            "ApplyServerSideEncryptionByDefault": {
+              "KMSMasterKeyID": "audit-archive",
+              "SSEAlgorithm": "aws:kms"
+            },
+            "BucketKeyEnabled": false
+          }
+        ]
+      },
+      "object_lock": {
+        "ObjectLockEnabled": "Enabled",
+        "Rule": {
+          "DefaultRetention": {
+            "Days": 3651,
+            "Mode": "COMPLIANCE"
+          }
+        }
+      },
+      "versioning": "Enabled"
+    },
+    "audit-originals": {
+      "encryption": {
+        "Rules": [
+          {
+            "ApplyServerSideEncryptionByDefault": {
+              "KMSMasterKeyID": "audit-archive",
+              "SSEAlgorithm": "aws:kms"
+            },
+            "BucketKeyEnabled": false
+          }
+        ]
+      },
+      "object_lock": {
+        "ObjectLockEnabled": "Enabled",
+        "Rule": {
+          "DefaultRetention": {
+            "Days": 2,
+            "Mode": "COMPLIANCE"
+          }
+        }
+      },
+      "versioning": "Enabled"
+    }
+  },
+  "ca_certificate_sha256": "ba0fa6c1bd8d70f48bad5a721d92979f87ae62a0a18d639d9ac0d4c8c66e934f",
+  "deployment": {
+    "buckets": {
+      "audit-governance": {
+        "cleanup": "New COMPLIANCE versions expire 3651 days after PUT; original pre-margin synthetic versions preserve their 3650-day deadlines. S3 cannot delete retained versions before expiry. Small metadata only.",
+        "default_retention": {
+          "days": 3651,
+          "mode": "COMPLIANCE"
+        },
+        "promised_minimum_seconds": 315360000,
+        "purpose": "Small synthetic policy.* envelopes/manifests/anchor indexes and idempotency metadata (event/type/hash/manifestref); no raw payloads",
+        "setting_note": "Prototype implementation setting for synthetic policy continuity; not a regulatory default"
+      },
+      "audit-originals": {
+        "default_retention": {
+          "days": 2,
+          "mode": "COMPLIANCE"
+        },
+        "promised_minimum_seconds": 86400,
+        "purpose": "execution and original_read records; synthetic originals",
+        "setting_note": "Prototype backend retention margin for observed whole-second defaults; application minimum remains 24 hours"
+      }
+    },
+    "limitations": [
+      "Single storage VM",
+      "Single key VM",
+      "Shared Proxmox administrator trust boundary",
+      "Synthetic lab; no regulatory certification",
+      "LUKS manual controller unlock required after reboot"
+    ],
+    "openbao": {
+      "artifact": "openbao_2.7.1_linux_amd64.tar.gz",
+      "endpoint": "https://10.10.1.63:8200",
+      "os_identity": "veyport-openbao; empty Linux capability set",
+      "sha256": "0e2f1ce10d124e03112b50dd2fbec6b78003783253bc3a91587938f39d1e2243",
+      "source": "https://github.com/openbao/openbao/releases/tag/v2.7.1",
+      "storage": "raft on encrypted service volume",
+      "transit_key": "audit-archive",
+      "version": "2.7.1"
+    },
+    "retention": {
+      "backend_governance_days": 3651,
+      "backend_original_days": 2,
+      "search_days": 7,
+      "synthetic_governance_days": 3650,
+      "synthetic_original_hours": 24
+    },
+    "seaweedfs": {
+      "artifact": "linux_amd64_full.tar.gz",
+      "data": "filer fs.configure -locationPrefix=/buckets/ -fsync=true -volumeGrowthCount=1 -apply; required and persisted before qualification",
+      "filesystem": "REQUIRED ext4 mounted sync,nodev,nosuid; all archive services reject missing sync mount. Required because released volume writes fsync DAT but do not fsync IDX.",
+      "kms_cache": false,
+      "management": "127.0.0.1 only",
+      "metadata": "PostgreSQL 16; fsync=on, synchronous_commit=on, full_page_writes=on",
+      "os_identity": "veyport-seaweed; empty Linux capability set",
+      "s3_endpoint": "https://10.10.1.62:8333",
+      "sha256": "3b290cd9621ab939c1c4292679520d7b3007376f24719adac47d6b311cb74bce",
+      "source": "https://github.com/seaweedfs/seaweedfs/releases/tag/4.48",
+      "source_commit": "530be3e37337488ecc34d58441e0bc476e121c93",
+      "version": "4.48",
+      "writer_policy": "Attached IAM exact S3 actions; explicit deny DeleteObject/DeleteObjectVersion/PutObjectRetention/PutObjectLegalHold; bucket default COMPLIANCE 2 days (application minimum 24 hours), governance 3651 days (application minimum 3650 days), verified exact version deadline"
+    }
+  },
+  "filer": "[postgres]\nenabled=true\ncreateTable=true\nhostname=\"127.0.0.1\"\nport=5433\nusername=\"seaweed\"\npassword=\"[REDACTED]\"\ndatabase=\"seaweed\"\nsslmode=\"disable\"\nconnection_max_idle=4\nconnection_max_open=8\n",
+  "filer_durability": "{\n  \"version\": 1,\n  \"locations\": [\n    {\n      \"locationPrefix\": \"/buckets/\",\n      \"collection\": \"\",\n      \"replication\": \"\",\n      \"ttl\": \"\",\n      \"diskType\": \"\",\n      \"fsync\": true,\n      \"volumeGrowthCount\": 1,\n      \"readOnly\": false,\n      \"dataCenter\": \"\",\n      \"rack\": \"\",\n      \"dataNode\": \"\",\n      \"maxFileNameLength\": 0,\n      \"disableChunkDeletion\": false,\n      \"wormGracePeriodSeconds\": \"0\",\n      \"wormRetentionTimeSeconds\": \"0\"\n    }\n  ]\n}\n",
+  "key_packages": "cryptsetup\t2:2.7.0-1ubuntu4.2\nnftables\t1.0.9-1ubuntu0.1\nopenssl\t3.0.13-0ubuntu3.16\n",
+  "kms_policy": "path \"transit/encrypt/audit-archive\" { capabilities=[\"update\"] }\npath \"transit/decrypt/audit-archive\" { capabilities=[\"update\"] }\npath \"transit/keys/audit-archive\" { capabilities=[\"read\"] }",
+  "kms_token_policy_names": [
+    "seaweed-kms"
+  ],
+  "mount_options": "rw,nosuid,nodev,relatime,sync",
+  "nginx": "server {\n  listen 10.10.1.62:8333 ssl;\n  server_name audit-store-lab;\n  ssl_certificate /srv/veyport/tls/server.crt;\n  ssl_certificate_key /srv/veyport/tls/server.key;\n  ssl_protocols TLSv1.2 TLSv1.3;\n  client_max_body_size 32m;\n  client_body_temp_path /srv/veyport/spool/nginx/body;\n  proxy_temp_path /srv/veyport/spool/nginx/proxy;\n  access_log off;\n  location / {\n    proxy_pass http://127.0.0.1:8334;\n    proxy_http_version 1.1;\n    proxy_set_header Host $http_host;\n    proxy_set_header Connection \"\";\n    proxy_request_buffering off;\n    proxy_buffering off;\n    proxy_read_timeout 60s;\n  }\n}\n",
+  "openbao_binary_sha256": "535cf827b13753046757f5ec8b97ae0ef21f10a40ffe673f0d5e75616170f5ea",
+  "openbao_config": "ui = false\napi_addr = \"https://10.10.1.63:8200\"\ncluster_addr = \"https://127.0.0.1:8201\"\nstorage \"raft\" {\n  path = \"/srv/veyport/data/openbao\"\n  node_id = \"audit-keys-lab\"\n}\nlistener \"tcp\" {\n  address = \"10.10.1.63:8200\"\n  cluster_address = \"127.0.0.1:8201\"\n  tls_cert_file = \"/srv/veyport/tls/server.crt\"\n  tls_key_file = \"/srv/veyport/tls/server.key\"\n  tls_min_version = \"tls12\"\n}\n",
+  "openbao_unit": "[Unit]\nDescription=Veyport lab independent OpenBao key service\nAfter=network-online.target\nConditionPathIsMountPoint=/srv/veyport\n[Service]\nUser=veyport-openbao\nGroup=veyport-openbao\nCapabilityBoundingSet=\nAmbientCapabilities=\nProtectHome=true\nPrivateDevices=true\nRestrictNamespaces=true\nLockPersonality=true\nExecStart=/usr/local/bin/bao server -config=/srv/veyport/config/openbao.hcl\nUMask=0077\nMemorySwapMax=0\nNoNewPrivileges=true\nPrivateTmp=true\nProtectSystem=strict\nReadWritePaths=/srv/veyport\nRestart=on-failure\n[Install]\nWantedBy=multi-user.target\n",
+  "postgres_settings": [
+    "16.15 (Ubuntu 16.15-0ubuntu0.24.04.1)",
+    "on",
+    "on",
+    "on"
+  ],
+  "s3": {
+    "identities": [
+      {
+        "actions": [
+          "Admin",
+          "Read",
+          "List",
+          "Write",
+          "Tagging"
+        ],
+        "credentials": "[REDACTED]",
+        "name": "admin"
+      },
+      {
+        "actions": [],
+        "credentials": "[REDACTED]",
+        "name": "writer",
+        "policyNames": [
+          "archive-writer"
+        ]
+      },
+      {
+        "actions": [
+          "Read:audit-originals/*",
+          "GetObjectRetention:audit-originals/*",
+          "Read:audit-governance/*",
+          "GetObjectRetention:audit-governance/*"
+        ],
+        "credentials": "[REDACTED]",
+        "name": "reader"
+      }
+    ],
+    "kms": {
+      "default_provider": "openbao",
+      "providers": {
+        "openbao": {
+          "address": "https://10.10.1.63:8200",
+          "ca_cert": "/srv/veyport/tls/ca.crt",
+          "cache_enabled": false,
+          "request_timeout": 5,
+          "tls_skip_verify": false,
+          "token": "[REDACTED]",
+          "transit_path": "transit",
+          "type": "openbao"
+        }
+      }
+    },
+    "policies": [
+      {
+        "content": "{\"Version\": \"2012-10-17\", \"Statement\": [{\"Effect\": \"Allow\", \"Action\": [\"s3:PutObject\", \"s3:GetObject\", \"s3:GetObjectVersion\", \"s3:GetObjectRetention\"], \"Resource\": [\"arn:aws:s3:::audit-originals/*\", \"arn:aws:s3:::audit-governance/*\"]}, {\"Effect\": \"Allow\", \"Action\": [\"s3:ListBucket\", \"s3:GetBucketVersioning\", \"s3:GetBucketObjectLockConfiguration\"], \"Resource\": [\"arn:aws:s3:::audit-originals\", \"arn:aws:s3:::audit-governance\"]}, {\"Effect\": \"Deny\", \"Action\": [\"s3:DeleteObject\", \"s3:DeleteObjectVersion\", \"s3:PutObjectRetention\", \"s3:PutObjectLegalHold\"], \"Resource\": [\"arn:aws:s3:::audit-originals/*\", \"arn:aws:s3:::audit-governance/*\"]}]}",
+        "name": "archive-writer"
+      }
+    ]
+  },
+  "schema_version": 1
+}
