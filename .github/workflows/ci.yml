@@ -17,7 +17,7 @@ on:
         required: false
 
 jobs:
-  test:
+  unit:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
@@ -70,11 +70,11 @@ jobs:
       - name: Release helper tests
         run: python3 -m unittest discover -s scripts/release -p "test_*.py"
 
-      - name: Hub tests with coverage
+      - name: Hub tests outside the separately sharded server package
         run: |
           cd hub
           listed="$(go list ./internal/...)"
-          mapfile -t packages < <(printf '%s\n' "$listed" | awk '!/\/internal\/integration$/')
+          mapfile -t packages < <(printf '%s\n' "$listed" | awk '!/\/internal\/(integration|server)$/')
           go test -race "${packages[@]}" -timeout 30m -coverprofile=../coverage-hub.out -covermode=atomic
 
       - name: Hub command tests with coverage
@@ -99,6 +99,85 @@ jobs:
         run: ./bin/vey-linux-amd64 --version
 
       - name: Upload coverage artifacts
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: coverage-units
+          path: |
+            coverage-hub.out
+            coverage-hub-cmd.out
+            coverage-agent.out
+            coverage-cli.out
+            coverage-proto.out
+            web/coverage/lcov.info
+
+  server-tests:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [0, 1, 2, 3, 4, 5]
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
+        with:
+          go-version-file: hub/go.mod
+          cache-dependency-path: |
+            hub/go.sum
+            proto/go.sum
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: 25
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - name: Build and embed the current production frontend
+        run: |
+          cd web && npm ci && npm run build
+          cd ..
+          mkdir -p hub/web/dist && cp -a web/dist/. hub/web/dist/
+      - name: Run every test assigned to this server shard
+        env:
+          SERVER_SHARD_INDEX: ${{ matrix.shard }}
+        run: python3 scripts/release/server_test_shards.py run --index "$SERVER_SHARD_INDEX" --shards 6 --timeout 1800 --output coverage-server
+      - name: Upload exact server execution and coverage evidence
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: coverage-server-shard-${{ matrix.shard }}
+          path: coverage-server/shard-${{ matrix.shard }}/
+          if-no-files-found: error
+
+  # Keep the required test status dependent on every matrix runner. An omitted,
+  # failed or skipped prerequisite must fail this job, rather than skip the gate.
+  test:
+    needs: [unit, server-tests]
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: Require all complete test jobs
+        env:
+          UNIT_RESULT: ${{ needs.unit.result }}
+          SERVER_RESULT: ${{ needs.server-tests.result }}
+        run: test "$UNIT_RESULT" = success && test "$SERVER_RESULT" = success
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
+        with:
+          go-version-file: hub/go.mod
+          cache-dependency-path: |
+            hub/go.sum
+            proto/go.sum
+      - name: Create the compile-only frontend embed required for inventory
+        run: mkdir -p hub/web/dist && touch hub/web/dist/index.html
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
+        with:
+          name: coverage-units
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
+        with:
+          pattern: coverage-server-shard-*
+          path: coverage-server
+      - name: Validate the complete server inventory and merge atomic coverage
+        run: python3 scripts/release/server_test_shards.py merge --input coverage-server --output coverage-hub.out --include coverage-hub.out --shards 6
+      - name: Upload complete coverage for Sonar
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: coverage
