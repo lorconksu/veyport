@@ -13,14 +13,19 @@ package commands
 // ssh client, and the no-TTY / missing-binary environment failures.
 //
 // execSSH and sshStdinIsTTY are the two injectable seams (see ssh.go): no
-// test in this file ever spawns a real ssh process.
+// test in this file ever connects to a real SSH gateway. Subprocess tests
+// use fake clients or the test binary to verify stream and signal behavior.
 
 import (
+	"bufio"
+	"bytes"
+	"context"
 	"crypto/ed25519"
 	"crypto/rand"
 	"encoding/json"
 	"encoding/pem"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -29,7 +34,9 @@ import (
 	"os/exec"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 
@@ -183,10 +190,10 @@ func stubExecSSH(t *testing.T, fn sshRunner) *[]string {
 	t.Helper()
 	orig := execSSH
 	captured := new([]string)
-	execSSH = func(binary string, argv []string, stdin io.Reader, stdout, stderr io.Writer) (int, error) {
+	execSSH = func(ctx context.Context, binary string, argv []string, stdin io.Reader, stdout, stderr io.Writer) (int, error) {
 		*captured = append([]string{binary}, argv...)
 		if fn != nil {
-			return fn(binary, argv, stdin, stdout, stderr)
+			return fn(ctx, binary, argv, stdin, stdout, stderr)
 		}
 		return 0, nil
 	}
@@ -291,7 +298,7 @@ func sshArgvIdentityAndKnownHosts(argv []string) (identityFile, knownHostsPath s
 // blocking real process) — so their existence/contents must be captured from
 // *inside* this callback, while RunSSH still holds them open.
 func captureSSHCredentialFiles(identityBytes, certBytes, knownHostsBytes *[]byte, readErr *error) sshRunner {
-	return func(_ string, argv []string, _ io.Reader, _, _ io.Writer) (int, error) {
+	return func(_ context.Context, _ string, argv []string, _ io.Reader, _, _ io.Writer) (int, error) {
 		identityFile, knownHostsPath := sshArgvIdentityAndKnownHosts(argv)
 		*identityBytes, *readErr = os.ReadFile(identityFile)
 		if *readErr == nil {
@@ -507,7 +514,7 @@ func TestSSH_ExitStatusPropagated(t *testing.T) {
 	mountSSHHostKey(mux)
 	mountSingleServer(mux, "bastion1", api.Server{ID: "s1", Name: "bastion1", Status: "online"})
 	stubSSHTTY(t, true)
-	stubExecSSH(t, func(string, []string, io.Reader, io.Writer, io.Writer) (int, error) {
+	stubExecSSH(t, func(context.Context, string, []string, io.Reader, io.Writer, io.Writer) (int, error) {
 		return 130, nil // e.g. ssh terminated by Ctrl-C
 	})
 
@@ -526,7 +533,7 @@ func TestSSH_ExitStatusPropagated_Zero(t *testing.T) {
 	mountSSHHostKey(mux)
 	mountSingleServer(mux, "bastion1", api.Server{ID: "s1", Name: "bastion1", Status: "online"})
 	stubSSHTTY(t, true)
-	stubExecSSH(t, func(string, []string, io.Reader, io.Writer, io.Writer) (int, error) {
+	stubExecSSH(t, func(context.Context, string, []string, io.Reader, io.Writer, io.Writer) (int, error) {
 		return 0, nil
 	})
 
@@ -574,7 +581,7 @@ func TestSSH_MissingSSHBinary_ExitError(t *testing.T) {
 	mountSSHHostKey(mux)
 	mountSingleServer(mux, "bastion1", api.Server{ID: "s1", Name: "bastion1", Status: "online"})
 	stubSSHTTY(t, true)
-	stubExecSSH(t, func(string, []string, io.Reader, io.Writer, io.Writer) (int, error) {
+	stubExecSSH(t, func(context.Context, string, []string, io.Reader, io.Writer, io.Writer) (int, error) {
 		return 0, errors.New("ssh not found on PATH")
 	})
 
@@ -594,7 +601,7 @@ func TestSSH_MissingSSHBinary_ExitError(t *testing.T) {
 // contract independent of the stubbing used everywhere else in this file.
 func TestRunSSHClient_MissingBinary(t *testing.T) {
 	t.Setenv("PATH", t.TempDir()) // a PATH with nothing on it
-	_, err := runSSHClient("vey-ssh-test-nonexistent-binary", nil, nil, io.Discard, io.Discard)
+	_, err := runSSHClient(context.Background(), "vey-ssh-test-nonexistent-binary", nil, nil, io.Discard, io.Discard)
 	if err == nil {
 		t.Fatal("runSSHClient with a nonexistent binary returned a nil error, want a local-start failure")
 	}
@@ -1151,7 +1158,7 @@ func TestKnownHostsPattern_NonDefaultPort(t *testing.T) {
 // to end against a real, trivial binary: success must come back as (0, nil),
 // not reinterpreted as anything else.
 func TestRunSSHClient_SuccessExitZero(t *testing.T) {
-	code, err := runSSHClient("true", nil, nil, io.Discard, io.Discard)
+	code, err := runSSHClient(context.Background(), "true", nil, nil, io.Discard, io.Discard)
 	if err != nil {
 		t.Fatalf("runSSHClient(true): unexpected error %v", err)
 	}
@@ -1164,7 +1171,7 @@ func TestRunSSHClient_SuccessExitZero(t *testing.T) {
 // *exec.ExitError branch: a non-zero exit is propagated as (code, nil), the
 // same contract the stubbed execSSH tests pin for RunSSH as a whole.
 func TestRunSSHClient_ExitCodePropagated(t *testing.T) {
-	code, err := runSSHClient("false", nil, nil, io.Discard, io.Discard)
+	code, err := runSSHClient(context.Background(), "false", nil, nil, io.Discard, io.Discard)
 	if err != nil {
 		t.Fatalf("runSSHClient(false): unexpected error %v", err)
 	}
@@ -1185,12 +1192,295 @@ func TestRunSSHClient_StartFailure_NotExitError(t *testing.T) {
 		t.Fatalf("writing bogus binary: %v", err)
 	}
 
-	_, err := runSSHClient(bogus, nil, nil, io.Discard, io.Discard)
+	_, err := runSSHClient(context.Background(), bogus, nil, nil, io.Discard, io.Discard)
 	if err == nil {
 		t.Fatal("runSSHClient with an unexecutable file returned nil error, want a local-start failure")
 	}
 	var exitErr *exec.ExitError
 	if errors.As(err, &exitErr) {
 		t.Fatalf("runSSHClient returned an *exec.ExitError (%v); want a non-ExitError start failure", exitErr)
+	}
+}
+
+// Commands are one opaque shell-program string; vey must not join arguments,
+// trim the program, or let command syntax reach a local shell.
+func TestSSH_CommandMode(t *testing.T) {
+	for _, tty := range []bool{false, true} {
+		for _, status := range []int{0, 42, 255} {
+			t.Run(fmt.Sprintf("tty=%t/exit=%d", tty, status), func(t *testing.T) {
+				mux, srv, configDir := seedForSSH(t, "tok-1")
+				seedSSHMaterial(t, configDir, srv.URL, "alice", time.Now().Add(time.Hour))
+				mountSSHHostKey(mux)
+				mountSingleServer(mux, "bastion1", api.Server{ID: "s1", Name: "bastion1"})
+				stubSSHTTY(t, tty)
+				command := "  printf '%s\\n' '$HOME;$(touch local)' | cat\n# café  "
+				calls := 0
+				captured := stubExecSSH(t, func(_ context.Context, _ string, argv []string, stdin io.Reader, stdout, stderr io.Writer) (int, error) {
+					calls++
+					if stdout != os.Stdout || stderr != os.Stderr {
+						t.Error("remote streams must use stdout and stderr separately")
+					}
+					if tty {
+						var input []byte
+						var err error
+						if stdin != nil {
+							input, err = io.ReadAll(stdin)
+						}
+						if err != nil || len(input) != 0 {
+							t.Errorf("terminal command stdin = %q, %v; want EOF", input, err)
+						}
+					} else if stdin != os.Stdin {
+						t.Error("redirected stdin must be passed directly to ssh")
+					}
+					if len(argv) < 2 || argv[len(argv)-1] != command || !strings.HasPrefix(argv[len(argv)-2], "alice+bastion1@") {
+						t.Errorf("command/destination were altered: argv=%q", argv)
+					}
+					for _, option := range []string{"-T", "RequestTTY=no", "BatchMode=yes", "PasswordAuthentication=no", "KbdInteractiveAuthentication=no", "StrictHostKeyChecking=yes", "IdentitiesOnly=yes"} {
+						if !slices.Contains(argv, option) {
+							t.Errorf("missing command-mode option %q: %q", option, argv)
+						}
+					}
+					return status, nil
+				})
+				ctx, stdout, stderr := newCmdContext(srv.URL, configDir, true, []string{"bastion1", "--", command})
+				if code := RunSSH(ctx); code != status || calls != 1 {
+					t.Fatalf("code=%d calls=%d; want %d, 1; stderr=%q", code, calls, status, stderr.String())
+				}
+				if stdout.Len() != 0 || stderr.Len() != 0 {
+					t.Errorf("unexpected CLI payload: stdout=%q stderr=%q", stdout.String(), stderr.String())
+				}
+				assertSSHTempDirCleanedUp(t, *captured)
+			})
+		}
+	}
+}
+
+func TestSSH_CommandInvalidUsage(t *testing.T) {
+	for name, args := range map[string][]string{
+		"missing command":        {"node", "--"},
+		"extra command argument": {"node", "--", "echo", "hello"},
+		"missing delimiter":      {"node", "echo hello"},
+		"missing node":           {"--", "echo hello"},
+		"extra node":             {"a", "b", "--", "true"},
+		"flag node":              {"-L", "--", "true"},
+		"empty command":          {"node", "--", ""},
+		"blank command":          {"node", "--", " \t\n"},
+		"nul":                    {"node", "--", "echo\x00oops"},
+		"invalid utf8":           {"node", "--", "echo\xff"},
+		"over limit":             {"node", "--", strings.Repeat("a", 32*1024+1)},
+	} {
+		t.Run(name, func(t *testing.T) {
+			if _, err := parseSSHArgs(args); err == nil || cmdutil.Code(err) != cmdutil.ExitUsage {
+				t.Fatalf("parser accepted invalid command shape: %v", err)
+			}
+			captured := stubExecSSH(t, nil)
+			ctx, stdout, stderr := newCmdContext("", t.TempDir(), false, args)
+			if code := RunSSH(ctx); code != cmdutil.ExitUsage {
+				t.Fatalf("code=%d; want usage; stderr=%q", code, stderr.String())
+			}
+			if *captured != nil || stdout.Len() != 0 {
+				t.Fatal("invalid usage executed ssh or produced stdout")
+			}
+		})
+	}
+}
+
+func TestSSH_CommandBoundaryAndDashPreserved(t *testing.T) {
+	for _, command := range []string{strings.Repeat("é", 16*1024), "-remote-command", "--"} {
+		ctx, _, stderr := newCmdContext("http://localhost", t.TempDir(), false, []string{"node", "--", command})
+		keyring.MockInitWithError(errNoKeyringForSSHRunTests)
+		t.Setenv("VEYPORT_TOKEN", "")
+		if code := RunSSH(ctx); code != cmdutil.ExitAuth {
+			t.Fatalf("valid command failed syntax/preflight: code=%d stderr=%q", code, stderr.String())
+		}
+	}
+}
+
+func TestSSH_CommandMissingCredentialsDoesNotReadInput(t *testing.T) {
+	_, srv, configDir := seedForSSH(t, "tok-1")
+	read, write, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer read.Close()
+	defer write.Close()
+	original := os.Stdin
+	os.Stdin = read
+	t.Cleanup(func() { os.Stdin = original })
+	stubSSHTTY(t, false)
+	captured := stubExecSSH(t, nil)
+	ctx, stdout, stderr := newCmdContext(srv.URL, configDir, false, []string{"node", "--", "cat"})
+	if code := RunSSH(ctx); code != cmdutil.ExitAuth || *captured != nil || stdout.Len() != 0 {
+		t.Fatalf("missing cert: code=%d argv=%q stdout=%q stderr=%q", code, *captured, stdout.String(), stderr.String())
+	}
+	// Leave the pipe open and empty throughout: attempting to read would hang.
+}
+
+// A subprocess keeps real signal delivery isolated from the go test runner.
+// The helper invokes the production runner with fake SSH, verifies bounded
+// child cleanup, and returns through the credential-directory defer.
+func TestSSH_CommandSignalCleanup(t *testing.T) {
+	if os.Getenv("VEY_SSH_SIGNAL_HELPER") == "1" {
+		mux, srv, configDir := seedForSSH(t, "tok-1")
+		seedSSHMaterial(t, configDir, srv.URL, "alice", time.Now().Add(time.Hour))
+		mountSSHHostKey(mux)
+		mountSingleServer(mux, "node", api.Server{ID: "s1", Name: "node"})
+		stubSSHTTY(t, false)
+		ctx, _, _ := newCmdContext(srv.URL, configDir, false, []string{"node", "--", "true"})
+		if code := RunSSH(ctx); code == 0 {
+			t.Fatal("cancelled command reported success")
+		}
+		return
+	}
+	cases := []struct {
+		name       string
+		signal     os.Signal
+		ignoreTerm bool
+	}{
+		{name: "interrupt", signal: os.Interrupt},
+		{name: "terminate", signal: syscall.SIGTERM},
+		{name: "hangup", signal: syscall.SIGHUP},
+		{name: "forced cleanup", signal: syscall.SIGTERM, ignoreTerm: true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			fakeSSH := filepath.Join(dir, "ssh")
+			// exec leaves just the native child to clean; stdout is the readiness
+			// handshake and also captures its pid and credential directory.
+			script := "#!/bin/sh\n"
+			if tc.ignoreTerm {
+				script += "trap '' TERM\n"
+			}
+			script += "printf '%s\\n' \"$$\" \"$4\"\nexec sleep 60\n"
+			if err := os.WriteFile(fakeSSH, []byte(script), 0o700); err != nil {
+				t.Fatal(err)
+			}
+			binary, err := os.Executable()
+			if err != nil {
+				t.Fatal(err)
+			}
+			deadline, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer cancel()
+			cmd := exec.CommandContext(deadline, binary, "-test.run=^TestSSH_CommandSignalCleanup$")
+			cmd.WaitDelay = 2 * time.Second
+			cmd.Env = append(os.Environ(), "VEY_SSH_SIGNAL_HELPER=1", "PATH="+dir+":"+os.Getenv("PATH"))
+			output, err := cmd.StdoutPipe()
+			if err != nil {
+				t.Fatal(err)
+			}
+			var stderr bytes.Buffer
+			cmd.Stderr = &stderr
+			if err := cmd.Start(); err != nil {
+				t.Fatal(err)
+			}
+			defer cmd.Process.Kill()
+			reader := bufio.NewReader(output)
+			pidLine, err := reader.ReadString('\n')
+			if err != nil {
+				t.Fatalf("fake ssh did not start: %v; stderr=%s", err, stderr.String())
+			}
+			identityLine, err := reader.ReadString('\n')
+			if err != nil {
+				t.Fatal(err)
+			}
+			pid, err := strconv.Atoi(strings.TrimSpace(pidLine))
+			if err != nil {
+				t.Fatal(err)
+			}
+			child, err := os.FindProcess(pid)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer child.Kill()
+			if err := cmd.Process.Signal(tc.signal); err != nil {
+				t.Fatal(err)
+			}
+			_ = cmd.Wait()
+			if deadline.Err() != nil {
+				t.Fatal("vey did not stop after signal within cleanup deadline")
+			}
+			if err := child.Signal(syscall.Signal(0)); err == nil {
+				t.Errorf("native child %d still alive after vey returned", pid)
+			}
+			tempDir := filepath.Dir(strings.TrimSpace(identityLine))
+			defer os.RemoveAll(tempDir) // Also clean evidence from a failed regression.
+			if _, err := os.Stat(tempDir); !errors.Is(err, os.ErrNotExist) {
+				t.Errorf("credential directory %s survived signal: %v", tempDir, err)
+			}
+		})
+	}
+}
+
+func TestRunSSHClient_ExactStreamsAndNoLocalShell(t *testing.T) {
+	if os.Getenv("VEY_SSH_STREAM_HELPER") == "1" {
+		input, err := io.ReadAll(os.Stdin)
+		if err != nil {
+			os.Exit(1)
+		}
+		_, _ = os.Stdout.Write(input)
+		_, _ = os.Stdout.Write([]byte{0, 255, '\n'})
+		_, _ = os.Stderr.Write([]byte("remote error\x00\xff\n"))
+		os.Exit(42)
+	}
+	binary, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("VEY_SSH_STREAM_HELPER", "1")
+	marker := filepath.Join(t.TempDir(), "must-not-exist")
+	command := "$(touch " + marker + "); echo 'quoted'"
+	var stdout, stderr bytes.Buffer
+	input := []byte("script\x00\xff\n")
+	code, err := runSSHClient(context.Background(), binary, []string{"-test.run=^TestRunSSHClient_ExactStreamsAndNoLocalShell$", "--", command}, bytes.NewReader(input), &stdout, &stderr)
+	if err != nil || code != 42 {
+		t.Fatalf("code=%d err=%v; want 42, nil", code, err)
+	}
+	if !bytes.Equal(stdout.Bytes(), append(input, 0, 255, '\n')) || !bytes.Equal(stderr.Bytes(), []byte("remote error\x00\xff\n")) {
+		t.Fatalf("streams changed: stdout=%q stderr=%q", stdout.Bytes(), stderr.Bytes())
+	}
+	if _, err := os.Stat(marker); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("local command substitution ran: %v", err)
+	}
+}
+
+func TestSSH_CommandStartFailureCleansCredentials(t *testing.T) {
+	mux, srv, configDir := seedForSSH(t, "tok-1")
+	seedSSHMaterial(t, configDir, srv.URL, "alice", time.Now().Add(time.Hour))
+	mountSSHHostKey(mux)
+	mountSingleServer(mux, "node", api.Server{ID: "s1", Name: "node"})
+	stubSSHTTY(t, false)
+	calls := 0
+	captured := stubExecSSH(t, func(ctx context.Context, _ string, _ []string, _ io.Reader, _, _ io.Writer) (int, error) {
+		calls++
+		if ctx.Done() == nil {
+			t.Error("command mode has no cancellation context")
+		}
+		return 0, errors.New("ssh not found on PATH")
+	})
+	ctx, stdout, stderr := newCmdContext(srv.URL, configDir, false, []string{"node", "--", "true"})
+	if code := RunSSH(ctx); code != cmdutil.ExitError || calls != 1 || stdout.Len() != 0 {
+		t.Fatalf("code=%d calls=%d stdout=%q stderr=%q", code, calls, stdout.String(), stderr.String())
+	}
+	assertSSHTempDirCleanedUp(t, *captured)
+}
+
+func TestBuildSSHArgs_CommandValidation(t *testing.T) {
+	for _, command := range []string{" \n", "echo\x00bad", "echo\xff", strings.Repeat("x", 32*1024+1)} {
+		_, err := buildSSHArgs(sshInvocation{
+			identityFile: "/tmp/key", knownHostsFile: "/tmp/hosts", port: 2222,
+			username: "alice", server: "node", gatewayHost: "hub.example", command: command,
+		})
+		if err == nil {
+			t.Fatal("invalid command accepted by argument builder")
+		}
+	}
+}
+
+func TestRunSSHClient_CancelledBeforeStart(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if _, err := runSSHClient(ctx, "true", nil, nil, io.Discard, io.Discard); !errors.Is(err, context.Canceled) {
+		t.Fatalf("cancelled command: %v; want context cancellation", err)
 	}
 }

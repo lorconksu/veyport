@@ -40,12 +40,21 @@ Commands:
   status         show the effective hub, auth mode, and reachability
   ssh-cert       obtain an SSH certificate for server connections
   ssh <server>   open an interactive SSH session by server name or ID
+                 add -- '<command>' to run a command without a PTY
   servers list   list servers on the hub
   servers get    show one server's details
   files ls       list a path on a remote server
   files cat      print a remote file to stdout
   logs tail      stream a remote log file
   audit export   stream the audit log export
+
+SSH command examples:
+  vey ssh bastion1 -- 'uname -a'
+  vey ssh bastion1 -- 'bash -s' < script.sh
+
+Pass one quoted command after --. Redirected stdin passes through; terminal
+stdin is EOF. Remote stdout/stderr and the native SSH exit status pass through.
+Exit 255 may be either a remote exit or a native SSH failure.
 `
 
 func main() {
