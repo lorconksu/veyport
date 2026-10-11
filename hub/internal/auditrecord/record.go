@@ -21,6 +21,7 @@ const (
 	MaxReceiptBytes    = 16 << 10
 	ExecutionAdmission = "execution.admission"
 	ExecutionLifecycle = "execution.lifecycle"
+	ExecutionDenial    = "execution.denial"
 	PolicyIntent       = "policy.intent"
 	PolicyCommit       = "policy.commit"
 	PolicyResult       = "policy.result"
@@ -79,6 +80,15 @@ type ExecutionBinding struct {
 	Limits        Limits    `json:"limits"`
 }
 
+type SubmissionBinding struct {
+	NodeID        string `json:"node_id"`
+	NodeName      string `json:"node_name"`
+	CommandSHA256 string `json:"command_sha256"`
+	CommandBytes  int64  `json:"command_bytes"`
+	ScriptSHA256  string `json:"script_sha256,omitempty"`
+	ScriptBytes   int64  `json:"script_bytes,omitempty"`
+}
+
 type Attachment struct {
 	ID     string `json:"id"`
 	SHA256 string `json:"sha256"`
@@ -87,6 +97,7 @@ type Attachment struct {
 
 // Details uses an explicit allowlist. It cannot smuggle arbitrary raw log fields.
 type Details struct {
+	Submission            *SubmissionBinding `json:"submission,omitempty"`
 	InstallationID        string             `json:"installation_id,omitempty"`
 	Requester             *Actor             `json:"requester,omitempty"`
 	CorrelationID         string             `json:"correlation_id"`
@@ -177,7 +188,7 @@ func (e Envelope) Validate() error {
 		return ErrSchema
 	}
 	switch e.EventType {
-	case ExecutionAdmission, ExecutionLifecycle, PolicyIntent, PolicyCommit, PolicyResult, OriginalReadIntent, OriginalReadResult, PolicyAnchor:
+	case ExecutionAdmission, ExecutionLifecycle, ExecutionDenial, PolicyIntent, PolicyCommit, PolicyResult, OriginalReadIntent, OriginalReadResult, PolicyAnchor:
 	default:
 		return ErrSchema
 	}
@@ -225,11 +236,20 @@ func (e Envelope) Validate() error {
 	if strings.HasPrefix(e.EventType, "policy.") && e.Execution != nil {
 		return ErrSchema
 	}
+	if e.EventType == ExecutionDenial && (e.Execution != nil || e.Details == nil || e.Details.State == "" || e.Details.Reason != "" || e.Details.Submission == nil) {
+		return ErrSchema
+	}
 	if e.EventType == ExecutionLifecycle && e.Execution == nil {
 		return ErrSchema
 	}
 	if e.Details != nil {
 		d := e.Details
+		if d.Submission != nil {
+			x := d.Submission
+			if e.EventType != ExecutionDenial || !ValidID(x.NodeID) || !bounded(x.NodeName, 256) || !ValidHash(x.CommandSHA256) || x.CommandBytes < 1 || x.CommandBytes > MaxCommandBytes || x.ScriptBytes < 0 || x.ScriptBytes > MaxAttachmentBytes || (x.ScriptSHA256 != "" && !ValidHash(x.ScriptSHA256)) || (x.ScriptSHA256 == "" && x.ScriptBytes != 0) {
+				return ErrSchema
+			}
+		}
 		if d.Requester != nil && !d.Requester.Valid() {
 			return ErrSchema
 		}

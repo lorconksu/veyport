@@ -1,0 +1,31 @@
+{
+  "schema_version": 1,
+  "verified_at": "2026-10-11T07:01:05.289654Z",
+  "fixture_count": 6,
+  "fixture_event_types": [
+    "execution.admission",
+    "execution.lifecycle",
+    "policy.result"
+  ],
+  "elasticsearch_version": "9.5.5",
+  "license": "basic",
+  "qualification_sha256": "b3cbbd7189920433d1c3c2fedff356b3ea1c2b74140520fde80437e1b5964808",
+  "governance_qualification_sha256": "baaa5cc2e09b7bd3af1ac981bf679afe1d77e5368af52192f3cd73f7952b107f",
+  "checks": [
+    "actual_canary_absence",
+    "stable_document_ids",
+    "empty_index_replay",
+    "deleted_index_replay",
+    "exact_original_versions_survive",
+    "visible_search_failure_lag",
+    "archive_admission_during_logstash_outage",
+    "search_recovery",
+    "least_privilege_search_ingest_http403"
+  ],
+  "limitations": [
+    "Synthetic records only; no remote process dispatch",
+    "Logstash HTTP ACK is acceptance, not an indexing receipt",
+    "No real human approvals simulated",
+    "Single guest for ELK and shared hypervisor administrator boundary"
+  ]
+}

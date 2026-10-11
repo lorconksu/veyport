@@ -85,6 +85,8 @@ func TestReadinessRequiresBothArchivesAndReportsSeparatePins(t *testing.T) {
 		w := callHandler(h, http.MethodGet, "/v1/ready", strings.Repeat("a", 32), nil)
 		var response struct {
 			Ready               bool   `json:"ready"`
+			ArchiveReady        bool   `json:"archive_ready"`
+			GovernanceReady     bool   `json:"governance_ready"`
 			OriginalPin         string `json:"qualification_sha256"`
 			GovernancePin       string `json:"governance_qualification_sha256"`
 			OriginalRetention   int64  `json:"retention_seconds"`
@@ -93,11 +95,45 @@ func TestReadinessRequiresBothArchivesAndReportsSeparatePins(t *testing.T) {
 		if w.Code != 200 || json.Unmarshal(w.Body.Bytes(), &response) != nil || response.Ready != (unavailable == "") || response.OriginalPin != originals.q.Digest || response.GovernancePin != governance.q.Digest || response.OriginalRetention != 86400 || response.GovernanceRetention != 3650*86400 {
 			t.Fatal("readiness omitted an archive dependency, pin or retention guarantee")
 		}
+		if response.ArchiveReady != (unavailable != "originals") || response.GovernanceReady != (unavailable != "governance") {
+			t.Fatal("independent authority readiness was coupled to the other bucket")
+		}
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 	if s.Ready(ctx) == nil {
 		t.Fatal("canceled readiness accepted")
+	}
+}
+
+type readinessArchive struct {
+	Archive
+	ready func(context.Context) error
+}
+
+func (a readinessArchive) Ready(ctx context.Context) error { return a.ready(ctx) }
+
+func TestReadinessTimeoutDoesNotCancelHealthyAuthorityProbe(t *testing.T) {
+	h, s, _, _ := testHandler(t)
+	s.config.Timeout = 25 * time.Millisecond
+	s.config.Archive = readinessArchive{Archive: s.config.Archive, ready: func(ctx context.Context) error {
+		<-ctx.Done()
+		return ctx.Err()
+	}}
+	s.config.GovernanceArchive = readinessArchive{Archive: s.config.GovernanceArchive, ready: func(ctx context.Context) error {
+		return ctx.Err()
+	}}
+	w := callHandler(h, http.MethodGet, "/v1/ready", strings.Repeat("a", 32), nil)
+	var response struct {
+		Ready           bool `json:"ready"`
+		ArchiveReady    bool `json:"archive_ready"`
+		GovernanceReady bool `json:"governance_ready"`
+	}
+	if w.Code != http.StatusOK || json.Unmarshal(w.Body.Bytes(), &response) != nil {
+		t.Fatal("readiness response unavailable")
+	}
+	if response.Ready || response.ArchiveReady || !response.GovernanceReady {
+		t.Fatal("timed-out originals probe cancelled healthy governance readiness")
 	}
 }
 

@@ -1,0 +1,13 @@
+path.data: /srv/veyport/data/logstash
+path.logs: /srv/veyport/logs/logstash
+pipeline.workers: 1
+pipeline.batch.size: 16
+queue.type: persisted
+path.queue: /srv/veyport/spool/logstash
+queue.max_bytes: 256mb
+queue.checkpoint.writes: 1
+dead_letter_queue.enable: false
+api.enabled: false
+config.debug: false
+log.level: error
+xpack.monitoring.enabled: false

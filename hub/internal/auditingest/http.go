@@ -2,6 +2,7 @@ package auditingest
 
 import (
 	"bytes"
+	"context"
 	"crypto/subtle"
 	"crypto/tls"
 	"encoding/hex"
@@ -14,6 +15,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/wyiu/veyport/hub/internal/auditrecord"
@@ -25,6 +27,7 @@ const (
 	ScopeIngest Scope = "ingest"
 	ScopeRead   Scope = "original-read"
 	ScopeAdmin  Scope = "admin"
+	ScopeExport Scope = "export-index"
 )
 
 // Credential contains only hashes. A single principal cannot combine write,
@@ -43,7 +46,7 @@ func NewAuthenticator(credentials []Credential) (*Authenticator, error) {
 	}
 	seen := map[string]bool{}
 	for _, c := range credentials {
-		if !auditrecord.ValidID(c.ID) || seen[c.ID] || c.Scope != ScopeIngest && c.Scope != ScopeRead && c.Scope != ScopeAdmin || !auditrecord.ValidHash(c.TokenSHA256) && !auditrecord.ValidHash(c.CertificateSHA256) || c.TokenSHA256 != "" && c.CertificateSHA256 != "" {
+		if !auditrecord.ValidID(c.ID) || seen[c.ID] || c.Scope != ScopeIngest && c.Scope != ScopeRead && c.Scope != ScopeAdmin && c.Scope != ScopeExport || !auditrecord.ValidHash(c.TokenSHA256) && !auditrecord.ValidHash(c.CertificateSHA256) || c.TokenSHA256 != "" && c.CertificateSHA256 != "" {
 			return nil, ErrUnavailable
 		}
 		seen[c.ID] = true
@@ -124,6 +127,12 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			w.WriteHeader(http.StatusMethodNotAllowed)
 			return
 		}
+	case "/v1/export-index":
+		scope = ScopeExport
+		if r.Method != http.MethodGet {
+			w.WriteHeader(http.StatusMethodNotAllowed)
+			return
+		}
 	default:
 		if strings.HasPrefix(r.URL.Path, "/v1/records/") || strings.HasPrefix(r.URL.Path, "/v1/anchors/") {
 			scope = ScopeAdmin
@@ -145,6 +154,10 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		defer func() { <-h.slots }()
 	default:
 		w.WriteHeader(http.StatusTooManyRequests)
+		return
+	}
+	if scope == ScopeExport {
+		h.exportIndex(w, r)
 		return
 	}
 	if scope == ScopeAdmin {
@@ -172,14 +185,32 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			_ = json.NewEncoder(w).Encode(anchor)
 			return
 		}
+		readinessContext, cancel := context.WithTimeout(r.Context(), h.service.config.Timeout)
+		defer cancel()
+		var archiveReady, governanceReady bool
+		var readinessChecks sync.WaitGroup
+		readinessChecks.Add(2)
+		go func() {
+			defer readinessChecks.Done()
+			archiveReady = h.service.config.Archive.Ready(readinessContext) == nil
+		}()
+		go func() {
+			defer readinessChecks.Done()
+			governanceReady = h.service.config.GovernanceArchive.Ready(readinessContext) == nil
+		}()
+		readinessChecks.Wait()
 		_ = json.NewEncoder(w).Encode(struct {
 			Ready                         bool   `json:"ready"`
+			ArchiveReady                  bool   `json:"archive_ready"`
+			GovernanceReady               bool   `json:"governance_ready"`
 			QualificationSHA256           string `json:"qualification_sha256"`
 			GovernanceQualificationSHA256 string `json:"governance_qualification_sha256"`
 			RetentionSeconds              int64  `json:"retention_seconds"`
 			GovernanceRetentionSeconds    int64  `json:"governance_retention_seconds"`
 		}{
-			Ready:                         h.service.Ready(r.Context()) == nil,
+			Ready:                         archiveReady && governanceReady,
+			ArchiveReady:                  archiveReady,
+			GovernanceReady:               governanceReady,
 			QualificationSHA256:           h.service.config.Archive.Qualification().Digest,
 			GovernanceQualificationSHA256: h.service.config.GovernanceArchive.Qualification().Digest,
 			RetentionSeconds:              int64(h.service.config.Retention / time.Second),

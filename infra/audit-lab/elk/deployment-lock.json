@@ -1,0 +1,27 @@
+{
+  "schema_version": 1,
+  "packages": [
+    {
+      "name": "elasticsearch",
+      "version": "9.5.5",
+      "sha512": "e7b843933fbd6e08e0ac7d6a0c5bf90a27cdbc754187852315a062c6c1a7bf60166786e01c3e74b8f55cdc0170e20f4765448861668da24982aef64ee261a6df",
+      "source": "https://artifacts.elastic.co/downloads/elasticsearch/elasticsearch-9.5.5-amd64.deb"
+    },
+    {
+      "name": "kibana",
+      "version": "9.5.5",
+      "sha512": "c1ddacf6dead0e062b5e1bb58e707f18558cdd163684b827bc4b81212750a051cf3f29fc4fd5480c682dc99852fcd5bcfd89a7197412b010435382e9bc4af0ab",
+      "source": "https://artifacts.elastic.co/downloads/kibana/kibana-9.5.5-amd64.deb"
+    },
+    {
+      "name": "logstash",
+      "version": "9.5.5",
+      "sha512": "d4a2181b320bce20f08f85fc5861b43f9f6f209c43dd244b3948ffbfeb6851e7f72dbb27e41c1e09ed92d6fe8fcee529248b7514a044ba43561c7ab5ec9cdedf",
+      "source": "https://artifacts.elastic.co/downloads/logstash/logstash-9.5.5-amd64.deb"
+    }
+  ],
+  "license": "basic",
+  "elasticsearch_version": "9.5.5",
+  "elasticsearch_bind": "127.0.0.1:9200",
+  "search_retention_days": 7
+}

@@ -1,0 +1,47 @@
+{
+  "index_patterns": ["veyport-audit-*", "veyport-replay-*"],
+  "priority": 500,
+  "template": {
+    "settings": {
+      "number_of_shards": 1,
+      "number_of_replicas": 0,
+      "index.lifecycle.name": "veyport-search-seven-days"
+    },
+    "mappings": {
+      "dynamic": "strict",
+      "properties": {
+        "@timestamp": {"type": "date"},
+        "schema_version": {"type": "integer"},
+        "redaction_rule_version": {"type": "keyword"},
+        "event_id": {"type": "keyword"},
+        "event_type": {"type": "keyword"},
+        "record_sha256": {"type": "keyword"},
+        "actor_user_id": {"type": "keyword"},
+        "actor_person_id": {"type": "keyword"},
+        "actor_name": {"type": "keyword"},
+        "execution_id": {"type": "keyword"},
+        "node_id": {"type": "keyword"},
+        "node_name": {"type": "keyword"},
+        "run_as": {"type": "keyword"},
+        "uid": {"type": "long"},
+        "gid": {"type": "long"},
+        "identity_sha256": {"type": "keyword"},
+        "policy_version": {"type": "long"},
+        "policy_sha256": {"type": "keyword"},
+        "command_summary": {"type": "keyword"},
+        "command_bytes": {"type": "long"},
+        "command_sha256": {"type": "keyword"},
+        "script_bytes": {"type": "long"},
+        "script_sha256": {"type": "keyword"},
+        "process_state": {"type": "keyword"},
+        "evidence_state": {"type": "keyword"},
+        "correlation_id": {"type": "keyword"},
+        "request_id": {"type": "keyword"},
+        "exit_code": {"type": "integer"},
+        "manifest_sha256": {"type": "keyword"},
+        "manifest_version_id": {"type": "keyword"},
+        "retain_until": {"type": "date"}
+      }
+    }
+  }
+}
