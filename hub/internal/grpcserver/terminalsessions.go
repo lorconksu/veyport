@@ -4,6 +4,8 @@ import (
 	"sort"
 	"sync"
 	"time"
+
+	"github.com/wyiu/veyport/hub/internal/store"
 )
 
 // Terminal kinds distinguish the transport a shell arrived on. They are the
@@ -53,8 +55,10 @@ type terminalSession struct {
 	startedAt    time.Time
 	lastActivity time.Time
 	ch           chan TerminalEvent
+	done         chan struct{}
 	streaming    bool
 	closed       bool
+	interactive  *interactiveAdmission
 }
 
 type TerminalSessionInfo struct {
@@ -68,11 +72,15 @@ type TerminalSessionInfo struct {
 	LastActivity  time.Time
 	Ch            <-chan TerminalEvent
 	Closed        bool
+	Done          <-chan struct{}
+	AgentDone     <-chan struct{}
 }
 
 type TerminalSessions struct {
-	mu       sync.Mutex
-	sessions map[string]*terminalSession
+	mu                   sync.Mutex
+	sessions             map[string]*terminalSession
+	interactiveStores    map[*store.Store]bool
+	interactiveObserveMu sync.Mutex
 	// nowFunc is swapped in tests to drive startedAt/lastActivity.
 	nowFunc func() time.Time
 }
@@ -134,14 +142,14 @@ func (ts *TerminalSessions) Register(serverID, sessionID, userID, executionUser 
 	}
 	ch := make(chan TerminalEvent, 256)
 	now := ts.nowFunc()
-	s.ch, s.startedAt, s.lastActivity = ch, now, now
+	s.ch, s.done, s.startedAt, s.lastActivity = ch, make(chan struct{}), now, now
 	ts.sessions[key] = s
 	return ch, true
 }
 
 // infoOf snapshots a session for callers. ts.mu must be held.
 func infoOf(s *terminalSession) TerminalSessionInfo {
-	return TerminalSessionInfo{
+	info := TerminalSessionInfo{
 		ServerID:      s.serverID,
 		SessionID:     s.sessionID,
 		UserID:        s.userID,
@@ -152,7 +160,12 @@ func infoOf(s *terminalSession) TerminalSessionInfo {
 		LastActivity:  s.lastActivity,
 		Ch:            s.ch,
 		Closed:        s.closed,
+		Done:          s.done,
 	}
+	if s.interactive != nil {
+		info.AgentDone = s.interactive.conn.Done()
+	}
+	return info
 }
 
 func (ts *TerminalSessions) Get(serverID, sessionID string) (TerminalSessionInfo, bool) {
@@ -230,6 +243,7 @@ func endLocked(s *terminalSession, exitCode int32, msg string, forced bool) bool
 		Type: TerminalEventExit, ExitCode: exitCode, Error: msg, Forced: forced,
 	})
 	close(s.ch)
+	close(s.done)
 	s.closed = true
 	return true
 }
@@ -313,6 +327,7 @@ func (ts *TerminalSessions) RemoveIfHubInitiated(serverID, sessionID string) (bo
 	alreadyClosed := s.closed
 	if !s.closed {
 		close(s.ch)
+		close(s.done)
 		s.closed = true
 	}
 	delete(ts.sessions, key)
@@ -362,18 +377,31 @@ func deliverExit(ch chan TerminalEvent, evt TerminalEvent) {
 }
 
 func (ts *TerminalSessions) RemoveUnattached(serverID, sessionID string) bool {
+	_, removed := ts.RemoveUnattachedWithClose(serverID, sessionID)
+	return removed
+}
+
+// RemoveUnattachedWithClose captures cleanup and removes one registration under
+// the same lock. A delayed timer can never close a replacement connection.
+func (ts *TerminalSessions) RemoveUnattachedWithClose(serverID, sessionID string) (func(), bool) {
 	key := makeKey(serverID, sessionID)
 	ts.mu.Lock()
 	defer ts.mu.Unlock()
 	s, ok := ts.sessions[key]
 	if !ok || s.streaming {
-		return false
+		return nil, false
 	}
 	if !s.closed {
 		close(s.ch)
+		close(s.done)
+		s.closed = true
+	}
+	var closeAgent func()
+	if s.interactive != nil {
+		closeAgent = s.interactive.close
 	}
 	delete(ts.sessions, key)
-	return true
+	return closeAgent, true
 }
 
 func (ts *TerminalSessions) Remove(serverID, sessionID string) bool {
@@ -383,6 +411,8 @@ func (ts *TerminalSessions) Remove(serverID, sessionID string) bool {
 	if s, ok := ts.sessions[key]; ok {
 		if !s.closed {
 			close(s.ch)
+			close(s.done)
+			s.closed = true
 		}
 		delete(ts.sessions, key)
 		removed = true

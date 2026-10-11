@@ -15,6 +15,9 @@ import (
 type Store struct {
 	db *sql.DB
 
+	interactivePolicyMu        sync.Mutex
+	interactivePolicyObservers []func()
+
 	auditStateMu    sync.Mutex
 	auditDegraded   bool
 	onAuditFailure  func(model.AuditHealth)

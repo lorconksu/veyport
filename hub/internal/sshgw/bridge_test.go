@@ -538,6 +538,9 @@ func assertNoGoroutineLeak(t *testing.T, base int) {
 // the resolved execution user, and waits for the ack.
 func TestBridgeOpenRequestCarriesExecutionUser(t *testing.T) {
 	f := newFixture(t, nil)
+	if _, err := f.store.DB().Exec("UPDATE users SET auth_provider='ldap',ldap_username='ldapalice' WHERE id=?", testUserID); err != nil {
+		t.Fatal(err)
+	}
 	f.connectAgent()
 
 	ch := newFakeChannel()

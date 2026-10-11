@@ -232,9 +232,9 @@ func (s *Server) runShell(sshConn *ssh.ServerConn, ch ssh.Channel, cols, rows ui
 		return
 	}
 
-	// The single shared authorization decision (research R5). An authorized
-	// LOCAL admin legitimately yields an EMPTY execution user, which means
-	// "the agent's default RunAsUser" — success, not failure.
+	// Refuse obvious denials before admission. The bridge revalidates the live
+	// grant and policy under the registration lock and before each ordered send.
+	// An authorized LOCAL admin yields an empty user for the agent default.
 	if err := authorization.New(s.cfg.Store).GuardInteractive(user.ID, srv.ID); err != nil {
 		s.refuseShell(ch, user.ID, srv.ID, ip, "enhanced policy requires protected command execution", err.Error())
 		return

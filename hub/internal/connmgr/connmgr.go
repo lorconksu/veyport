@@ -122,9 +122,15 @@ func (cm *ConnManager) SendToAgent(serverID string, msg *pb.HubMessage) error {
 // Connect handler, which cancels the underlying gRPC stream and its blocked
 // sender. Callers reserve execution capacity before using this method.
 func (cm *ConnManager) SendToAgentContext(ctx context.Context, serverID string, msg *pb.HubMessage) error {
-	conn := cm.GetConn(serverID)
+	return cm.SendToConnectionChecked(ctx, cm.GetConn(serverID), msg, nil)
+}
+
+// SendToConnectionChecked binds a send to one control generation. The final
+// local check and send share that connection's send order with terminal closes;
+// the check releases any policy/registry locks before network I/O starts.
+func (cm *ConnManager) SendToConnectionChecked(ctx context.Context, conn *AgentConn, msg *pb.HubMessage, check func() error) error {
 	if conn == nil {
-		return fmt.Errorf("agent not connected: %s", serverID)
+		return fmt.Errorf("agent not connected")
 	}
 	result := make(chan error, 1)
 	go func() {
@@ -132,9 +138,18 @@ func (cm *ConnManager) SendToAgentContext(ctx context.Context, serverID string, 
 		defer conn.SendMu.Unlock()
 		select {
 		case <-conn.Done():
-			result <- fmt.Errorf("agent disconnected: %s", serverID)
+			result <- fmt.Errorf("agent disconnected: %s", conn.ServerID)
+			return
+		case <-ctx.Done():
+			result <- ctx.Err()
 			return
 		default:
+		}
+		if check != nil {
+			if err := check(); err != nil {
+				result <- err
+				return
+			}
 		}
 		result <- conn.Stream.Send(msg)
 	}()
@@ -145,6 +160,6 @@ func (cm *ConnManager) SendToAgentContext(ctx context.Context, serverID string, 
 		conn.Close()
 		return ctx.Err()
 	case <-conn.Done():
-		return fmt.Errorf("agent disconnected: %s", serverID)
+		return fmt.Errorf("agent disconnected: %s", conn.ServerID)
 	}
 }

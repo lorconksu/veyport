@@ -14,6 +14,7 @@ import (
 	"github.com/wyiu/veyport/hub/internal/auditrecord"
 	"github.com/wyiu/veyport/hub/internal/auth"
 	"github.com/wyiu/veyport/hub/internal/authorization"
+	"github.com/wyiu/veyport/hub/internal/grpcserver"
 	"github.com/wyiu/veyport/hub/internal/model"
 	"github.com/wyiu/veyport/hub/internal/store"
 )
@@ -277,6 +278,9 @@ func (s *Server) endNewlyCoveredShells() {
 	}
 	for _, u := range users {
 		for _, shell := range s.terminalSessions.ListByUser(u.ID) {
+			if shell.Kind == grpcserver.TerminalKindExec {
+				continue
+			}
 			if s.securityService().GuardInteractive(u.ID, shell.ServerID) != nil {
 				s.terminalSessions.EndOne(shell.ServerID, shell.SessionID, 1, "Security policy changed; protected command execution required.")
 			}

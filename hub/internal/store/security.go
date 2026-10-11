@@ -364,6 +364,9 @@ func checkSecurityPrincipal(ctx context.Context, conn *sql.Conn, c model.Securit
 	return nil
 }
 func (s *Store) BeginSecurityApply(c model.SecurityChange, newPolicy model.AuditPolicy, intentRef string, now time.Time) error {
+	return s.changeInteractivePolicy(func() error { return s.beginSecurityApply(c, newPolicy, intentRef, now) })
+}
+func (s *Store) beginSecurityApply(c model.SecurityChange, newPolicy model.AuditPolicy, intentRef string, now time.Time) error {
 	raw, err := json.Marshal(newPolicy)
 	if err != nil {
 		return err
@@ -410,6 +413,9 @@ func (s *Store) RecordSecurityCommit(id, reference string) error {
 	return err
 }
 func (s *Store) ActivateSecurityChange(c model.SecurityChange, p model.SecurityChangePayload) error {
+	return s.changeInteractivePolicy(func() error { return s.activateSecurityChange(c, p) })
+}
+func (s *Store) activateSecurityChange(c model.SecurityChange, p model.SecurityChangePayload) error {
 	return s.withImmediateTx(func(ctx context.Context, conn *sql.Conn) error {
 		var active uint64
 		var pending sql.NullInt64
@@ -537,6 +543,9 @@ func applySecurityPayload(ctx context.Context, conn *sql.Conn, c model.SecurityC
 	return nil
 }
 func (s *Store) FinishSecurityChange(id, resultRef string) error {
+	return s.changeInteractivePolicy(func() error { return s.finishSecurityChange(id, resultRef) })
+}
+func (s *Store) finishSecurityChange(id, resultRef string) error {
 	if resultRef == "" {
 		return ErrSecurityConflict
 	}
@@ -556,6 +565,9 @@ func (s *Store) FinishSecurityChange(id, resultRef string) error {
 	})
 }
 func (s *Store) RequirePolicyRecovery() error {
+	return s.changeInteractivePolicy(func() error { return s.requirePolicyRecovery() })
+}
+func (s *Store) requirePolicyRecovery() error {
 	_, err := s.db.Exec("UPDATE audit_policy_state SET state='recovery_required' WHERE id=1")
 	return err
 }
@@ -735,6 +747,9 @@ func (s *Store) validateSecurityQuorumConn(ctx context.Context, conn *sql.Conn, 
 	return nil
 }
 func (s *Store) ResumeSecurityApplying(id string) error {
+	return s.changeInteractivePolicy(func() error { return s.resumeSecurityApplying(id) })
+}
+func (s *Store) resumeSecurityApplying(id string) error {
 	result, err := s.db.Exec("UPDATE audit_policy_state SET state='applying' WHERE id=1 AND state='recovery_required' AND pending_change=? AND pending_version IS NOT NULL AND EXISTS(SELECT 1 FROM security_changes WHERE id=? AND state='applying')", id, id)
 	if err != nil {
 		return err
