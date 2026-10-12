@@ -92,10 +92,7 @@ func TestBridgeHubClosedSessionReportsAbort(t *testing.T) {
 	ch := newFakeChannel()
 	done, _ := f.startBridge(ch, nil)
 	sessionID := f.openSessionID()
-	waitFor(t, "session attach", func() bool {
-		_, ok := f.terminals.Get(testServerID, sessionID)
-		return ok
-	})
+	f.waitForSessionAttached(sessionID)
 
 	f.terminals.Remove(testServerID, sessionID)
 	waitForDone(t, done, "bridge teardown after the hub closed the session")
