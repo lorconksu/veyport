@@ -60,3 +60,18 @@ func TestLinkerIdentityRejectsAmbiguousStamps(t *testing.T) {
 		t.Fatalf("linkerIdentity=%q,%q,%v", v, r, err)
 	}
 }
+
+func TestVersionOrderingRefusesInvalidInstalledVersionAndLegacyOverflow(t *testing.T) {
+	for _, current := range []string{"dev", "v18446744073709551616.0.0-1-g1234567-staging"} {
+		if _, err := CompareVersions(current, "2.0.50-prototype.4"); err == nil {
+			t.Fatalf("unorderable installed version %q was accepted", current)
+		}
+	}
+}
+
+func TestLinkerIdentityIgnoresMalformedUnrelatedAssignments(t *testing.T) {
+	version, revision, err := linkerIdentity("-X unrelated-package-field -X main.version=1.2.3 -X main.revision=exact-revision")
+	if err != nil || version != "1.2.3" || revision != "exact-revision" {
+		t.Fatalf("unrelated linker assignment changed release identity: %q %q %v", version, revision, err)
+	}
+}

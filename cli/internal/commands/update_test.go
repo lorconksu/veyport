@@ -97,3 +97,23 @@ func TestUpdateJSONFailureHasNoPayload(t *testing.T) {
 		t.Fatalf("out=%s err=%s", out, errOut)
 	}
 }
+
+type unavailableUpdateOutput struct{}
+
+func (unavailableUpdateOutput) Write([]byte) (int, error) {
+	return 0, fmt.Errorf("output destination closed")
+}
+
+func TestUpdateDoesNotReportSuccessAfterOutputFailure(t *testing.T) {
+	for _, jsonMode := range []bool{false, true} {
+		ctx, _, stderr := newCmdContext("https://hub.example", t.TempDir(), jsonMode, []string{"--check"})
+		ctx.Version = "1.2.3"
+		ctx.Printer.Out = unavailableUpdateOutput{}
+		checked := func(context.Context, string, string) (update.Result, error) {
+			return update.Result{CurrentVersion: "1.2.3", AvailableVersion: "1.2.4", UpdateAvailable: true}, nil
+		}
+		if code := runUpdate(ctx, checked, checked); code != cmdutil.ExitError || !strings.Contains(stderr.String(), "output destination closed") {
+			t.Fatalf("output failure code=%d error=%s", code, stderr.String())
+		}
+	}
+}
