@@ -129,6 +129,9 @@ func TestOriginalAssertionCannotWeakenPackagePlatformStampsOrCandidateChecks(t *
 			if output, err := cmd.CombinedOutput(); err != nil {
 				t.Fatalf("build original fault: %v %s", err, output)
 			}
+			if err := os.Chmod(p.binary, 0755); err != nil {
+				t.Fatal(err)
+			}
 			f, err := os.Open(p.binary)
 			if err != nil {
 				t.Fatal(err)
@@ -138,8 +141,19 @@ func TestOriginalAssertionCannotWeakenPackagePlatformStampsOrCandidateChecks(t *
 			if err != nil {
 				t.Fatal(err)
 			}
-			if _, err := p.bootstrapMetadata(updateutil.BootstrapOriginal{Version: "0.1.0", SHA256: hash}); err == nil {
-				t.Fatal("assertion admitted incompatible or stamped original")
+			want := "both release stamps absent"
+			switch fault {
+			case "wrong_package":
+				want = "installed binary is not the agent"
+			case "wrong_platform":
+				want = "agent ELF platform mismatch"
+			case "empty_version", "duplicate_version":
+				want = "duplicate installed version"
+			case "duplicate_revision":
+				want = "duplicate installed revision"
+			}
+			if _, err := p.bootstrapMetadata(updateutil.BootstrapOriginal{Version: "0.1.0", SHA256: hash}); err == nil || !strings.Contains(err.Error(), want) {
+				t.Fatalf("assertion did not refuse original identity fault %s: %v", fault, err)
 			}
 		})
 	}
