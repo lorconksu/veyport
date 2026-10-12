@@ -51,6 +51,7 @@ for issue and pull-request expectations.
 - **Email Notifications** — 8 configurable alert types (agent connect/disconnect, file uploads, login events, and more)
 - **Audit Logging** — Local audit metadata for security and workflow actions; optional Enhanced command evidence uses external admission receipts and encrypted originals
 - **Command Passthrough** — `vey ssh <node> -- '<command>'` runs one opaque command through the Hub without a PTY and keeps stdout, stderr, stdin, and exit results separate
+- **Verified Updates** — `vey update` updates the local CLI from its configured Hub; `vey servers update <node>` updates supported Standard agents while preserving their enrolled identity and configuration
 - **Optional Enhanced Audit** — External admission receipts and encrypted original evidence for covered commands, with redacted search projections kept separate
 - **2FA (TOTP)** — Mandatory TOTP-based two-factor authentication for all users, no exceptions
 - **Role-Based Access** — Admin, Auditor, and Viewer roles with per-server, per-path permissions enforced at both Hub and Agent layers
@@ -80,9 +81,9 @@ for the current request-based session activity model.
 Enhanced command evidence covers the submitted command string or complete
 supported stdin script. It does not attest every internal shell instruction,
 fetched program, child-process action, or remote output; command execution is not
-a sandbox. The prototype identity is version `2.0.50-prototype.3` and immutable
-tag `prototype-ssh-passthrough.3`; stable `2.0.49` does not include this
-feature. Before installing, check the [prototype release page](https://github.com/lorconksu/veyport/releases/tag/prototype-ssh-passthrough.3)
+a sandbox. The prototype identity is version `2.0.50-prototype.4` and immutable
+tag `prototype-ssh-passthrough.4`; stable `2.0.49` does not include this
+feature. Before installing, check the [prototype release page](https://github.com/lorconksu/veyport/releases/tag/prototype-ssh-passthrough.4)
 for an actually published release and its required assets. If they are absent,
 the prototype is unavailable. Use the Hub and CLI from the same source revision
 with a compatible agent. Resolve the immutable OCI tag to its published digest
@@ -113,6 +114,15 @@ curl -fsSL https://<hub-address>/api/install.sh | sudo bash -s -- \
 ```
 
 The agent installs as a systemd service, connects to the Hub over gRPC with mTLS, and appears on the dashboard within seconds.
+
+Use the enrollment command for new nodes. For upgrades, use `vey update` for
+the local CLI and `vey servers update <node>` for a supported enrolled agent.
+Agent updates require an interactive administrator session and a Standard
+installation that has never enrolled governance controls. The built-in update
+flow preserves node identity and configuration; the install script's existing
+replacement path unregisters and re-enrolls an agent. See the
+[Deployment Guide](docs/wiki/Deployment.md#update-the-cli-and-enrolled-agents)
+for platform limits, bootstrap, and recovery details.
 
 ## Tech Stack
 

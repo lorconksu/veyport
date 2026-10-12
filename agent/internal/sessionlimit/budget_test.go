@@ -2,6 +2,39 @@ package sessionlimit
 
 import "testing"
 
+func TestMaintenanceAndAdmissionCannotRace(t *testing.T) {
+	for attempt := 0; attempt < 100; attempt++ {
+		b := New(8)
+		start := make(chan struct{})
+		admitted := make(chan bool, 1)
+		maintenance := make(chan bool, 1)
+		go func() { <-start; admitted <- b.Acquire() }()
+		go func() { <-start; maintenance <- b.TryMaintenance() }()
+		close(start)
+		a, m := <-admitted, <-maintenance
+		if a == m {
+			t.Fatalf("admission=%v maintenance=%v", a, m)
+		}
+		if m {
+			if b.Acquire() || b.TryMaintenance() {
+				t.Fatal("exclusive maintenance allowed work")
+			}
+			b.EndMaintenance()
+			if !b.Acquire() {
+				t.Fatal("maintenance did not release")
+			}
+		} else {
+			if b.TryMaintenance() {
+				t.Fatal("active work accepted maintenance")
+			}
+			b.Release()
+			if !b.TryMaintenance() {
+				t.Fatal("quiescent reservation refused")
+			}
+		}
+	}
+}
+
 func TestConcurrentReservationsCannotExceedSharedBudget(t *testing.T) {
 	budget := New(8)
 	start := make(chan struct{})

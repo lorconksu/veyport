@@ -20,7 +20,7 @@ import (
 // dispatching on ctx.Args[0].
 func RunServers(ctx *Context) int {
 	if len(ctx.Args) == 0 {
-		err := cmdutil.NewUsageError(errors.New("usage: vey servers <list|get> [args]"))
+		err := cmdutil.NewUsageError(errors.New("usage: vey servers <list|get|update> [args]"))
 		ctx.Printer.Error(err)
 		return cmdutil.Code(err)
 	}
@@ -31,8 +31,10 @@ func RunServers(ctx *Context) int {
 		return runServersList(ctx, rest)
 	case "get":
 		return runServersGet(ctx, rest)
+	case "update":
+		return runServersUpdate(ctx, rest)
 	default:
-		err := cmdutil.NewUsageError(fmt.Errorf("unknown servers subcommand %q (want list or get)", sub))
+		err := cmdutil.NewUsageError(fmt.Errorf("unknown servers subcommand %q (want list, get or update)", sub))
 		ctx.Printer.Error(err)
 		return cmdutil.Code(err)
 	}

@@ -92,6 +92,8 @@ type AgentMessage struct {
 	//	*AgentMessage_ExecutionCapabilities
 	//	*AgentMessage_ExecutionPrepared
 	//	*AgentMessage_ExecutionStatus
+	//	*AgentMessage_UpdateCapabilities
+	//	*AgentMessage_UpdateStatus
 	Payload       isAgentMessage_Payload `protobuf_oneof:"payload"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -287,6 +289,24 @@ func (x *AgentMessage) GetExecutionStatus() *ExecutionStatus {
 	return nil
 }
 
+func (x *AgentMessage) GetUpdateCapabilities() *UpdateCapabilities {
+	if x != nil {
+		if x, ok := x.Payload.(*AgentMessage_UpdateCapabilities); ok {
+			return x.UpdateCapabilities
+		}
+	}
+	return nil
+}
+
+func (x *AgentMessage) GetUpdateStatus() *AgentUpdateStatus {
+	if x != nil {
+		if x, ok := x.Payload.(*AgentMessage_UpdateStatus); ok {
+			return x.UpdateStatus
+		}
+	}
+	return nil
+}
+
 type isAgentMessage_Payload interface {
 	isAgentMessage_Payload()
 }
@@ -360,6 +380,14 @@ type AgentMessage_ExecutionStatus struct {
 	ExecutionStatus *ExecutionStatus `protobuf:"bytes,32,opt,name=execution_status,json=executionStatus,proto3,oneof"`
 }
 
+type AgentMessage_UpdateCapabilities struct {
+	UpdateCapabilities *UpdateCapabilities `protobuf:"bytes,40,opt,name=update_capabilities,json=updateCapabilities,proto3,oneof"`
+}
+
+type AgentMessage_UpdateStatus struct {
+	UpdateStatus *AgentUpdateStatus `protobuf:"bytes,41,opt,name=update_status,json=updateStatus,proto3,oneof"`
+}
+
 func (*AgentMessage_Heartbeat) isAgentMessage_Payload() {}
 
 func (*AgentMessage_Register) isAgentMessage_Payload() {}
@@ -394,6 +422,10 @@ func (*AgentMessage_ExecutionPrepared) isAgentMessage_Payload() {}
 
 func (*AgentMessage_ExecutionStatus) isAgentMessage_Payload() {}
 
+func (*AgentMessage_UpdateCapabilities) isAgentMessage_Payload() {}
+
+func (*AgentMessage_UpdateStatus) isAgentMessage_Payload() {}
+
 // Messages from Hub → Agent
 type HubMessage struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
@@ -419,6 +451,8 @@ type HubMessage struct {
 	//	*HubMessage_ExecutionAttach
 	//	*HubMessage_ExecutionCancel
 	//	*HubMessage_ExecutionStatusRequest
+	//	*HubMessage_AgentUpdateRequest
+	//	*HubMessage_UpdateConfirmation
 	Payload       isHubMessage_Payload `protobuf_oneof:"payload"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -641,6 +675,24 @@ func (x *HubMessage) GetExecutionStatusRequest() *ExecutionStatusRequest {
 	return nil
 }
 
+func (x *HubMessage) GetAgentUpdateRequest() *AgentUpdateRequest {
+	if x != nil {
+		if x, ok := x.Payload.(*HubMessage_AgentUpdateRequest); ok {
+			return x.AgentUpdateRequest
+		}
+	}
+	return nil
+}
+
+func (x *HubMessage) GetUpdateConfirmation() *UpdateConfirmation {
+	if x != nil {
+		if x, ok := x.Payload.(*HubMessage_UpdateConfirmation); ok {
+			return x.UpdateConfirmation
+		}
+	}
+	return nil
+}
+
 type isHubMessage_Payload interface {
 	isHubMessage_Payload()
 }
@@ -726,6 +778,14 @@ type HubMessage_ExecutionStatusRequest struct {
 	ExecutionStatusRequest *ExecutionStatusRequest `protobuf:"bytes,33,opt,name=execution_status_request,json=executionStatusRequest,proto3,oneof"`
 }
 
+type HubMessage_AgentUpdateRequest struct {
+	AgentUpdateRequest *AgentUpdateRequest `protobuf:"bytes,40,opt,name=agent_update_request,json=agentUpdateRequest,proto3,oneof"`
+}
+
+type HubMessage_UpdateConfirmation struct {
+	UpdateConfirmation *UpdateConfirmation `protobuf:"bytes,41,opt,name=update_confirmation,json=updateConfirmation,proto3,oneof"`
+}
+
 func (*HubMessage_HeartbeatAck) isHubMessage_Payload() {}
 
 func (*HubMessage_RegisterAck) isHubMessage_Payload() {}
@@ -765,6 +825,10 @@ func (*HubMessage_ExecutionAttach) isHubMessage_Payload() {}
 func (*HubMessage_ExecutionCancel) isHubMessage_Payload() {}
 
 func (*HubMessage_ExecutionStatusRequest) isHubMessage_Payload() {}
+
+func (*HubMessage_AgentUpdateRequest) isHubMessage_Payload() {}
+
+func (*HubMessage_UpdateConfirmation) isHubMessage_Payload() {}
 
 type Heartbeat struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
@@ -4394,12 +4458,550 @@ func (x *ExecutionResult) GetStderrComplete() bool {
 	return false
 }
 
+// Update v1 supports only the canonical root-owned Linux/systemd installation.
+// Capabilities describe the running executable, not its historical registration.
+type UpdateCapabilities struct {
+	state           protoimpl.MessageState `protogen:"open.v1"`
+	ProtocolVersion uint32                 `protobuf:"varint,1,opt,name=protocol_version,json=protocolVersion,proto3" json:"protocol_version,omitempty"`
+	Os              string                 `protobuf:"bytes,2,opt,name=os,proto3" json:"os,omitempty"`
+	Arch            string                 `protobuf:"bytes,3,opt,name=arch,proto3" json:"arch,omitempty"`
+	Version         string                 `protobuf:"bytes,4,opt,name=version,proto3" json:"version,omitempty"`
+	Revision        string                 `protobuf:"bytes,5,opt,name=revision,proto3" json:"revision,omitempty"`
+	Sha256          string                 `protobuf:"bytes,6,opt,name=sha256,proto3" json:"sha256,omitempty"`
+	BootId          string                 `protobuf:"bytes,7,opt,name=boot_id,json=bootId,proto3" json:"boot_id,omitempty"`
+	Supported       bool                   `protobuf:"varint,8,opt,name=supported,proto3" json:"supported,omitempty"`
+	Reason          string                 `protobuf:"bytes,9,opt,name=reason,proto3" json:"reason,omitempty"`
+	unknownFields   protoimpl.UnknownFields
+	sizeCache       protoimpl.SizeCache
+}
+
+func (x *UpdateCapabilities) Reset() {
+	*x = UpdateCapabilities{}
+	mi := &file_proto_veyport_v1_agent_proto_msgTypes[56]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *UpdateCapabilities) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*UpdateCapabilities) ProtoMessage() {}
+
+func (x *UpdateCapabilities) ProtoReflect() protoreflect.Message {
+	mi := &file_proto_veyport_v1_agent_proto_msgTypes[56]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use UpdateCapabilities.ProtoReflect.Descriptor instead.
+func (*UpdateCapabilities) Descriptor() ([]byte, []int) {
+	return file_proto_veyport_v1_agent_proto_rawDescGZIP(), []int{56}
+}
+
+func (x *UpdateCapabilities) GetProtocolVersion() uint32 {
+	if x != nil {
+		return x.ProtocolVersion
+	}
+	return 0
+}
+
+func (x *UpdateCapabilities) GetOs() string {
+	if x != nil {
+		return x.Os
+	}
+	return ""
+}
+
+func (x *UpdateCapabilities) GetArch() string {
+	if x != nil {
+		return x.Arch
+	}
+	return ""
+}
+
+func (x *UpdateCapabilities) GetVersion() string {
+	if x != nil {
+		return x.Version
+	}
+	return ""
+}
+
+func (x *UpdateCapabilities) GetRevision() string {
+	if x != nil {
+		return x.Revision
+	}
+	return ""
+}
+
+func (x *UpdateCapabilities) GetSha256() string {
+	if x != nil {
+		return x.Sha256
+	}
+	return ""
+}
+
+func (x *UpdateCapabilities) GetBootId() string {
+	if x != nil {
+		return x.BootId
+	}
+	return ""
+}
+
+func (x *UpdateCapabilities) GetSupported() bool {
+	if x != nil {
+		return x.Supported
+	}
+	return false
+}
+
+func (x *UpdateCapabilities) GetReason() string {
+	if x != nil {
+		return x.Reason
+	}
+	return ""
+}
+
+type AgentUpdateRequest struct {
+	state            protoimpl.MessageState `protogen:"open.v1"`
+	OperationId      string                 `protobuf:"bytes,1,opt,name=operation_id,json=operationId,proto3" json:"operation_id,omitempty"`
+	Version          string                 `protobuf:"bytes,2,opt,name=version,proto3" json:"version,omitempty"`
+	Revision         string                 `protobuf:"bytes,3,opt,name=revision,proto3" json:"revision,omitempty"`
+	Sha256           string                 `protobuf:"bytes,4,opt,name=sha256,proto3" json:"sha256,omitempty"`
+	Bytes            int64                  `protobuf:"varint,5,opt,name=bytes,proto3" json:"bytes,omitempty"`
+	ExpiresUnixMilli int64                  `protobuf:"varint,6,opt,name=expires_unix_milli,json=expiresUnixMilli,proto3" json:"expires_unix_milli,omitempty"`
+	unknownFields    protoimpl.UnknownFields
+	sizeCache        protoimpl.SizeCache
+}
+
+func (x *AgentUpdateRequest) Reset() {
+	*x = AgentUpdateRequest{}
+	mi := &file_proto_veyport_v1_agent_proto_msgTypes[57]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *AgentUpdateRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*AgentUpdateRequest) ProtoMessage() {}
+
+func (x *AgentUpdateRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_proto_veyport_v1_agent_proto_msgTypes[57]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use AgentUpdateRequest.ProtoReflect.Descriptor instead.
+func (*AgentUpdateRequest) Descriptor() ([]byte, []int) {
+	return file_proto_veyport_v1_agent_proto_rawDescGZIP(), []int{57}
+}
+
+func (x *AgentUpdateRequest) GetOperationId() string {
+	if x != nil {
+		return x.OperationId
+	}
+	return ""
+}
+
+func (x *AgentUpdateRequest) GetVersion() string {
+	if x != nil {
+		return x.Version
+	}
+	return ""
+}
+
+func (x *AgentUpdateRequest) GetRevision() string {
+	if x != nil {
+		return x.Revision
+	}
+	return ""
+}
+
+func (x *AgentUpdateRequest) GetSha256() string {
+	if x != nil {
+		return x.Sha256
+	}
+	return ""
+}
+
+func (x *AgentUpdateRequest) GetBytes() int64 {
+	if x != nil {
+		return x.Bytes
+	}
+	return 0
+}
+
+func (x *AgentUpdateRequest) GetExpiresUnixMilli() int64 {
+	if x != nil {
+		return x.ExpiresUnixMilli
+	}
+	return 0
+}
+
+type AgentUpdateStatus struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	OperationId   string                 `protobuf:"bytes,1,opt,name=operation_id,json=operationId,proto3" json:"operation_id,omitempty"`
+	State         string                 `protobuf:"bytes,2,opt,name=state,proto3" json:"state,omitempty"`
+	Reason        string                 `protobuf:"bytes,3,opt,name=reason,proto3" json:"reason,omitempty"`
+	Version       string                 `protobuf:"bytes,4,opt,name=version,proto3" json:"version,omitempty"`
+	Revision      string                 `protobuf:"bytes,5,opt,name=revision,proto3" json:"revision,omitempty"`
+	Sha256        string                 `protobuf:"bytes,6,opt,name=sha256,proto3" json:"sha256,omitempty"`
+	BootId        string                 `protobuf:"bytes,7,opt,name=boot_id,json=bootId,proto3" json:"boot_id,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *AgentUpdateStatus) Reset() {
+	*x = AgentUpdateStatus{}
+	mi := &file_proto_veyport_v1_agent_proto_msgTypes[58]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *AgentUpdateStatus) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*AgentUpdateStatus) ProtoMessage() {}
+
+func (x *AgentUpdateStatus) ProtoReflect() protoreflect.Message {
+	mi := &file_proto_veyport_v1_agent_proto_msgTypes[58]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use AgentUpdateStatus.ProtoReflect.Descriptor instead.
+func (*AgentUpdateStatus) Descriptor() ([]byte, []int) {
+	return file_proto_veyport_v1_agent_proto_rawDescGZIP(), []int{58}
+}
+
+func (x *AgentUpdateStatus) GetOperationId() string {
+	if x != nil {
+		return x.OperationId
+	}
+	return ""
+}
+
+func (x *AgentUpdateStatus) GetState() string {
+	if x != nil {
+		return x.State
+	}
+	return ""
+}
+
+func (x *AgentUpdateStatus) GetReason() string {
+	if x != nil {
+		return x.Reason
+	}
+	return ""
+}
+
+func (x *AgentUpdateStatus) GetVersion() string {
+	if x != nil {
+		return x.Version
+	}
+	return ""
+}
+
+func (x *AgentUpdateStatus) GetRevision() string {
+	if x != nil {
+		return x.Revision
+	}
+	return ""
+}
+
+func (x *AgentUpdateStatus) GetSha256() string {
+	if x != nil {
+		return x.Sha256
+	}
+	return ""
+}
+
+func (x *AgentUpdateStatus) GetBootId() string {
+	if x != nil {
+		return x.BootId
+	}
+	return ""
+}
+
+type UpdateConfirmation struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	OperationId   string                 `protobuf:"bytes,1,opt,name=operation_id,json=operationId,proto3" json:"operation_id,omitempty"`
+	State         string                 `protobuf:"bytes,2,opt,name=state,proto3" json:"state,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *UpdateConfirmation) Reset() {
+	*x = UpdateConfirmation{}
+	mi := &file_proto_veyport_v1_agent_proto_msgTypes[59]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *UpdateConfirmation) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*UpdateConfirmation) ProtoMessage() {}
+
+func (x *UpdateConfirmation) ProtoReflect() protoreflect.Message {
+	mi := &file_proto_veyport_v1_agent_proto_msgTypes[59]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use UpdateConfirmation.ProtoReflect.Descriptor instead.
+func (*UpdateConfirmation) Descriptor() ([]byte, []int) {
+	return file_proto_veyport_v1_agent_proto_rawDescGZIP(), []int{59}
+}
+
+func (x *UpdateConfirmation) GetOperationId() string {
+	if x != nil {
+		return x.OperationId
+	}
+	return ""
+}
+
+func (x *UpdateConfirmation) GetState() string {
+	if x != nil {
+		return x.State
+	}
+	return ""
+}
+
+type UpdateArtifactRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	OperationId   string                 `protobuf:"bytes,1,opt,name=operation_id,json=operationId,proto3" json:"operation_id,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *UpdateArtifactRequest) Reset() {
+	*x = UpdateArtifactRequest{}
+	mi := &file_proto_veyport_v1_agent_proto_msgTypes[60]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *UpdateArtifactRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*UpdateArtifactRequest) ProtoMessage() {}
+
+func (x *UpdateArtifactRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_proto_veyport_v1_agent_proto_msgTypes[60]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use UpdateArtifactRequest.ProtoReflect.Descriptor instead.
+func (*UpdateArtifactRequest) Descriptor() ([]byte, []int) {
+	return file_proto_veyport_v1_agent_proto_rawDescGZIP(), []int{60}
+}
+
+func (x *UpdateArtifactRequest) GetOperationId() string {
+	if x != nil {
+		return x.OperationId
+	}
+	return ""
+}
+
+type UpdateArtifactChunk struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Offset        int64                  `protobuf:"varint,1,opt,name=offset,proto3" json:"offset,omitempty"`
+	Data          []byte                 `protobuf:"bytes,2,opt,name=data,proto3" json:"data,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *UpdateArtifactChunk) Reset() {
+	*x = UpdateArtifactChunk{}
+	mi := &file_proto_veyport_v1_agent_proto_msgTypes[61]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *UpdateArtifactChunk) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*UpdateArtifactChunk) ProtoMessage() {}
+
+func (x *UpdateArtifactChunk) ProtoReflect() protoreflect.Message {
+	mi := &file_proto_veyport_v1_agent_proto_msgTypes[61]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use UpdateArtifactChunk.ProtoReflect.Descriptor instead.
+func (*UpdateArtifactChunk) Descriptor() ([]byte, []int) {
+	return file_proto_veyport_v1_agent_proto_rawDescGZIP(), []int{61}
+}
+
+func (x *UpdateArtifactChunk) GetOffset() int64 {
+	if x != nil {
+		return x.Offset
+	}
+	return 0
+}
+
+func (x *UpdateArtifactChunk) GetData() []byte {
+	if x != nil {
+		return x.Data
+	}
+	return nil
+}
+
+type UpdateAuthorization struct {
+	state            protoimpl.MessageState `protogen:"open.v1"`
+	OperationId      string                 `protobuf:"bytes,1,opt,name=operation_id,json=operationId,proto3" json:"operation_id,omitempty"`
+	ExpiresUnixMilli int64                  `protobuf:"varint,2,opt,name=expires_unix_milli,json=expiresUnixMilli,proto3" json:"expires_unix_milli,omitempty"`
+	unknownFields    protoimpl.UnknownFields
+	sizeCache        protoimpl.SizeCache
+}
+
+func (x *UpdateAuthorization) Reset() {
+	*x = UpdateAuthorization{}
+	mi := &file_proto_veyport_v1_agent_proto_msgTypes[62]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *UpdateAuthorization) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*UpdateAuthorization) ProtoMessage() {}
+
+func (x *UpdateAuthorization) ProtoReflect() protoreflect.Message {
+	mi := &file_proto_veyport_v1_agent_proto_msgTypes[62]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use UpdateAuthorization.ProtoReflect.Descriptor instead.
+func (*UpdateAuthorization) Descriptor() ([]byte, []int) {
+	return file_proto_veyport_v1_agent_proto_rawDescGZIP(), []int{62}
+}
+
+func (x *UpdateAuthorization) GetOperationId() string {
+	if x != nil {
+		return x.OperationId
+	}
+	return ""
+}
+
+func (x *UpdateAuthorization) GetExpiresUnixMilli() int64 {
+	if x != nil {
+		return x.ExpiresUnixMilli
+	}
+	return 0
+}
+
+type UpdateBootstrapRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Ticket        string                 `protobuf:"bytes,1,opt,name=ticket,proto3" json:"ticket,omitempty"`
+	Capabilities  *UpdateCapabilities    `protobuf:"bytes,2,opt,name=capabilities,proto3" json:"capabilities,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *UpdateBootstrapRequest) Reset() {
+	*x = UpdateBootstrapRequest{}
+	mi := &file_proto_veyport_v1_agent_proto_msgTypes[63]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *UpdateBootstrapRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*UpdateBootstrapRequest) ProtoMessage() {}
+
+func (x *UpdateBootstrapRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_proto_veyport_v1_agent_proto_msgTypes[63]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use UpdateBootstrapRequest.ProtoReflect.Descriptor instead.
+func (*UpdateBootstrapRequest) Descriptor() ([]byte, []int) {
+	return file_proto_veyport_v1_agent_proto_rawDescGZIP(), []int{63}
+}
+
+func (x *UpdateBootstrapRequest) GetTicket() string {
+	if x != nil {
+		return x.Ticket
+	}
+	return ""
+}
+
+func (x *UpdateBootstrapRequest) GetCapabilities() *UpdateCapabilities {
+	if x != nil {
+		return x.Capabilities
+	}
+	return nil
+}
+
 var File_proto_veyport_v1_agent_proto protoreflect.FileDescriptor
 
 const file_proto_veyport_v1_agent_proto_rawDesc = "" +
 	"\n" +
 	"\x1cproto/veyport/v1/agent.proto\x12\n" +
-	"veyport.v1\"\xe9\t\n" +
+	"veyport.v1\"\x82\v\n" +
 	"\fAgentMessage\x125\n" +
 	"\theartbeat\x18\x01 \x01(\v2\x15.veyport.v1.HeartbeatH\x00R\theartbeat\x127\n" +
 	"\bregister\x18\x02 \x01(\v2\x19.veyport.v1.RegisterAgentH\x00R\bregister\x12L\n" +
@@ -4418,8 +5020,10 @@ const file_proto_veyport_v1_agent_proto_rawDesc = "" +
 	"\x0ereenroll_proof\x18\x16 \x01(\v2\x19.veyport.v1.ReEnrollProofH\x00R\rreenrollProof\x12Z\n" +
 	"\x16execution_capabilities\x18\x1e \x01(\v2!.veyport.v1.ExecutionCapabilitiesH\x00R\x15executionCapabilities\x12N\n" +
 	"\x12execution_prepared\x18\x1f \x01(\v2\x1d.veyport.v1.ExecutionPreparedH\x00R\x11executionPrepared\x12H\n" +
-	"\x10execution_status\x18  \x01(\v2\x1b.veyport.v1.ExecutionStatusH\x00R\x0fexecutionStatusB\t\n" +
-	"\apayload\"\x84\f\n" +
+	"\x10execution_status\x18  \x01(\v2\x1b.veyport.v1.ExecutionStatusH\x00R\x0fexecutionStatus\x12Q\n" +
+	"\x13update_capabilities\x18( \x01(\v2\x1e.veyport.v1.UpdateCapabilitiesH\x00R\x12updateCapabilities\x12D\n" +
+	"\rupdate_status\x18) \x01(\v2\x1d.veyport.v1.AgentUpdateStatusH\x00R\fupdateStatusB\t\n" +
+	"\apayload\"\xab\r\n" +
 	"\n" +
 	"HubMessage\x12?\n" +
 	"\rheartbeat_ack\x18\x01 \x01(\v2\x18.veyport.v1.HeartbeatAckH\x00R\fheartbeatAck\x12<\n" +
@@ -4442,7 +5046,9 @@ const file_proto_veyport_v1_agent_proto_rawDesc = "" +
 	"\x11execution_prepare\x18\x1e \x01(\v2\x1c.veyport.v1.ExecutionPrepareH\x00R\x10executionPrepare\x12O\n" +
 	"\x10execution_attach\x18\x1f \x01(\v2\".veyport.v1.ExecutionAttachRequestH\x00R\x0fexecutionAttach\x12H\n" +
 	"\x10execution_cancel\x18  \x01(\v2\x1b.veyport.v1.ExecutionCancelH\x00R\x0fexecutionCancel\x12^\n" +
-	"\x18execution_status_request\x18! \x01(\v2\".veyport.v1.ExecutionStatusRequestH\x00R\x16executionStatusRequestB\t\n" +
+	"\x18execution_status_request\x18! \x01(\v2\".veyport.v1.ExecutionStatusRequestH\x00R\x16executionStatusRequest\x12R\n" +
+	"\x14agent_update_request\x18( \x01(\v2\x1e.veyport.v1.AgentUpdateRequestH\x00R\x12agentUpdateRequest\x12Q\n" +
+	"\x13update_confirmation\x18) \x01(\v2\x1e.veyport.v1.UpdateConfirmationH\x00R\x12updateConfirmationB\t\n" +
 	"\apayload\"\x9e\x01\n" +
 	"\tHeartbeat\x12\x1b\n" +
 	"\tserver_id\x18\x01 \x01(\tR\bserverId\x12\x1c\n" +
@@ -4721,14 +5327,56 @@ const file_proto_veyport_v1_agent_proto_rawDesc = "" +
 	"\x06signal\x18\x04 \x01(\tR\x06signal\x12\x16\n" +
 	"\x06reason\x18\x05 \x01(\tR\x06reason\x12'\n" +
 	"\x0fstdout_complete\x18\x06 \x01(\bR\x0estdoutComplete\x12'\n" +
-	"\x0fstderr_complete\x18\a \x01(\bR\x0estderrComplete*m\n" +
+	"\x0fstderr_complete\x18\a \x01(\bR\x0estderrComplete\"\x80\x02\n" +
+	"\x12UpdateCapabilities\x12)\n" +
+	"\x10protocol_version\x18\x01 \x01(\rR\x0fprotocolVersion\x12\x0e\n" +
+	"\x02os\x18\x02 \x01(\tR\x02os\x12\x12\n" +
+	"\x04arch\x18\x03 \x01(\tR\x04arch\x12\x18\n" +
+	"\aversion\x18\x04 \x01(\tR\aversion\x12\x1a\n" +
+	"\brevision\x18\x05 \x01(\tR\brevision\x12\x16\n" +
+	"\x06sha256\x18\x06 \x01(\tR\x06sha256\x12\x17\n" +
+	"\aboot_id\x18\a \x01(\tR\x06bootId\x12\x1c\n" +
+	"\tsupported\x18\b \x01(\bR\tsupported\x12\x16\n" +
+	"\x06reason\x18\t \x01(\tR\x06reason\"\xc9\x01\n" +
+	"\x12AgentUpdateRequest\x12!\n" +
+	"\foperation_id\x18\x01 \x01(\tR\voperationId\x12\x18\n" +
+	"\aversion\x18\x02 \x01(\tR\aversion\x12\x1a\n" +
+	"\brevision\x18\x03 \x01(\tR\brevision\x12\x16\n" +
+	"\x06sha256\x18\x04 \x01(\tR\x06sha256\x12\x14\n" +
+	"\x05bytes\x18\x05 \x01(\x03R\x05bytes\x12,\n" +
+	"\x12expires_unix_milli\x18\x06 \x01(\x03R\x10expiresUnixMilli\"\xcb\x01\n" +
+	"\x11AgentUpdateStatus\x12!\n" +
+	"\foperation_id\x18\x01 \x01(\tR\voperationId\x12\x14\n" +
+	"\x05state\x18\x02 \x01(\tR\x05state\x12\x16\n" +
+	"\x06reason\x18\x03 \x01(\tR\x06reason\x12\x18\n" +
+	"\aversion\x18\x04 \x01(\tR\aversion\x12\x1a\n" +
+	"\brevision\x18\x05 \x01(\tR\brevision\x12\x16\n" +
+	"\x06sha256\x18\x06 \x01(\tR\x06sha256\x12\x17\n" +
+	"\aboot_id\x18\a \x01(\tR\x06bootId\"M\n" +
+	"\x12UpdateConfirmation\x12!\n" +
+	"\foperation_id\x18\x01 \x01(\tR\voperationId\x12\x14\n" +
+	"\x05state\x18\x02 \x01(\tR\x05state\":\n" +
+	"\x15UpdateArtifactRequest\x12!\n" +
+	"\foperation_id\x18\x01 \x01(\tR\voperationId\"A\n" +
+	"\x13UpdateArtifactChunk\x12\x16\n" +
+	"\x06offset\x18\x01 \x01(\x03R\x06offset\x12\x12\n" +
+	"\x04data\x18\x02 \x01(\fR\x04data\"f\n" +
+	"\x13UpdateAuthorization\x12!\n" +
+	"\foperation_id\x18\x01 \x01(\tR\voperationId\x12,\n" +
+	"\x12expires_unix_milli\x18\x02 \x01(\x03R\x10expiresUnixMilli\"t\n" +
+	"\x16UpdateBootstrapRequest\x12\x16\n" +
+	"\x06ticket\x18\x01 \x01(\tR\x06ticket\x12B\n" +
+	"\fcapabilities\x18\x02 \x01(\v2\x1e.veyport.v1.UpdateCapabilitiesR\fcapabilities*m\n" +
 	"\x0fExecutionOutput\x12 \n" +
 	"\x1cEXECUTION_OUTPUT_UNSPECIFIED\x10\x00\x12\x1b\n" +
 	"\x17EXECUTION_OUTPUT_STDOUT\x10\x01\x12\x1b\n" +
-	"\x17EXECUTION_OUTPUT_STDERR\x10\x022\xa2\x01\n" +
+	"\x17EXECUTION_OUTPUT_STDERR\x10\x022\xa8\x03\n" +
 	"\fAgentService\x12?\n" +
 	"\aConnect\x12\x18.veyport.v1.AgentMessage\x1a\x16.veyport.v1.HubMessage(\x010\x01\x12Q\n" +
-	"\aExecute\x12!.veyport.v1.ExecutionAgentMessage\x1a\x1f.veyport.v1.ExecutionHubMessage(\x010\x01B*Z(github.com/wyiu/veyport/proto/veyport/v1b\x06proto3"
+	"\aExecute\x12!.veyport.v1.ExecutionAgentMessage\x1a\x1f.veyport.v1.ExecutionHubMessage(\x010\x01\x12V\n" +
+	"\x0eDownloadUpdate\x12!.veyport.v1.UpdateArtifactRequest\x1a\x1f.veyport.v1.UpdateArtifactChunk0\x01\x12U\n" +
+	"\x0fAuthorizeUpdate\x12!.veyport.v1.UpdateArtifactRequest\x1a\x1f.veyport.v1.UpdateAuthorization\x12U\n" +
+	"\x0fBootstrapUpdate\x12\".veyport.v1.UpdateBootstrapRequest\x1a\x1e.veyport.v1.AgentUpdateRequestB*Z(github.com/wyiu/veyport/proto/veyport/v1b\x06proto3"
 
 var (
 	file_proto_veyport_v1_agent_proto_rawDescOnce sync.Once
@@ -4743,7 +5391,7 @@ func file_proto_veyport_v1_agent_proto_rawDescGZIP() []byte {
 }
 
 var file_proto_veyport_v1_agent_proto_enumTypes = make([]protoimpl.EnumInfo, 1)
-var file_proto_veyport_v1_agent_proto_msgTypes = make([]protoimpl.MessageInfo, 56)
+var file_proto_veyport_v1_agent_proto_msgTypes = make([]protoimpl.MessageInfo, 64)
 var file_proto_veyport_v1_agent_proto_goTypes = []any{
 	(ExecutionOutput)(0),           // 0: veyport.v1.ExecutionOutput
 	(*AgentMessage)(nil),           // 1: veyport.v1.AgentMessage
@@ -4802,6 +5450,14 @@ var file_proto_veyport_v1_agent_proto_goTypes = []any{
 	(*ExecutionScriptChunk)(nil),   // 54: veyport.v1.ExecutionScriptChunk
 	(*ExecutionScriptEOF)(nil),     // 55: veyport.v1.ExecutionScriptEOF
 	(*ExecutionResult)(nil),        // 56: veyport.v1.ExecutionResult
+	(*UpdateCapabilities)(nil),     // 57: veyport.v1.UpdateCapabilities
+	(*AgentUpdateRequest)(nil),     // 58: veyport.v1.AgentUpdateRequest
+	(*AgentUpdateStatus)(nil),      // 59: veyport.v1.AgentUpdateStatus
+	(*UpdateConfirmation)(nil),     // 60: veyport.v1.UpdateConfirmation
+	(*UpdateArtifactRequest)(nil),  // 61: veyport.v1.UpdateArtifactRequest
+	(*UpdateArtifactChunk)(nil),    // 62: veyport.v1.UpdateArtifactChunk
+	(*UpdateAuthorization)(nil),    // 63: veyport.v1.UpdateAuthorization
+	(*UpdateBootstrapRequest)(nil), // 64: veyport.v1.UpdateBootstrapRequest
 }
 var file_proto_veyport_v1_agent_proto_depIdxs = []int32{
 	3,  // 0: veyport.v1.AgentMessage.heartbeat:type_name -> veyport.v1.Heartbeat
@@ -4821,68 +5477,79 @@ var file_proto_veyport_v1_agent_proto_depIdxs = []int32{
 	35, // 14: veyport.v1.AgentMessage.execution_capabilities:type_name -> veyport.v1.ExecutionCapabilities
 	40, // 15: veyport.v1.AgentMessage.execution_prepared:type_name -> veyport.v1.ExecutionPrepared
 	44, // 16: veyport.v1.AgentMessage.execution_status:type_name -> veyport.v1.ExecutionStatus
-	4,  // 17: veyport.v1.HubMessage.heartbeat_ack:type_name -> veyport.v1.HeartbeatAck
-	6,  // 18: veyport.v1.HubMessage.register_ack:type_name -> veyport.v1.RegisterAck
-	8,  // 19: veyport.v1.HubMessage.file_list_request:type_name -> veyport.v1.FileListRequest
-	13, // 20: veyport.v1.HubMessage.log_stream_request:type_name -> veyport.v1.LogStreamRequest
-	16, // 21: veyport.v1.HubMessage.file_upload_request:type_name -> veyport.v1.FileUploadRequest
-	11, // 22: veyport.v1.HubMessage.file_read_request:type_name -> veyport.v1.FileReadRequest
-	15, // 23: veyport.v1.HubMessage.log_stream_stop:type_name -> veyport.v1.LogStreamStop
-	18, // 24: veyport.v1.HubMessage.file_delete_request:type_name -> veyport.v1.FileDeleteRequest
-	20, // 25: veyport.v1.HubMessage.unregister_request:type_name -> veyport.v1.UnregisterRequest
-	23, // 26: veyport.v1.HubMessage.cert_renew_response:type_name -> veyport.v1.CertRenewResponse
-	24, // 27: veyport.v1.HubMessage.terminal_open_request:type_name -> veyport.v1.TerminalOpenRequest
-	26, // 28: veyport.v1.HubMessage.terminal_input:type_name -> veyport.v1.TerminalInput
-	27, // 29: veyport.v1.HubMessage.terminal_resize:type_name -> veyport.v1.TerminalResize
-	30, // 30: veyport.v1.HubMessage.terminal_close:type_name -> veyport.v1.TerminalClose
-	32, // 31: veyport.v1.HubMessage.reenroll_approved:type_name -> veyport.v1.ReEnrollApproved
-	34, // 32: veyport.v1.HubMessage.reenroll_denied:type_name -> veyport.v1.ReEnrollDenied
-	39, // 33: veyport.v1.HubMessage.execution_prepare:type_name -> veyport.v1.ExecutionPrepare
-	41, // 34: veyport.v1.HubMessage.execution_attach:type_name -> veyport.v1.ExecutionAttachRequest
-	42, // 35: veyport.v1.HubMessage.execution_cancel:type_name -> veyport.v1.ExecutionCancel
-	43, // 36: veyport.v1.HubMessage.execution_status_request:type_name -> veyport.v1.ExecutionStatusRequest
-	7,  // 37: veyport.v1.Heartbeat.system_info:type_name -> veyport.v1.SystemInfo
-	35, // 38: veyport.v1.RegisterAgent.execution_capabilities:type_name -> veyport.v1.ExecutionCapabilities
-	10, // 39: veyport.v1.FileListResponse.files:type_name -> veyport.v1.FileNode
-	36, // 40: veyport.v1.ExecutionPrepare.limits:type_name -> veyport.v1.ExecutionLimits
-	37, // 41: veyport.v1.ExecutionPrepared.binding:type_name -> veyport.v1.ExecutionBinding
-	38, // 42: veyport.v1.ExecutionPrepared.identity:type_name -> veyport.v1.ExecutionIdentity
-	36, // 43: veyport.v1.ExecutionPrepared.limits:type_name -> veyport.v1.ExecutionLimits
-	37, // 44: veyport.v1.ExecutionAttachRequest.binding:type_name -> veyport.v1.ExecutionBinding
-	37, // 45: veyport.v1.ExecutionCancel.binding:type_name -> veyport.v1.ExecutionBinding
-	37, // 46: veyport.v1.ExecutionStatus.binding:type_name -> veyport.v1.ExecutionBinding
-	56, // 47: veyport.v1.ExecutionStatus.result:type_name -> veyport.v1.ExecutionResult
-	41, // 48: veyport.v1.ExecutionAgentMessage.attach:type_name -> veyport.v1.ExecutionAttachRequest
-	49, // 49: veyport.v1.ExecutionAgentMessage.started:type_name -> veyport.v1.ExecutionStarted
-	50, // 50: veyport.v1.ExecutionAgentMessage.start_failed:type_name -> veyport.v1.ExecutionStartFailed
-	51, // 51: veyport.v1.ExecutionAgentMessage.stdout:type_name -> veyport.v1.ExecutionData
-	51, // 52: veyport.v1.ExecutionAgentMessage.stderr:type_name -> veyport.v1.ExecutionData
-	53, // 53: veyport.v1.ExecutionAgentMessage.output_eof:type_name -> veyport.v1.ExecutionOutputEOF
-	56, // 54: veyport.v1.ExecutionAgentMessage.result:type_name -> veyport.v1.ExecutionResult
-	44, // 55: veyport.v1.ExecutionAgentMessage.status:type_name -> veyport.v1.ExecutionStatus
-	47, // 56: veyport.v1.ExecutionHubMessage.attached:type_name -> veyport.v1.ExecutionAttached
-	48, // 57: veyport.v1.ExecutionHubMessage.start:type_name -> veyport.v1.ExecutionStart
-	51, // 58: veyport.v1.ExecutionHubMessage.input:type_name -> veyport.v1.ExecutionData
-	52, // 59: veyport.v1.ExecutionHubMessage.input_eof:type_name -> veyport.v1.ExecutionInputEOF
-	54, // 60: veyport.v1.ExecutionHubMessage.script_chunk:type_name -> veyport.v1.ExecutionScriptChunk
-	55, // 61: veyport.v1.ExecutionHubMessage.script_eof:type_name -> veyport.v1.ExecutionScriptEOF
-	42, // 62: veyport.v1.ExecutionHubMessage.cancel:type_name -> veyport.v1.ExecutionCancel
-	37, // 63: veyport.v1.ExecutionAttached.binding:type_name -> veyport.v1.ExecutionBinding
-	37, // 64: veyport.v1.ExecutionStart.binding:type_name -> veyport.v1.ExecutionBinding
-	36, // 65: veyport.v1.ExecutionStart.limits:type_name -> veyport.v1.ExecutionLimits
-	37, // 66: veyport.v1.ExecutionStarted.binding:type_name -> veyport.v1.ExecutionBinding
-	37, // 67: veyport.v1.ExecutionStartFailed.binding:type_name -> veyport.v1.ExecutionBinding
-	0,  // 68: veyport.v1.ExecutionOutputEOF.output:type_name -> veyport.v1.ExecutionOutput
-	37, // 69: veyport.v1.ExecutionResult.binding:type_name -> veyport.v1.ExecutionBinding
-	1,  // 70: veyport.v1.AgentService.Connect:input_type -> veyport.v1.AgentMessage
-	45, // 71: veyport.v1.AgentService.Execute:input_type -> veyport.v1.ExecutionAgentMessage
-	2,  // 72: veyport.v1.AgentService.Connect:output_type -> veyport.v1.HubMessage
-	46, // 73: veyport.v1.AgentService.Execute:output_type -> veyport.v1.ExecutionHubMessage
-	72, // [72:74] is the sub-list for method output_type
-	70, // [70:72] is the sub-list for method input_type
-	70, // [70:70] is the sub-list for extension type_name
-	70, // [70:70] is the sub-list for extension extendee
-	0,  // [0:70] is the sub-list for field type_name
+	57, // 17: veyport.v1.AgentMessage.update_capabilities:type_name -> veyport.v1.UpdateCapabilities
+	59, // 18: veyport.v1.AgentMessage.update_status:type_name -> veyport.v1.AgentUpdateStatus
+	4,  // 19: veyport.v1.HubMessage.heartbeat_ack:type_name -> veyport.v1.HeartbeatAck
+	6,  // 20: veyport.v1.HubMessage.register_ack:type_name -> veyport.v1.RegisterAck
+	8,  // 21: veyport.v1.HubMessage.file_list_request:type_name -> veyport.v1.FileListRequest
+	13, // 22: veyport.v1.HubMessage.log_stream_request:type_name -> veyport.v1.LogStreamRequest
+	16, // 23: veyport.v1.HubMessage.file_upload_request:type_name -> veyport.v1.FileUploadRequest
+	11, // 24: veyport.v1.HubMessage.file_read_request:type_name -> veyport.v1.FileReadRequest
+	15, // 25: veyport.v1.HubMessage.log_stream_stop:type_name -> veyport.v1.LogStreamStop
+	18, // 26: veyport.v1.HubMessage.file_delete_request:type_name -> veyport.v1.FileDeleteRequest
+	20, // 27: veyport.v1.HubMessage.unregister_request:type_name -> veyport.v1.UnregisterRequest
+	23, // 28: veyport.v1.HubMessage.cert_renew_response:type_name -> veyport.v1.CertRenewResponse
+	24, // 29: veyport.v1.HubMessage.terminal_open_request:type_name -> veyport.v1.TerminalOpenRequest
+	26, // 30: veyport.v1.HubMessage.terminal_input:type_name -> veyport.v1.TerminalInput
+	27, // 31: veyport.v1.HubMessage.terminal_resize:type_name -> veyport.v1.TerminalResize
+	30, // 32: veyport.v1.HubMessage.terminal_close:type_name -> veyport.v1.TerminalClose
+	32, // 33: veyport.v1.HubMessage.reenroll_approved:type_name -> veyport.v1.ReEnrollApproved
+	34, // 34: veyport.v1.HubMessage.reenroll_denied:type_name -> veyport.v1.ReEnrollDenied
+	39, // 35: veyport.v1.HubMessage.execution_prepare:type_name -> veyport.v1.ExecutionPrepare
+	41, // 36: veyport.v1.HubMessage.execution_attach:type_name -> veyport.v1.ExecutionAttachRequest
+	42, // 37: veyport.v1.HubMessage.execution_cancel:type_name -> veyport.v1.ExecutionCancel
+	43, // 38: veyport.v1.HubMessage.execution_status_request:type_name -> veyport.v1.ExecutionStatusRequest
+	58, // 39: veyport.v1.HubMessage.agent_update_request:type_name -> veyport.v1.AgentUpdateRequest
+	60, // 40: veyport.v1.HubMessage.update_confirmation:type_name -> veyport.v1.UpdateConfirmation
+	7,  // 41: veyport.v1.Heartbeat.system_info:type_name -> veyport.v1.SystemInfo
+	35, // 42: veyport.v1.RegisterAgent.execution_capabilities:type_name -> veyport.v1.ExecutionCapabilities
+	10, // 43: veyport.v1.FileListResponse.files:type_name -> veyport.v1.FileNode
+	36, // 44: veyport.v1.ExecutionPrepare.limits:type_name -> veyport.v1.ExecutionLimits
+	37, // 45: veyport.v1.ExecutionPrepared.binding:type_name -> veyport.v1.ExecutionBinding
+	38, // 46: veyport.v1.ExecutionPrepared.identity:type_name -> veyport.v1.ExecutionIdentity
+	36, // 47: veyport.v1.ExecutionPrepared.limits:type_name -> veyport.v1.ExecutionLimits
+	37, // 48: veyport.v1.ExecutionAttachRequest.binding:type_name -> veyport.v1.ExecutionBinding
+	37, // 49: veyport.v1.ExecutionCancel.binding:type_name -> veyport.v1.ExecutionBinding
+	37, // 50: veyport.v1.ExecutionStatus.binding:type_name -> veyport.v1.ExecutionBinding
+	56, // 51: veyport.v1.ExecutionStatus.result:type_name -> veyport.v1.ExecutionResult
+	41, // 52: veyport.v1.ExecutionAgentMessage.attach:type_name -> veyport.v1.ExecutionAttachRequest
+	49, // 53: veyport.v1.ExecutionAgentMessage.started:type_name -> veyport.v1.ExecutionStarted
+	50, // 54: veyport.v1.ExecutionAgentMessage.start_failed:type_name -> veyport.v1.ExecutionStartFailed
+	51, // 55: veyport.v1.ExecutionAgentMessage.stdout:type_name -> veyport.v1.ExecutionData
+	51, // 56: veyport.v1.ExecutionAgentMessage.stderr:type_name -> veyport.v1.ExecutionData
+	53, // 57: veyport.v1.ExecutionAgentMessage.output_eof:type_name -> veyport.v1.ExecutionOutputEOF
+	56, // 58: veyport.v1.ExecutionAgentMessage.result:type_name -> veyport.v1.ExecutionResult
+	44, // 59: veyport.v1.ExecutionAgentMessage.status:type_name -> veyport.v1.ExecutionStatus
+	47, // 60: veyport.v1.ExecutionHubMessage.attached:type_name -> veyport.v1.ExecutionAttached
+	48, // 61: veyport.v1.ExecutionHubMessage.start:type_name -> veyport.v1.ExecutionStart
+	51, // 62: veyport.v1.ExecutionHubMessage.input:type_name -> veyport.v1.ExecutionData
+	52, // 63: veyport.v1.ExecutionHubMessage.input_eof:type_name -> veyport.v1.ExecutionInputEOF
+	54, // 64: veyport.v1.ExecutionHubMessage.script_chunk:type_name -> veyport.v1.ExecutionScriptChunk
+	55, // 65: veyport.v1.ExecutionHubMessage.script_eof:type_name -> veyport.v1.ExecutionScriptEOF
+	42, // 66: veyport.v1.ExecutionHubMessage.cancel:type_name -> veyport.v1.ExecutionCancel
+	37, // 67: veyport.v1.ExecutionAttached.binding:type_name -> veyport.v1.ExecutionBinding
+	37, // 68: veyport.v1.ExecutionStart.binding:type_name -> veyport.v1.ExecutionBinding
+	36, // 69: veyport.v1.ExecutionStart.limits:type_name -> veyport.v1.ExecutionLimits
+	37, // 70: veyport.v1.ExecutionStarted.binding:type_name -> veyport.v1.ExecutionBinding
+	37, // 71: veyport.v1.ExecutionStartFailed.binding:type_name -> veyport.v1.ExecutionBinding
+	0,  // 72: veyport.v1.ExecutionOutputEOF.output:type_name -> veyport.v1.ExecutionOutput
+	37, // 73: veyport.v1.ExecutionResult.binding:type_name -> veyport.v1.ExecutionBinding
+	57, // 74: veyport.v1.UpdateBootstrapRequest.capabilities:type_name -> veyport.v1.UpdateCapabilities
+	1,  // 75: veyport.v1.AgentService.Connect:input_type -> veyport.v1.AgentMessage
+	45, // 76: veyport.v1.AgentService.Execute:input_type -> veyport.v1.ExecutionAgentMessage
+	61, // 77: veyport.v1.AgentService.DownloadUpdate:input_type -> veyport.v1.UpdateArtifactRequest
+	61, // 78: veyport.v1.AgentService.AuthorizeUpdate:input_type -> veyport.v1.UpdateArtifactRequest
+	64, // 79: veyport.v1.AgentService.BootstrapUpdate:input_type -> veyport.v1.UpdateBootstrapRequest
+	2,  // 80: veyport.v1.AgentService.Connect:output_type -> veyport.v1.HubMessage
+	46, // 81: veyport.v1.AgentService.Execute:output_type -> veyport.v1.ExecutionHubMessage
+	62, // 82: veyport.v1.AgentService.DownloadUpdate:output_type -> veyport.v1.UpdateArtifactChunk
+	63, // 83: veyport.v1.AgentService.AuthorizeUpdate:output_type -> veyport.v1.UpdateAuthorization
+	58, // 84: veyport.v1.AgentService.BootstrapUpdate:output_type -> veyport.v1.AgentUpdateRequest
+	80, // [80:85] is the sub-list for method output_type
+	75, // [75:80] is the sub-list for method input_type
+	75, // [75:75] is the sub-list for extension type_name
+	75, // [75:75] is the sub-list for extension extendee
+	0,  // [0:75] is the sub-list for field type_name
 }
 
 func init() { file_proto_veyport_v1_agent_proto_init() }
@@ -4908,6 +5575,8 @@ func file_proto_veyport_v1_agent_proto_init() {
 		(*AgentMessage_ExecutionCapabilities)(nil),
 		(*AgentMessage_ExecutionPrepared)(nil),
 		(*AgentMessage_ExecutionStatus)(nil),
+		(*AgentMessage_UpdateCapabilities)(nil),
+		(*AgentMessage_UpdateStatus)(nil),
 	}
 	file_proto_veyport_v1_agent_proto_msgTypes[1].OneofWrappers = []any{
 		(*HubMessage_HeartbeatAck)(nil),
@@ -4930,6 +5599,8 @@ func file_proto_veyport_v1_agent_proto_init() {
 		(*HubMessage_ExecutionAttach)(nil),
 		(*HubMessage_ExecutionCancel)(nil),
 		(*HubMessage_ExecutionStatusRequest)(nil),
+		(*HubMessage_AgentUpdateRequest)(nil),
+		(*HubMessage_UpdateConfirmation)(nil),
 	}
 	file_proto_veyport_v1_agent_proto_msgTypes[44].OneofWrappers = []any{
 		(*ExecutionAgentMessage_Attach)(nil),
@@ -4956,7 +5627,7 @@ func file_proto_veyport_v1_agent_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_proto_veyport_v1_agent_proto_rawDesc), len(file_proto_veyport_v1_agent_proto_rawDesc)),
 			NumEnums:      1,
-			NumMessages:   56,
+			NumMessages:   64,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

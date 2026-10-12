@@ -22,6 +22,12 @@ func (s *Store) CreateServer(srv *model.Server) error {
 	return nil
 }
 
+// UpdateObservedAgentVersion uses the authenticated running-binary capability.
+func (s *Store) UpdateObservedAgentVersion(node, version string) error {
+	_, err := s.db.Exec("UPDATE servers SET agent_version=? WHERE id=?", version, node)
+	return err
+}
+
 func (s *Store) GetServerByID(id string) (*model.Server, error) {
 	return s.scanServer(s.db.QueryRow(
 		`SELECT id, name, hostname, ip_address, os, status, registration_token, token_expires_at,

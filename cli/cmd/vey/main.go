@@ -19,6 +19,9 @@ import (
 //	-ldflags "-X main.version=$(VERSION)"
 var version = "dev"
 
+// revision binds distribution metadata to this exact source revision.
+var revision = "unknown"
+
 // usage documents the command surface from
 // specs/004-cli-connector/contracts/cli-commands.md. Global flags precede
 // the subcommand name; each subcommand's own flags follow it (e.g.
@@ -38,6 +41,8 @@ Commands:
   login          sign in to a hub interactively
   logout         sign out and remove stored credentials for the hub
   status         show the effective hub, auth mode, and reachability
+  update         install a newer verified CLI from the configured Hub
+                 add --check to read metadata without changing files
   ssh-cert       obtain an SSH certificate for server connections
   ssh <server>   open an interactive SSH session by server name or ID
                  add -- '<command>' to run a command without a PTY
@@ -127,5 +132,7 @@ func run(args []string) int {
 	}
 
 	ctx := commands.NewContext(*hubFlag, os.Getenv("VEYPORT_HUB"), cfg, filepath.Dir(configPath), printer, cmdArgs)
+	ctx.Version = version
+	ctx.Revision = revision
 	return fn(ctx)
 }

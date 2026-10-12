@@ -246,9 +246,9 @@ Terminal endpoints require an interactive browser session. CLI-created API token
 
 ### `vey ssh node -- command` is refused or hangs while sending input
 
-Command mode uses prototype version `2.0.50-prototype.3` and immutable tag
-`prototype-ssh-passthrough.3`; stable `2.0.49` does not include it. Before
-installing, check the [prototype release page](https://github.com/lorconksu/veyport/releases/tag/prototype-ssh-passthrough.3)
+Command mode uses prototype version `2.0.50-prototype.4` and immutable tag
+`prototype-ssh-passthrough.4`; stable `2.0.49` does not include it. Before
+installing, check the [prototype release page](https://github.com/lorconksu/veyport/releases/tag/prototype-ssh-passthrough.4)
 for an actually published release and its required assets. If they are absent,
 the prototype is unavailable. Use the Hub and CLI from the same source revision
 with a compatible agent. Resolve the immutable OCI tag to its published digest
@@ -351,6 +351,49 @@ To recover:
 The node reconnects automatically within seconds, keeping the same serverID, history, and path assignments.
 
 If the approval returns **"re-register required,"** the node predates transport-key support. Re-register it once using the standard install command; the node will have transport-key support after that and can use re-enrollment in future.
+
+### `vey update` reports a permission or destination error
+
+The built-in CLI updater changes only `/usr/local/bin/vey`; it does not choose a
+different destination or elevate itself. Run the command printed in the error,
+including its explicit `sudo` and `--hub` arguments. If it reports that the
+running executable differs from `/usr/local/bin/vey`, invoke the installed
+binary directly and retry. Development or unrecognized versions cannot be
+updated in place; install a versioned CLI from the Hub first. If the new
+executable fails its final version or checksum check, the updater restores the
+previous executable automatically. If it reports that rollback failed, use the
+backup path printed in the error to restore the previous binary.
+
+### `vey servers update` refuses or does not confirm an update
+
+Agent updates require a live interactive administrator CLI session. Clear
+`VEYPORT_TOKEN` and configured API-token overrides, then run `vey login`. The
+node must be online with a valid enrolled mTLS identity, run Linux amd64 or
+arm64 under the root-owned `/usr/local/bin/veyport-agent` systemd service, and
+belong to a Standard installation that has never enrolled Enhanced or other
+governance controls. These checks cannot be bypassed by re-enrolling the node.
+
+The Hub refuses a busy node while a terminal, command, or other agent work is
+active. Let it become idle, then run `vey servers update NODE --check` again.
+The update uses only the exact Hub artifact and does not accept a URL or target
+version. If the wait ends before the new agent reports its exact artifact
+identity, inspect the operation before retrying:
+
+```bash
+vey servers update NODE --status
+vey servers update NODE --status --operation OPERATION_ID
+```
+
+For `bootstrap_required`, connect to the node through direct SSH and run the
+one-use command printed by `vey servers update NODE`. The ticket expires after
+120 seconds. Confirm that the HTTPS host in that command matches the Hub host
+configured for the agent's mTLS connection; the ports can differ. The bootstrap
+preserves the node identity and configuration and does not use the normal
+registration installer. If the outcome is `unknown`, do not retry blindly. For
+legacy agents, the old protocol may not report the binary hash after rollback.
+Verify the original SHA-256 and service state over direct SSH, wait until the
+time printed by the CLI, then acknowledge with the exact expected hash. That
+action records your attestation and is not remote confirmation of rollback.
 
 ---
 

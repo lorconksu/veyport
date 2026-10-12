@@ -1,6 +1,7 @@
 package grpcserver
 
 import (
+	"errors"
 	"sort"
 	"sync"
 	"time"
@@ -79,6 +80,7 @@ type TerminalSessionInfo struct {
 type TerminalSessions struct {
 	mu                   sync.Mutex
 	sessions             map[string]*terminalSession
+	maintenance          map[string]string
 	interactiveStores    map[*store.Store]bool
 	interactiveObserveMu sync.Mutex
 	// nowFunc is swapped in tests to drive startedAt/lastActivity.
@@ -113,6 +115,9 @@ func (ts *TerminalSessions) Register(serverID, sessionID, userID, executionUser 
 	key := makeKey(serverID, sessionID)
 	ts.mu.Lock()
 	defer ts.mu.Unlock()
+	if ts.maintenance[serverID] != "" {
+		return nil, false
+	}
 	if _, exists := ts.sessions[key]; exists {
 		return nil, false
 	}
@@ -145,6 +150,58 @@ func (ts *TerminalSessions) Register(serverID, sessionID, userID, executionUser 
 	s.ch, s.done, s.startedAt, s.lastActivity = ch, make(chan struct{}), now, now
 	ts.sessions[key] = s
 	return ch, true
+}
+
+// ReserveMaintenance atomically requires an idle node and blocks every new
+// shell/prepared execution registration until the operation is reconciled.
+func (ts *TerminalSessions) ReserveMaintenance(node, id string) error {
+	ts.mu.Lock()
+	defer ts.mu.Unlock()
+	if ts.maintenance[node] != "" {
+		return errors.New("node update maintenance is active")
+	}
+	for _, s := range ts.sessions {
+		if s.serverID == node && !s.closed {
+			return errors.New("node has active terminal or command sessions")
+		}
+	}
+	if ts.maintenance == nil {
+		ts.maintenance = make(map[string]string)
+	}
+	ts.maintenance[node] = id
+	return nil
+}
+func (ts *TerminalSessions) SetMaintenance(node, id string) {
+	ts.mu.Lock()
+	defer ts.mu.Unlock()
+	if ts.maintenance == nil {
+		ts.maintenance = make(map[string]string)
+	}
+	if id == "" {
+		delete(ts.maintenance, node)
+	} else {
+		ts.maintenance[node] = id
+	}
+}
+func (ts *TerminalSessions) ReleaseMaintenance(node, id string) {
+	ts.mu.Lock()
+	defer ts.mu.Unlock()
+	if ts.maintenance[node] == id {
+		delete(ts.maintenance, node)
+	}
+}
+func (ts *TerminalSessions) MaintenanceIdle(node, id string) bool {
+	ts.mu.Lock()
+	defer ts.mu.Unlock()
+	if ts.maintenance[node] != id {
+		return false
+	}
+	for _, s := range ts.sessions {
+		if s.serverID == node && !s.closed {
+			return false
+		}
+	}
+	return true
 }
 
 // infoOf snapshots a session for callers. ts.mu must be held.

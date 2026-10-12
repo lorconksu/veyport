@@ -10,7 +10,9 @@ mkdir -p "$delivery/bin" "$delivery/reports"
 docker buildx build --platform linux/amd64 --target artifacts \
   --build-arg "VERSION=$version" --build-arg "REVISION=$revision" \
   --output "type=local,dest=$delivery/bin" .
+cp "$delivery/bin/artifact-manifest.json" "$delivery/reports/build-artifact-manifest.json"
 python3 scripts/release/artifacts.py --directory "$delivery/bin" --version "$version" --revision "$revision" --smoke
+cmp "$delivery/reports/build-artifact-manifest.json" "$delivery/bin/artifact-manifest.json"
 python3 scripts/release/go_binary_evidence.py "$delivery/bin" "$delivery/reports/go"
 
 # The exact public binary set also includes arm64 and Darwin release assets.
@@ -83,6 +85,10 @@ PY
     docker cp "$container:/app/$image_name" "$temporary/$binary"
     cmp "$delivery/bin/$binary" "$temporary/$binary"
   done < "$temporary/binaries.txt"
+  if [ "$target" = veyport ]; then
+    docker cp "$container:/app/artifact-manifest.json" "$temporary/artifact-manifest.json"
+    cmp "$delivery/bin/artifact-manifest.json" "$temporary/artifact-manifest.json"
+  fi
   python3 - "$delivery" "$target" "$temporary/binaries.txt" <<'PY'
 import json,sys
 from pathlib import Path

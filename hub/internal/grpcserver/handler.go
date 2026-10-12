@@ -38,6 +38,7 @@ type Handler struct {
 	logSessions *LogSessions
 	terminals   *TerminalSessions
 	executions  *ExecutionSessions
+	updates     *AgentUpdates
 	hbCoalescer *HeartbeatCoalescer
 	caCert      *x509.Certificate
 	caKey       *ecdsa.PrivateKey
@@ -204,6 +205,9 @@ func (h *Handler) onAgentConnected(serverID, peerAddr string) {
 
 // onAgentDisconnected unregisters the connection, flushes heartbeats, and logs the disconnect event.
 func (h *Handler) onAgentDisconnected(serverID string, stream pb.AgentService_ConnectServer) {
+	if h.updates != nil {
+		h.updates.EndConnection(serverID, stream)
+	}
 	if h.executions != nil {
 		h.executions.EndConnection(serverID, stream, "agent disconnected")
 	}
@@ -476,6 +480,23 @@ func (h *Handler) routeAgentMessage(serverID string, stream pb.AgentService_Conn
 		}
 	case *pb.AgentMessage_ExecutionStatus:
 		// Status is reconciliation metadata, never authority to retry Start.
+	case *pb.AgentMessage_UpdateCapabilities:
+		if h.updates != nil {
+			if node, err := h.executionNode(stream.Context()); err == nil && node == serverID {
+				if err = h.updates.ObserveCapabilities(serverID, stream, p.UpdateCapabilities); err != nil {
+					log.Printf("update capability rejected for %s: %v", serverID, err)
+				}
+			}
+		}
+	case *pb.AgentMessage_UpdateStatus:
+		if h.updates != nil {
+			if node, err := h.executionNode(stream.Context()); err == nil && node == serverID {
+				if err = h.updates.ObserveStatus(serverID, stream, p.UpdateStatus); err != nil {
+					log.Printf("update status rejected for %s: %v", serverID, err)
+					return err
+				}
+			}
+		}
 	default:
 		log.Printf("unhandled message type from %s: %T", serverID, p)
 	}

@@ -52,6 +52,8 @@ type Server struct {
 	isDev                     bool
 	frontendFS                *embed.FS
 	agentBinDir               string
+	distributionMu            sync.Mutex
+	distributionCache         map[string]distributionCacheEntry
 	grpcAddr                  string
 	grpcExternalAddr          string
 	grpcCACertSHA256          string
@@ -59,6 +61,7 @@ type Server struct {
 	pending                   *grpcserver.PendingRequests
 	logSessions               *grpcserver.LogSessions
 	terminalSessions          *grpcserver.TerminalSessions
+	agentUpdates              *grpcserver.AgentUpdates
 	reEnrollReleaser          ReEnrollReleaser
 	logTailMu                 sync.Mutex
 	logTailSessions           map[string]int
@@ -121,6 +124,7 @@ type Config struct {
 	Pending                   *grpcserver.PendingRequests
 	LogSessions               *grpcserver.LogSessions
 	TerminalSessions          *grpcserver.TerminalSessions
+	AgentUpdates              *grpcserver.AgentUpdates
 	ReEnrollReleaser          ReEnrollReleaser
 	Notifier                  *notify.Notifier
 	LDAPAuthenticator         LDAPAuthenticator
@@ -163,6 +167,7 @@ func New(cfg Config) *Server {
 		pending:                   cfg.Pending,
 		logSessions:               cfg.LogSessions,
 		terminalSessions:          cfg.TerminalSessions,
+		agentUpdates:              cfg.AgentUpdates,
 		reEnrollReleaser:          cfg.ReEnrollReleaser,
 		logTailSessions:           make(map[string]int),
 		totpCache:                 auth.NewTOTPUsedCodes(),

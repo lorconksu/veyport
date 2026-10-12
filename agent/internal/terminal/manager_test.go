@@ -475,7 +475,14 @@ func TestTerminalAndExecutionShareOneAtomicNodeBudget(t *testing.T) {
 		t.Fatal(err)
 	}
 	request.ExecutionId = "released"
-	if prepared := executionManager.Prepare(request); prepared.Error != "" {
-		t.Fatal(prepared.Error)
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		if prepared := executionManager.Prepare(request); prepared.Error == "" {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("terminal budget was not released after process exit")
+		}
+		time.Sleep(time.Millisecond)
 	}
 }

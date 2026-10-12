@@ -7,6 +7,10 @@ service AgentService {
   rpc Connect(stream AgentMessage) returns (stream HubMessage);
   // Dedicated enrolled-node mTLS connection; never the enrollment control path.
   rpc Execute(stream ExecutionAgentMessage) returns (stream ExecutionHubMessage);
+  // Maintenance artifacts are selected by the Hub, never by a client URL.
+  rpc DownloadUpdate(UpdateArtifactRequest) returns (stream UpdateArtifactChunk);
+  rpc AuthorizeUpdate(UpdateArtifactRequest) returns (UpdateAuthorization);
+  rpc BootstrapUpdate(UpdateBootstrapRequest) returns (AgentUpdateRequest);
 }
 
 // Messages from Agent → Hub
@@ -30,6 +34,8 @@ message AgentMessage {
     ExecutionCapabilities execution_capabilities = 30;
     ExecutionPrepared execution_prepared = 31;
     ExecutionStatus execution_status = 32;
+    UpdateCapabilities update_capabilities = 40;
+    AgentUpdateStatus update_status = 41;
   }
 }
 
@@ -57,6 +63,8 @@ message HubMessage {
     ExecutionAttachRequest execution_attach = 31;
     ExecutionCancel execution_cancel = 32;
     ExecutionStatusRequest execution_status_request = 33;
+    AgentUpdateRequest agent_update_request = 40;
+    UpdateConfirmation update_confirmation = 41;
   }
 }
 
@@ -393,3 +401,39 @@ message ExecutionResult {
   bool stdout_complete = 6;
   bool stderr_complete = 7;
 }
+
+// Update v1 supports only the canonical root-owned Linux/systemd installation.
+// Capabilities describe the running executable, not its historical registration.
+message UpdateCapabilities {
+  uint32 protocol_version = 1;
+  string os = 2;
+  string arch = 3;
+  string version = 4;
+  string revision = 5;
+  string sha256 = 6;
+  string boot_id = 7;
+  bool supported = 8;
+  string reason = 9;
+}
+message AgentUpdateRequest {
+  string operation_id = 1;
+  string version = 2;
+  string revision = 3;
+  string sha256 = 4;
+  int64 bytes = 5;
+  int64 expires_unix_milli = 6;
+}
+message AgentUpdateStatus {
+  string operation_id = 1;
+  string state = 2;
+  string reason = 3;
+  string version = 4;
+  string revision = 5;
+  string sha256 = 6;
+  string boot_id = 7;
+}
+message UpdateConfirmation { string operation_id = 1; string state = 2; }
+message UpdateArtifactRequest { string operation_id = 1; }
+message UpdateArtifactChunk { int64 offset = 1; bytes data = 2; }
+message UpdateAuthorization { string operation_id = 1; int64 expires_unix_milli = 2; }
+message UpdateBootstrapRequest { string ticket = 1; UpdateCapabilities capabilities = 2; }

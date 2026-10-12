@@ -35,6 +35,7 @@ import (
 	"github.com/wyiu/veyport/agent/internal/nodekey"
 	"github.com/wyiu/veyport/agent/internal/sessionlimit"
 	"github.com/wyiu/veyport/agent/internal/terminal"
+	"github.com/wyiu/veyport/agent/internal/update"
 	"github.com/wyiu/veyport/proto/protectedinput"
 	pb "github.com/wyiu/veyport/proto/veyport/v1"
 )
@@ -47,6 +48,8 @@ type Config struct {
 	IPAddress       string
 	OS              string
 	AgentVersion    string
+	AgentRevision   string
+	ConfigPath      string
 	CertDir         string // directory for mTLS cert storage; empty uses /etc/veyport/tls/
 	UnregisterToken string
 	Insecure        bool
@@ -92,6 +95,9 @@ type Client struct {
 	sealedNodeKeyHex   string               // AES-GCM sealed Ed25519 private key (hex), empty if not yet enrolled
 	executionSpool     protectedinput.Store // explicit internal storage dependency; runtime provisions encrypted storage
 	transportPrivBytes []byte               // X25519 transport private key (32 bytes), empty until first enrollment
+	budget             *sessionlimit.Budget
+	updates            *update.Runtime
+	updateWorkers      chan struct{}
 }
 
 func New(cfg Config) *Client {
@@ -120,7 +126,7 @@ func New(cfg Config) *Client {
 		}
 	}
 
-	return &Client{
+	c := &Client{
 		hubAddr:            cfg.HubAddr,
 		serverID:           cfg.ServerID,
 		token:              cfg.Token,
@@ -142,7 +148,11 @@ func New(cfg Config) *Client {
 		reconnectCh:        make(chan struct{}, 1),
 		sealedNodeKeyHex:   sealedNodeKeyHex,
 		transportPrivBytes: transportPrivBytes,
+		budget:             sessionlimit.New(8),
+		updateWorkers:      make(chan struct{}, 1),
 	}
+	c.updates = update.New(cfg.AgentVersion, cfg.AgentRevision, cfg.ConfigPath, certDir, cfg.Insecure, c.budget)
+	return c
 }
 
 func (c *Client) ServerID() string {
@@ -1176,6 +1186,9 @@ func (c *Client) startRecvLoopForSession(stream pb.AgentService_ConnectClient, s
 			if executions != nil && executions.handle(msg) {
 				continue
 			}
+			if c.handleUpdateMessage(stream.Context(), msg, sendCh) {
+				continue
+			}
 			// File upload chunks must be sequential to avoid race conditions.
 			// Other messages can be handled concurrently.
 			if _, ok := msg.Payload.(*pb.HubMessage_FileUploadRequest); ok {
@@ -1219,7 +1232,11 @@ func (c *Client) connectAndStream(ctx context.Context) error {
 	log.Printf("connected to hub at %s", c.hubAddr)
 
 	sendCh := make(chan *pb.AgentMessage, 16)
-	budget := sessionlimit.New(8)
+	budget := c.budget
+	if budget == nil {
+		budget = sessionlimit.New(8)
+		c.budget = budget
+	}
 	terminalMgr := terminal.NewManagerWithBudget(sendCh, budget)
 	executions, execErr := c.newExecutionTransport(ctx, budget, sendCh, cancelSession)
 	if execErr != nil {
@@ -1235,6 +1252,25 @@ func (c *Client) connectAndStream(ctx context.Context) error {
 			executions.close()
 		}
 		return fmt.Errorf("send execution capabilities: %w", err)
+	}
+	if c.updates != nil {
+		c.updates.Recheck()
+		if err := stream.Send(&pb.AgentMessage{Payload: &pb.AgentMessage_UpdateCapabilities{UpdateCapabilities: c.updates.Capabilities()}}); err != nil {
+			terminalMgr.CloseAll()
+			if executions != nil {
+				executions.close()
+			}
+			return fmt.Errorf("send update capabilities: %w", err)
+		}
+		if status := c.updates.ResumeStatus(); status != nil {
+			if err := stream.Send(&pb.AgentMessage{Payload: &pb.AgentMessage_UpdateStatus{UpdateStatus: status}}); err != nil {
+				terminalMgr.CloseAll()
+				if executions != nil {
+					executions.close()
+				}
+				return fmt.Errorf("send update recovery status: %w", err)
+			}
+		}
 	}
 	defer func() {
 		c.tailSessionsMu.Lock()

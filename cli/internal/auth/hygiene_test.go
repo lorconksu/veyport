@@ -637,6 +637,7 @@ func hygieneScenarios() []scenario {
 		{name: "status/api-token-mode-env", run: scenarioStatusAPITokenModeEnv},
 		{name: "status/api-token-mode-config", run: scenarioStatusAPITokenModeConfig},
 		{name: "status/not-signed-in", run: scenarioStatusNotSignedIn},
+		{name: "update/public-metadata-reflection", run: scenarioUpdatePublicMetadataReflection},
 
 		// --- vey servers -----------------------------------------------
 		{name: "servers/list-ok", run: scenarioServersListOK},
@@ -694,6 +695,42 @@ func scenarioSecuritySecretReflection(t *testing.T, e *env) {
 		t.Fatal(err)
 	}
 	e.run(t, "security write-only reflection", commands.RunSecurity, cmdutil.ExitForbidden, "secret", "--kind", "password", "--value-file", path)
+}
+
+func scenarioUpdatePublicMetadataReflection(t *testing.T, e *env) {
+	e.seedSession(t)
+	e.useEnvAPIToken(t)
+	e.useConfigAPIToken()
+	credentialsPath := filepath.Join(e.configDir, auth.CredentialsFileName)
+	before, err := os.ReadFile(credentialsPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	requests := 0
+	hub := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests++
+		if r.Header.Get("Authorization") != "" || r.Header.Get("Cookie") != "" || r.URL.RawQuery != "" {
+			t.Error("public update metadata request sent credentials")
+		}
+		writeHubError(w, http.StatusServiceUnavailable, sentinelConfigAPIToken+" "+sentinelEnvAPIToken+" "+sentinelPassword)
+	}))
+	defer hub.Close()
+	// Trust only this fixture's TLS certificate; verification remains enabled.
+	previousTransport := http.DefaultTransport
+	http.DefaultTransport = hub.Client().Transport
+	defer func() { http.DefaultTransport = previousTransport }()
+	ctx := commands.NewContext(hub.URL, "", e.cfg, e.configDir, e.printer, []string{"--check"})
+	ctx.Version = "2.0.50-prototype.3"
+	if code := commands.RunUpdate(ctx); code != cmdutil.ExitError || requests != 1 {
+		t.Fatalf("code=%d requests=%d", code, requests)
+	}
+	after, err := os.ReadFile(credentialsPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(before, after) {
+		t.Fatal("update check changed credentials")
+	}
 }
 
 func scenarioLoginHappyPath(t *testing.T, e *env) {

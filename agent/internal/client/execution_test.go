@@ -75,6 +75,12 @@ func (h *executionTestHub) Connect(stream pb.AgentService_ConnectServer) error {
 	if err != nil {
 		return err
 	}
+	if msg.GetUpdateCapabilities() != nil {
+		msg, err = stream.Recv()
+		if err != nil {
+			return err
+		}
+	}
 	prepared := msg.GetExecutionPrepared()
 	if prepared == nil || prepared.Error != "" || prepared.Binding.BootId != caps.BootId {
 		return fmt.Errorf("invalid prepared response")
@@ -345,7 +351,10 @@ func (m *mockExecutionStream) Recv() (*pb.ExecutionHubMessage, error) {
 	return msg, nil
 }
 
-type mockExecutionService struct{ stream *mockExecutionStream }
+type mockExecutionService struct {
+	pb.AgentServiceClient
+	stream *mockExecutionStream
+}
 
 func (m mockExecutionService) Connect(context.Context, ...grpc.CallOption) (pb.AgentService_ConnectClient, error) {
 	return nil, errors.New("control unused")

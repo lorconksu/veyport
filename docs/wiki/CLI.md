@@ -14,14 +14,15 @@
 1. [Overview](#overview)
 2. [Connect to a server](#connect-to-a-server)
 3. [Install](#install)
-4. [Authentication](#authentication)
-5. [Configuration](#configuration)
-6. [Session awareness](#session-awareness)
-7. [Command Reference](#command-reference)
-8. [Exit Codes](#exit-codes)
-9. [TLS](#tls)
-10. [Scripting Notes](#scripting-notes)
-11. [Command passthrough](#command-passthrough)
+4. [Update the CLI](#update-the-cli)
+5. [Authentication](#authentication)
+6. [Configuration](#configuration)
+7. [Session awareness](#session-awareness)
+8. [Command Reference](#command-reference)
+9. [Exit Codes](#exit-codes)
+10. [TLS](#tls)
+11. [Scripting Notes](#scripting-notes)
+12. [Command passthrough](#command-passthrough)
 
 ---
 
@@ -77,9 +78,9 @@ deadline is 120 seconds.
 Stdout, stderr, and remote exit results remain separate. Exit 255 can represent
 either a remote result or an SSH transport failure; commands are not automatically
 retried after uncertain outcomes. Remote output is not part of the command
-evidence. The prototype identity is version `2.0.50-prototype.3` and immutable
-tag `prototype-ssh-passthrough.3`; stable `2.0.49` does not include this
-feature. Before installing, check the [prototype release page](https://github.com/lorconksu/veyport/releases/tag/prototype-ssh-passthrough.3)
+evidence. The prototype identity is version `2.0.50-prototype.4` and immutable
+tag `prototype-ssh-passthrough.4`; stable `2.0.49` does not include this
+feature. Before installing, check the [prototype release page](https://github.com/lorconksu/veyport/releases/tag/prototype-ssh-passthrough.4)
 for an actually published release and its required assets. If they are absent,
 the prototype is unavailable. Use the Hub and CLI from the same source revision
 with a compatible agent. Resolve the immutable OCI tag to its published digest
@@ -152,7 +153,46 @@ chmod +x vey && ./vey --version
 | macOS Intel | `darwin` | `amd64` |
 | macOS Apple Silicon | `darwin` | `arm64` |
 
-Move the verified binary onto your `PATH` (e.g. `sudo mv vey /usr/local/bin/vey`). There is no auto-update mechanism — re-run the install to pick up a newer build.
+Move the verified binary onto your `PATH` (e.g. `sudo mv vey /usr/local/bin/vey`). Current builds can update in place with `vey update`; see [Update the CLI](#update-the-cli). If the installed build predates that command, use the Hub's **Install CLI** command once to install a build that includes it.
+
+## Update the CLI
+
+The installed CLI can check for and install a newer verified build from its
+configured Hub:
+
+```bash
+vey update --check
+vey update
+```
+
+`--check` reads the Hub's public distribution metadata only. It does not need a
+login, download the executable, or change local files. Hub selection follows the
+normal precedence (`--hub`, `VEYPORT_HUB`, then the configured default). Updates
+require HTTPS with a valid certificate and refuse redirects. Only a newer,
+comparable release is installed; the command does not downgrade. Development,
+dirty, or unrecognized build identities cannot be updated in place.
+
+Updates are supported on Linux and macOS for amd64 and arm64. The command only
+replaces `/usr/local/bin/vey`, and refuses an alternate executable path, unsafe
+ownership or permissions, or a mismatch between the running CLI and that file.
+It never elevates itself. If replacement needs root permission, rerun the exact
+command shown in the error, for example:
+
+```bash
+sudo /usr/local/bin/vey --hub 'https://hub.example.com' update
+```
+
+The updater verifies the Hub manifest and downloaded binary before an atomic
+replacement. It keeps configuration and credentials untouched and retains the
+previous executable in the private `.vey-update-*` directory under
+`/usr/local/bin`. If the new binary fails its post-install checks, the updater
+restores the previous executable automatically. If restoration itself fails,
+the error gives the retained backup path for recovery. A successful update is
+used by the next `/usr/local/bin/vey` invocation; no shell reload is needed.
+
+If the Hub has no approved metadata for the running CLI platform, update fails
+closed. See [[Deployment]] for enrolled-agent updates and the one-time bootstrap
+for older agents.
 
 ## Authentication
 
@@ -271,6 +311,44 @@ touching any other session.
 ## Command Reference
 
 This section transcribes the command contract in `specs/004-cli-connector/contracts/cli-commands.md`.
+
+### `vey update [--check]`
+
+Checks the configured Hub's public CLI distribution metadata and, unless
+`--check` is supplied, installs a verified newer build at `/usr/local/bin/vey`.
+No login is needed. It supports Linux and macOS amd64/arm64, requires HTTPS with
+a valid certificate, follows no redirects, and never downgrades. The updater
+preserves CLI configuration and credentials and retains the previous executable
+for recovery. See [Update the CLI](#update-the-cli) for path, permission, and
+rollback behavior.
+
+### `vey servers update <node>`
+
+Checks and updates an enrolled Linux systemd agent from the exact artifact
+served by the configured Hub. Requires a live interactive administrator
+session; API tokens are refused. The node must have a valid mTLS enrollment,
+use the root-owned `/usr/local/bin/veyport-agent` service, and belong to a
+Standard installation that has never enrolled Enhanced or other governance
+controls. Busy nodes and unsupported platforms or configurations are refused.
+See [[Deployment]] for the preserving bootstrap, operation status, and recovery
+steps.
+
+Supported forms are:
+
+```text
+vey servers update <node> [--check]
+vey servers update <node> --status [--operation <id>]
+vey servers update <node> --acknowledge-recovery <id> --verified-sha256 <hash>
+```
+
+`--check` is read-only. An apply waits up to 150 seconds for a fresh mTLS
+connection to report the exact target version, revision, and checksum and for
+the agent to durably confirm the result. If the result is unknown or the wait
+ends before confirmation, inspect the durable operation with `--status` before
+retrying. Recovery acknowledgement requires
+direct SSH verification of the original binary and service, the exact expected
+hash, and the cooldown printed by the CLI. It records the administrator's
+attestation; it does not claim remote binary verification.
 
 ### `vey login`
 

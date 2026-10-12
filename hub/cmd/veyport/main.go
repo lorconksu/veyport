@@ -125,6 +125,10 @@ func runServer() error {
 	logSessions := grpcserver.NewLogSessions()
 	terminalSessions := grpcserver.NewTerminalSessions()
 	executionSessions := grpcserver.NewExecutionSessions(terminalSessions, cm)
+	agentUpdates, err := grpcserver.NewAgentUpdates(st, cm, terminalSessions)
+	if err != nil {
+		return fmt.Errorf("initialize agent update reconciliation: %w", err)
+	}
 	transition := authorization.TransitionConfig{InstallationID: installationID, EnrollmentPath: filepath.Join(*securityStateDir, "enhanced-enrollment.json")}
 	var auditRuntime *auditruntime.Runtime
 	var protectedExecution *sshgw.ProtectedExecutionConfig
@@ -178,6 +182,7 @@ func runServer() error {
 		Pending:                   pending,
 		LogSessions:               logSessions,
 		TerminalSessions:          terminalSessions,
+		AgentUpdates:              agentUpdates,
 		Notifier:                  notifier,
 		UserCA:                    userCA,
 		SSHHostKey:                hostKey,
@@ -185,6 +190,7 @@ func runServer() error {
 	})
 
 	// Extract hostname from external gRPC address for TLS SAN
+	agentUpdates.SetArtifactResolver(srv.ResolveAgentArtifact)
 	grpcExternalHost := resolveGRPCExternalHost(*grpcExternalAddr)
 
 	grpcSrv := grpcserver.New(grpcserver.Config{
@@ -196,6 +202,7 @@ func runServer() error {
 		LogSessions:       logSessions,
 		TerminalSessions:  terminalSessions,
 		ExecutionSessions: executionSessions,
+		AgentUpdates:      agentUpdates,
 		CACert:            caCert,
 		CAKey:             caKey,
 		Notifier:          notifier,

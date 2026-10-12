@@ -3101,3 +3101,103 @@ disabling an account now also ends every session and closes every shell it has o
 curl -X DELETE https://hub.example.com/api/users/USER_UUID/sessions \
   -H 'Authorization: Bearer <access_token>'
 ```
+
+## Update Distribution and Agent Endpoints
+
+### GET /install/metadata/{component}/{os}/{arch}
+
+Returns the verified public manifest for a build offered by this Hub. This
+public route supports `component=cli` on Linux and macOS amd64/arm64, and
+`component=agent` on Linux amd64/arm64. Local `vey update` uses the CLI
+manifest and fixed binary path `/install/cli/{os}/{arch}`. The agent bootstrap
+uses the matching agent manifest and `/install/{os}/{arch}` binary. Neither
+route requires login. Update clients require HTTPS with a valid certificate
+and refuse redirects.
+
+```json
+{
+  "schema_version": 1,
+  "component": "cli",
+  "os": "linux",
+  "arch": "amd64",
+  "version": "<version>",
+  "revision": "<40-or-64-character-source-revision>",
+  "sha256": "<lowercase-sha256>",
+  "bytes": 12345678,
+  "path": "/install/cli/linux/amd64"
+}
+```
+
+The Hub serves metadata only when its versioned artifact manifest matches the
+binary bytes on disk. Development or mismatched distributions fail closed.
+
+### GET /install/agent-update.sh
+
+Returns the preserving Linux-agent bootstrap script. The script accepts the Hub
+address and a short-lived, single-use ticket bound to an enrolled node and exact
+Hub artifact. The bootstrap command printed by `vey servers update NODE` runs
+the script over verified HTTPS with explicit `sudo`; the ticket is sent to the
+running agent and is never part of the downloaded script. This public download
+route does not grant update authority by itself.
+
+### Agent update endpoints
+
+All `/api/servers/{id}/agent-update` routes require a live interactive admin
+session. API tokens are rejected. Check, start, and recovery mutation are
+refused for installations that ever enrolled Enhanced or other governance
+controls, as well as for nodes outside the supported Linux systemd deployment.
+The enrolled node must already have a valid mTLS identity. The status route
+remains available for read-only inspection of an existing durable operation.
+The Hub chooses the exact artifact; clients cannot provide a URL or arbitrary
+version.
+
+#### GET /api/servers/{id}/agent-update
+
+Read-only capability and artifact check. The response includes the current
+agent capabilities when available, the Hub's target artifact, whether an
+update is available, whether a preserving bootstrap is required, and the latest
+operation when present. Returns a conflict or forbidden error when the node or
+installation is not eligible.
+
+#### POST /api/servers/{id}/agent-update
+
+Starts one update after rechecking the current Hub artifact and administrator
+authority. The body accepts only the exact checked version and source revision:
+
+```json
+{
+  "expected_version": "<version>",
+  "expected_revision": "<40-or-64-character-source-revision>"
+}
+```
+
+For a supported agent, the Hub reserves the node for maintenance and dispatches
+the update. For an older enrolled agent, the response includes a node-bound,
+single-use bootstrap ticket with a 120-second expiry. The ticket is returned
+only in the start response; status responses never include it. The CLI renders
+the preserving direct-SSH command. Do not log or reuse the ticket.
+
+#### GET /api/servers/{id}/agent-update/status?operation_id={id}
+
+Returns the latest durable update operation for the node when `operation_id` is
+omitted, or that exact operation when supplied. The status records success only
+after a fresh mTLS connection reports the exact target version, revision, and
+checksum and the agent durably confirms that result. An `unknown` legacy
+rollback state requires direct-SSH verification and explicit administrator
+acknowledgement; it is not reported as success.
+
+#### POST /api/servers/{id}/agent-update/recovery
+
+Records an administrator's attestation after direct SSH confirms the original
+binary and service. It requires an unknown operation, the exact recorded
+previous checksum, an idle node, and the expiry plus 190 seconds.
+
+```json
+{
+  "operation_id": "<operation-id>",
+  "verified_sha256": "<recorded-previous-sha256>"
+}
+```
+
+This endpoint records the human verification and releases the maintenance
+reservation. It does not remotely verify the agent binary.

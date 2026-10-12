@@ -19,8 +19,11 @@ import (
 const _ = grpc.SupportPackageIsVersion9
 
 const (
-	AgentService_Connect_FullMethodName = "/veyport.v1.AgentService/Connect"
-	AgentService_Execute_FullMethodName = "/veyport.v1.AgentService/Execute"
+	AgentService_Connect_FullMethodName         = "/veyport.v1.AgentService/Connect"
+	AgentService_Execute_FullMethodName         = "/veyport.v1.AgentService/Execute"
+	AgentService_DownloadUpdate_FullMethodName  = "/veyport.v1.AgentService/DownloadUpdate"
+	AgentService_AuthorizeUpdate_FullMethodName = "/veyport.v1.AgentService/AuthorizeUpdate"
+	AgentService_BootstrapUpdate_FullMethodName = "/veyport.v1.AgentService/BootstrapUpdate"
 )
 
 // AgentServiceClient is the client API for AgentService service.
@@ -31,6 +34,10 @@ type AgentServiceClient interface {
 	Connect(ctx context.Context, opts ...grpc.CallOption) (grpc.BidiStreamingClient[AgentMessage, HubMessage], error)
 	// Dedicated enrolled-node mTLS connection; never the enrollment control path.
 	Execute(ctx context.Context, opts ...grpc.CallOption) (grpc.BidiStreamingClient[ExecutionAgentMessage, ExecutionHubMessage], error)
+	// Maintenance artifacts are selected by the Hub, never by a client URL.
+	DownloadUpdate(ctx context.Context, in *UpdateArtifactRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[UpdateArtifactChunk], error)
+	AuthorizeUpdate(ctx context.Context, in *UpdateArtifactRequest, opts ...grpc.CallOption) (*UpdateAuthorization, error)
+	BootstrapUpdate(ctx context.Context, in *UpdateBootstrapRequest, opts ...grpc.CallOption) (*AgentUpdateRequest, error)
 }
 
 type agentServiceClient struct {
@@ -67,6 +74,45 @@ func (c *agentServiceClient) Execute(ctx context.Context, opts ...grpc.CallOptio
 // This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
 type AgentService_ExecuteClient = grpc.BidiStreamingClient[ExecutionAgentMessage, ExecutionHubMessage]
 
+func (c *agentServiceClient) DownloadUpdate(ctx context.Context, in *UpdateArtifactRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[UpdateArtifactChunk], error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	stream, err := c.cc.NewStream(ctx, &AgentService_ServiceDesc.Streams[2], AgentService_DownloadUpdate_FullMethodName, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	x := &grpc.GenericClientStream[UpdateArtifactRequest, UpdateArtifactChunk]{ClientStream: stream}
+	if err := x.ClientStream.SendMsg(in); err != nil {
+		return nil, err
+	}
+	if err := x.ClientStream.CloseSend(); err != nil {
+		return nil, err
+	}
+	return x, nil
+}
+
+// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
+type AgentService_DownloadUpdateClient = grpc.ServerStreamingClient[UpdateArtifactChunk]
+
+func (c *agentServiceClient) AuthorizeUpdate(ctx context.Context, in *UpdateArtifactRequest, opts ...grpc.CallOption) (*UpdateAuthorization, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(UpdateAuthorization)
+	err := c.cc.Invoke(ctx, AgentService_AuthorizeUpdate_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *agentServiceClient) BootstrapUpdate(ctx context.Context, in *UpdateBootstrapRequest, opts ...grpc.CallOption) (*AgentUpdateRequest, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(AgentUpdateRequest)
+	err := c.cc.Invoke(ctx, AgentService_BootstrapUpdate_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // AgentServiceServer is the server API for AgentService service.
 // All implementations must embed UnimplementedAgentServiceServer
 // for forward compatibility.
@@ -75,6 +121,10 @@ type AgentServiceServer interface {
 	Connect(grpc.BidiStreamingServer[AgentMessage, HubMessage]) error
 	// Dedicated enrolled-node mTLS connection; never the enrollment control path.
 	Execute(grpc.BidiStreamingServer[ExecutionAgentMessage, ExecutionHubMessage]) error
+	// Maintenance artifacts are selected by the Hub, never by a client URL.
+	DownloadUpdate(*UpdateArtifactRequest, grpc.ServerStreamingServer[UpdateArtifactChunk]) error
+	AuthorizeUpdate(context.Context, *UpdateArtifactRequest) (*UpdateAuthorization, error)
+	BootstrapUpdate(context.Context, *UpdateBootstrapRequest) (*AgentUpdateRequest, error)
 	mustEmbedUnimplementedAgentServiceServer()
 }
 
@@ -90,6 +140,15 @@ func (UnimplementedAgentServiceServer) Connect(grpc.BidiStreamingServer[AgentMes
 }
 func (UnimplementedAgentServiceServer) Execute(grpc.BidiStreamingServer[ExecutionAgentMessage, ExecutionHubMessage]) error {
 	return status.Error(codes.Unimplemented, "method Execute not implemented")
+}
+func (UnimplementedAgentServiceServer) DownloadUpdate(*UpdateArtifactRequest, grpc.ServerStreamingServer[UpdateArtifactChunk]) error {
+	return status.Error(codes.Unimplemented, "method DownloadUpdate not implemented")
+}
+func (UnimplementedAgentServiceServer) AuthorizeUpdate(context.Context, *UpdateArtifactRequest) (*UpdateAuthorization, error) {
+	return nil, status.Error(codes.Unimplemented, "method AuthorizeUpdate not implemented")
+}
+func (UnimplementedAgentServiceServer) BootstrapUpdate(context.Context, *UpdateBootstrapRequest) (*AgentUpdateRequest, error) {
+	return nil, status.Error(codes.Unimplemented, "method BootstrapUpdate not implemented")
 }
 func (UnimplementedAgentServiceServer) mustEmbedUnimplementedAgentServiceServer() {}
 func (UnimplementedAgentServiceServer) testEmbeddedByValue()                      {}
@@ -126,13 +185,69 @@ func _AgentService_Execute_Handler(srv interface{}, stream grpc.ServerStream) er
 // This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
 type AgentService_ExecuteServer = grpc.BidiStreamingServer[ExecutionAgentMessage, ExecutionHubMessage]
 
+func _AgentService_DownloadUpdate_Handler(srv interface{}, stream grpc.ServerStream) error {
+	m := new(UpdateArtifactRequest)
+	if err := stream.RecvMsg(m); err != nil {
+		return err
+	}
+	return srv.(AgentServiceServer).DownloadUpdate(m, &grpc.GenericServerStream[UpdateArtifactRequest, UpdateArtifactChunk]{ServerStream: stream})
+}
+
+// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
+type AgentService_DownloadUpdateServer = grpc.ServerStreamingServer[UpdateArtifactChunk]
+
+func _AgentService_AuthorizeUpdate_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(UpdateArtifactRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(AgentServiceServer).AuthorizeUpdate(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: AgentService_AuthorizeUpdate_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(AgentServiceServer).AuthorizeUpdate(ctx, req.(*UpdateArtifactRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _AgentService_BootstrapUpdate_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(UpdateBootstrapRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(AgentServiceServer).BootstrapUpdate(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: AgentService_BootstrapUpdate_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(AgentServiceServer).BootstrapUpdate(ctx, req.(*UpdateBootstrapRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // AgentService_ServiceDesc is the grpc.ServiceDesc for AgentService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
 var AgentService_ServiceDesc = grpc.ServiceDesc{
 	ServiceName: "veyport.v1.AgentService",
 	HandlerType: (*AgentServiceServer)(nil),
-	Methods:     []grpc.MethodDesc{},
+	Methods: []grpc.MethodDesc{
+		{
+			MethodName: "AuthorizeUpdate",
+			Handler:    _AgentService_AuthorizeUpdate_Handler,
+		},
+		{
+			MethodName: "BootstrapUpdate",
+			Handler:    _AgentService_BootstrapUpdate_Handler,
+		},
+	},
 	Streams: []grpc.StreamDesc{
 		{
 			StreamName:    "Connect",
@@ -145,6 +260,11 @@ var AgentService_ServiceDesc = grpc.ServiceDesc{
 			Handler:       _AgentService_Execute_Handler,
 			ServerStreams: true,
 			ClientStreams: true,
+		},
+		{
+			StreamName:    "DownloadUpdate",
+			Handler:       _AgentService_DownloadUpdate_Handler,
+			ServerStreams: true,
 		},
 	},
 	Metadata: "proto/veyport/v1/agent.proto",

@@ -124,6 +124,10 @@ func (s *Server) routes() http.Handler {
 	mux.Handle("GET /api/servers/{id}", loggingMiddleware(s.authMiddleware(auth.TokenTypeAccess, http.HandlerFunc(s.handleGetServer))))
 	mux.Handle("PUT /api/servers/{id}", loggingMiddleware(s.authMiddleware(auth.TokenTypeAccess, s.adminOnly(http.HandlerFunc(s.handleUpdateServer)))))
 	mux.Handle("DELETE /api/servers/{id}", loggingMiddleware(s.authMiddleware(auth.TokenTypeAccess, s.adminOnly(http.HandlerFunc(s.handleDeleteServer)))))
+	mux.Handle("GET /api/servers/{id}/agent-update", loggingMiddleware(s.authMiddleware(auth.TokenTypeAccess, s.interactiveOnly(s.adminOnly(http.HandlerFunc(s.handleAgentUpdateCheck))))))
+	mux.Handle("POST /api/servers/{id}/agent-update", loggingMiddleware(s.authMiddleware(auth.TokenTypeAccess, s.interactiveOnly(s.adminOnly(http.HandlerFunc(s.handleAgentUpdateStart))))))
+	mux.Handle("GET /api/servers/{id}/agent-update/status", loggingMiddleware(s.authMiddleware(auth.TokenTypeAccess, s.interactiveOnly(s.adminOnly(http.HandlerFunc(s.handleAgentUpdateStatus))))))
+	mux.Handle("POST /api/servers/{id}/agent-update/recovery", loggingMiddleware(s.authMiddleware(auth.TokenTypeAccess, s.interactiveOnly(s.adminOnly(http.HandlerFunc(s.handleAgentUpdateRecovery))))))
 
 	// File access path management (admin)
 	mux.Handle("GET /api/servers/{id}/paths", loggingMiddleware(s.authMiddleware(auth.TokenTypeAccess, s.adminOnly(http.HandlerFunc(s.handleListPaths)))))
@@ -163,6 +167,8 @@ func (s *Server) routes() http.Handler {
 	mux.Handle("GET /api/ssh/host-key", loggingMiddleware(s.authMiddleware(auth.TokenTypeAccess, http.HandlerFunc(s.handleSSHHostKey))))
 
 	// Public endpoints (no auth required)
+	mux.Handle("GET /install/metadata/{component}/{os}/{arch}", loggingMiddleware(http.HandlerFunc(s.handleDistributionMetadata)))
+	mux.Handle("GET /install/agent-update.sh", loggingMiddleware(http.HandlerFunc(s.handleAgentUpdateScript)))
 	mux.Handle("GET /install.sh", loggingMiddleware(http.HandlerFunc(s.handleInstallScript)))
 	mux.Handle("GET /install/cli.sh", loggingMiddleware(http.HandlerFunc(s.handleInstallCLIScript)))
 	mux.Handle("GET /install/{os}/{arch}", loggingMiddleware(http.HandlerFunc(s.handleAgentBinary)))

@@ -26,14 +26,15 @@ COPY proto/ proto/
 COPY hub/ hub/
 COPY --from=frontend /app/web/dist hub/web/dist
 ARG VERSION=dev
+ARG REVISION=unknown
 # Keep Go symbol metadata so exact-binary vulnerability scans can distinguish
 # installed vulnerable packages from unused module metadata.
-RUN cd hub && CGO_ENABLED=1 go build -ldflags="-X github.com/wyiu/veyport/hub/internal/server.Version=${VERSION}" -o /out/veyport ./cmd/veyport/
+RUN cd hub && CGO_ENABLED=1 go build -ldflags="-X github.com/wyiu/veyport/hub/internal/server.Version=${VERSION} -X github.com/wyiu/veyport/hub/internal/server.Revision=${REVISION}" -o /out/veyport ./cmd/veyport/
 
 # Build Agent (pure Go, cross-compile for linux/amd64 and linux/arm64)
 COPY agent/ agent/
-RUN cd agent && CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -ldflags="-X main.version=${VERSION}" -o /out/veyport-agent-linux-amd64 ./cmd/veyport-agent/
-RUN cd agent && CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -ldflags="-X main.version=${VERSION}" -o /out/veyport-agent-linux-arm64 ./cmd/veyport-agent/
+RUN cd agent && CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -ldflags="-X main.version=${VERSION} -X main.revision=${REVISION}" -o /out/veyport-agent-linux-amd64 ./cmd/veyport-agent/
+RUN cd agent && CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -ldflags="-X main.version=${VERSION} -X main.revision=${REVISION}" -o /out/veyport-agent-linux-arm64 ./cmd/veyport-agent/
 RUN sha256sum /out/veyport-agent-linux-amd64 | awk '{print $1}' > /out/veyport-agent-linux-amd64.sha256
 RUN sha256sum /out/veyport-agent-linux-arm64 | awk '{print $1}' > /out/veyport-agent-linux-arm64.sha256
 
@@ -41,10 +42,10 @@ RUN sha256sum /out/veyport-agent-linux-arm64 | awk '{print $1}' > /out/veyport-a
 # Mirrors `make build-vey` (see Makefile) so the hub can serve it from
 # --agent-bin-dir at GET /install/cli/{os}/{arch}.
 COPY cli/ cli/
-RUN cd cli && CGO_ENABLED=0 GOOS=linux  GOARCH=amd64 go build -ldflags="-X main.version=${VERSION}" -o /out/vey-linux-amd64 ./cmd/vey/
-RUN cd cli && CGO_ENABLED=0 GOOS=linux  GOARCH=arm64 go build -ldflags="-X main.version=${VERSION}" -o /out/vey-linux-arm64 ./cmd/vey/
-RUN cd cli && CGO_ENABLED=0 GOOS=darwin GOARCH=amd64 go build -ldflags="-X main.version=${VERSION}" -o /out/vey-darwin-amd64 ./cmd/vey/
-RUN cd cli && CGO_ENABLED=0 GOOS=darwin GOARCH=arm64 go build -ldflags="-X main.version=${VERSION}" -o /out/vey-darwin-arm64 ./cmd/vey/
+RUN cd cli && CGO_ENABLED=0 GOOS=linux  GOARCH=amd64 go build -ldflags="-X main.version=${VERSION} -X main.revision=${REVISION}" -o /out/vey-linux-amd64 ./cmd/vey/
+RUN cd cli && CGO_ENABLED=0 GOOS=linux  GOARCH=arm64 go build -ldflags="-X main.version=${VERSION} -X main.revision=${REVISION}" -o /out/vey-linux-arm64 ./cmd/vey/
+RUN cd cli && CGO_ENABLED=0 GOOS=darwin GOARCH=amd64 go build -ldflags="-X main.version=${VERSION} -X main.revision=${REVISION}" -o /out/vey-darwin-amd64 ./cmd/vey/
+RUN cd cli && CGO_ENABLED=0 GOOS=darwin GOARCH=arm64 go build -ldflags="-X main.version=${VERSION} -X main.revision=${REVISION}" -o /out/vey-darwin-arm64 ./cmd/vey/
 RUN for bin in vey-linux-amd64 vey-linux-arm64 vey-darwin-amd64 vey-darwin-arm64; do \
         sha256sum /out/$bin | awk '{print $1}' > /out/$bin.sha256; \
     done
@@ -57,6 +58,8 @@ RUN cd hub && for service in ingest export; do for arch in amd64 arm64; do \
 RUN for bin in /out/veyport /out/veyport-audit-*-linux-*; do \
       sha256sum "$bin" | awk '{print $1}' > "$bin.sha256"; \
     done
+
+RUN cd hub && go run ./cmd/artifact-manifest --directory /out --version "${VERSION}" --revision "${REVISION}"
 
 # Stage 3: Minimal runtime (Wolfi — glibc-based, fast CVE patching, no systemd/ncurses/tar)
 FROM ${RUNTIME_IMAGE} AS runtime-base
@@ -98,6 +101,7 @@ ARG REVISION=unknown
 LABEL org.opencontainers.image.version=${VERSION} org.opencontainers.image.revision=${REVISION}
 
 COPY --from=backend /out/veyport /app/veyport
+COPY --from=backend /out/artifact-manifest.json /app/artifact-manifest.json
 COPY --from=backend /out/veyport-agent-linux-amd64 /app/veyport-agent-linux-amd64
 COPY --from=backend /out/veyport-agent-linux-arm64 /app/veyport-agent-linux-arm64
 COPY --from=backend /out/veyport-agent-linux-amd64.sha256 /app/veyport-agent-linux-amd64.sha256

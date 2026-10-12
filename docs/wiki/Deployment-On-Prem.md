@@ -278,6 +278,13 @@ The install script will:
 5. Install and enable a systemd service
 6. Verify successful registration with the Hub
 
+Use this installer for initial enrollment or an explicitly planned replacement.
+Its existing-installation path unregisters and re-enrolls the agent; it is not
+the ordinary upgrade path. To preserve node identity and configuration while
+updating, use `vey servers update <node>` from a live interactive administrator
+CLI session. See [[Deployment#update-the-cli-and-enrolled-agents]] for supported
+platforms and recovery.
+
 ### Network requirements
 
 | Direction | Protocol | Port | Notes |

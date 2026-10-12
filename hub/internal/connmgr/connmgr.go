@@ -22,13 +22,15 @@ func (c *AgentConn) Done() <-chan struct{} { return c.done }
 func (c *AgentConn) Close()                { c.closeOnce.Do(func() { close(c.done) }) }
 
 type ConnManager struct {
-	mu      sync.RWMutex
-	streams map[string]*AgentConn
+	mu          sync.RWMutex
+	streams     map[string]*AgentConn
+	maintenance map[string]string
 }
 
 func New() *ConnManager {
 	return &ConnManager{
-		streams: make(map[string]*AgentConn),
+		streams:     make(map[string]*AgentConn),
+		maintenance: make(map[string]string),
 	}
 }
 
@@ -115,6 +117,9 @@ func (cm *ConnManager) SendToAgent(serverID string, msg *pb.HubMessage) error {
 	}
 	conn.SendMu.Lock()
 	defer conn.SendMu.Unlock()
+	if err := cm.checkMaintenance(conn.ServerID, msg); err != nil {
+		return err
+	}
 	return conn.Stream.Send(msg)
 }
 
@@ -151,6 +156,10 @@ func (cm *ConnManager) SendToConnectionChecked(ctx context.Context, conn *AgentC
 				return
 			}
 		}
+		if err := cm.checkMaintenance(conn.ServerID, msg); err != nil {
+			result <- err
+			return
+		}
 		result <- conn.Stream.Send(msg)
 	}()
 	select {
@@ -162,4 +171,61 @@ func (cm *ConnManager) SendToConnectionChecked(ctx context.Context, conn *AgentC
 	case <-conn.Done():
 		return fmt.Errorf("agent disconnected: %s", conn.ServerID)
 	}
+}
+
+// ReserveMaintenance shares the exact control send order with admissions.
+// The callback may acquire the policy/store lock; it must not send network data.
+func (cm *ConnManager) ReserveMaintenance(conn *AgentConn, id string, check func() error) error {
+	if conn == nil {
+		return fmt.Errorf("agent not connected")
+	}
+	conn.SendMu.Lock()
+	defer conn.SendMu.Unlock()
+	if cm.GetConn(conn.ServerID) != conn {
+		return fmt.Errorf("agent connection changed")
+	}
+	select {
+	case <-conn.Done():
+		return fmt.Errorf("agent disconnected")
+	default:
+	}
+	cm.mu.RLock()
+	active := cm.maintenance[conn.ServerID]
+	cm.mu.RUnlock()
+	if active != "" {
+		return fmt.Errorf("agent maintenance is already reserved")
+	}
+	if err := check(); err != nil {
+		return err
+	}
+	cm.SetMaintenance(conn.ServerID, id)
+	return nil
+}
+func (cm *ConnManager) SetMaintenance(node, id string) {
+	cm.mu.Lock()
+	defer cm.mu.Unlock()
+	if id == "" {
+		delete(cm.maintenance, node)
+	} else {
+		cm.maintenance[node] = id
+	}
+}
+func (cm *ConnManager) ReleaseMaintenance(node, id string) {
+	cm.mu.Lock()
+	defer cm.mu.Unlock()
+	if cm.maintenance[node] == id {
+		delete(cm.maintenance, node)
+	}
+}
+func (cm *ConnManager) checkMaintenance(node string, msg *pb.HubMessage) error {
+	if msg.GetTerminalOpenRequest() == nil && msg.GetExecutionPrepare() == nil && msg.GetExecutionAttach() == nil {
+		return nil
+	}
+	cm.mu.RLock()
+	active := cm.maintenance[node]
+	cm.mu.RUnlock()
+	if active != "" {
+		return fmt.Errorf("agent update maintenance is active")
+	}
+	return nil
 }

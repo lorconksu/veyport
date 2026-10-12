@@ -131,6 +131,8 @@ func (m *Manager) Open(sessionID string, cols, rows uint32, cwd, runAsUser strin
 
 	if err := m.register(sessionID, s); err != nil {
 		m.closeSession(s, true)
+		_ = cmd.Wait()
+		close(s.exited)
 		return err
 	}
 
@@ -306,6 +308,9 @@ func (m *Manager) readLoop(s *session) {
 func (m *Manager) waitLoop(s *session) {
 	err := s.cmd.Wait()
 	close(s.exited)
+	// Closing admission must remain busy until the owned process has actually
+	// exited, including the bounded SIGHUP/SIGKILL cleanup after disconnect.
+	m.budget.Release()
 
 	exitCode := int32(0)
 	exitErr := ""
@@ -345,11 +350,7 @@ func (m *Manager) Send(msg *pb.AgentMessage) bool {
 func (m *Manager) closeSession(s *session, signalProcess bool) {
 	s.closeOnce.Do(func() {
 		m.mu.Lock()
-		_, existed := m.sessions[s.id]
 		delete(m.sessions, s.id)
-		if existed {
-			m.budget.Release()
-		}
 		m.mu.Unlock()
 
 		if signalProcess && s.cmd.Process != nil {

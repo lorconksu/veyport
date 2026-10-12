@@ -14,6 +14,9 @@ import (
 // needs a hub (e.g. bare `vey --help`), and ErrNoHub shouldn't surface for
 // commands that never touch it.
 type Context struct {
+	// Version is the current executable's linker-stamped release version.
+	Version  string
+	Revision string
 	// HubURL is the effective, normalized hub base URL. Empty until
 	// RequireHub has resolved it successfully.
 	HubURL string
@@ -114,4 +117,5 @@ var Registry = map[string]func(ctx *Context) int{
 	"security": RunSecurity,
 	"ssh-cert": RunSSHCert,
 	"ssh":      RunSSH,
+	"update":   RunUpdate,
 }
