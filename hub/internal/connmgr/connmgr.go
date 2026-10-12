@@ -6,31 +6,42 @@ import (
 	"sync"
 	"time"
 
+	"github.com/google/uuid"
+
 	pb "github.com/wyiu/veyport/proto/veyport/v1"
 )
 
 type AgentConn struct {
-	ServerID  string
-	Stream    pb.AgentService_ConnectServer
-	LastSeen  time.Time
-	SendMu    sync.Mutex
-	done      chan struct{}
-	closeOnce sync.Once
+	ServerID     string
+	Stream       pb.AgentService_ConnectServer
+	LastSeen     time.Time
+	SendMu       sync.Mutex
+	GenerationID string
+	done         chan struct{}
+	closeOnce    sync.Once
 }
 
 func (c *AgentConn) Done() <-chan struct{} { return c.done }
 func (c *AgentConn) Close()                { c.closeOnce.Do(func() { close(c.done) }) }
 
 type ConnManager struct {
-	mu          sync.RWMutex
-	streams     map[string]*AgentConn
-	maintenance map[string]string
+	mu             sync.RWMutex
+	streams        map[string]*AgentConn
+	maintenance    map[string]string
+	activities     map[activityKey]*activityRecord
+	uncertain      map[string]bool
+	activityNodes  map[string]int
+	activityCounts map[*AgentConn]uint32
 }
 
 func New() *ConnManager {
 	return &ConnManager{
-		streams:     make(map[string]*AgentConn),
-		maintenance: make(map[string]string),
+		streams:        make(map[string]*AgentConn),
+		maintenance:    make(map[string]string),
+		activities:     make(map[activityKey]*activityRecord),
+		uncertain:      make(map[string]bool),
+		activityNodes:  make(map[string]int),
+		activityCounts: make(map[*AgentConn]uint32),
 	}
 }
 
@@ -41,12 +52,14 @@ func (cm *ConnManager) Register(serverID string, stream pb.AgentService_ConnectS
 	defer cm.mu.Unlock()
 	if previous := cm.streams[serverID]; previous != nil {
 		previous.Close()
+		cm.endActivitiesLocked(previous)
 	}
 	connection := &AgentConn{
-		ServerID: serverID,
-		Stream:   stream,
-		LastSeen: time.Now(),
-		done:     make(chan struct{}),
+		ServerID:     serverID,
+		Stream:       stream,
+		LastSeen:     time.Now(),
+		GenerationID: uuid.NewString(),
+		done:         make(chan struct{}),
 	}
 	cm.streams[serverID] = connection
 	return connection
@@ -57,6 +70,7 @@ func (cm *ConnManager) Unregister(serverID string) {
 	defer cm.mu.Unlock()
 	if conn := cm.streams[serverID]; conn != nil {
 		conn.Close()
+		cm.endActivitiesLocked(conn)
 	}
 	delete(cm.streams, serverID)
 }
@@ -69,6 +83,7 @@ func (cm *ConnManager) UnregisterIfCurrent(serverID string, stream pb.AgentServi
 		return false
 	}
 	conn.Close()
+	cm.endActivitiesLocked(conn)
 	delete(cm.streams, serverID)
 	return true
 }
@@ -117,10 +132,14 @@ func (cm *ConnManager) SendToAgent(serverID string, msg *pb.HubMessage) error {
 	}
 	conn.SendMu.Lock()
 	defer conn.SendMu.Unlock()
-	if err := cm.checkMaintenance(conn.ServerID, msg); err != nil {
+	if err := cm.prepareActivitySend(conn, msg); err != nil {
 		return err
 	}
-	return conn.Stream.Send(msg)
+	err := conn.Stream.Send(msg)
+	if err != nil {
+		cm.abandonMessage(conn, msg)
+	}
+	return err
 }
 
 // SendToAgentContext bounds a control send. Timeout closes the registered
@@ -156,11 +175,15 @@ func (cm *ConnManager) SendToConnectionChecked(ctx context.Context, conn *AgentC
 				return
 			}
 		}
-		if err := cm.checkMaintenance(conn.ServerID, msg); err != nil {
+		if err := cm.prepareActivitySend(conn, msg); err != nil {
 			result <- err
 			return
 		}
-		result <- conn.Stream.Send(msg)
+		err := conn.Stream.Send(msg)
+		if err != nil {
+			cm.abandonMessage(conn, msg)
+		}
+		result <- err
 	}()
 	select {
 	case err := <-result:
@@ -176,6 +199,11 @@ func (cm *ConnManager) SendToConnectionChecked(ctx context.Context, conn *AgentC
 // ReserveMaintenance shares the exact control send order with admissions.
 // The callback may acquire the policy/store lock; it must not send network data.
 func (cm *ConnManager) ReserveMaintenance(conn *AgentConn, id string, check func() error) error {
+	return cm.ReserveMaintenanceWithIdleAssertion(conn, id, false, check)
+}
+
+// Manual idle assertion may reconcile abandoned work only; live work always refuses.
+func (cm *ConnManager) ReserveMaintenanceWithIdleAssertion(conn *AgentConn, id string, manual bool, check func() error) error {
 	if conn == nil {
 		return fmt.Errorf("agent not connected")
 	}
@@ -195,10 +223,30 @@ func (cm *ConnManager) ReserveMaintenance(conn *AgentConn, id string, check func
 	if active != "" {
 		return fmt.Errorf("agent maintenance is already reserved")
 	}
+	if err := cm.activityIdle(conn, manual); err != nil {
+		return err
+	}
 	if err := check(); err != nil {
 		return err
 	}
-	cm.SetMaintenance(conn.ServerID, id)
+	// Register may replace this generation while the local callback persists
+	// authority. Commit freshness, idle state and maintenance together; never
+	// apply an old manual assertion to a replacement connection.
+	cm.mu.Lock()
+	defer cm.mu.Unlock()
+	if !cm.liveLocked(conn) {
+		return fmt.Errorf("agent connection changed during maintenance reservation")
+	}
+	if cm.maintenance[conn.ServerID] != "" {
+		return fmt.Errorf("agent maintenance is already reserved")
+	}
+	if err := cm.activityIdleLocked(conn, manual); err != nil {
+		return err
+	}
+	if manual {
+		cm.clearAbandonedActivitiesLocked(conn)
+	}
+	cm.maintenance[conn.ServerID] = id
 	return nil
 }
 func (cm *ConnManager) SetMaintenance(node, id string) {
@@ -216,16 +264,4 @@ func (cm *ConnManager) ReleaseMaintenance(node, id string) {
 	if cm.maintenance[node] == id {
 		delete(cm.maintenance, node)
 	}
-}
-func (cm *ConnManager) checkMaintenance(node string, msg *pb.HubMessage) error {
-	if msg.GetTerminalOpenRequest() == nil && msg.GetExecutionPrepare() == nil && msg.GetExecutionAttach() == nil {
-		return nil
-	}
-	cm.mu.RLock()
-	active := cm.maintenance[node]
-	cm.mu.RUnlock()
-	if active != "" {
-		return fmt.Errorf("agent update maintenance is active")
-	}
-	return nil
 }

@@ -59,6 +59,7 @@ message HubMessage {
     TerminalClose terminal_close = 21;
     ReEnrollApproved reenroll_approved = 22;
     ReEnrollDenied reenroll_denied = 23;
+    FileUploadAbort file_upload_abort = 24;
     ExecutionPrepare execution_prepare = 30;
     ExecutionAttachRequest execution_attach = 31;
     ExecutionCancel execution_cancel = 32;
@@ -155,6 +156,9 @@ message LogStreamChunk {
   string request_id = 1;
   bytes data = 2;
   int64 offset = 3;
+  // Terminal completion follows actual tail-worker exit and file closure.
+  bool done = 4;
+  string error = 5;
 }
 
 message LogStreamStop {
@@ -174,6 +178,9 @@ message FileUploadAck {
   bool success = 2;
   string error = 3;
 }
+
+// Cancel one partial upload without committing it. FileUploadAck follows cleanup.
+message FileUploadAbort { string request_id = 1; }
 
 // File deletion (dropzone)
 message FileDeleteRequest {
@@ -414,6 +421,9 @@ message UpdateCapabilities {
   string boot_id = 7;
   bool supported = 8;
   string reason = 9;
+  // Version1 counts complete file/upload/log lifetimes in the maintenance budget.
+  uint32 activity_quiescence_version = 10;
+  uint32 active_activities = 11;
 }
 message AgentUpdateRequest {
   string operation_id = 1;

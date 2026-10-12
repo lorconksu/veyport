@@ -17,11 +17,12 @@ import (
 	"github.com/wyiu/veyport/cli/internal/cmdutil"
 )
 
-const serversUpdateUsage = "usage: vey servers update <node> [--check | --status [--operation ID] | --acknowledge-recovery ID --verified-sha256 HASH]"
+const serversUpdateUsage = "usage: vey servers update <node> [--check | --status [--operation ID] | --bootstrap-idle-confirmed | --acknowledge-recovery ID --verified-sha256 HASH]"
 
 type serversUpdateOptions struct {
 	node                      string
 	check, status             bool
+	bootstrapIdleConfirmed    bool
 	operation, recovery, hash string
 }
 
@@ -40,6 +41,11 @@ func parseServersUpdate(args []string) (serversUpdateOptions, error) {
 				return fail()
 			}
 			o.status = true
+		case "--bootstrap-idle-confirmed":
+			if o.bootstrapIdleConfirmed {
+				return fail()
+			}
+			o.bootstrapIdleConfirmed = true
 		case "--operation", "--acknowledge-recovery", "--verified-sha256":
 			if i+1 >= len(args) {
 				return fail()
@@ -73,7 +79,7 @@ func parseServersUpdate(args []string) (serversUpdateOptions, error) {
 			o.node = args[i]
 		}
 	}
-	if strings.TrimSpace(o.node) == "" || o.check && o.status || o.operation != "" && !o.status || o.recovery != "" && (o.check || o.status) || ((o.recovery != "") != (o.hash != "")) {
+	if strings.TrimSpace(o.node) == "" || o.check && o.status || o.operation != "" && !o.status || o.recovery != "" && (o.check || o.status) || ((o.recovery != "") != (o.hash != "")) || o.bootstrapIdleConfirmed && (o.check || o.status || o.recovery != "") {
 		return fail()
 	}
 	return o, nil
@@ -131,6 +137,12 @@ func runServersUpdate(ctx *Context, args []string) int {
 	if err != nil {
 		return serversUpdateFinish(ctx, err)
 	}
+	if o.bootstrapIdleConfirmed && (!check.BootstrapRequired || !check.BootstrapIdleConfirmationRequired) {
+		return serversUpdateFinish(ctx, cmdutil.NewForbiddenError(errors.New("--bootstrap-idle-confirmed is only valid for the preserving manual bootstrap path")))
+	}
+	if !o.check && check.BootstrapRequired && check.BootstrapIdleConfirmationRequired && (!o.bootstrapIdleConfirmed || check.ConnectionID == "") {
+		return serversUpdateFinish(ctx, cmdutil.NewForbiddenError(errors.New("this agent cannot prove complete file/upload/log quiescence. Through direct SSH and operator coordination, close user file/log clients and agent sessions, let all work finish, verify the agent is idle, then run vey servers update "+updateShellQuote(o.node)+" --bootstrap-idle-confirmed. Known active work will still refuse")))
+	}
 	if !o.check && !check.BootstrapRequired && !check.Supported {
 		return serversUpdateFinish(ctx, cmdutil.NewForbiddenError(fmt.Errorf("agent update is unsupported: %s", check.Reason)))
 	}
@@ -154,9 +166,16 @@ func runServersUpdate(ctx *Context, args []string) int {
 	var start api.AgentUpdateStart
 	err = actx.Do(call, func(c *api.Client) error {
 		return c.Post(call, base, struct {
-			Version  string `json:"expected_version"`
-			Revision string `json:"expected_revision"`
-		}{check.Target.Version, check.Target.Revision}, &start)
+			Version                string `json:"expected_version"`
+			Revision               string `json:"expected_revision"`
+			BootstrapIdleConfirmed bool   `json:"bootstrap_idle_confirmed,omitempty"`
+			ExpectedConnectionID   string `json:"expected_connection_id,omitempty"`
+		}{check.Target.Version, check.Target.Revision, o.bootstrapIdleConfirmed, func() string {
+			if o.bootstrapIdleConfirmed {
+				return check.ConnectionID
+			}
+			return ""
+		}()}, &start)
 	})
 	if err != nil {
 		return serversUpdateFinish(ctx, err)

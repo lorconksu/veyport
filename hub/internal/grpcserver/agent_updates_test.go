@@ -72,7 +72,7 @@ func newUpdateFixture(t *testing.T) *updateFixture {
 		result.Arch = arch
 		return result, nil
 	})
-	c := &pb.UpdateCapabilities{ProtocolVersion: 1, Os: "linux", Arch: "amd64", Version: "0.1.0", Revision: "unknown", Sha256: strings.Repeat("a", 64), BootId: "original-boot-nonce", Supported: true}
+	c := &pb.UpdateCapabilities{ProtocolVersion: 1, Os: "linux", Arch: "amd64", Version: "0.1.0", Revision: "unknown", Sha256: strings.Repeat("a", 64), BootId: "original-boot-nonce", Supported: true, ActivityQuiescenceVersion: 1}
 	if err = u.ObserveCapabilities("node", stream, c); err != nil {
 		t.Fatal(err)
 	}
@@ -80,11 +80,18 @@ func newUpdateFixture(t *testing.T) *updateFixture {
 }
 func (f *updateFixture) start(t *testing.T) model.AgentUpdate {
 	t.Helper()
-	op, _, err := f.u.Start(context.Background(), "admin", "session", "node", f.target.Version, f.target.Revision)
+	op, _, err := f.u.Start(context.Background(), "admin", "session", "node", f.target.Version, f.target.Revision, f.idleAssertion())
 	if err != nil {
 		t.Fatal(err)
 	}
 	return op
+}
+func (f *updateFixture) idleAssertion() BootstrapIdleAssertion {
+	c := f.u.Capabilities("node")
+	if c == nil || c.Supported && c.ActivityQuiescenceVersion == 0 {
+		return BootstrapIdleAssertion{Confirmed: true, ConnectionID: f.h.connMgr.GetConn("node").GenerationID}
+	}
+	return BootstrapIdleAssertion{}
 }
 func enrolledUpdateContext(node string) context.Context {
 	now := time.Now()
@@ -114,7 +121,7 @@ func TestAgentUpdateCheckIsReadOnlyAndMaintenanceBlocksAdmissions(t *testing.T) 
 	if _, ok := f.u.terminals.Register("node", "active", "admin", ""); !ok {
 		t.Fatal("check reserved maintenance")
 	}
-	if _, _, err = f.u.Start(context.Background(), "admin", "session", "node", f.target.Version, f.target.Revision); err == nil {
+	if _, _, err = f.u.Start(context.Background(), "admin", "session", "node", f.target.Version, f.target.Revision, f.idleAssertion()); err == nil {
 		t.Fatal("updated busy node")
 	}
 	f.u.terminals.Remove("node", "active")
@@ -125,7 +132,7 @@ func TestAgentUpdateCheckIsReadOnlyAndMaintenanceBlocksAdmissions(t *testing.T) 
 	if err = f.h.connMgr.SendToAgent("node", &pb.HubMessage{Payload: &pb.HubMessage_TerminalOpenRequest{TerminalOpenRequest: &pb.TerminalOpenRequest{SessionId: "after"}}}); err == nil {
 		t.Fatal("maintenance control send admitted terminal")
 	}
-	if _, _, err = f.u.Start(context.Background(), "admin", "session", "node", f.target.Version, f.target.Revision); err == nil {
+	if _, _, err = f.u.Start(context.Background(), "admin", "session", "node", f.target.Version, f.target.Revision, f.idleAssertion()); err == nil {
 		t.Fatal("duplicate update admitted")
 	}
 	got, err := f.st.GetAgentUpdate(op.ID)
@@ -340,7 +347,7 @@ func TestAgentUpdateRestartDoesNotReissueInstallationAndAllowsExactRollback(t *t
 func TestAgentUpdateBootstrapIsOneUseNodeBoundRedactedAndRecoveryExplicit(t *testing.T) {
 	f := newUpdateFixture(t)
 	f.u.EndConnection("node", f.stream)
-	op, ticket, err := f.u.Start(context.Background(), "admin", "session", "node", f.target.Version, f.target.Revision)
+	op, ticket, err := f.u.Start(context.Background(), "admin", "session", "node", f.target.Version, f.target.Revision, f.idleAssertion())
 	if err != nil || ticket == "" || op.State != "bootstrap_required" {
 		t.Fatal("bootstrap not issued", err)
 	}
@@ -445,7 +452,7 @@ func TestAgentUpdateConcurrentNodesCannotExceedGlobalOperationLimit(t *testing.T
 		go func(i int) {
 			defer wg.Done()
 			id := fmt.Sprintf("node-%d", i)
-			if op, _, err := f.u.Start(context.Background(), "admin", "session", id, f.target.Version, f.target.Revision); err == nil {
+			if op, _, err := f.u.Start(context.Background(), "admin", "session", id, f.target.Version, f.target.Revision, f.idleAssertion()); err == nil {
 				accepted <- op.ID
 			}
 		}(i)
@@ -470,7 +477,7 @@ func TestAgentUpdateStartReplacesExpiredPreinstallButNeverRetriesAuthorizedInsta
 			if phase == "bootstrap_required" {
 				f.u.EndConnection("node", f.stream)
 			}
-			op, _, err := f.u.Start(context.Background(), "admin", "session", "node", f.target.Version, f.target.Revision)
+			op, _, err := f.u.Start(context.Background(), "admin", "session", "node", f.target.Version, f.target.Revision, f.idleAssertion())
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -478,7 +485,7 @@ func TestAgentUpdateStartReplacesExpiredPreinstallButNeverRetriesAuthorizedInsta
 				f.authorize(t, op)
 			}
 			f.u.now = func() time.Time { return time.UnixMilli(op.ExpiresAt + 1) }
-			second, _, err := f.u.Start(context.Background(), "admin", "session", "node", f.target.Version, f.target.Revision)
+			second, _, err := f.u.Start(context.Background(), "admin", "session", "node", f.target.Version, f.target.Revision, f.idleAssertion())
 			old, e := f.st.GetAgentUpdate(op.ID)
 			if e != nil {
 				t.Fatal(e)
@@ -505,7 +512,7 @@ func TestAgentUpdateDispatchAndAuditFailureReleaseOnlyPreinstallReservation(t *t
 					t.Fatal(err)
 				}
 			}
-			op, _, err := f.u.Start(context.Background(), "admin", "session", "node", f.target.Version, f.target.Revision)
+			op, _, err := f.u.Start(context.Background(), "admin", "session", "node", f.target.Version, f.target.Revision, f.idleAssertion())
 			if err == nil {
 				t.Fatal("failed dispatch/audit returned success")
 			}

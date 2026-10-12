@@ -25,11 +25,13 @@ type AgentUpdate struct {
 	UpdatedAt        int64         `json:"updated_at"`
 }
 type AgentUpdateCheck struct {
-	Supported         bool   `json:"supported"`
-	Reason            string `json:"reason,omitempty"`
-	UpdateAvailable   bool   `json:"update_available"`
-	BootstrapRequired bool   `json:"bootstrap_required"`
-	Current           *struct {
+	Supported                         bool   `json:"supported"`
+	Reason                            string `json:"reason,omitempty"`
+	UpdateAvailable                   bool   `json:"update_available"`
+	BootstrapRequired                 bool   `json:"bootstrap_required"`
+	BootstrapIdleConfirmationRequired bool   `json:"bootstrap_idle_confirmation_required"`
+	ConnectionID                      string `json:"connection_id"`
+	Current                           *struct {
 		Version  string `json:"version"`
 		Revision string `json:"revision"`
 		SHA256   string `json:"sha256"`

@@ -120,6 +120,14 @@ func sendExecution(stream pb.AgentService_ExecuteServer, s *ExecutionSession) er
 	case <-stream.Context().Done():
 		return stream.Context().Err()
 	}
+	// Dequeue can win a select against cancellation. Refuse stale authority
+	// before transferring protected input, then check again before Start.
+	s.mu.Lock()
+	err := s.validateLaunchLocked(stream.Context())
+	s.mu.Unlock()
+	if err != nil {
+		return err
+	}
 	if dispatch.script != nil {
 		if err := sendProtectedScript(stream, s, dispatch.script); err != nil {
 			return err
@@ -130,12 +138,20 @@ func sendExecution(stream pb.AgentService_ExecuteServer, s *ExecutionSession) er
 			return err
 		}
 	}
-	if s.Binding().ExpiresUnixMilli <= time.Now().UnixMilli() || (dispatch.start.AdmissionExpiresUnixMilli != 0 && dispatch.start.AdmissionExpiresUnixMilli <= time.Now().UnixMilli()) {
-		return status.Error(codes.DeadlineExceeded, "execution authority expired before launch")
-	}
 	s.mu.Lock()
-	s.startAttempted = true
+	err = s.validateLaunchLocked(stream.Context())
+	if err == nil && (s.prepared.Binding.ExpiresUnixMilli <= time.Now().UnixMilli() || (dispatch.start.AdmissionExpiresUnixMilli != 0 && dispatch.start.AdmissionExpiresUnixMilli <= time.Now().UnixMilli())) {
+		err = status.Error(codes.DeadlineExceeded, "execution authority expired before launch")
+	}
+	if err == nil {
+		// Cancel closes Done under this mutex, so a withdrawn session cannot
+		// become a Start attempt. Release it before any transport I/O.
+		s.startAttempted = true
+	}
 	s.mu.Unlock()
+	if err != nil {
+		return err
+	}
 	if err := stream.Send(&pb.ExecutionHubMessage{Payload: &pb.ExecutionHubMessage_Start{Start: dispatch.start}}); err != nil {
 		return err
 	}
@@ -160,6 +176,23 @@ func sendExecution(stream pb.AgentService_ExecuteServer, s *ExecutionSession) er
 			}
 		}
 	}
+}
+
+func (s *ExecutionSession) validateLaunchLocked(ctx context.Context) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	select {
+	case <-s.done:
+		return status.Error(codes.Canceled, "execution cancelled before launch")
+	case <-s.transportDone:
+		return status.Error(codes.Canceled, "execution transport completed before launch")
+	default:
+	}
+	if s.connection != s.registry.connections.GetConn(s.NodeID) || !executionConnectionOpen(s.connection) {
+		return status.Error(codes.Canceled, "execution control connection changed before launch")
+	}
+	return nil
 }
 
 func sendProtectedScript(stream pb.AgentService_ExecuteServer, s *ExecutionSession, reader io.Reader) error {

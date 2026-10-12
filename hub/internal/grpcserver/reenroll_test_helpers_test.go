@@ -6,6 +6,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/google/uuid"
+	"github.com/wyiu/veyport/hub/internal/model"
 	pb "github.com/wyiu/veyport/proto/veyport/v1"
 )
 
@@ -58,12 +60,19 @@ func handleApprovedReEnrollForTest(t *testing.T, h *Handler, stream *mockStream,
 	if err != nil {
 		t.Fatalf("waiting for re-enrollment session %s: %v", req.ServerId, err)
 	}
-	sess.approve <- reEnrollApproval{
+	approval := reEnrollApproval{
 		ephemeralPub: make([]byte, 32),
 		encryptedKek: make([]byte, 44),
 		challenge:    make([]byte, 32),
 		decidedBy:    "admin-1",
 	}
+	h.reEnrollMu.Lock()
+	sess.state = reEnrollAwaitingProof
+	sess.challenge = approval.challenge
+	sess.decidedBy = approval.decidedBy
+	sess.proofUntil = time.Now().Add(reEnrollProofTimeout)
+	sess.approve <- approval
+	h.reEnrollMu.Unlock()
 	select {
 	case got := <-results:
 		return got.approvalSent, got.err
@@ -88,7 +97,7 @@ func TestWaitForReEnrollSession_DelayedRegistration(t *testing.T) {
 		defer timer.Stop()
 		select {
 		case <-timer.C:
-			h.registerReEnroll("delayed", nil, "fingerprint")
+			registerReEnrollForTest(t, h, "delayed", nil, "fingerprint")
 		case <-ctx.Done():
 		}
 	}()
@@ -109,4 +118,43 @@ func TestWaitForReEnrollSession_MissingRegistration(t *testing.T) {
 	if sess != nil || !errors.Is(err, context.DeadlineExceeded) {
 		t.Fatalf("expected registration deadline, got session=%v, error=%v", sess, err)
 	}
+}
+
+// Fixture helpers bind the exact stream and durable request before exercising
+// an intended approved-proof state. They never authenticate a normal route.
+func registerReEnrollForTest(t *testing.T, h *Handler, serverID string, csr []byte, fingerprint string) *reEnrollSession {
+	t.Helper()
+	requestID := uuid.NewString()
+	if h.store != nil {
+		if err := h.store.CreateReEnrollRequest(&model.ReEnrollRequest{ID: requestID, ServerID: serverID, RequestedAt: "2026-10-12 00:00:00", Status: "pending", AnomalyFlags: "{}"}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	h.reEnrollMu.Lock()
+	defer h.reEnrollMu.Unlock()
+	return h.registerReEnrollLocked(serverID, csr, fingerprint, requestID, &mockStream{})
+}
+
+func reEnrollRequestIDForTest(h *Handler, serverID string) string {
+	if sess, ok := h.lookupReEnroll(serverID); ok {
+		return sess.requestID
+	}
+	return "missing-request"
+}
+
+func handleReEnrollProofForTest(t *testing.T, h *Handler, stream *mockStream, serverID string, proof *pb.ReEnrollProof) error {
+	t.Helper()
+	h.reEnrollMu.Lock()
+	if sess := h.reEnrollSessions[serverID]; sess != nil {
+		sess.stream, sess.state = stream, reEnrollAwaitingProof
+		sess.proofUntil = time.Now().Add(reEnrollProofTimeout)
+		if _, err := h.store.GetReEnrollRequest(sess.requestID); err != nil {
+			if err := h.store.CreateReEnrollRequest(&model.ReEnrollRequest{ID: sess.requestID, ServerID: serverID, RequestedAt: "2026-10-12 00:00:00", Status: "pending", AnomalyFlags: "{}"}); err != nil {
+				h.reEnrollMu.Unlock()
+				t.Fatal(err)
+			}
+		}
+	}
+	h.reEnrollMu.Unlock()
+	return h.handleReEnrollProof(stream, serverID, proof)
 }

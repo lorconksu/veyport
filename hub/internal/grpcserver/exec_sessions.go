@@ -317,8 +317,22 @@ func (es *ExecutionSessions) Attach(node string, a *pb.ExecutionAttachRequest) (
 	return s, nil
 }
 
-// Dispatch allows exactly one Start after the caller's live authorization check.
+// Dispatch queues one Standard Start for callers that already own the live
+// authorization boundary. The SSH gateway uses DispatchChecked instead.
 func (s *ExecutionSession) Dispatch() error {
+	return s.dispatchStandard(nil)
+}
+
+// DispatchChecked revalidates live authorization in the sole stream sender,
+// after queued dispatch work and immediately before the Start attempt.
+func (s *ExecutionSession) DispatchChecked(beforeStart func() error) error {
+	if beforeStart == nil {
+		return errors.New("execution launch authorization check is required")
+	}
+	return s.dispatchStandard(beforeStart)
+}
+
+func (s *ExecutionSession) dispatchStandard(beforeStart func() error) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.enhanced || s.prepared == nil || !s.ticketUsed || s.dispatch || s.connection != s.registry.connections.GetConn(s.NodeID) || !executionConnectionOpen(s.connection) || s.prepared.Binding.ExpiresUnixMilli <= time.Now().UnixMilli() {
@@ -331,7 +345,7 @@ func (s *ExecutionSession) Dispatch() error {
 	}
 	s.dispatch = true
 	p := s.prepared
-	s.start <- executionDispatch{start: &pb.ExecutionStart{Binding: proto.Clone(p.Binding).(*pb.ExecutionBinding), CommandSha256: append([]byte(nil), p.CommandSha256...), IdentitySha256: append([]byte(nil), p.Identity.IdentitySha256...), Limits: proto.Clone(p.Limits).(*pb.ExecutionLimits), PolicyVersion: "standard-v1"}}
+	s.start <- executionDispatch{start: &pb.ExecutionStart{Binding: proto.Clone(p.Binding).(*pb.ExecutionBinding), CommandSha256: append([]byte(nil), p.CommandSha256...), IdentitySha256: append([]byte(nil), p.Identity.IdentitySha256...), Limits: proto.Clone(p.Limits).(*pb.ExecutionLimits), PolicyVersion: "standard-v1"}, beforeStart: beforeStart}
 	return nil
 }
 
@@ -428,7 +442,12 @@ func (s *ExecutionSession) enqueueInput(ctx context.Context, msg *pb.ExecutionHu
 }
 
 func (s *ExecutionSession) Cancel(reason string) {
-	s.cancelOnce.Do(func() { s.mu.Lock(); s.reason = reason; s.mu.Unlock(); close(s.done) })
+	s.cancelOnce.Do(func() {
+		s.mu.Lock()
+		defer s.mu.Unlock()
+		s.reason = reason
+		close(s.done)
+	})
 }
 func (s *ExecutionSession) Reason() string { s.mu.Lock(); defer s.mu.Unlock(); return s.reason }
 

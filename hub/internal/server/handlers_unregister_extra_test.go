@@ -29,15 +29,14 @@ func TestHandleUnregisterServer_NilConnMgr(t *testing.T) {
 
 // TestHandleUploadFile_EmptyMultipart verifies that uploading with malformed multipart returns 413/400.
 func TestHandleUploadFile_EmptyMultipart(t *testing.T) {
-	s := testServer(t)
-	token := registerAndGetAdminToken(t, s)
+	s, token, serverID := testServerWithAgent(t)
 
 	// Build multipart form with empty body
 	body := &bytes.Buffer{}
 	writer := multipart.NewWriter(body)
 	writer.Close()
 
-	req := httptest.NewRequest("POST", testS1Upload, body)
+	req := httptest.NewRequest("POST", "/api/servers/"+serverID+"/upload", body)
 	req.Header.Set("Authorization", testBearerPrefix+token)
 	req.Header.Set(testContentType, writer.FormDataContentType())
 	rec := httptest.NewRecorder()

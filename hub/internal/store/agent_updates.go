@@ -70,14 +70,16 @@ func (s *Store) ActiveAgentUpdates() ([]model.AgentUpdate, error) {
 }
 
 type storedAgentUpdate struct {
-	Update             model.AgentUpdate     `json:"update"`
-	PreviousBootID     string                `json:"previous_boot_id"`
-	ObservedBootID     string                `json:"observed_boot_id"`
-	BootstrapArtifacts []model.AgentArtifact `json:"bootstrap_artifacts,omitempty"`
+	Update                 model.AgentUpdate     `json:"update"`
+	PreviousBootID         string                `json:"previous_boot_id"`
+	ObservedBootID         string                `json:"observed_boot_id"`
+	BootstrapArtifacts     []model.AgentArtifact `json:"bootstrap_artifacts,omitempty"`
+	BootstrapIdleConfirmed bool                  `json:"bootstrap_idle_confirmed,omitempty"`
+	BootstrapConnectionID  string                `json:"bootstrap_connection_id,omitempty"`
 }
 
 func marshalAgentUpdate(u model.AgentUpdate) ([]byte, error) {
-	return json.Marshal(storedAgentUpdate{u, u.PreviousBootID, u.ObservedBootID, u.BootstrapArtifacts})
+	return json.Marshal(storedAgentUpdate{u, u.PreviousBootID, u.ObservedBootID, u.BootstrapArtifacts, u.BootstrapIdleConfirmed, u.BootstrapConnectionID})
 }
 func unmarshalAgentUpdate(raw string, u *model.AgentUpdate) error {
 	var persisted storedAgentUpdate
@@ -89,6 +91,7 @@ func unmarshalAgentUpdate(raw string, u *model.AgentUpdate) error {
 	u.ActorID, u.SessionID, u.TicketHash = actor, sid, ticket
 	u.PreviousBootID, u.ObservedBootID = persisted.PreviousBootID, persisted.ObservedBootID
 	u.BootstrapArtifacts = persisted.BootstrapArtifacts
+	u.BootstrapIdleConfirmed, u.BootstrapConnectionID = persisted.BootstrapIdleConfirmed, persisted.BootstrapConnectionID
 	return nil
 }
 func (s *Store) AgentUpdateByTicketHash(hash string) (model.AgentUpdate, error) {

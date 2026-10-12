@@ -106,7 +106,7 @@ func TestReleaseKEK_ProofTimeout(t *testing.T) {
 		t.Fatalf("SetNodeTransportPub: %v", err)
 	}
 
-	sess := h.registerReEnroll("srv-proof-timeout", testRegistrationCSR(t), "fp-t")
+	sess := registerReEnrollForTest(t, h, "srv-proof-timeout", testRegistrationCSR(t), "fp-t")
 
 	// Goroutine: drain from sess.approve (simulates stream goroutine receiving the
 	// approval) but never write to sess.result — this causes the proof timeout.
@@ -120,7 +120,7 @@ func TestReleaseKEK_ProofTimeout(t *testing.T) {
 	reEnrollProofTimeout = 20 * time.Millisecond
 	t.Cleanup(func() { reEnrollProofTimeout = orig })
 
-	releaseErr := h.ReleaseKEK("srv-proof-timeout", "admin-1")
+	releaseErr := h.ReleaseKEK("srv-proof-timeout", reEnrollRequestIDForTest(h, "srv-proof-timeout"), "admin-1")
 	if releaseErr == nil {
 		t.Fatal("expected error from ReleaseKEK on proof timeout")
 	}
@@ -201,10 +201,10 @@ func TestReleaseKEK_GetNodeCryptoReturnsErr(t *testing.T) {
 	h.storageKey = "test-storage-key-0123456789"
 
 	// Register a session — but do NOT create the server, so GetNodeCrypto returns ErrNoRows.
-	_ = h.registerReEnroll("srv-ghost-crypto", testRegistrationCSR(t), "fp-x")
+	_ = registerReEnrollForTest(t, h, "srv-ghost-crypto", testRegistrationCSR(t), "fp-x")
 	_ = st // silence unused warning — st is kept open for the test cleanup
 
-	releaseErr := h.ReleaseKEK("srv-ghost-crypto", "admin-1")
+	releaseErr := h.ReleaseKEK("srv-ghost-crypto", reEnrollRequestIDForTest(h, "srv-ghost-crypto"), "admin-1")
 	if releaseErr == nil {
 		t.Fatal("expected error from ReleaseKEK when server does not exist")
 	}
@@ -246,7 +246,7 @@ func TestHandleReEnrollProof_SendCertFails(t *testing.T) {
 		t.Fatalf("random challenge: %v", err)
 	}
 
-	sess := h.registerReEnroll("srv-cert-send-fails", testRegistrationCSR(t), "fp-x")
+	sess := registerReEnrollForTest(t, h, "srv-cert-send-fails", testRegistrationCSR(t), "fp-x")
 	sess.requestID = "re-cert-send-fails-1"
 	sess.challenge = challenge
 	sess.decidedBy = "admin-5"
@@ -258,7 +258,7 @@ func TestHandleReEnrollProof_SendCertFails(t *testing.T) {
 	stream := &mockStream{ctx: context.Background(), sendErr: sendErr}
 	proof := &pb.ReEnrollProof{Signature: sig}
 
-	returnedErr := h.handleReEnrollProof(stream, "srv-cert-send-fails", proof)
+	returnedErr := handleReEnrollProofForTest(t, h, stream, "srv-cert-send-fails", proof)
 	if returnedErr == nil {
 		t.Fatal("expected error from handleReEnrollProof when stream.Send fails")
 	}
@@ -293,9 +293,9 @@ func TestReleaseKEK_OpenKEKFails(t *testing.T) {
 	}
 
 	// Register a live session.
-	_ = h.registerReEnroll("srv-bad-kek", testRegistrationCSR(t), "fp-x")
+	_ = registerReEnrollForTest(t, h, "srv-bad-kek", testRegistrationCSR(t), "fp-x")
 
-	err := h.ReleaseKEK("srv-bad-kek", "admin-1")
+	err := h.ReleaseKEK("srv-bad-kek", reEnrollRequestIDForTest(h, "srv-bad-kek"), "admin-1")
 	if err == nil {
 		t.Fatal("expected error from ReleaseKEK when KEK decryption fails")
 	}
@@ -326,12 +326,12 @@ func TestReleaseKEK_GetNodeTransportPubFails(t *testing.T) {
 	}
 
 	// Register a session before deleting the server.
-	_ = h.registerReEnroll("srv-no-tp-row", testRegistrationCSR(t), "fp-x")
+	_ = registerReEnrollForTest(t, h, "srv-no-tp-row", testRegistrationCSR(t), "fp-x")
 
 	// Close the store so GetNodeTransportPub returns an error.
 	st.Close()
 
-	releaseErr := h.ReleaseKEK("srv-no-tp-row", "admin-1")
+	releaseErr := h.ReleaseKEK("srv-no-tp-row", reEnrollRequestIDForTest(h, "srv-no-tp-row"), "admin-1")
 	if releaseErr == nil {
 		t.Fatal("expected error when store is closed")
 	}

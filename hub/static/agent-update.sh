@@ -15,6 +15,7 @@ while (($#)); do
   esac
 done
 [[ ${EUID} -eq 0 ]] || fail 'run this command with sudo'
+printf 'Manual bootstrap precondition: user file/log clients and agent sessions must be closed, all admitted work finished, and idle verified through direct SSH. The one-use Hub ticket records the administrator idle assertion.\n'
 hub_expression='^https://[][a-zA-Z0-9._:-]+/?$'
 [[ "$hub" =~ $hub_expression ]] || fail 'an explicit configured HTTPS Hub is required'
 hub="${hub%/}"

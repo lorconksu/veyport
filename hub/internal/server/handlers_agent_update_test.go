@@ -58,7 +58,7 @@ func TestAgentUpdateRESTCheckStartStatusAndClosedInput(t *testing.T) {
 			t.Fatal("accepted ambiguous/arbitrary payload", body, rec.Code, rec.Body.String())
 		}
 	}
-	rec = updateHTTPRequest(s, token, node, "POST", "", `{"expected_version":"2.0.1-prototype.4","expected_revision":"`+strings.Repeat("f", 40)+`"}`)
+	rec = updateHTTPRequest(s, token, node, "POST", "", `{"expected_version":"2.0.1-prototype.4","expected_revision":"`+strings.Repeat("f", 40)+`","bootstrap_idle_confirmed":true,"expected_connection_id":"`+s.connMgr.GetConn(node).GenerationID+`"}`)
 	if rec.Code != http.StatusAccepted {
 		t.Fatal(rec.Code, rec.Body.String())
 	}

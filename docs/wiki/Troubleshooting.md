@@ -246,11 +246,10 @@ Terminal endpoints require an interactive browser session. CLI-created API token
 
 ### `vey ssh node -- command` is refused or hangs while sending input
 
-Command mode uses prototype version `2.0.50-prototype.4` and immutable tag
-`prototype-ssh-passthrough.4`; stable `2.0.49` does not include it. Before
-installing, check the [prototype release page](https://github.com/lorconksu/veyport/releases/tag/prototype-ssh-passthrough.4)
-for an actually published release and its required assets. If they are absent,
-the prototype is unavailable. Use the Hub and CLI from the same source revision
+This branch targets version `2.0.50-prototype.5` and immutable tag
+`prototype-ssh-passthrough.5`; stable `2.0.49` does not include it. Before
+installing, verify publication, required assets, and qualification on the
+[release page](https://github.com/lorconksu/veyport/releases). Use the Hub and CLI from the same source revision
 with a compatible agent. Resolve the immutable OCI tag to its published digest
 and verify the source revision. Use one command string after `--`, for example
 `vey ssh web01 -- 'uname -a'`; do not
@@ -348,7 +347,10 @@ To recover:
 2. Review any **"possible clone"** warning (if present, verify you recognise this hardware before approving).
 3. Click **Approve** and enter your TOTP code when prompted.
 
-The node reconnects automatically within seconds, keeping the same serverID, history, and path assignments.
+Approval releases a proof exchange for that specific request and bootstrap
+stream. The node proves its identity, receives a new certificate, closes the
+bootstrap stream, and reconnects with verified mTLS before normal agent work is
+accepted. It keeps the same server ID, history, and path assignments.
 
 If the approval returns **"re-register required,"** the node predates transport-key support. Re-register it once using the standard install command; the node will have transport-key support after that and can use re-enrollment in future.
 
@@ -373,8 +375,10 @@ arm64 under the root-owned `/usr/local/bin/veyport-agent` systemd service, and
 belong to a Standard installation that has never enrolled Enhanced or other
 governance controls. These checks cannot be bypassed by re-enrolling the node.
 
-The Hub refuses a busy node while a terminal, command, or other agent work is
-active. Let it become idle, then run `vey servers update NODE --check` again.
+The Hub tracks file list/read/delete, uploads, log tails, PTY, execution, and
+other agent work until the operation itself completes. A caller cancellation or
+timeout does not release an active remote operation; maintenance also blocks new
+work. Let all work finish and run `vey servers update NODE --check` again.
 The update uses only the exact Hub artifact and does not accept a URL or target
 version. If the wait ends before the new agent reports its exact artifact
 identity, inspect the operation before retrying:
@@ -384,9 +388,14 @@ vey servers update NODE --status
 vey servers update NODE --status --operation OPERATION_ID
 ```
 
-For `bootstrap_required`, connect to the node through direct SSH and run the
-one-use command printed by `vey servers update NODE`. The ticket expires after
-120 seconds. Confirm that the HTTPS host in that command matches the Hub host
+For `bootstrap_required` with `bootstrap_idle_confirmation_required`, close file
+and log clients and agent sessions, let all work finish, and verify the node is
+idle through direct SSH. Then rerun
+`vey servers update NODE --bootstrap-idle-confirmed`. This is an explicit
+operator assertion bound by the Hub to the checked `connection_id`; it is not an
+automatic detector, and known active work still refuses the update. The CLI then
+prints the one-use command. Its ticket expires after 120 seconds. Confirm that
+the HTTPS host in that command matches the Hub host
 configured for the agent's mTLS connection; the ports can differ. The bootstrap
 preserves the node identity and configuration and does not use the normal
 registration installer. If the outcome is `unknown`, do not retry blindly. For

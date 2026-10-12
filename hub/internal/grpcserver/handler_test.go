@@ -10,6 +10,7 @@ import (
 	"crypto/x509/pkix"
 	"net"
 	"testing"
+	"time"
 
 	"github.com/wyiu/veyport/hub/internal/ca"
 	"google.golang.org/grpc/credentials"
@@ -107,13 +108,8 @@ func testRegistrationCSR(t *testing.T) []byte {
 func streamWithPeer(serverID, ip string) *mockStream {
 	p := &peer.Peer{Addr: &net.TCPAddr{IP: net.ParseIP(ip), Port: 1234}}
 	if serverID != "" {
-		p.AuthInfo = credentials.TLSInfo{
-			State: tls.ConnectionState{
-				PeerCertificates: []*x509.Certificate{
-					{Subject: pkix.Name{CommonName: serverID}},
-				},
-			},
-		}
+		cert := &x509.Certificate{Subject: pkix.Name{CommonName: serverID}, NotBefore: time.Now().Add(-time.Hour), NotAfter: time.Now().Add(time.Hour)}
+		p.AuthInfo = credentials.TLSInfo{State: tls.ConnectionState{PeerCertificates: []*x509.Certificate{cert}, VerifiedChains: [][]*x509.Certificate{{cert}}}}
 	}
 	return &mockStream{ctx: peer.NewContext(context.Background(), p)}
 }
@@ -276,6 +272,7 @@ func TestRouteAgentMessage_FileListResponse(t *testing.T) {
 	h.pending = NewPendingRequests()
 
 	stream := &mockStream{}
+	h.connMgr.Register("s1", stream)
 	reqID := "req-file-list-1"
 	ch := h.pending.Register("s1", reqID)
 
@@ -304,6 +301,7 @@ func TestRouteAgentMessage_FileReadResponse(t *testing.T) {
 	h.pending = NewPendingRequests()
 
 	stream := &mockStream{}
+	h.connMgr.Register("s1", stream)
 	reqID := "req-file-read-1"
 	ch := h.pending.Register("s1", reqID)
 
@@ -332,6 +330,7 @@ func TestRouteAgentMessage_FileUploadAck(t *testing.T) {
 	h.pending = NewPendingRequests()
 
 	stream := &mockStream{}
+	h.connMgr.Register("s1", stream)
 	reqID := "req-upload-1"
 	ch := h.pending.Register("s1", reqID)
 
@@ -360,6 +359,7 @@ func TestRouteAgentMessage_FileDeleteResponse(t *testing.T) {
 	h.pending = NewPendingRequests()
 
 	stream := &mockStream{}
+	h.connMgr.Register("s1", stream)
 	reqID := "req-delete-1"
 	ch := h.pending.Register("s1", reqID)
 
@@ -416,6 +416,7 @@ func TestRouteAgentMessage_LogStreamChunk(t *testing.T) {
 	h.logSessions = NewLogSessions()
 
 	stream := &mockStream{}
+	h.connMgr.Register("s1", stream)
 	reqID := "req-log-1"
 	ch := h.logSessions.Register("s1", reqID)
 

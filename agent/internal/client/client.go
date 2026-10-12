@@ -137,7 +137,6 @@ func New(cfg Config) *Client {
 		backoff:            1 * time.Second,
 		maxBackoff:         60 * time.Second,
 		tailSessions:       make(map[string]chan struct{}),
-		dropzone:           dropzone.New(dropzoneDir),
 		certStore:          certs.NewStore(certDir),
 		certDir:            certDir,
 		unregisterToken:    cfg.UnregisterToken,
@@ -151,6 +150,7 @@ func New(cfg Config) *Client {
 		budget:             sessionlimit.New(8),
 		updateWorkers:      make(chan struct{}, 1),
 	}
+	c.dropzone = dropzone.NewWithBudget(dropzoneDir, c.budget)
 	c.updates = update.New(cfg.AgentVersion, cfg.AgentRevision, cfg.ConfigPath, certDir, cfg.Insecure, c.budget)
 	return c
 }
@@ -456,41 +456,41 @@ func (c *Client) resolveAgentPath(path string) string {
 	return path
 }
 
-func (c *Client) handleFileListRequest(p *pb.HubMessage_FileListRequest, sendCh chan<- *pb.AgentMessage) {
+func (c *Client) handleFileListRequest(p *pb.HubMessage_FileListRequest, sendCh chan<- *pb.AgentMessage, contexts ...context.Context) {
 	resolvedPath := c.resolveAgentPath(p.FileListRequest.Path)
 	if !isPathAllowed(resolvedPath, c.allowedPaths) {
-		sendCh <- &pb.AgentMessage{
+		sendResponse(responseContext(contexts), sendCh, &pb.AgentMessage{
 			Payload: &pb.AgentMessage_FileListResponse{
 				FileListResponse: &pb.FileListResponse{
 					RequestId: p.FileListRequest.RequestId,
 					Error:     "path not in allowed list",
 				},
 			},
-		}
+		})
 		return
 	}
 	resp, _ := filebrowser.ListDir(resolvedPath)
 	if resp != nil {
 		resp.RequestId = p.FileListRequest.RequestId
-		sendCh <- &pb.AgentMessage{
+		sendResponse(responseContext(contexts), sendCh, &pb.AgentMessage{
 			Payload: &pb.AgentMessage_FileListResponse{
 				FileListResponse: resp,
 			},
-		}
+		})
 	}
 }
 
-func (c *Client) handleFileReadRequest(p *pb.HubMessage_FileReadRequest, sendCh chan<- *pb.AgentMessage) {
+func (c *Client) handleFileReadRequest(p *pb.HubMessage_FileReadRequest, sendCh chan<- *pb.AgentMessage, contexts ...context.Context) {
 	resolvedPath := c.resolveAgentPath(p.FileReadRequest.Path)
 	if !isPathAllowed(resolvedPath, c.allowedPaths) {
-		sendCh <- &pb.AgentMessage{
+		sendResponse(responseContext(contexts), sendCh, &pb.AgentMessage{
 			Payload: &pb.AgentMessage_FileReadResponse{
 				FileReadResponse: &pb.FileReadResponse{
 					RequestId: p.FileReadRequest.RequestId,
 					Error:     "path not in allowed list",
 				},
 			},
-		}
+		})
 		return
 	}
 	resp, _ := filebrowser.ReadFile(
@@ -500,11 +500,11 @@ func (c *Client) handleFileReadRequest(p *pb.HubMessage_FileReadRequest, sendCh 
 	)
 	if resp != nil {
 		resp.RequestId = p.FileReadRequest.RequestId
-		sendCh <- &pb.AgentMessage{
+		sendResponse(responseContext(contexts), sendCh, &pb.AgentMessage{
 			Payload: &pb.AgentMessage_FileReadResponse{
 				FileReadResponse: resp,
 			},
-		}
+		})
 	}
 }
 
@@ -555,19 +555,19 @@ func (c *Client) handleLogStreamStop(p *pb.HubMessage_LogStreamStop) {
 	}
 }
 
-func (c *Client) handleFileUploadRequest(p *pb.HubMessage_FileUploadRequest, sendCh chan<- *pb.AgentMessage) {
+func (c *Client) handleFileUploadRequest(p *pb.HubMessage_FileUploadRequest, sendCh chan<- *pb.AgentMessage, contexts ...context.Context) {
 	req := p.FileUploadRequest
 	ack := c.dropzone.HandleChunk(req.RequestId, req.Filename, req.Chunk, req.Done)
 	if ack != nil {
-		sendCh <- &pb.AgentMessage{
+		sendResponse(responseContext(contexts), sendCh, &pb.AgentMessage{
 			Payload: &pb.AgentMessage_FileUploadAck{
 				FileUploadAck: ack,
 			},
-		}
+		})
 	}
 }
 
-func (c *Client) handleFileDeleteRequest(p *pb.HubMessage_FileDeleteRequest, sendCh chan<- *pb.AgentMessage) {
+func (c *Client) handleFileDeleteRequest(p *pb.HubMessage_FileDeleteRequest, sendCh chan<- *pb.AgentMessage, contexts ...context.Context) {
 	req := p.FileDeleteRequest
 	resp := &pb.FileDeleteResponse{RequestId: req.RequestId}
 	// Only allow deletion from dropzone directory
@@ -583,11 +583,11 @@ func (c *Client) handleFileDeleteRequest(p *pb.HubMessage_FileDeleteRequest, sen
 	} else {
 		resp.Success = true
 	}
-	sendCh <- &pb.AgentMessage{
+	sendResponse(responseContext(contexts), sendCh, &pb.AgentMessage{
 		Payload: &pb.AgentMessage_FileDeleteResponse{
 			FileDeleteResponse: resp,
 		},
-	}
+	})
 }
 
 func (c *Client) handleUnregisterRequest(p *pb.HubMessage_UnregisterRequest, sendCh chan<- *pb.AgentMessage) {
@@ -1170,16 +1170,28 @@ func (c *Client) startRecvLoop(stream pb.AgentService_ConnectClient, sendCh chan
 
 	return c.startRecvLoopForSession(stream, sendCh, terminalMgr, nil)
 }
-func (c *Client) startRecvLoopForSession(stream pb.AgentService_ConnectClient, sendCh chan<- *pb.AgentMessage, terminalMgr *terminal.Manager, executions *executionTransport) <-chan error {
+func (c *Client) startRecvLoopForSession(stream pb.AgentService_ConnectClient, sendCh chan<- *pb.AgentMessage, terminalMgr *terminal.Manager, executions *executionTransport, sessions ...*activitySession) <-chan error {
+	var activities *activitySession
+	if len(sessions) != 0 {
+		activities = sessions[0]
+	} else if c.budget != nil && c.dropzone != nil {
+		activities = newActivitySession(stream.Context(), c, sendCh)
+	}
 	recvErr := make(chan error, 1)
 	go func() {
 		for {
 			msg, err := stream.Recv()
 			if err == io.EOF {
+				if activities != nil {
+					activities.close()
+				}
 				recvErr <- nil
 				return
 			}
 			if err != nil {
+				if activities != nil {
+					activities.close()
+				}
 				recvErr <- err
 				return
 			}
@@ -1187,6 +1199,9 @@ func (c *Client) startRecvLoopForSession(stream pb.AgentService_ConnectClient, s
 				continue
 			}
 			if c.handleUpdateMessage(stream.Context(), msg, sendCh) {
+				continue
+			}
+			if activities != nil && activities.dispatch(msg) {
 				continue
 			}
 			// File upload chunks must be sequential to avoid race conditions.
@@ -1238,6 +1253,8 @@ func (c *Client) connectAndStream(ctx context.Context) error {
 		c.budget = budget
 	}
 	terminalMgr := terminal.NewManagerWithBudget(sendCh, budget)
+	activities := newActivitySession(ctx, c, sendCh, cancelSession)
+	defer activities.close()
 	executions, execErr := c.newExecutionTransport(ctx, budget, sendCh, cancelSession)
 	if execErr != nil {
 		log.Printf("noninteractive execution unavailable: %v", execErr)
@@ -1255,43 +1272,22 @@ func (c *Client) connectAndStream(ctx context.Context) error {
 	}
 	if c.updates != nil {
 		c.updates.Recheck()
-		if err := stream.Send(&pb.AgentMessage{Payload: &pb.AgentMessage_UpdateCapabilities{UpdateCapabilities: c.updates.Capabilities()}}); err != nil {
-			terminalMgr.CloseAll()
-			if executions != nil {
-				executions.close()
-			}
-			return fmt.Errorf("send update capabilities: %w", err)
-		}
-		if status := c.updates.ResumeStatus(); status != nil {
-			if err := stream.Send(&pb.AgentMessage{Payload: &pb.AgentMessage_UpdateStatus{UpdateStatus: status}}); err != nil {
-				terminalMgr.CloseAll()
-				if executions != nil {
-					executions.close()
-				}
-				return fmt.Errorf("send update recovery status: %w", err)
-			}
-		}
+		status := c.updates.ResumeStatus()
+		activities.observe(c.updates.Capabilities(), status)
 	}
 	defer func() {
-		c.tailSessionsMu.Lock()
-		for id, stop := range c.tailSessions {
-			close(stop)
-			delete(c.tailSessions, id)
-		}
-		c.tailSessionsMu.Unlock()
 		cancelSession()
 		terminalMgr.CloseAll()
 		if executions != nil {
 			executions.close()
 		}
-		c.dropzone.Cleanup()
 	}()
 	hbStop := make(chan struct{})
 	defer close(hbStop)
 	go heartbeat.StartTicker(c.serverID, 10*time.Second, sendCh, hbStop)
 	go c.startCertRenewalTicker(10*time.Second, sendCh, hbStop)
 
-	recvErr := c.startRecvLoopForSession(stream, sendCh, terminalMgr, executions)
+	recvErr := c.startRecvLoopForSession(stream, sendCh, terminalMgr, executions, activities)
 
 	for {
 		select {

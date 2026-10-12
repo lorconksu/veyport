@@ -418,8 +418,7 @@ bootstrap approver may not have global security-list permissions. The request
 must be opened by its exact authorized request ID; nomination does not grant broad
 policy, principal-list, or security capabilities. See [[Audit Logs]] for execution
 investigation and controlled original access, and [[API Reference]] for the
-request/API contract. The prototype identity is version `2.0.50-prototype.4` and
-immutable tag `prototype-ssh-passthrough.4`; stable `2.0.49` does not include this
-feature. Before installing, check the [prototype release page](https://github.com/lorconksu/veyport/releases/tag/prototype-ssh-passthrough.4)
-for an actually published release and its required assets. If they are absent,
-the prototype is unavailable.
+request/API contract. This branch targets version `2.0.50-prototype.5` and
+immutable tag `prototype-ssh-passthrough.5`; stable `2.0.49` does not include this
+feature. Before installing, verify publication, required assets, and qualification
+on the [release page](https://github.com/lorconksu/veyport/releases).

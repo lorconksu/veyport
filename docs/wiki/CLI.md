@@ -78,13 +78,11 @@ deadline is 120 seconds.
 Stdout, stderr, and remote exit results remain separate. Exit 255 can represent
 either a remote result or an SSH transport failure; commands are not automatically
 retried after uncertain outcomes. Remote output is not part of the command
-evidence. The prototype identity is version `2.0.50-prototype.4` and immutable
-tag `prototype-ssh-passthrough.4`; stable `2.0.49` does not include this
-feature. Before installing, check the [prototype release page](https://github.com/lorconksu/veyport/releases/tag/prototype-ssh-passthrough.4)
-for an actually published release and its required assets. If they are absent,
-the prototype is unavailable. Use the Hub and CLI from the same source revision
-with a compatible agent. Resolve the immutable OCI tag to its published digest
-and verify the source revision.
+evidence. This branch targets version `2.0.50-prototype.5` and immutable tag
+`prototype-ssh-passthrough.5`; stable `2.0.49` does not include this feature.
+Verify publication, required assets, and qualification on the [release page](https://github.com/lorconksu/veyport/releases) before installing. Use the Hub and CLI from
+the same source revision with a compatible agent. Resolve the immutable OCI tag
+to its published digest and verify the source revision.
 
 ## Install
 
@@ -325,18 +323,22 @@ rollback behavior.
 ### `vey servers update <node>`
 
 Checks and updates an enrolled Linux systemd agent from the exact artifact
-served by the configured Hub. Requires a live interactive administrator
-session; API tokens are refused. The node must have a valid mTLS enrollment,
-use the root-owned `/usr/local/bin/veyport-agent` service, and belong to a
-Standard installation that has never enrolled Enhanced or other governance
-controls. Busy nodes and unsupported platforms or configurations are refused.
-See [[Deployment]] for the preserving bootstrap, operation status, and recovery
-steps.
+served by the configured Hub. `vey update` continues to update this local CLI.
+Agent updates require a live interactive administrator session; API tokens are
+refused. The node must have a valid mTLS enrollment, use the root-owned
+`/usr/local/bin/veyport-agent` service, and belong to a Standard installation
+that has never enrolled Enhanced or other governance controls. The updater
+tracks file list/read/delete, upload, log-tail, PTY, and execution work through
+their full lifetimes. New work is blocked while maintenance is reserved. A
+cancelled request, CLI timeout, or disconnected caller does not prove remote
+work has finished. See [[Deployment]] for the preserving bootstrap, operation
+status, and recovery steps.
 
 Supported forms are:
 
 ```text
 vey servers update <node> [--check]
+vey servers update <node> --bootstrap-idle-confirmed
 vey servers update <node> --status [--operation <id>]
 vey servers update <node> --acknowledge-recovery <id> --verified-sha256 <hash>
 ```

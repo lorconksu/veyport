@@ -41,11 +41,10 @@ That means:
 - Interactive PTY and no-PTY execution use separate protocol paths; command streams have bounded buffering and explicit results.
 - Authorization and target identity are checked live. A valid SSH certificate does not grant terminal or command authority by itself.
 
-The prototype identity is version `2.0.50-prototype.4` and immutable tag
-`prototype-ssh-passthrough.4`; stable `2.0.49` does not include this feature.
-Before installing, check the [prototype release page](https://github.com/lorconksu/veyport/releases/tag/prototype-ssh-passthrough.4)
-for an actually published release and its required assets. If they are absent,
-the prototype is unavailable. Use the Hub and CLI from the same source revision
+This branch targets version `2.0.50-prototype.5` and immutable tag
+`prototype-ssh-passthrough.5`; stable `2.0.49` does not include this feature.
+Before installing, verify publication, required assets, and qualification on
+the [release page](https://github.com/lorconksu/veyport/releases). Use the Hub and CLI from the same source revision
 with a compatible agent. Resolve the immutable OCI tag to its published digest
 and verify the source revision.
 Standard command execution has no external audit-service dependency. Enhanced
@@ -131,8 +130,11 @@ Stdout and stderr are separate binary-safe streams; their individual order is
 preserved, with no promised total ordering between the two. Remote exit status is
 propagated through SSH. Exit 255 can overlap a remote exit with a native SSH
 failure. Do not automatically retry after a connection loss or uncertain result.
-Browser refresh does not cancel a command; cancellation or live authority
-revocation does. Remote output is not archived as command evidence.
+Browser refresh does not cancel a command. Cancellation and live authority
+revocation are checked by the Hub's execution lifecycle, including immediately
+before `Start` is sent; they cannot recall a start already sent or guarantee
+that a process already starting has stopped. Remote output is not archived as
+command evidence.
 
 Enhanced evidence covers the exact submitted command or complete supported
 script, not every internal shell instruction, downloaded program, child-process

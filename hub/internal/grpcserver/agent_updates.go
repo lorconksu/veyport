@@ -37,24 +37,27 @@ type updateCapability struct {
 	value      *pb.UpdateCapabilities
 }
 type AgentUpdates struct {
-	mu           sync.Mutex
-	store        *store.Store
-	connections  *connmgr.ConnManager
-	terminals    *TerminalSessions
-	capabilities map[string]updateCapability
-	origins      map[string]*connmgr.AgentConn
-	resolve      func(string, string) (model.AgentArtifact, error)
-	now          func() time.Time
-	transfers    chan struct{}
+	mu            sync.Mutex
+	observationMu sync.Mutex
+	store         *store.Store
+	connections   *connmgr.ConnManager
+	terminals     *TerminalSessions
+	capabilities  map[string]updateCapability
+	origins       map[string]*connmgr.AgentConn
+	resolve       func(string, string) (model.AgentArtifact, error)
+	now           func() time.Time
+	transfers     chan struct{}
 }
 type AgentUpdateCheck struct {
-	Supported         bool                   `json:"supported"`
-	Reason            string                 `json:"reason,omitempty"`
-	Current           *pb.UpdateCapabilities `json:"current,omitempty"`
-	Target            model.AgentArtifact    `json:"target"`
-	UpdateAvailable   bool                   `json:"update_available"`
-	BootstrapRequired bool                   `json:"bootstrap_required"`
-	Operation         *model.AgentUpdate     `json:"operation,omitempty"`
+	Supported                         bool                   `json:"supported"`
+	Reason                            string                 `json:"reason,omitempty"`
+	Current                           *pb.UpdateCapabilities `json:"current,omitempty"`
+	Target                            model.AgentArtifact    `json:"target"`
+	UpdateAvailable                   bool                   `json:"update_available"`
+	BootstrapRequired                 bool                   `json:"bootstrap_required"`
+	ConnectionID                      string                 `json:"connection_id"`
+	BootstrapIdleConfirmationRequired bool                   `json:"bootstrap_idle_confirmation_required"`
+	Operation                         *model.AgentUpdate     `json:"operation,omitempty"`
 }
 
 // One transfer/helper per node and at most32 active operations. No background
@@ -149,14 +152,43 @@ func (u *AgentUpdates) Capabilities(node string) *pb.UpdateCapabilities {
 	return proto.Clone(c.value).(*pb.UpdateCapabilities)
 }
 func (u *AgentUpdates) ObserveCapabilities(node string, stream pb.AgentService_ConnectServer, c *pb.UpdateCapabilities) error {
+	// Serialize identity persistence and cache publication across generations.
+	// A new observation cannot commit before an older blocked version write,
+	// and a stale observer is refused before touching SQL.
+	u.observationMu.Lock()
+	defer u.observationMu.Unlock()
 	conn := u.connections.GetConn(node)
 	if conn == nil || conn.Stream != stream || !validUpdateCapabilities(c) {
 		return errors.New("invalid update capability or stale agent connection")
 	}
+	if c.ActivityQuiescenceVersion != 0 {
+		if err := u.connections.ObserveActivityCapabilities(node, stream, c.ActivityQuiescenceVersion, c.ActiveActivities); err != nil {
+			return err
+		}
+	}
 	u.mu.Lock()
+	previous := u.capabilities[node]
+	unchangedVersion := previous.connection == conn && previous.value != nil && previous.value.Version == c.Version
+	u.mu.Unlock()
+	if !unchangedVersion {
+		if err := u.store.UpdateObservedAgentVersion(node, c.Version); err != nil {
+			return err
+		}
+	}
+	u.mu.Lock()
+	if u.connections.GetConn(node) != conn {
+		u.mu.Unlock()
+		return errors.New("agent connection changed during capability observation")
+	}
+	select {
+	case <-conn.Done():
+		u.mu.Unlock()
+		return errors.New("agent connection closed during capability observation")
+	default:
+	}
 	u.capabilities[node] = updateCapability{conn, proto.Clone(c).(*pb.UpdateCapabilities)}
 	u.mu.Unlock()
-	return u.store.UpdateObservedAgentVersion(node, c.Version)
+	return nil
 }
 func (u *AgentUpdates) EndConnection(node string, stream pb.AgentService_ConnectServer) {
 	u.mu.Lock()
@@ -184,9 +216,11 @@ func (u *AgentUpdates) Check(actor, sid, node string) (AgentUpdateCheck, error) 
 	if err != nil {
 		return result, err
 	}
-	if u.connections.GetConn(node) == nil {
+	conn := u.connections.GetConn(node)
+	if conn == nil {
 		return result, errors.New("agent is not connected")
 	}
+	result.ConnectionID = conn.GenerationID
 	c := u.Capabilities(node)
 	arch := "amd64"
 	if c != nil {
@@ -206,6 +240,7 @@ func (u *AgentUpdates) Check(actor, sid, node string) (AgentUpdateCheck, error) 
 		result.Target.Bytes = 0
 		result.Target.BinaryPath = ""
 		result.BootstrapRequired = true
+		result.BootstrapIdleConfirmationRequired = true
 		result.Reason = "agent requires a preserving one-time bootstrap"
 	} else if !c.Supported {
 		result.Reason = c.Reason
@@ -220,8 +255,14 @@ func (u *AgentUpdates) Check(actor, sid, node string) (AgentUpdateCheck, error) 
 		if cmp == 0 && a.SHA256 != c.Sha256 {
 			return result, errors.New("same-version agent artifact differs; automatic replacement refused")
 		}
-		result.Supported = true
-		result.UpdateAvailable = cmp > 0
+		if c.ActivityQuiescenceVersion != 1 {
+			result.BootstrapRequired = true
+			result.BootstrapIdleConfirmationRequired = true
+			result.Reason = "agent cannot prove complete file/upload/log quiescence; preserving manual bootstrap requires direct SSH idle confirmation"
+		} else {
+			result.Supported = true
+			result.UpdateAvailable = cmp > 0
+		}
 	}
 	if op, e := u.store.LatestAgentUpdate(node); e == nil {
 		result.Operation = &op
@@ -230,13 +271,33 @@ func (u *AgentUpdates) Check(actor, sid, node string) (AgentUpdateCheck, error) 
 	}
 	return result, nil
 }
-func (u *AgentUpdates) Start(ctx context.Context, actor, sid, node, expectedVersion, expectedRevision string) (model.AgentUpdate, string, error) {
+
+type BootstrapIdleAssertion struct {
+	Confirmed    bool
+	ConnectionID string
+}
+
+func (u *AgentUpdates) Start(ctx context.Context, actor, sid, node, expectedVersion, expectedRevision string, assertions ...BootstrapIdleAssertion) (model.AgentUpdate, string, error) {
 	check, err := u.Check(actor, sid, node)
 	if err != nil {
 		return model.AgentUpdate{}, "", err
 	}
 	if check.Target.Version != expectedVersion || check.Target.Revision != expectedRevision {
 		return model.AgentUpdate{}, "", errors.New("Hub artifact changed; check again")
+	}
+	var idle BootstrapIdleAssertion
+	if len(assertions) > 1 {
+		return model.AgentUpdate{}, "", errors.New("invalid bootstrap idle assertion")
+	}
+	if len(assertions) == 1 {
+		idle = assertions[0]
+	}
+	if check.BootstrapRequired {
+		if !idle.Confirmed || idle.ConnectionID == "" || idle.ConnectionID != check.ConnectionID {
+			return model.AgentUpdate{}, "", errors.New("preserving bootstrap requires explicit bootstrap_idle_confirmed and the freshly checked connection_id after direct SSH verification of idle agent work")
+		}
+	} else if idle.Confirmed || idle.ConnectionID != "" {
+		return model.AgentUpdate{}, "", errors.New("bootstrap idle assertion is only valid for the preserving manual path")
 	}
 	if check.Operation != nil && !check.Operation.Terminal() && u.now().UnixMilli() >= check.Operation.ExpiresAt {
 		if _, err = u.Status(node, check.Operation.ID); err != nil {
@@ -247,8 +308,13 @@ func (u *AgentUpdates) Start(ctx context.Context, actor, sid, node, expectedVers
 		return model.AgentUpdate{}, "", errors.New("agent update unavailable: " + check.Reason)
 	}
 	conn := u.connections.GetConn(node)
+	if check.BootstrapRequired && (conn == nil || conn.GenerationID != idle.ConnectionID) {
+		return model.AgentUpdate{}, "", errors.New("bootstrap checked connection changed")
+	}
 	now := u.now().UnixMilli()
 	op := model.AgentUpdate{ID: uuid.NewString(), NodeID: node, ActorID: actor, SessionID: sid, State: "requested", Target: check.Target, ExpiresAt: now + 120000, CreatedAt: now, UpdatedAt: now}
+	op.BootstrapIdleConfirmed = idle.Confirmed
+	op.BootstrapConnectionID = idle.ConnectionID
 	ticket := ""
 	if check.Current != nil {
 		op.PreviousVersion = check.Current.Version
@@ -272,10 +338,15 @@ func (u *AgentUpdates) Start(ctx context.Context, actor, sid, node, expectedVers
 		op.TicketHash = store.SecurityDigest([]byte(ticket))
 		op.State = "bootstrap_required"
 	}
-	err = u.connections.ReserveMaintenance(conn, op.ID, func() error {
+	err = u.connections.ReserveMaintenanceWithIdleAssertion(conn, op.ID, idle.Confirmed, func() error {
 		return u.store.WithInteractivePolicy(func() error {
 			if err := u.authorize(actor, sid, node); err != nil {
 				return err
+			}
+			if idle.Confirmed {
+				if err := u.audit(op, "manual_bootstrap_idle_confirmed"); err != nil {
+					return err
+				}
 			}
 			u.mu.Lock()
 			if len(u.origins) >= 32 {
@@ -301,6 +372,9 @@ func (u *AgentUpdates) Start(ctx context.Context, actor, sid, node, expectedVers
 		})
 	})
 	if err != nil {
+		// A reconnect can invalidate the exact generation after the callback
+		// persisted this preinstall operation. Retire only its own authority.
+		u.finishBeforeInstall(op, "maintenance reservation refused before installation: "+err.Error())
 		return op, "", err
 	}
 	if err = u.audit(op, "requested"); err != nil {
@@ -347,9 +421,12 @@ func (u *AgentUpdates) release(op model.AgentUpdate) {
 }
 func (u *AgentUpdates) audit(op model.AgentUpdate, state string) error {
 	detail := fmt.Sprintf("operation=%s requester=%s state=%s version=%s revision=%s sha256=%s", op.ID, op.ActorID, state, op.Target.Version, op.Target.Revision, op.Target.SHA256)
+	if op.BootstrapIdleConfirmed {
+		detail += " bootstrap_idle_confirmed=true connection=" + op.BootstrapConnectionID
+	}
 	actorType := "agent"
 	var userID *string
-	if state == "requested" || state == "installation_authorized" || state == "recovery_acknowledged" {
+	if state == "requested" || state == "installation_authorized" || state == "recovery_acknowledged" || state == "manual_bootstrap_idle_confirmed" {
 		actorType = "user"
 		userID = &op.ActorID
 	}
@@ -568,11 +645,14 @@ func (h *Handler) BootstrapUpdate(ctx context.Context, req *pb.UpdateBootstrapRe
 	}
 	hash := sha256.Sum256([]byte(req.Ticket))
 	op, err := u.store.AgentUpdateByTicketHash(hex.EncodeToString(hash[:]))
-	if err != nil || op.NodeID != node {
+	if err != nil || op.NodeID != node || !op.BootstrapIdleConfirmed {
 		return nil, status.Error(codes.PermissionDenied, "bootstrap ticket unavailable")
 	}
 	if err = u.validateOperation(op); err != nil {
 		return nil, status.Error(codes.PermissionDenied, err.Error())
+	}
+	if conn := u.connections.GetConn(node); conn == nil || conn.GenerationID != op.BootstrapConnectionID {
+		return nil, status.Error(codes.PermissionDenied, "bootstrap checked connection changed")
 	}
 	c := req.Capabilities
 	a, err := u.artifact(c.Os, c.Arch)

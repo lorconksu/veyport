@@ -84,11 +84,10 @@ Replace `latest` with a specific version tag to avoid unexpected upgrades:
 image: yiucloud/veyport:vX.Y.Z
 ```
 
-The command-passthrough prototype identity is version `2.0.50-prototype.4` and
-immutable tag `prototype-ssh-passthrough.4`; stable `2.0.49` does not include
-this feature. Before installing, check the [prototype release page](https://github.com/lorconksu/veyport/releases/tag/prototype-ssh-passthrough.4)
-for an actually published release and its required assets. If they are absent,
-the prototype is unavailable. Use the reviewed Hub artifact from that release,
+This branch targets version `2.0.50-prototype.5` and immutable tag
+`prototype-ssh-passthrough.5`; stable `2.0.49` does not include this feature.
+Before installing, verify publication, required assets, and qualification on
+the [release page](https://github.com/lorconksu/veyport/releases). Use the reviewed Hub artifact from that release,
 resolve the immutable OCI tag to its published digest, and verify its source
 revision. Use a CLI from the same source revision with a compatible agent.
 Follow the owner-approved staging and rollback procedure.
@@ -657,25 +656,41 @@ vey servers update web01
 ```
 
 `--check` reports the current agent capability, Hub artifact, version, checksum,
-and whether a one-time bootstrap is required. Applying an update reserves the
-node for maintenance and refuses while a terminal, command, or other agent work
-is active. It does not interrupt that work. The command waits up to 150 seconds
-for the agent to reconnect, report the exact target version, revision, and
-checksum, and durably confirm the update. If it cannot confirm that evidence,
-inspect the durable operation before retrying:
+and whether a one-time bootstrap is required. Current agents report file-list,
+file-read, file-delete, upload, and log-tail activity to the Hub. These records
+stay active until the agent reports actual completion, even if the HTTP caller
+cancels or times out. Maintenance is refused while any known or unconfirmed
+activity, terminal, command, or other agent work remains; once reserved, new
+work is blocked. A client timeout, cancellation, disconnect, or stop request is
+not proof that remote work finished. Let the work complete and verify the node
+is idle before retrying. The command waits up to 150 seconds for the agent to
+reconnect, report the exact target version, revision, and checksum, and durably
+confirm the update. If it cannot confirm that evidence, inspect the durable
+operation before retrying:
 
 ```bash
 vey servers update web01 --status
 vey servers update web01 --status --operation <operation-id>
 ```
 
-For an older enrolled agent that does not yet advertise update support, the CLI
-returns a one-use bootstrap command tied to that node, Hub artifact, and
-operation. Run that printed command through direct SSH on the node within 120
-seconds. It uses a short-lived ticket, verifies the Hub's artifact, checks that
-the node is idle, and updates the existing installation while preserving its
-mTLS identity, `agent.conf`, service configuration, and node ID. It does not
-re-enroll or use a registration token. The HTTPS Hub hostname in the bootstrap
+For an older enrolled agent, or an agent that cannot report complete file/log
+quiescence (including prototype.4 agents), the CLI's check response includes
+`bootstrap_required`, `bootstrap_idle_confirmation_required`, and the current
+`connection_id`. Close file and log clients, agent sessions, and other work;
+allow it to finish and verify the node is idle over direct SSH. Then run
+`vey servers update web01 --bootstrap-idle-confirmed`. This flag is the
+operator's explicit idle assertion, not an automatic activity detector. The CLI
+binds it to the exact checked connection generation; the Hub rejects a changed
+connection and still refuses known active work. If you cannot confirm idle,
+leave the node untouched and check again later.
+
+After that assertion, the CLI returns a one-use bootstrap command tied to the
+node, Hub artifact, and operation. Run that printed command through direct SSH
+on the node within 120 seconds. It uses a short-lived ticket, verifies the Hub's
+artifact, independently checks the service cgroup is idle, and updates the
+existing installation while preserving its mTLS identity, `agent.conf`, service
+configuration, and node ID. It does not re-enroll or use a registration token.
+The HTTPS Hub hostname in the bootstrap
 command must match the Hub hostname configured for the agent's mTLS connection;
 the HTTPS and gRPC ports may differ. The command format is:
 

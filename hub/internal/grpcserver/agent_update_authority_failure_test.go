@@ -94,7 +94,7 @@ func TestAgentUpdateBootstrapPinsActualPlatformAndRejectsChangedOrExpiredArtifac
 				}
 				return f.target, nil
 			})
-			op, ticket, err := f.u.Start(context.Background(), "admin", "session", "node", f.target.Version, f.target.Revision)
+			op, ticket, err := f.u.Start(context.Background(), "admin", "session", "node", f.target.Version, f.target.Revision, f.idleAssertion())
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -261,7 +261,7 @@ func TestAgentUpdateControlCapabilityRequiresEnrolledMTLSAndCurrentGeneration(t 
 	}
 	invalid := proto.Clone(f.old).(*pb.UpdateCapabilities)
 	invalid.BootId = "short"
-	if err := f.h.routeAgentMessage("node", verified, &pb.AgentMessage{Payload: &pb.AgentMessage_UpdateCapabilities{UpdateCapabilities: invalid}}); err != nil {
+	if err := f.h.routeAgentMessage("node", verified, &pb.AgentMessage{Payload: &pb.AgentMessage_UpdateCapabilities{UpdateCapabilities: invalid}}); err == nil {
 		t.Fatal(err)
 	}
 	if c := f.u.Capabilities("node"); c == nil || c.BootId != f.old.BootId {

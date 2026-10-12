@@ -2511,7 +2511,7 @@ curl https://hub.example.com/api/servers/reenroll/pending \
 
 ### POST /api/servers/{id}/reenroll/approve
 
-Approve a pending re-enrollment request. Requires the approving admin's current TOTP code (step-up authentication). On success, the hub encrypts the KEK to the node's X25519 transport public key, issues a new client certificate for the same serverID, and the node reconnects automatically.
+Approve one exact pending re-enrollment request. Requires the approving admin's current TOTP code (step-up authentication). Approval releases a challenge exchange on that request's originating bootstrap stream; the Hub issues a new certificate only after verifying the node's proof on that stream. The bootstrap stream cannot enter normal routing. The node reconnects using the issued certificate, which the Hub verifies before accepting normal agent traffic.
 
 | Property | Value |
 |---|---|
@@ -3156,23 +3156,37 @@ version.
 Read-only capability and artifact check. The response includes the current
 agent capabilities when available, the Hub's target artifact, whether an
 update is available, whether a preserving bootstrap is required, and the latest
-operation when present. Returns a conflict or forbidden error when the node or
-installation is not eligible.
+operation when present. For agents that cannot report file/log quiescence, it
+also returns `bootstrap_idle_confirmation_required: true` and the exact current
+`connection_id`. Native activity covers file list/read/delete, upload, and log
+tail requests through actual completion. A request timeout or cancellation does
+not prove that its agent work ended. Returns a conflict or forbidden error when
+the node or installation is not eligible.
 
 #### POST /api/servers/{id}/agent-update
 
 Starts one update after rechecking the current Hub artifact and administrator
-authority. The body accepts only the exact checked version and source revision:
+authority. The body accepts the exact checked version and source revision. The
+manual preserving-bootstrap path additionally accepts an operator idle
+assertion bound to the connection ID from the preceding check:
 
 ```json
 {
   "expected_version": "<version>",
-  "expected_revision": "<40-or-64-character-source-revision>"
+  "expected_revision": "<40-or-64-character-source-revision>",
+  "bootstrap_idle_confirmed": true,
+  "expected_connection_id": "<connection-id-from-check>"
 }
 ```
 
 For a supported agent, the Hub reserves the node for maintenance and dispatches
-the update. For an older enrolled agent, the response includes a node-bound,
+the update. The Hub refuses while known or unconfirmed work is active and blocks
+new work once maintenance is reserved. For an older enrolled agent or one that
+cannot prove complete file/log quiescence, the operator must close file/log
+clients and sessions, allow work to finish, verify idle over direct SSH, and
+explicitly assert it. The Hub binds that assertion to the exact connection
+generation and still refuses known active work; it is not an automatic detector
+or a native quiescence override. The response then includes a node-bound,
 single-use bootstrap ticket with a 120-second expiry. The ticket is returned
 only in the start response; status responses never include it. The CLI renders
 the preserving direct-SSH command. Do not log or reuse the ticket.

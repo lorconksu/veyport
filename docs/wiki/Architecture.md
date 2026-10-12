@@ -53,6 +53,14 @@ ordered, and no total ordering between stdout and stderr is promised. The remote
 result is propagated, but exit 255 can overlap SSH transport failure. Commands
 are not automatically retried after uncertain outcomes.
 
+For both Standard and Enhanced execution, the Hub's sole agent-stream sender
+rechecks live policy, actor/access authority, and target-node state immediately
+before sending `Start`. It also checks cancellation and that the captured agent
+control connection is still current after queued dispatch. This closes stale
+queued-start paths, while a start already sent cannot be recalled; a subsequent
+send or connection failure can leave the remote outcome unknown. Revocation is
+not an atomic guarantee that a process already starting or running has stopped.
+
 No per-command run-as option exists. The agent resolves user, UID/GID/groups,
 home, shell, and working directory before admission. Local admins inherit the
 agent service identity (root with the standard installer); mapped directory
@@ -90,11 +98,10 @@ closed when it cannot reconcile. Replacing the trusted binary, runtime trust
 configuration, or installation identity as root/hypervisor administrator is
 outside the tested application boundary, as are host destruction and key loss.
 See the repo-local [audit lab notes](../../infra/audit-lab/README.md) for
-qualification detail. The prototype identity is version `2.0.50-prototype.4`
-and immutable tag `prototype-ssh-passthrough.4`; stable `2.0.49` does not
-include this feature. Before installing, check the [prototype release page](https://github.com/lorconksu/veyport/releases/tag/prototype-ssh-passthrough.4)
-for an actually published release and its required assets. If they are absent,
-the prototype is unavailable. Use the Hub and CLI from the same source revision
+qualification detail. This branch targets version `2.0.50-prototype.5` and
+immutable tag `prototype-ssh-passthrough.5`; stable `2.0.49` does not include
+this feature. Before installing, verify publication, required assets, and
+qualification on the [release page](https://github.com/lorconksu/veyport/releases). Use the Hub and CLI from the same source revision
 with a compatible agent. Resolve the immutable OCI tag to its published digest
 and verify the source revision.
 
@@ -149,8 +156,8 @@ terminal registry. See [[SSH Gateway]] and [[Settings]].
 
 Agent connections are authenticated with **Hub-issued short-lived client certificates** over mTLS. The certificate lifetime is configurable (`agent_cert_validity_hours`, default 24 h).
 
-- **Auto-renewal (adopt-live):** While an agent is connected, it requests renewal approximately 6 hours before expiry. The Hub issues a fresh certificate over the existing stream — no reconnect required — and the agent adopts it immediately.
-- **Expiry recovery (re-enrollment):** If a node is offline longer than its certificate lifetime the cert expires and the node cannot reconnect on its own. The agent phones home over the CA-pinned bootstrap channel and requests re-enrollment. The hub places the node in **Pending re-enrollment** state until an admin approves.
+- **Auto-renewal (adopt-live):** While an agent is connected, it requests renewal approximately 6 hours before expiry. The Hub independently verifies the current authenticated mTLS peer and connection before issuing a fresh certificate over that stream; bootstrap approval is not a renewal credential.
+- **Expiry recovery (re-enrollment):** If a node is offline longer than its certificate lifetime the cert expires and the node cannot reconnect on its own. The agent requests re-enrollment over a separate CA-pinned bootstrap stream. The Hub places the exact request in **Pending re-enrollment** until an admin approves. Approval permits one challenge proof on that same stream; only after verifying the node's proof does the Hub return a certificate. The bootstrap stream remains bootstrap-only and closes; the agent then reconnects with the new certificate, which the Hub verifies before normal routing.
 
 ### Re-Enrollment Flow
 
@@ -159,9 +166,8 @@ Agent connections are authenticated with **Hub-issued short-lived client certifi
 ### Re-Enrollment Security Model
 
 - Each node holds a durable **ed25519 identity key** sealed at rest under a **KEK** held by the Hub, plus an **X25519 transport key** (public half registered at enrollment; private half stored unsealed at `node_transport.key`).
-- On approval the Hub encrypts the KEK to the node's X25519 transport public key — sealed box: **X25519 ECDH + HKDF-SHA256 + AES-256-GCM**, context string `veyport-kek-transport-v1`. The raw KEK never crosses the network unencrypted.
-- After decrypting the KEK, the agent unlocks its identity key and signs a hub-issued challenge (ed25519); the Hub verifies the signature before completing re-issuance.
-- The **human TOTP step-up** is the primary control gate. A caller without a valid admin TOTP code cannot trigger a KEK release, and cannot produce a valid ed25519 proof without the node's own private key.
+- Approval releases only the challenge exchange for that exact request and originating bootstrap stream. The agent proves possession of its durable ed25519 identity key by signing the Hub challenge; the Hub verifies the proof before issuing the new certificate. Approval alone does not issue a certificate or authorize normal agent traffic.
+- The **human TOTP step-up** is required to approve; it does not replace the node's proof.
 - **Clone detection:** the node's DMI system UUID recorded at enrollment is compared on each re-enrollment request; a mismatch surfaces as a **"possible clone"** warning at approval time (advisory, not a hard block).
 - **Legacy nodes** enrolled before transport keys were introduced cannot re-enroll; the approval endpoint returns **409 "re-register required"** and the node must be re-registered once to gain transport-key support.
 

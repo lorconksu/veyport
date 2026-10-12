@@ -36,7 +36,7 @@ func (s *Server) handleListFiles(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Send request via gRPC and wait for response
-	raw := s.sendAgentRequest(w, serverID, func(requestID string) *pb.HubMessage {
+	raw := s.sendAgentRequestContext(r.Context(), w, serverID, uuid.NewString(), func(requestID string) *pb.HubMessage {
 		return &pb.HubMessage{
 			Payload: &pb.HubMessage_FileListRequest{
 				FileListRequest: &pb.FileListRequest{
@@ -81,7 +81,7 @@ func (s *Server) handleReadFile(w http.ResponseWriter, r *http.Request) {
 
 	// Send request — use offset -1 to tell the agent to return the tail (last 1MB).
 	// The agent interprets negative offsets as "from end of file".
-	raw := s.sendAgentRequest(w, serverID, func(requestID string) *pb.HubMessage {
+	raw := s.sendAgentRequestContext(r.Context(), w, serverID, uuid.NewString(), func(requestID string) *pb.HubMessage {
 		return &pb.HubMessage{
 			Payload: &pb.HubMessage_FileReadRequest{
 				FileReadRequest: &pb.FileReadRequest{

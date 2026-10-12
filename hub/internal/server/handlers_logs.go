@@ -1,6 +1,7 @@
 package server
 
 import (
+	"context"
 	"encoding/base64"
 	"fmt"
 	"net/http"
@@ -8,6 +9,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/wyiu/veyport/hub/internal/connmgr"
 	"github.com/wyiu/veyport/hub/internal/model"
 	pb "github.com/wyiu/veyport/proto/veyport/v1"
 )
@@ -61,10 +63,18 @@ func (s *Server) handleTailLog(w http.ResponseWriter, r *http.Request) {
 
 	// Register log session
 	requestID := uuid.NewString()
+	activity := s.beginAgentActivity(w, serverID, requestID, connmgr.ActivityLog)
+	if activity == nil {
+		s.releaseLogTailSlot(serverID, userID)
+		return
+	}
+	defer activity.Abandon()
 	ch := s.logSessions.Register(serverID, requestID)
 
 	// Send LogStreamRequest to agent
-	err := s.connMgr.SendToAgent(serverID, &pb.HubMessage{
+	call, cancelSend := context.WithTimeout(r.Context(), 10*time.Second)
+	defer cancelSend()
+	err := activity.Send(call, &pb.HubMessage{
 		Payload: &pb.HubMessage_LogStreamRequest{
 			LogStreamRequest: &pb.LogStreamRequest{
 				RequestId: requestID,
@@ -108,13 +118,15 @@ func (s *Server) handleTailLog(w http.ResponseWriter, r *http.Request) {
 		s.releaseLogTailSlot(serverID, userID)
 		s.logSessions.Remove(serverID, requestID)
 		// Send stop to agent
-		_ = s.connMgr.SendToAgent(serverID, &pb.HubMessage{
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		defer cancel()
+		_ = s.connMgr.SendToConnectionChecked(ctx, activity.Connection(), &pb.HubMessage{
 			Payload: &pb.HubMessage_LogStreamStop{
 				LogStreamStop: &pb.LogStreamStop{
 					RequestId: requestID,
 				},
 			},
-		})
+		}, nil)
 	}()
 
 	// Stream loop
@@ -122,6 +134,8 @@ func (s *Server) handleTailLog(w http.ResponseWriter, r *http.Request) {
 	for {
 		select {
 		case <-ctx.Done():
+			return
+		case <-activity.Connection().Done():
 			return
 		case data, ok := <-ch:
 			if !ok {

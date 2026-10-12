@@ -35,7 +35,8 @@ var Version = "dev"
 // *grpcserver.Handler, but the interface prevents a direct import cycle and
 // keeps the test surface small.
 type ReEnrollReleaser interface {
-	ReleaseKEK(serverID, decidedBy string) error
+	ReleaseKEK(serverID, requestID, decidedBy string) error
+	DenyReEnroll(serverID, requestID, decidedBy string) error
 }
 
 type Server struct {

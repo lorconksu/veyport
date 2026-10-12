@@ -273,7 +273,7 @@ func (s *Server) execute(ctx context.Context, ch ssh.Channel, p execParams, comm
 		}
 		err = p.session.DispatchProtected(receiptToken, receiptExpiry, policyLabel(p.policy), reader, beforeStart)
 	} else {
-		err = p.session.Dispatch()
+		err = p.session.DispatchChecked(func() error { return s.recheckExecutionPolicy(p) })
 	}
 	if err != nil {
 		return nil, err

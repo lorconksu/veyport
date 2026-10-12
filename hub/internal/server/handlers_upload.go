@@ -1,6 +1,7 @@
 package server
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"io"
@@ -12,6 +13,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/wyiu/veyport/hub/internal/connmgr"
 	"github.com/wyiu/veyport/hub/internal/model"
 	pb "github.com/wyiu/veyport/proto/veyport/v1"
 )
@@ -20,19 +22,12 @@ const (
 	maxUploadSize     = 100 * 1024 * 1024 // 100MB
 	uploadChunkSize   = 64 * 1024         // 64KB
 	uploadTimeout     = 30 * time.Second
+	uploadBodyTimeout = 2 * time.Minute
 	agentDropzonePath = "veyport://dropzone"
 )
 
 func (s *Server) handleUploadFile(w http.ResponseWriter, r *http.Request) {
 	serverID := r.PathValue("id")
-
-	// Stream the multipart body directly instead of buffering via ParseMultipartForm.
-	// We use r.MultipartReader() which returns a streaming reader.
-	reader, filename, parseErr := parseMultipartFileStream(r)
-	if parseErr != nil {
-		respondError(w, parseErr.statusCode, parseErr.message)
-		return
-	}
 
 	// Check agent connected
 	if _, ok := s.requireAgent(w, r); !ok {
@@ -41,10 +36,45 @@ func (s *Server) handleUploadFile(w http.ResponseWriter, r *http.Request) {
 
 	// Generate request ID and register for ack
 	requestID := uuid.NewString()
+	activity := s.beginAgentActivity(w, serverID, requestID, connmgr.ActivityUpload)
+	if activity == nil {
+		return
+	}
+	defer activity.Abandon()
+	// Failure/cancellation requests cleanup; only the actual acknowledgement
+	// releases the dispatched remote lifetime.
+	completed := false
+	defer func() {
+		if completed || !activity.Dispatched() {
+			return
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		defer cancel()
+		_ = s.connMgr.SendToConnectionChecked(ctx, activity.Connection(), &pb.HubMessage{Payload: &pb.HubMessage_FileUploadAbort{FileUploadAbort: &pb.FileUploadAbort{RequestId: requestID}}}, nil)
+	}()
 	ch := s.pending.Register(serverID, requestID)
 	defer s.pending.Remove(serverID, requestID)
+	// Reserve before multipart parsing/body reads, including clients that hold
+	// raw headers. A socket read deadline bounds stalled input without a reader goroutine.
+	bodyCtx, cancelBody := context.WithTimeout(r.Context(), uploadBodyTimeout)
+	defer cancelBody()
+	rc := http.NewResponseController(w)
+	_ = rc.SetReadDeadline(time.Now().Add(uploadBodyTimeout))
+	readDeadlineDone := make(chan struct{})
+	stopRead := context.AfterFunc(bodyCtx, func() { defer close(readDeadlineDone); _ = rc.SetReadDeadline(time.Now()) })
+	defer func() {
+		if !stopRead() {
+			<-readDeadlineDone
+		}
+		_ = rc.SetReadDeadline(time.Time{})
+	}()
+	reader, filename, parseErr := parseMultipartFileStream(r)
+	if parseErr != nil {
+		respondError(w, parseErr.statusCode, parseErr.message)
+		return
+	}
 
-	totalSize, streamErr := s.streamFileToAgent(serverID, requestID, filename, reader)
+	totalSize, streamErr := s.streamFileToActivity(bodyCtx, activity, requestID, filename, reader)
 	if streamErr != nil {
 		respondError(w, streamErr.statusCode, streamErr.message)
 		return
@@ -61,6 +91,8 @@ func (s *Server) handleUploadFile(w http.ResponseWriter, r *http.Request) {
 			respondError(w, http.StatusInternalServerError, errUnexpectedResponse)
 			return
 		}
+		s.connMgr.CompleteResponse(serverID, activity.Connection().Stream, ack)
+		completed = true
 		if !ack.Success {
 			respondError(w, http.StatusInternalServerError, fmt.Sprintf("upload failed: %s", ack.Error))
 			return
@@ -96,6 +128,10 @@ func (s *Server) handleUploadFile(w http.ResponseWriter, r *http.Request) {
 		})
 	case <-uploadTimer.C:
 		respondError(w, http.StatusGatewayTimeout, "upload timeout")
+	case <-bodyCtx.Done():
+		return
+	case <-activity.Connection().Done():
+		respondError(w, http.StatusBadGateway, errAgentNotConnected)
 	}
 }
 
@@ -149,44 +185,10 @@ func parseMultipartFileStream(r *http.Request) (io.Reader, string, *uploadStream
 	}
 }
 
-// sendChunkToAgent sends a single file chunk to the agent.
-func (s *Server) sendChunkToAgent(serverID, requestID, filename string, data []byte) *uploadStreamError {
-	sendErr := s.connMgr.SendToAgent(serverID, &pb.HubMessage{
-		Payload: &pb.HubMessage_FileUploadRequest{
-			FileUploadRequest: &pb.FileUploadRequest{
-				RequestId: requestID,
-				Filename:  filename,
-				Chunk:     data,
-				Done:      false,
-			},
-		},
-	})
-	if sendErr != nil {
-		return &uploadStreamError{http.StatusBadGateway, "failed to send to agent"}
-	}
-	return nil
-}
-
-// sendFinalChunk sends the terminal "done" marker to the agent.
-func (s *Server) sendFinalChunk(serverID, requestID string) *uploadStreamError {
-	sendErr := s.connMgr.SendToAgent(serverID, &pb.HubMessage{
-		Payload: &pb.HubMessage_FileUploadRequest{
-			FileUploadRequest: &pb.FileUploadRequest{
-				RequestId: requestID,
-				Done:      true,
-			},
-		},
-	})
-	if sendErr != nil {
-		return &uploadStreamError{http.StatusBadGateway, "failed to send to agent"}
-	}
-	return nil
-}
-
-// streamFileToAgent sends the file contents to the agent in chunks, followed by a final "done"
-// message. It enforces the maxUploadSize limit by counting bytes as they stream through.
-// It returns the total number of bytes sent, or an uploadStreamError on failure.
-func (s *Server) streamFileToAgent(serverID, requestID, filename string, file io.Reader) (int64, *uploadStreamError) {
+// streamFileToActivity sends the complete upload through its original admitted
+// connection. The final acknowledgement, rather than this function's return,
+// releases the remote lifetime.
+func (s *Server) streamFileToActivity(ctx context.Context, activity *connmgr.Activity, requestID, filename string, file io.Reader) (int64, *uploadStreamError) {
 	buf := make([]byte, uploadChunkSize)
 	isFirst := true
 	totalSize := int64(0)
@@ -199,8 +201,8 @@ func (s *Server) streamFileToAgent(serverID, requestID, filename string, file io
 				return 0, &uploadStreamError{http.StatusRequestEntityTooLarge, "file too large (max 100MB)"}
 			}
 			fname := chunkFilename(filename, &isFirst)
-			if chunkErr := s.sendChunkToAgent(serverID, requestID, fname, buf[:n]); chunkErr != nil {
-				return 0, chunkErr
+			if err := s.sendUploadActivity(ctx, activity, &pb.FileUploadRequest{RequestId: requestID, Filename: fname, Chunk: buf[:n]}); err != nil {
+				return 0, err
 			}
 		}
 		if readErr == io.EOF {
@@ -211,10 +213,19 @@ func (s *Server) streamFileToAgent(serverID, requestID, filename string, file io
 		}
 	}
 
-	if finalErr := s.sendFinalChunk(serverID, requestID); finalErr != nil {
+	if finalErr := s.sendUploadActivity(ctx, activity, &pb.FileUploadRequest{RequestId: requestID, Filename: chunkFilename(filename, &isFirst), Done: true}); finalErr != nil {
 		return 0, finalErr
 	}
 	return totalSize, nil
+}
+
+func (s *Server) sendUploadActivity(ctx context.Context, activity *connmgr.Activity, req *pb.FileUploadRequest) *uploadStreamError {
+	call, cancel := context.WithTimeout(ctx, uploadTimeout)
+	defer cancel()
+	if err := activity.Send(call, &pb.HubMessage{Payload: &pb.HubMessage_FileUploadRequest{FileUploadRequest: req}}); err != nil {
+		return &uploadStreamError{http.StatusBadGateway, "failed to send to agent"}
+	}
+	return nil
 }
 
 // chunkFilename returns the filename for the first chunk and an empty string for subsequent chunks.
@@ -246,7 +257,7 @@ func (s *Server) handleDeleteDropzoneFile(w http.ResponseWriter, r *http.Request
 	}
 
 	path := agentDropzonePath + "/" + filename
-	raw := s.sendAgentRequest(w, serverID, func(requestID string) *pb.HubMessage {
+	raw := s.sendAgentRequestContext(r.Context(), w, serverID, uuid.NewString(), func(requestID string) *pb.HubMessage {
 		return &pb.HubMessage{
 			Payload: &pb.HubMessage_FileDeleteRequest{
 				FileDeleteRequest: &pb.FileDeleteRequest{
@@ -278,7 +289,7 @@ func (s *Server) handleListDropzone(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	raw := s.sendAgentRequest(w, serverID, func(requestID string) *pb.HubMessage {
+	raw := s.sendAgentRequestContext(r.Context(), w, serverID, uuid.NewString(), func(requestID string) *pb.HubMessage {
 		return &pb.HubMessage{
 			Payload: &pb.HubMessage_FileListRequest{
 				FileListRequest: &pb.FileListRequest{

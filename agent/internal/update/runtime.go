@@ -70,7 +70,7 @@ type hostEnvironment struct {
 }
 
 func newRuntime(version, revision, config, certDir string, insecure bool, budget *sessionlimit.Budget, host hostEnvironment) *Runtime {
-	r := &Runtime{paths: host.paths, budget: budget, launch: runCommand, config: config, certDir: certDir, insecure: insecure, host: host, capabilities: &pb.UpdateCapabilities{ProtocolVersion: 1, Os: host.os, Arch: host.arch, Version: version, Revision: revision, BootId: bootID()}}
+	r := &Runtime{paths: host.paths, budget: budget, launch: runCommand, config: config, certDir: certDir, insecure: insecure, host: host, capabilities: &pb.UpdateCapabilities{ProtocolVersion: 1, ActivityQuiescenceVersion: 1, Os: host.os, Arch: host.arch, Version: version, Revision: revision, BootId: bootID()}}
 	actualExecutable := host.runningExecutable
 	if actualExecutable == "" {
 		actualExecutable = host.executable
@@ -149,7 +149,9 @@ func (r *Runtime) checkInstallation() error {
 func (r *Runtime) Capabilities() *pb.UpdateCapabilities {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	return proto.Clone(r.capabilities).(*pb.UpdateCapabilities)
+	c := proto.Clone(r.capabilities).(*pb.UpdateCapabilities)
+	c.ActiveActivities = r.budget.ActivityCount()
+	return c
 }
 
 // Recheck supports the first registration reconnect: configuration and issued
