@@ -140,7 +140,7 @@ func sendExecution(stream pb.AgentService_ExecuteServer, s *ExecutionSession) er
 	}
 	s.mu.Lock()
 	err = s.validateLaunchLocked(stream.Context())
-	if err == nil && (s.prepared.Binding.ExpiresUnixMilli <= time.Now().UnixMilli() || (dispatch.start.AdmissionExpiresUnixMilli != 0 && dispatch.start.AdmissionExpiresUnixMilli <= time.Now().UnixMilli())) {
+	if err == nil && dispatch.start.AdmissionExpiresUnixMilli != 0 && dispatch.start.AdmissionExpiresUnixMilli <= time.Now().UnixMilli() {
 		err = status.Error(codes.DeadlineExceeded, "execution authority expired before launch")
 	}
 	if err == nil {
@@ -192,6 +192,9 @@ func (s *ExecutionSession) validateLaunchLocked(ctx context.Context) error {
 	if s.connection != s.registry.connections.GetConn(s.NodeID) || !executionConnectionOpen(s.connection) {
 		return status.Error(codes.Canceled, "execution control connection changed before launch")
 	}
+	if s.preparationExpiredLocked(time.Now()) {
+		return status.Error(codes.DeadlineExceeded, "execution authority expired before launch")
+	}
 	return nil
 }
 
@@ -200,7 +203,13 @@ func sendProtectedScript(stream pb.AgentService_ExecuteServer, s *ExecutionSessi
 	hash := sha256.New()
 	var offset uint64
 	for {
+		if s.preparationExpired(time.Now()) {
+			return status.Error(codes.DeadlineExceeded, "protected transfer expired")
+		}
 		n, err := reader.Read(buffer)
+		if s.preparationExpired(time.Now()) {
+			return status.Error(codes.DeadlineExceeded, "protected transfer expired")
+		}
 		if n > 0 {
 			if offset+uint64(n) > s.scriptLength {
 				return status.Error(codes.DataLoss, "protected input length mismatch")
@@ -223,9 +232,6 @@ func sendProtectedScript(stream pb.AgentService_ExecuteServer, s *ExecutionSessi
 		case <-stream.Context().Done():
 			return stream.Context().Err()
 		default:
-		}
-		if s.Binding().ExpiresUnixMilli <= time.Now().UnixMilli() {
-			return status.Error(codes.DeadlineExceeded, "protected transfer expired")
 		}
 	}
 	if offset != s.scriptLength || !bytes.Equal(hash.Sum(nil), s.scriptHash) {

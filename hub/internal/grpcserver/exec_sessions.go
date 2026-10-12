@@ -23,7 +23,11 @@ const (
 	MaxExecutionCommandBytes = 32 * 1024
 	MaxExecutionFrameBytes   = 64 * 1024
 	ExecutionAttachTimeout   = 60 * time.Second
-	executionQueueFrames     = 8
+	// Agent preparation TTLs use a separate host clock. This allowance only
+	// bounds the accepted future expiry; it never extends the Hub's deadline
+	// or permits an already expired binding.
+	executionPreparationClockSkew = 5 * time.Second
+	executionQueueFrames          = 8
 )
 
 var ErrExecutionUnsupported = errors.New("the connected agent does not support command execution; upgrade the agent")
@@ -64,6 +68,7 @@ type ExecutionSession struct {
 	commandHash                        [32]byte
 	mu                                 sync.Mutex
 	prepared                           *pb.ExecutionPrepared
+	preparationDeadline                time.Time
 	preparedReady                      chan struct{}
 	prepareErr                         error
 	ticket                             [32]byte
@@ -230,11 +235,19 @@ func (es *ExecutionSessions) DeliverPrepared(node string, stream pb.AgentService
 	if s.prepared != nil || s.prepareErr != nil {
 		return false
 	}
-	err := s.validatePrepared(p)
+	now := time.Now()
+	err := s.validatePrepared(p, now)
 	if err != nil {
 		s.prepareErr = err
 	} else {
 		s.prepared = proto.Clone(p).(*pb.ExecutionPrepared)
+		// Keep the agent's exact wire binding, but cap local authority to 60s.
+		// Add the wall-time difference to now to preserve its monotonic clock.
+		s.preparationDeadline = now.Add(ExecutionAttachTimeout)
+		remoteDeadline := now.Add(time.UnixMilli(p.Binding.ExpiresUnixMilli).Sub(now))
+		if remoteDeadline.Before(s.preparationDeadline) {
+			s.preparationDeadline = remoteDeadline
+		}
 	}
 	close(s.preparedReady)
 	return err == nil
@@ -246,13 +259,19 @@ func (es *ExecutionSessions) hasExecution(node, id string) bool {
 	return es.sessions[makeKey(node, id)] != nil
 }
 
-func (s *ExecutionSession) validatePrepared(p *pb.ExecutionPrepared) error {
+func (s *ExecutionSession) validatePrepared(p *pb.ExecutionPrepared, now time.Time) error {
 	if p.Error != "" {
 		return errors.New("agent could not prepare execution")
 	}
 	b, i := p.Binding, p.Identity
-	if b == nil || b.ExecutionId != s.ID || b.NodeId != s.NodeID || b.PreparationId == "" || len(b.PreparationId) > 128 || b.BootId != s.bootID || b.ExpiresUnixMilli <= time.Now().UnixMilli() || b.ExpiresUnixMilli > time.Now().Add(ExecutionAttachTimeout).UnixMilli() {
+	if b == nil || b.ExecutionId != s.ID || b.NodeId != s.NodeID || b.PreparationId == "" || len(b.PreparationId) > 128 || b.BootId != s.bootID {
 		return errors.New("invalid execution preparation binding")
+	}
+	if b.ExpiresUnixMilli <= now.UnixMilli() {
+		return errors.New("execution preparation expired")
+	}
+	if b.ExpiresUnixMilli > now.Add(ExecutionAttachTimeout+executionPreparationClockSkew).UnixMilli() {
+		return errors.New("execution preparation expiry exceeds allowed clock skew")
 	}
 	if !bytes.Equal(p.CommandSha256, s.commandHash[:]) || !proto.Equal(p.Limits, s.limits) {
 		return errors.New("execution preparation content or limits changed")
@@ -261,6 +280,18 @@ func (s *ExecutionSession) validatePrepared(p *pb.ExecutionPrepared) error {
 		return errors.New("invalid prepared execution identity")
 	}
 	return nil
+}
+
+// preparationExpiredLocked requires s.mu. Neither clock-skew tolerance nor a
+// backwards wall-clock adjustment may renew locally accepted authority.
+func (s *ExecutionSession) preparationExpiredLocked(now time.Time) bool {
+	return s.prepared == nil || s.prepared.Binding == nil || s.preparationDeadline.IsZero() || !now.Before(s.preparationDeadline) || s.prepared.Binding.ExpiresUnixMilli <= now.UnixMilli()
+}
+
+func (s *ExecutionSession) preparationExpired(now time.Time) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.preparationExpiredLocked(now)
 }
 
 func (s *ExecutionSession) WaitPrepared(ctx context.Context) (*pb.ExecutionPrepared, error) {
@@ -282,7 +313,7 @@ func (s *ExecutionSession) WaitPrepared(ctx context.Context) (*pb.ExecutionPrepa
 func (s *ExecutionSession) IssueAttach() (*pb.ExecutionAttachRequest, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if s.prepared == nil || s.ticketIssued || s.prepared.Binding.ExpiresUnixMilli <= time.Now().UnixMilli() {
+	if s.ticketIssued || s.preparationExpiredLocked(time.Now()) {
 		return nil, errors.New("preparation not available for attachment")
 	}
 	if _, err := rand.Read(s.ticket[:]); err != nil {
@@ -309,7 +340,7 @@ func (es *ExecutionSessions) Attach(node string, a *pb.ExecutionAttachRequest) (
 		return nil, errors.New("execution cancelled")
 	default:
 	}
-	if s.prepared == nil || !s.ticketIssued || s.ticketUsed || !proto.Equal(a.Binding, s.prepared.Binding) || a.Binding.ExpiresUnixMilli <= time.Now().UnixMilli() || subtle.ConstantTimeCompare(a.Ticket, s.ticket[:]) != 1 {
+	if s.preparationExpiredLocked(time.Now()) || !s.ticketIssued || s.ticketUsed || !proto.Equal(a.Binding, s.prepared.Binding) || subtle.ConstantTimeCompare(a.Ticket, s.ticket[:]) != 1 {
 		return nil, errors.New("invalid or consumed execution attachment")
 	}
 	s.ticketUsed = true
@@ -335,7 +366,7 @@ func (s *ExecutionSession) DispatchChecked(beforeStart func() error) error {
 func (s *ExecutionSession) dispatchStandard(beforeStart func() error) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if s.enhanced || s.prepared == nil || !s.ticketUsed || s.dispatch || s.connection != s.registry.connections.GetConn(s.NodeID) || !executionConnectionOpen(s.connection) || s.prepared.Binding.ExpiresUnixMilli <= time.Now().UnixMilli() {
+	if s.enhanced || s.preparationExpiredLocked(time.Now()) || !s.ticketUsed || s.dispatch || s.connection != s.registry.connections.GetConn(s.NodeID) || !executionConnectionOpen(s.connection) {
 		return errors.New("execution is not dispatchable")
 	}
 	select {
@@ -379,7 +410,7 @@ func (s *ExecutionSession) Configure(enhanced bool, hash []byte, length uint64, 
 func (s *ExecutionSession) DispatchProtected(receipt []byte, receiptExpiry int64, policy string, script io.Reader, beforeStart func() error) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if !s.enhanced || s.prepared == nil || !s.ticketUsed || s.dispatch || len(receipt) == 0 || len(receipt) > 16<<10 || receiptExpiry <= time.Now().UnixMilli() || receiptExpiry > s.prepared.Binding.ExpiresUnixMilli || beforeStart == nil || (len(s.scriptHash) != 0 && script == nil) || s.connection != s.registry.connections.GetConn(s.NodeID) || !executionConnectionOpen(s.connection) || s.prepared.Binding.ExpiresUnixMilli <= time.Now().UnixMilli() {
+	if !s.enhanced || s.preparationExpiredLocked(time.Now()) || !s.ticketUsed || s.dispatch || len(receipt) == 0 || len(receipt) > 16<<10 || receiptExpiry <= time.Now().UnixMilli() || receiptExpiry > s.prepared.Binding.ExpiresUnixMilli || beforeStart == nil || (len(s.scriptHash) != 0 && script == nil) || s.connection != s.registry.connections.GetConn(s.NodeID) || !executionConnectionOpen(s.connection) {
 		return errors.New("protected execution is not dispatchable")
 	}
 	select {

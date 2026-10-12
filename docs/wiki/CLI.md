@@ -440,6 +440,16 @@ Enhanced mode permits stdin only for the exact four shell script forms shown
 above, and collects the full script before launch. The CLI preserves stdout and
 stderr separately and propagates the remote result without automatic retries.
 
+In Standard mode, preparation, admission, and execution transport failures
+report a diagnostic on stderr and a nonzero exit status to a responsive client.
+Enhanced mode provides this response after complete input collection; cancellation
+during collection may instead close the channel. Once finalization begins for an
+accepted execution, final SSH response delivery and relay cleanup have a deadline of at most two
+seconds; if the SSH client stops accepting the response, the Hub closes the
+connection. Treat a lost connection as an uncertain remote outcome and inspect
+the execution before retrying. Existing command-capable agents can use the Hub
+fix without an agent upgrade.
+
 ### `vey security`
 
 Feature-branch prototype commands:

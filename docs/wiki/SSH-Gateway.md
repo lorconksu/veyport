@@ -130,6 +130,14 @@ Stdout and stderr are separate binary-safe streams; their individual order is
 preserved, with no promised total ordering between the two. Remote exit status is
 propagated through SSH. Exit 255 can overlap a remote exit with a native SSH
 failure. Do not automatically retry after a connection loss or uncertain result.
+In Standard mode, preparation, admission, and execution transport failures return
+a diagnostic on stderr and a nonzero status to a responsive client. Enhanced
+mode provides this response after complete input collection; cancellation during
+collection may instead close the channel. Once finalization begins for an
+accepted execution, final SSH response delivery and relay cleanup have a deadline
+of at most two seconds. The
+Hub closes the SSH connection if response delivery stalls; this also ends other
+channels sharing that connection.
 Browser refresh does not cancel a command. Cancellation and live authority
 revocation are checked by the Hub's execution lifecycle, including immediately
 before `Start` is sent; they cannot recall a start already sent or guarantee

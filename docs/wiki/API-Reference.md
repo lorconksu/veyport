@@ -1067,6 +1067,16 @@ List filters are `actor_id`, `node_id`, `os_user`, `policy_version`, `state`, an
 `evidence_state`; `limit` defaults to 50 and is capped at 100, with `offset`
 pagination.
 
+Standard SSH command preparation or admission failures return a diagnostic on
+stderr and a nonzero exit status to a responsive client; Enhanced mode provides
+this response after complete input collection. Cancellation during Enhanced
+collection may instead close the channel. Inspect the redacted execution
+record for its durable state. An admission failure does not establish that a
+process ran. After an attempted launch, a transport failure can leave the remote
+outcome uncertain. Once finalization begins for an accepted execution, final SSH
+response delivery and relay cleanup have a deadline of at most two seconds, with SSH connection closure
+if response delivery stalls. Do not automatically retry an uncertain execution.
+
 Original access requires a live interactive session with `audit.original.read`,
 enrolled MFA, and a fresh action-bound TOTP proof. Each request selects exactly
 one `envelope` or `script`, with a nonempty purpose of at most 1,024 UTF-8 bytes.

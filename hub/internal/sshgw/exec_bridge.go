@@ -23,10 +23,16 @@ import (
 
 type execParams struct {
 	bridgeParams
-	user     *model.User
-	metadata *model.Execution
-	session  *grpcserver.ExecutionSession
-	policy   model.ExecutionPolicy
+	user      *model.User
+	metadata  *model.Execution
+	session   *grpcserver.ExecutionSession
+	policy    model.ExecutionPolicy
+	transport io.Closer
+}
+
+type executionIO struct {
+	all     sync.WaitGroup
+	outputs sync.WaitGroup
 }
 
 func (s *Server) authorizeExec(conn *ssh.ServerConn) (execParams, error) {
@@ -106,6 +112,7 @@ func (s *Server) startExec(conn *ssh.ServerConn, ch ssh.Channel, req *ssh.Reques
 		return
 	}
 	p.clientGone = st.clientGone
+	p.transport = conn
 	replyTo(req, true)
 	st.shellWG.Add(1)
 	go func() { defer st.shellWG.Done(); s.runExec(ch, p, payload.Command) }()
@@ -115,14 +122,14 @@ func (s *Server) runExec(ch ssh.Channel, p execParams, command string) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	defer s.cfg.Executions.Remove(p.serverID, p.session.ID)
+	relays := &executionIO{}
 	if err := s.auditExecution(p, model.AuditExecutionSubmitted, "submitted"); err != nil {
-		s.finishExec(ch, p, "admission_failed", 1, nil, "", "ordinary audit metadata unavailable")
+		s.finishExec(ch, p, "admission_failed", 1, nil, "", "ordinary audit metadata unavailable", relays)
 		return
 	}
 	var stdoutWrite, stderrWrite atomic.Int64
-	var ioWG sync.WaitGroup
 	watchDone := make(chan struct{})
-	go func() { defer close(watchDone); s.watchExecution(ctx, cancel, ch, p, &stdoutWrite, &stderrWrite) }()
+	go func() { defer close(watchDone); s.watchExecution(ctx, cancel, p, &stdoutWrite, &stderrWrite) }()
 	var input *protectedSubmission
 	var submissionErr error
 	if p.policy.Enhanced {
@@ -136,7 +143,7 @@ func (s *Server) runExec(ch ssh.Channel, p execParams, command string) {
 	if submissionErr != nil {
 		err = submissionErr
 	} else {
-		result, err = s.execute(ctx, ch, p, command, input, &stdoutWrite, &stderrWrite, &ioWG)
+		result, err = s.execute(ctx, ch, p, command, input, &stdoutWrite, &stderrWrite, relays)
 	}
 	if err != nil {
 		reason := p.session.Reason()
@@ -160,8 +167,7 @@ func (s *Server) runExec(ch ssh.Channel, p execParams, command string) {
 		p.session.Cancel(reason)
 		cancel()
 		s.cancelPreparedExecution(p)
-		// Closing the SSH channel unblocks both output writes and stdin reads.
-		s.finishExec(ch, p, state, exitAborted, nil, "", reason)
+		s.finishExec(ch, p, state, exitAborted, nil, "", reason, relays)
 	} else {
 		code := uint32(result.ExitCode)
 		if result.State != "exited" && result.State != "launch_failed" {
@@ -174,10 +180,9 @@ func (s *Server) runExec(ch ssh.Channel, p execParams, command string) {
 		if result.State == "exited" && result.ExitCode >= 0 {
 			observedExit = &result.ExitCode
 		}
-		s.finishExec(ch, p, result.State, code, observedExit, result.Signal, result.Reason)
+		s.finishExec(ch, p, result.State, code, observedExit, result.Signal, result.Reason, relays)
 	}
 	cancel()
-	ioWG.Wait()
 	<-watchDone
 }
 
@@ -191,7 +196,7 @@ func (s *Server) cancelPreparedExecution(p execParams) {
 	_ = s.cfg.ConnMgr.SendToAgentContext(ctx, p.serverID, &pb.HubMessage{Payload: &pb.HubMessage_ExecutionCancel{ExecutionCancel: &pb.ExecutionCancel{Binding: binding, Reason: "hub cancelled execution"}}})
 }
 
-func (s *Server) execute(ctx context.Context, ch ssh.Channel, p execParams, command string, input *protectedSubmission, stdoutWrite, stderrWrite *atomic.Int64, ioWG *sync.WaitGroup) (*pb.ExecutionResult, error) {
+func (s *Server) execute(ctx context.Context, ch ssh.Channel, p execParams, command string, input *protectedSubmission, stdoutWrite, stderrWrite *atomic.Int64, relays *executionIO) (*pb.ExecutionResult, error) {
 	prepareCtx, prepareCancel := context.WithTimeout(ctx, grpcserver.ExecutionAttachTimeout)
 	defer prepareCancel()
 	limits := grpcserver.DefaultExecutionLimits()
@@ -278,23 +283,26 @@ func (s *Server) execute(ctx context.Context, ch ssh.Channel, p execParams, comm
 	if err != nil {
 		return nil, err
 	}
-	ioWG.Add(3)
+	relays.all.Add(3)
+	relays.outputs.Add(2)
 	outputDone := make(chan struct{}, 2)
 	go func() {
-		defer ioWG.Done()
+		defer relays.all.Done()
 		if !p.policy.Enhanced {
 			s.forwardExecutionInput(ctx, ch, p)
 		}
 	}()
 	go func() {
-		defer ioWG.Done()
+		defer relays.all.Done()
+		defer relays.outputs.Done()
 		defer func() { outputDone <- struct{}{} }()
-		relayExecutionOutput(ctx, cancelExecutionWriter(ch, p), ch, p.session.Stdout, stdoutWrite)
+		relayExecutionOutput(ctx, cancelExecutionWriter(p), ch, p.session.Stdout, stdoutWrite)
 	}()
 	go func() {
-		defer ioWG.Done()
+		defer relays.all.Done()
+		defer relays.outputs.Done()
 		defer func() { outputDone <- struct{}{} }()
-		relayExecutionOutput(ctx, cancelExecutionWriter(ch, p), ch.Stderr(), p.session.Stderr, stderrWrite)
+		relayExecutionOutput(ctx, cancelExecutionWriter(p), ch.Stderr(), p.session.Stderr, stderrWrite)
 	}()
 	var result *pb.ExecutionResult
 	runtimeTimer := time.NewTimer(time.Duration(prepared.Limits.RuntimeSeconds) * time.Second)
@@ -329,7 +337,6 @@ func (s *Server) execute(ctx context.Context, ch ssh.Channel, p execParams, comm
 		}
 	}
 	if result == nil {
-		_ = ch.Close()
 		return nil, err
 	}
 	// Output EOF precedes Result, but SSH writes may still be draining. Wait
@@ -338,21 +345,16 @@ func (s *Server) execute(ctx context.Context, ch ssh.Channel, p execParams, comm
 		select {
 		case <-outputDone:
 		case <-ctx.Done():
-			_ = ch.Close()
 			return nil, ctx.Err()
 		case <-p.session.Done:
-			_ = ch.Close()
 			return nil, errors.New(p.session.Reason())
 		}
 	}
-	_ = ch.CloseWrite()
-	// Stop stdin reads without cutting off the result request: input relay is
-	// allowed to finish when finishExec closes the channel immediately below.
 	return result, nil
 }
 
-func cancelExecutionWriter(ch ssh.Channel, p execParams) func() {
-	return func() { p.session.Cancel("SSH output transport failed"); _ = ch.Close() }
+func cancelExecutionWriter(p execParams) func() {
+	return func() { p.session.Cancel("SSH output transport failed") }
 }
 
 func relayExecutionOutput(ctx context.Context, onError func(), writer io.Writer, frames <-chan []byte, active *atomic.Int64) {
@@ -405,7 +407,7 @@ func (s *Server) forwardExecutionInput(ctx context.Context, ch ssh.Channel, p ex
 	}
 }
 
-func (s *Server) watchExecution(ctx context.Context, cancel context.CancelFunc, ch ssh.Channel, p execParams, stdoutWrite, stderrWrite *atomic.Int64) {
+func (s *Server) watchExecution(ctx context.Context, cancel context.CancelFunc, p execParams, stdoutWrite, stderrWrite *atomic.Int64) {
 	blocked := 60 * time.Second
 	if s.cfg.ExecutionConsumerTimeout > 0 && s.cfg.ExecutionConsumerTimeout < blocked {
 		blocked = s.cfg.ExecutionConsumerTimeout
@@ -445,7 +447,8 @@ func (s *Server) watchExecution(ctx context.Context, cancel context.CancelFunc, 
 		if reason != "" {
 			p.session.Cancel(reason)
 			cancel()
-			_ = ch.Close()
+			// finishExec owns channel closure so cancellation cannot discard
+			// the diagnostic and exit status for a responsive SSH client.
 			return
 		}
 	}
@@ -495,16 +498,17 @@ func (s *Server) auditExecution(p execParams, action, state string) error {
 	return s.cfg.Store.LogAudit(model.AuditEntry{ID: uuid.NewString(), UserID: &p.userID, Target: &p.serverID, Action: action, Detail: &detail, IPAddress: &p.remoteIP, ActorType: model.AuditActorTypeUser, ResourceType: &resource, CorrelationID: &p.metadata.ID, Outcome: outcome})
 }
 
-func (s *Server) finishExec(ch ssh.Channel, p execParams, state string, code uint32, observedExit *int32, signal, reason string) {
+func (s *Server) finishExec(ch ssh.Channel, p execParams, state string, code uint32, observedExit *int32, signal, reason string, relays *executionIO) {
 	p.metadata.ExitCode = observedExit
 	p.metadata.Signal = signal
 	p.metadata.State = state
 	storeErr := s.cfg.Store.FinishExecution(p.session.ID, state, observedExit, signal, reason)
 	auditErr := s.auditExecution(p, model.AuditExecutionFinished, state)
+	var messages []string
 	if p.policy.Enhanced {
 		if err := s.queueExecutionLifecycle(p); err != nil {
 			_ = s.cfg.Store.MarkExecutionEvidencePermanent(p.session.ID)
-			writeClientMessage(ch, "external completion evidence is permanently incomplete")
+			messages = append(messages, "external completion evidence is permanently incomplete")
 		} else {
 			s.wakeEvidenceRecovery()
 		}
@@ -515,11 +519,37 @@ func (s *Server) finishExec(ch ssh.Channel, p execParams, state string, code uin
 	if storeErr != nil || auditErr != nil {
 		_ = s.cfg.Store.MarkExecutionEvidenceIncomplete(p.session.ID)
 		log.Printf("SSH execution %s: completion evidence unavailable", p.session.ID)
-		writeClientMessage(ch, "execution completion evidence is incomplete")
+		messages = append(messages, "execution completion evidence is incomplete")
+	}
+	// A channel close needs a live peer to unblock its readers and writers.
+	// Bound output draining, final messages, and close acknowledgement by
+	// closing the whole SSH transport if this client no longer progresses.
+	timeout := 2 * time.Second
+	if s.cfg.ExecutionConsumerTimeout > 0 && s.cfg.ExecutionConsumerTimeout < timeout {
+		timeout = s.cfg.ExecutionConsumerTimeout
+	}
+	transport := p.transport
+	if transport == nil {
+		transport = ch
+	}
+	timedOut := make(chan struct{})
+	timer := time.AfterFunc(timeout, func() { defer close(timedOut); _ = transport.Close() })
+	defer func() {
+		if !timer.Stop() {
+			<-timedOut
+		}
+	}()
+	// Failure cancellation stops the relays, but an in-flight stderr write
+	// must finish before the gateway starts writing its own diagnostic.
+	relays.outputs.Wait()
+	for _, message := range messages {
+		writeClientMessage(ch, message)
 	}
 	if reason != "" {
 		writeClientMessage(ch, reason)
 	}
+	_ = ch.CloseWrite()
 	sendExitStatus(ch, code)
 	_ = ch.Close()
+	relays.all.Wait()
 }

@@ -50,10 +50,13 @@ func (a *failingExecBridgeAgent) Send(msg *pb.HubMessage) error {
 		if a.phase == "malformed-preparation" {
 			prepared.Identity = nil
 		}
+		if a.phase == "invalid-binding" {
+			prepared.Binding.NodeId = "another-node"
+		}
 		if a.phase == "expired-preparation" {
 			prepared.Binding.ExpiresUnixMilli = time.Now().Add(30 * time.Millisecond).UnixMilli()
 		}
-		if accepted := a.executions.DeliverPrepared(testServerID, a, prepared); !accepted && a.phase != "malformed-preparation" {
+		if accepted := a.executions.DeliverPrepared(testServerID, a, prepared); !accepted && a.phase != "malformed-preparation" && a.phase != "invalid-binding" {
 			return errors.New("fixture preparation rejected unexpectedly")
 		}
 		if a.phase == "expired-preparation" {
@@ -207,10 +210,8 @@ func TestExecBridgeFailureBoundariesPreserveClaimsAndCleanup(t *testing.T) {
 			if phase == "submitted-audit" {
 				wantCode = 1
 			}
-			// Cancellation closes SSH I/O to unblock both relays. A transport
-			// abort can therefore precede its best-effort final exit request.
-			// Require the exact failure code when delivered, and never success;
-			// the durable outcome and closed channel are checked above.
+			// A responsive SSH channel must receive its failure status before
+			// cancellation closes the channel and releases the relays.
 			hasStatus := false
 			for _, request := range ch.requests() {
 				if request.name == "exit-status" {
@@ -221,8 +222,8 @@ func TestExecBridgeFailureBoundariesPreserveClaimsAndCleanup(t *testing.T) {
 					}
 				}
 			}
-			if phase == "submitted-audit" && !hasStatus {
-				t.Fatal("submission refusal did not deliver its final status")
+			if !hasStatus {
+				t.Fatal("execution failure did not deliver its final status")
 			}
 			var claims int
 			if err := f.store.DB().QueryRow("SELECT COUNT(*) FROM execution_dispatches WHERE execution_id=?", p.session.ID).Scan(&claims); err != nil {
