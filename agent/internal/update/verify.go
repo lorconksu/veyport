@@ -53,6 +53,15 @@ func (p paths) verify(path string, expected Metadata, strict bool) error {
 }
 
 func (p paths) installedMetadata() (Metadata, error) {
+	return p.bootstrapMetadata(updateutil.BootstrapOriginal{})
+}
+
+// bootstrapMetadata permits an unstamped original only with an explicit digest
+// and version assertion. Native updates never provide this compatibility input.
+func (p paths) bootstrapMetadata(original updateutil.BootstrapOriginal) (Metadata, error) {
+	if err := original.Validate(); err != nil {
+		return Metadata{}, err
+	}
 	f, err := p.open(p.binary, unix.O_RDONLY, 0, false)
 	if err != nil {
 		return Metadata{}, err
@@ -77,6 +86,7 @@ func (p paths) installedMetadata() (Metadata, error) {
 		return Metadata{}, fmt.Errorf("installed agent platform mismatch")
 	}
 	metadata := Metadata{SHA256: hash, Bytes: size, Revision: "unknown"}
+	versionSeen, revisionSeen := false, false
 	fields := strings.Fields(settings["-ldflags"])
 	for i := 0; i < len(fields); i++ {
 		value := ""
@@ -86,22 +96,30 @@ func (p paths) installedMetadata() (Metadata, error) {
 		} else if strings.HasPrefix(fields[i], "-X=") {
 			value = strings.TrimPrefix(fields[i], "-X=")
 		}
-		name, stamp, _ := strings.Cut(strings.Trim(value, "'\""), "=")
+		name, stamp, valid := strings.Cut(strings.Trim(value, "'\""), "=")
 		if name == "main.version" {
-			if metadata.Version != "" {
+			if versionSeen || !valid || stamp == "" {
 				return Metadata{}, fmt.Errorf("duplicate installed version")
 			}
+			versionSeen = true
 			metadata.Version = stamp
 		}
 		if name == "main.revision" {
-			if metadata.Revision != "unknown" {
+			if revisionSeen || !valid || stamp == "" {
 				return Metadata{}, fmt.Errorf("duplicate installed revision")
 			}
+			revisionSeen = true
 			metadata.Revision = stamp
 		}
 	}
+	if original.Present() {
+		if versionSeen || revisionSeen || original.SHA256 != hash {
+			return Metadata{}, fmt.Errorf("bootstrap original assertion requires the exact binary with both release stamps absent")
+		}
+		metadata.Version = original.Version
+	}
 	if metadata.Version == "" {
-		return Metadata{}, fmt.Errorf("installed agent has no version stamp")
+		return Metadata{}, fmt.Errorf("installed agent has no version stamp; through direct SSH verify its version and SHA256, then request a new preserving bootstrap with --bootstrap-original-version and --bootstrap-original-sha256")
 	}
 	return metadata, nil
 }

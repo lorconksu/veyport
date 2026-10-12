@@ -106,7 +106,7 @@ func TestUpdateHelperRefusalsPreserveEnrolledIdentity(t *testing.T) {
 		}
 	}
 	ticket := strings.Repeat("x", 64)
-	for _, fault := range []string{"alternate_config", "alternate_cert_dir", "insecure", "registration_token", "self_unregister", "mixed_helpers", "symlink_config", "broad_key_mode", "malformed_config", "missing_identity", "different_hub", "bootstrap_requires_mtls", "supervisor_requires_staging"} {
+	for _, fault := range []string{"alternate_config", "alternate_cert_dir", "insecure", "registration_token", "self_unregister", "mixed_helpers", "symlink_config", "broad_key_mode", "malformed_config", "missing_identity", "different_hub", "bootstrap_requires_mtls", "supervisor_requires_staging", "original_assertion_requires_mtls", "original_partial", "original_malformed", "original_normal", "original_supervisor"} {
 		t.Run(fault, func(t *testing.T) {
 			root := t.TempDir()
 			fixture := filepath.Join(root, "root")
@@ -187,6 +187,20 @@ func TestUpdateHelperRefusalsPreserveEnrolledIdentity(t *testing.T) {
 			case "supervisor_requires_staging":
 				arguments = []string{"--update-supervisor", "fixture-operation"}
 				reason = "private verified staging directory"
+			case "original_assertion_requires_mtls":
+				arguments = append(arguments, "--update-original-version", "0.1.0", "--update-original-sha256", strings.Repeat("b", 64))
+			case "original_partial":
+				arguments = append(arguments, "--update-original-version", "0.1.0")
+				reason = "bootstrap original assertion requires"
+			case "original_malformed":
+				arguments = append(arguments, "--update-original-version", "dev", "--update-original-sha256", strings.Repeat("b", 64))
+				reason = "bootstrap original assertion requires"
+			case "original_normal", "original_supervisor":
+				arguments = []string{"--update-original-version", "0.1.0", "--update-original-sha256", strings.Repeat("b", 64)}
+				if fault == "original_supervisor" {
+					arguments = append(arguments, "--update-supervisor", "fixture-operation")
+				}
+				reason = "original binary assertions are only valid for preserving update bootstrap"
 			}
 			if output, err := rootCommand("chown", "-hR", "0:0", "--", fixture).CombinedOutput(); err != nil {
 				t.Fatalf("protect isolated fixture: %v %s", err, output)

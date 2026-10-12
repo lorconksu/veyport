@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/wyiu/veyport/agent/internal/sessionlimit"
+	"github.com/wyiu/veyport/proto/updateutil"
 	pb "github.com/wyiu/veyport/proto/veyport/v1"
 	"golang.org/x/sys/unix"
 )
@@ -62,7 +63,7 @@ func validateHelperFiles(p paths, uid int) error {
 // Bootstrap upgrades an old enrolled agent without registration or reenrollment.
 // The ticket only selects a Hub-owned operation; all authority is independently
 // checked over the existing enrolled mTLS identity.
-func Bootstrap(ctx context.Context, ticket, version, revision string, service pb.AgentServiceClient) error {
+func Bootstrap(ctx context.Context, ticket, version, revision string, service pb.AgentServiceClient, assertions ...updateutil.BootstrapOriginal) error {
 	if os.Geteuid() != 0 || runtime.GOOS != "linux" || len(ticket) < 32 || len(ticket) > 512 {
 		return errors.New("invalid agent update bootstrap")
 	}
@@ -71,11 +72,18 @@ func Bootstrap(ctx context.Context, ticket, version, revision string, service pb
 	if err != nil {
 		return err
 	}
-	return bootstrap(ctx, p, ticket, version, revision, service, executable, runCommand)
+	return bootstrap(ctx, p, ticket, version, revision, service, executable, runCommand, assertions...)
 }
 
-func bootstrap(ctx context.Context, p paths, ticket, version, revision string, service pb.AgentServiceClient, executable string, launch func(context.Context, string, ...string) error) error {
-	original, err := p.installedMetadata()
+func bootstrap(ctx context.Context, p paths, ticket, version, revision string, service pb.AgentServiceClient, executable string, launch func(context.Context, string, ...string) error, assertions ...updateutil.BootstrapOriginal) error {
+	var assertion updateutil.BootstrapOriginal
+	if len(assertions) > 1 {
+		return errors.New("invalid bootstrap original assertion")
+	}
+	if len(assertions) == 1 {
+		assertion = assertions[0]
+	}
+	original, err := p.bootstrapMetadata(assertion)
 	if err != nil {
 		return err
 	}
@@ -85,7 +93,7 @@ func bootstrap(ctx context.Context, p paths, ticket, version, revision string, s
 	caps := &pb.UpdateCapabilities{ProtocolVersion: 1, Os: "linux", Arch: runtime.GOARCH, Version: original.Version, Revision: original.Revision, Sha256: original.SHA256, BootId: bootID(), Supported: true}
 	ctx, cancel := context.WithTimeout(ctx, 2*time.Minute)
 	defer cancel()
-	req, err := service.BootstrapUpdate(ctx, &pb.UpdateBootstrapRequest{Ticket: ticket, Capabilities: caps})
+	req, err := service.BootstrapUpdate(ctx, &pb.UpdateBootstrapRequest{Ticket: ticket, Capabilities: caps, OriginalIdentityAsserted: assertion.Present()})
 	if err != nil {
 		return errors.New("Hub refused enrolled update bootstrap")
 	}
@@ -177,7 +185,7 @@ func bootstrap(ctx context.Context, p paths, ticket, version, revision string, s
 		return err
 	}
 	started = true
-	fmt.Printf("Agent update %s staged; check vey servers update <node> --status for Hub-confirmed reconnection.\n", entry.Operation)
+	fmt.Printf("Agent update %s started; completion is pending Hub-confirmed reconnection. Inspect: vey servers update <node> --status --operation %s\n", entry.Operation, entry.Operation)
 	return nil
 }
 

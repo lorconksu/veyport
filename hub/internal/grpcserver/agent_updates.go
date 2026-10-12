@@ -275,6 +275,21 @@ func (u *AgentUpdates) Check(actor, sid, node string) (AgentUpdateCheck, error) 
 type BootstrapIdleAssertion struct {
 	Confirmed    bool
 	ConnectionID string
+	Original     updateutil.BootstrapOriginal
+}
+
+func (u *AgentUpdates) validateOriginalAssertion(node string, original updateutil.BootstrapOriginal) error {
+	if u.Capabilities(node) != nil {
+		return errors.New("original binary assertion is only valid for a legacy agent without update capabilities")
+	}
+	srv, err := u.store.GetServerByID(node)
+	if err != nil {
+		return err
+	}
+	if srv.AgentVersion != nil && updateutil.ValidateVersion(*srv.AgentVersion) == nil && *srv.AgentVersion != original.Version {
+		return errors.New("original version assertion contradicts the enrolled agent's observed version")
+	}
+	return nil
 }
 
 func (u *AgentUpdates) Start(ctx context.Context, actor, sid, node, expectedVersion, expectedRevision string, assertions ...BootstrapIdleAssertion) (model.AgentUpdate, string, error) {
@@ -291,6 +306,21 @@ func (u *AgentUpdates) Start(ctx context.Context, actor, sid, node, expectedVers
 	}
 	if len(assertions) == 1 {
 		idle = assertions[0]
+	}
+	if err := idle.Original.Validate(); err != nil {
+		return model.AgentUpdate{}, "", err
+	}
+	if idle.Original.Present() {
+		if !check.BootstrapRequired || check.Current != nil {
+			return model.AgentUpdate{}, "", errors.New("original binary assertion is only valid for a legacy agent without update capabilities")
+		}
+		cmp, err := updateutil.CompareVersions(check.Target.Version, idle.Original.Version)
+		if err != nil || cmp <= 0 {
+			return model.AgentUpdate{}, "", errors.New("bootstrap target must advance the operator-asserted original version")
+		}
+		if err := u.validateOriginalAssertion(node, idle.Original); err != nil {
+			return model.AgentUpdate{}, "", err
+		}
 	}
 	if check.BootstrapRequired {
 		if !idle.Confirmed || idle.ConnectionID == "" || idle.ConnectionID != check.ConnectionID {
@@ -315,6 +345,7 @@ func (u *AgentUpdates) Start(ctx context.Context, actor, sid, node, expectedVers
 	op := model.AgentUpdate{ID: uuid.NewString(), NodeID: node, ActorID: actor, SessionID: sid, State: "requested", Target: check.Target, ExpiresAt: now + 120000, CreatedAt: now, UpdatedAt: now}
 	op.BootstrapIdleConfirmed = idle.Confirmed
 	op.BootstrapConnectionID = idle.ConnectionID
+	op.BootstrapOriginal = idle.Original
 	ticket := ""
 	if check.Current != nil {
 		op.PreviousVersion = check.Current.Version
@@ -338,10 +369,21 @@ func (u *AgentUpdates) Start(ctx context.Context, actor, sid, node, expectedVers
 		op.TicketHash = store.SecurityDigest([]byte(ticket))
 		op.State = "bootstrap_required"
 	}
+	if idle.Original.Present() {
+		// Serialize final admission with authenticated capability observations.
+		// Artifact resolution above stays outside the observation lock.
+		u.observationMu.Lock()
+		defer u.observationMu.Unlock()
+	}
 	err = u.connections.ReserveMaintenanceWithIdleAssertion(conn, op.ID, idle.Confirmed, func() error {
 		return u.store.WithInteractivePolicy(func() error {
 			if err := u.authorize(actor, sid, node); err != nil {
 				return err
+			}
+			if idle.Original.Present() {
+				if err := u.validateOriginalAssertion(node, idle.Original); err != nil {
+					return err
+				}
 			}
 			if idle.Confirmed {
 				if err := u.audit(op, "manual_bootstrap_idle_confirmed"); err != nil {
@@ -423,6 +465,9 @@ func (u *AgentUpdates) audit(op model.AgentUpdate, state string) error {
 	detail := fmt.Sprintf("operation=%s requester=%s state=%s version=%s revision=%s sha256=%s", op.ID, op.ActorID, state, op.Target.Version, op.Target.Revision, op.Target.SHA256)
 	if op.BootstrapIdleConfirmed {
 		detail += " bootstrap_idle_confirmed=true connection=" + op.BootstrapConnectionID
+	}
+	if op.BootstrapOriginal.Present() {
+		detail += " original_identity_source=operator_assertion original_version=" + op.BootstrapOriginal.Version + " original_sha256=" + op.BootstrapOriginal.SHA256
 	}
 	actorType := "agent"
 	var userID *string
@@ -655,6 +700,9 @@ func (h *Handler) BootstrapUpdate(ctx context.Context, req *pb.UpdateBootstrapRe
 		return nil, status.Error(codes.PermissionDenied, "bootstrap checked connection changed")
 	}
 	c := req.Capabilities
+	if op.BootstrapOriginal.Validate() != nil || req.OriginalIdentityAsserted != op.BootstrapOriginal.Present() || (op.BootstrapOriginal.Present() && (c.Version != op.BootstrapOriginal.Version || c.Sha256 != op.BootstrapOriginal.SHA256 || c.Revision != "unknown")) {
+		return nil, status.Error(codes.FailedPrecondition, "bootstrap original identity does not match the operator assertion bound to this ticket")
+	}
 	a, err := u.artifact(c.Os, c.Arch)
 	var bound model.AgentArtifact
 	for _, allowed := range op.BootstrapArtifacts {
@@ -664,6 +712,16 @@ func (h *Handler) BootstrapUpdate(ctx context.Context, req *pb.UpdateBootstrapRe
 	}
 	if err != nil || a.Version != op.Target.Version || a.Revision != op.Target.Revision || a.SHA256 != bound.SHA256 || a.Bytes != bound.Bytes {
 		return nil, status.Error(codes.FailedPrecondition, "bootstrap Hub artifact changed")
+	}
+	if op.BootstrapOriginal.Present() {
+		u.observationMu.Lock()
+		defer u.observationMu.Unlock()
+		if err := u.validateOriginalAssertion(node, op.BootstrapOriginal); err != nil {
+			return nil, status.Error(codes.FailedPrecondition, err.Error())
+		}
+		if err := u.validateOperation(op); err != nil {
+			return nil, status.Error(codes.PermissionDenied, err.Error())
+		}
 	}
 	cmp, err := updateutil.CompareVersions(a.Version, c.Version)
 	if err != nil || cmp < 0 || (cmp == 0 && a.SHA256 != c.Sha256) {

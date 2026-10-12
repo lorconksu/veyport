@@ -23,8 +23,8 @@ import (
 
 var fixtureOnce sync.Once
 var fixtureErr error
-var oldBytes, newBytes []byte
-var oldMetadata, newMetadata Metadata
+var oldBytes, newBytes, unstampedBytes []byte
+var oldMetadata, newMetadata, unstampedMetadata Metadata
 
 func artifacts(t *testing.T) {
 	t.Helper()
@@ -39,9 +39,12 @@ func artifacts(t *testing.T) {
 			version, revision string
 			bytes             *[]byte
 			metadata          *Metadata
-		}{{"0.2.0-prototype.3", strings.Repeat("b", 40), &oldBytes, &oldMetadata}, {"0.2.0-prototype.4", strings.Repeat("a", 40), &newBytes, &newMetadata}} {
+		}{{"0.2.0-prototype.3", strings.Repeat("b", 40), &oldBytes, &oldMetadata}, {"0.2.0-prototype.4", strings.Repeat("a", 40), &newBytes, &newMetadata}, {"0.1.0", "unknown", &unstampedBytes, &unstampedMetadata}} {
 			path := filepath.Join(dir, fmt.Sprintf("agent%d", i))
 			cmd := exec.Command("go", "build", "-ldflags", "-X main.version="+item.version+" -X main.revision="+item.revision, "-o", path, "./cmd/veyport-agent")
+			if item.bytes == &unstampedBytes {
+				cmd = exec.Command("go", "build", "-o", path, "./cmd/veyport-agent")
+			}
 			cmd.Dir = "../.."
 			if output, err := cmd.CombinedOutput(); err != nil {
 				fixtureErr = fmt.Errorf("build agent fixture: %w: %s", err, output)
@@ -205,15 +208,17 @@ func (s *artifactStream) Header() (metadata.MD, error) { return nil, nil }
 
 type artifactService struct {
 	pb.AgentServiceClient
-	stream           *artifactStream
-	called           bool
-	bootstrapRequest *pb.AgentUpdateRequest
-	bootstrapCaps    *pb.UpdateCapabilities
-	bootstrapErr     error
+	stream            *artifactStream
+	called            bool
+	bootstrapRequest  *pb.AgentUpdateRequest
+	bootstrapCaps     *pb.UpdateCapabilities
+	bootstrapErr      error
+	bootstrapAsserted bool
 }
 
 func (s *artifactService) BootstrapUpdate(_ context.Context, request *pb.UpdateBootstrapRequest, _ ...grpc.CallOption) (*pb.AgentUpdateRequest, error) {
 	s.bootstrapCaps = request.Capabilities
+	s.bootstrapAsserted = request.OriginalIdentityAsserted
 	return s.bootstrapRequest, s.bootstrapErr
 }
 

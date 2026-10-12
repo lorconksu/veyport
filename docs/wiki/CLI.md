@@ -339,6 +339,8 @@ Supported forms are:
 ```text
 vey servers update <node> [--check]
 vey servers update <node> --bootstrap-idle-confirmed
+vey servers update <node> --bootstrap-idle-confirmed \
+  --bootstrap-original-version <version> --bootstrap-original-sha256 <hash>
 vey servers update <node> --status [--operation <id>]
 vey servers update <node> --acknowledge-recovery <id> --verified-sha256 <hash>
 ```
@@ -351,6 +353,28 @@ retrying. Recovery acknowledgement requires
 direct SSH verification of the original binary and service, the exact expected
 hash, and the cooldown printed by the CLI. It records the administrator's
 attestation; it does not claim remote binary verification.
+
+For a one-time preserving upgrade of an older enrolled binary whose version
+and revision linker stamps are both absent, close all clients and agent work,
+verify the node is idle over direct SSH, and establish the original version
+from trusted deployment records. Measure the exact installed bytes on the
+node with `sudo sha256sum /usr/local/bin/veyport-agent`, then pass both
+`--bootstrap-original-version` and `--bootstrap-original-sha256` together with
+`--bootstrap-idle-confirmed`. The version must not be guessed from an arbitrary
+unstamped executable. The helper rejects this path for a stamped binary and
+requires a matching installed-byte digest; the Hub requires the target release
+to be newer than the asserted original. The Hub binds the assertions to the
+authenticated actor/session, node, fresh connection, and one-use ticket. The
+CLI prints the direct-SSH script command carrying those same assertions; run
+that exact command.
+
+Printing the command does not mean the remote installation succeeded. After
+running it, inspect `vey servers update <node> --status` until the operation is
+`succeeded`, then verify the node over Veyport SSH:
+
+```bash
+vey ssh <node> -- 'hostname; id; uname -s'
+```
 
 ### `vey login`
 

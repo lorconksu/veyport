@@ -3168,14 +3168,22 @@ the node or installation is not eligible.
 Starts one update after rechecking the current Hub artifact and administrator
 authority. The body accepts the exact checked version and source revision. The
 manual preserving-bootstrap path additionally accepts an operator idle
-assertion bound to the connection ID from the preceding check:
+assertion bound to the connection ID from the preceding check. For an original
+agent whose version and revision linker stamps are both absent, it also requires
+the operator's established original version and exact installed-byte SHA-256;
+these assertions must be supplied together:
+
+Include both `bootstrap_original_*` fields below only for the unstamped-original
+path; omit both for the ordinary preserving bootstrap.
 
 ```json
 {
   "expected_version": "<version>",
   "expected_revision": "<40-or-64-character-source-revision>",
   "bootstrap_idle_confirmed": true,
-  "expected_connection_id": "<connection-id-from-check>"
+  "expected_connection_id": "<connection-id-from-check>",
+  "bootstrap_original_version": "<operator-established-original-version>",
+  "bootstrap_original_sha256": "<sha256-of-installed-agent>"
 }
 ```
 
@@ -3188,8 +3196,15 @@ explicitly assert it. The Hub binds that assertion to the exact connection
 generation and still refuses known active work; it is not an automatic detector
 or a native quiescence override. The response then includes a node-bound,
 single-use bootstrap ticket with a 120-second expiry. The ticket is returned
-only in the start response; status responses never include it. The CLI renders
-the preserving direct-SSH command. Do not log or reuse the ticket.
+only in the start response; status responses never include it. For the
+unstamped-original path, the agent helper verifies the supported Linux
+package/platform, requires both linker-stamped identity fields to be absent,
+and checks the installed bytes against the asserted SHA-256 before replacement.
+It reports that assertion through the existing enrolled mTLS connection. The
+Hub binds the assertion to the authenticated actor and session, node, fresh
+connection, and one-use ticket, and requires the target release to be newer
+than the asserted original version. The CLI renders the preserving direct-SSH
+command with those same assertions. Do not log or reuse the ticket.
 
 #### GET /api/servers/{id}/agent-update/status?operation_id={id}
 

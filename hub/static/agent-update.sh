@@ -7,11 +7,17 @@ umask 077
 fail() { printf 'Agent update refused: %s\n' "$*" >&2; exit 1; }
 hub=''
 ticket=''
+original_version=''
+original_sha256=''
+original_version_seen=0
+original_sha256_seen=0
 while (($#)); do
   case "$1" in
     --hub) (($# >= 2)) || fail 'missing --hub value'; hub="$2"; shift 2 ;;
     --ticket) (($# >= 2)) || fail 'missing --ticket value'; ticket="$2"; shift 2 ;;
-    *) fail 'only --hub and --ticket are accepted' ;;
+    --original-version) (($# >= 2)) && ((original_version_seen == 0)) || fail 'invalid --original-version'; original_version_seen=1; original_version="$2"; shift 2 ;;
+    --original-sha256) (($# >= 2)) && ((original_sha256_seen == 0)) || fail 'invalid --original-sha256'; original_sha256_seen=1; original_sha256="$2"; shift 2 ;;
+    *) fail 'only --hub, --ticket, --original-version and --original-sha256 are accepted' ;;
   esac
 done
 [[ ${EUID} -eq 0 ]] || fail 'run this command with sudo'
@@ -20,6 +26,13 @@ hub_expression='^https://[][a-zA-Z0-9._:-]+/?$'
 [[ "$hub" =~ $hub_expression ]] || fail 'an explicit configured HTTPS Hub is required'
 hub="${hub%/}"
 [[ "$ticket" =~ ^[a-zA-Z0-9_-]{32,512}$ ]] || fail 'invalid one-use update ticket'
+original_args=()
+if ((original_version_seen || original_sha256_seen)); then
+  original_version_expression='^v?[0-9]+\.[0-9]+\.[0-9]+(-[a-zA-Z0-9.-]+)?(\+[a-zA-Z0-9.-]+)?$'
+  [[ "$original_version" =~ $original_version_expression && ${#original_version} -lt 128 && "$original_sha256" =~ ^[0-9a-f]{64}$ ]] || fail 'original assertion requires a version and exact lowercase SHA256; obtain both through direct SSH before requesting a new ticket'
+  original_args=(--update-original-version "$original_version" --update-original-sha256 "$original_sha256")
+  printf 'Original version is operator-asserted and bound to an exact digest; the helper and enrolled Hub will verify the assertion before starting the update.\n'
+fi
 [[ $(uname -s) == Linux ]] || fail 'only Linux/systemd installations are supported'
 [[ -d /run/systemd/system ]] || fail 'systemd is required'
 for tool in curl sha256sum stat od sed mktemp wc cat chmod tr rm uname; do command -v "$tool" >/dev/null || fail "required tool is missing: $tool"; done
@@ -101,4 +114,4 @@ actual_machine=$(od -An -tx1 -j18 -N2 "$workdir/candidate" | tr -s ' ' | sed 's/
 [[ "$actual_machine" == "$machine" ]] || fail 'update artifact ELF architecture differs'
 chmod 700 "$workdir/candidate"
 printf 'Verified Hub agent artifact %s (%s). Authorizing the enrolled update.\n' "$version" "$revision"
-"$workdir/candidate" --update-bootstrap "$ticket" --update-hub "$hub"
+"$workdir/candidate" --update-bootstrap "$ticket" --update-hub "$hub" "${original_args[@]}"

@@ -110,3 +110,48 @@ func TestAgentUpdateRESTRequiresInteractiveAdminAndServiceAvailability(t *testin
 		t.Fatal("preserving bootstrap script unavailable", rec.Code)
 	}
 }
+
+func TestAgentUpdateRESTOriginalAssertionIsBoundAndClosedToMalformedPairs(t *testing.T) {
+	for _, fault := range []string{"valid", "partial", "malformed", "duplicate", "observed_version"} {
+		t.Run(fault, func(t *testing.T) {
+			s, token, node := updateHTTPFixture(t)
+			body := `{"expected_version":"2.0.1-prototype.4","expected_revision":"` + strings.Repeat("f", 40) + `","bootstrap_idle_confirmed":true,"expected_connection_id":"` + s.connMgr.GetConn(node).GenerationID + `","bootstrap_original_version":"0.1.0","bootstrap_original_sha256":"` + strings.Repeat("b", 64) + `"}`
+			switch fault {
+			case "partial":
+				body = strings.Replace(body, `,"bootstrap_original_sha256":"`+strings.Repeat("b", 64)+`"`, "", 1)
+			case "malformed":
+				body = strings.Replace(body, `"bootstrap_original_version":"0.1.0"`, `"bootstrap_original_version":"dev"`, 1)
+			case "duplicate":
+				body = strings.TrimSuffix(body, "}") + `,"bootstrap_original_version":"0.0.1"}`
+			case "observed_version":
+				if err := s.store.UpdateObservedAgentVersion(node, "1.9.0"); err != nil {
+					t.Fatal(err)
+				}
+			}
+			rec := updateHTTPRequest(s, token, node, "POST", "", body)
+			if fault == "valid" {
+				if rec.Code != http.StatusAccepted {
+					t.Fatal(rec.Code, rec.Body.String())
+				}
+				var response struct {
+					Operation model.AgentUpdate `json:"operation"`
+				}
+				if err := json.Unmarshal(rec.Body.Bytes(), &response); err != nil {
+					t.Fatal(err)
+				}
+				op, err := s.store.GetAgentUpdate(response.Operation.ID)
+				if err != nil || op.BootstrapOriginal.Version != "0.1.0" || op.BootstrapOriginal.SHA256 != strings.Repeat("b", 64) {
+					t.Fatal("REST dropped exact assertion", op, err)
+				}
+			} else {
+				want := http.StatusConflict
+				if fault == "duplicate" {
+					want = http.StatusBadRequest
+				}
+				if rec.Code != want {
+					t.Fatal("REST accepted malformed original", fault, rec.Code, rec.Body.String())
+				}
+			}
+		})
+	}
+}

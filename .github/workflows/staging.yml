@@ -12,11 +12,11 @@ on:
       prototype_version:
         description: Prototype binary and OCI version
         type: string
-        default: 2.0.50-prototype.5
+        default: 2.0.50-prototype.6
       prototype_tag:
         description: Non-v immutable prototype tag
         type: string
-        default: prototype-ssh-passthrough.5
+        default: prototype-ssh-passthrough.6
 
 permissions:
   contents: write

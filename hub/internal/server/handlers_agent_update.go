@@ -12,6 +12,7 @@ import (
 	"github.com/wyiu/veyport/hub/internal/auditrecord"
 	"github.com/wyiu/veyport/hub/internal/grpcserver"
 	"github.com/wyiu/veyport/hub/internal/model"
+	"github.com/wyiu/veyport/proto/updateutil"
 )
 
 // ResolveAgentArtifact shares the same verified distribution as local updates.
@@ -51,10 +52,12 @@ func (s *Server) handleAgentUpdateStart(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	var body struct {
-		ExpectedVersion        string `json:"expected_version"`
-		ExpectedRevision       string `json:"expected_revision"`
-		BootstrapIdleConfirmed bool   `json:"bootstrap_idle_confirmed"`
-		ExpectedConnectionID   string `json:"expected_connection_id"`
+		ExpectedVersion          string `json:"expected_version"`
+		ExpectedRevision         string `json:"expected_revision"`
+		BootstrapIdleConfirmed   bool   `json:"bootstrap_idle_confirmed"`
+		ExpectedConnectionID     string `json:"expected_connection_id"`
+		BootstrapOriginalVersion string `json:"bootstrap_original_version"`
+		BootstrapOriginalSHA256  string `json:"bootstrap_original_sha256"`
 	}
 	raw, err := io.ReadAll(io.LimitReader(r.Body, 2049))
 	r.Body.Close()
@@ -64,7 +67,7 @@ func (s *Server) handleAgentUpdateStart(w http.ResponseWriter, r *http.Request) 
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
 	defer cancel()
-	op, ticket, err := s.agentUpdates.Start(ctx, UserIDFromContext(r.Context()), SessionIDFromContext(r.Context()), r.PathValue("id"), body.ExpectedVersion, body.ExpectedRevision, grpcserver.BootstrapIdleAssertion{Confirmed: body.BootstrapIdleConfirmed, ConnectionID: body.ExpectedConnectionID})
+	op, ticket, err := s.agentUpdates.Start(ctx, UserIDFromContext(r.Context()), SessionIDFromContext(r.Context()), r.PathValue("id"), body.ExpectedVersion, body.ExpectedRevision, grpcserver.BootstrapIdleAssertion{Confirmed: body.BootstrapIdleConfirmed, ConnectionID: body.ExpectedConnectionID, Original: updateutil.BootstrapOriginal{Version: body.BootstrapOriginalVersion, SHA256: body.BootstrapOriginalSHA256}})
 	if err != nil {
 		agentUpdateError(w, err)
 		return

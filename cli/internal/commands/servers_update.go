@@ -15,15 +15,17 @@ import (
 	"github.com/wyiu/veyport/cli/internal/api"
 	"github.com/wyiu/veyport/cli/internal/auth"
 	"github.com/wyiu/veyport/cli/internal/cmdutil"
+	"github.com/wyiu/veyport/proto/updateutil"
 )
 
-const serversUpdateUsage = "usage: vey servers update <node> [--check | --status [--operation ID] | --bootstrap-idle-confirmed | --acknowledge-recovery ID --verified-sha256 HASH]"
+const serversUpdateUsage = "usage: vey servers update <node> [--check | --status [--operation ID] | --bootstrap-idle-confirmed [--bootstrap-original-version VERSION --bootstrap-original-sha256 HASH] | --acknowledge-recovery ID --verified-sha256 HASH]"
 
 type serversUpdateOptions struct {
 	node                      string
 	check, status             bool
 	bootstrapIdleConfirmed    bool
 	operation, recovery, hash string
+	original                  updateutil.BootstrapOriginal
 }
 
 func parseServersUpdate(args []string) (serversUpdateOptions, error) {
@@ -46,7 +48,7 @@ func parseServersUpdate(args []string) (serversUpdateOptions, error) {
 				return fail()
 			}
 			o.bootstrapIdleConfirmed = true
-		case "--operation", "--acknowledge-recovery", "--verified-sha256":
+		case "--operation", "--acknowledge-recovery", "--verified-sha256", "--bootstrap-original-version", "--bootstrap-original-sha256":
 			if i+1 >= len(args) {
 				return fail()
 			}
@@ -71,6 +73,16 @@ func parseServersUpdate(args []string) (serversUpdateOptions, error) {
 					return fail()
 				}
 				o.hash = args[i]
+			case "--bootstrap-original-version":
+				if o.original.Version != "" {
+					return fail()
+				}
+				o.original.Version = args[i]
+			case "--bootstrap-original-sha256":
+				if o.original.SHA256 != "" {
+					return fail()
+				}
+				o.original.SHA256 = args[i]
 			}
 		default:
 			if strings.HasPrefix(args[i], "-") || o.node != "" {
@@ -79,7 +91,7 @@ func parseServersUpdate(args []string) (serversUpdateOptions, error) {
 			o.node = args[i]
 		}
 	}
-	if strings.TrimSpace(o.node) == "" || o.check && o.status || o.operation != "" && !o.status || o.recovery != "" && (o.check || o.status) || ((o.recovery != "") != (o.hash != "")) || o.bootstrapIdleConfirmed && (o.check || o.status || o.recovery != "") {
+	if strings.TrimSpace(o.node) == "" || o.check && o.status || o.operation != "" && !o.status || o.recovery != "" && (o.check || o.status) || ((o.recovery != "") != (o.hash != "")) || o.bootstrapIdleConfirmed && (o.check || o.status || o.recovery != "") || o.original.Validate() != nil || o.original.Present() && !o.bootstrapIdleConfirmed {
 		return fail()
 	}
 	return o, nil
@@ -140,6 +152,9 @@ func runServersUpdate(ctx *Context, args []string) int {
 	if o.bootstrapIdleConfirmed && (!check.BootstrapRequired || !check.BootstrapIdleConfirmationRequired) {
 		return serversUpdateFinish(ctx, cmdutil.NewForbiddenError(errors.New("--bootstrap-idle-confirmed is only valid for the preserving manual bootstrap path")))
 	}
+	if o.original.Present() && check.Current != nil {
+		return serversUpdateFinish(ctx, cmdutil.NewForbiddenError(errors.New("original binary assertion is only valid for a legacy agent without update capabilities")))
+	}
 	if !o.check && check.BootstrapRequired && check.BootstrapIdleConfirmationRequired && (!o.bootstrapIdleConfirmed || check.ConnectionID == "") {
 		return serversUpdateFinish(ctx, cmdutil.NewForbiddenError(errors.New("this agent cannot prove complete file/upload/log quiescence. Through direct SSH and operator coordination, close user file/log clients and agent sessions, let all work finish, verify the agent is idle, then run vey servers update "+updateShellQuote(o.node)+" --bootstrap-idle-confirmed. Known active work will still refuse")))
 	}
@@ -166,16 +181,18 @@ func runServersUpdate(ctx *Context, args []string) int {
 	var start api.AgentUpdateStart
 	err = actx.Do(call, func(c *api.Client) error {
 		return c.Post(call, base, struct {
-			Version                string `json:"expected_version"`
-			Revision               string `json:"expected_revision"`
-			BootstrapIdleConfirmed bool   `json:"bootstrap_idle_confirmed,omitempty"`
-			ExpectedConnectionID   string `json:"expected_connection_id,omitempty"`
+			Version                  string `json:"expected_version"`
+			Revision                 string `json:"expected_revision"`
+			BootstrapIdleConfirmed   bool   `json:"bootstrap_idle_confirmed,omitempty"`
+			ExpectedConnectionID     string `json:"expected_connection_id,omitempty"`
+			BootstrapOriginalVersion string `json:"bootstrap_original_version,omitempty"`
+			BootstrapOriginalSHA256  string `json:"bootstrap_original_sha256,omitempty"`
 		}{check.Target.Version, check.Target.Revision, o.bootstrapIdleConfirmed, func() string {
 			if o.bootstrapIdleConfirmed {
 				return check.ConnectionID
 			}
 			return ""
-		}()}, &start)
+		}(), o.original.Version, o.original.SHA256}, &start)
 	})
 	if err != nil {
 		return serversUpdateFinish(ctx, err)
@@ -188,6 +205,9 @@ func runServersUpdate(ctx *Context, args []string) int {
 			return serversUpdateFinish(ctx, errors.New("Hub returned an invalid bootstrap ticket"))
 		}
 		start.BootstrapCommand = fmt.Sprintf("curl -fsS --proto '=https' %s | sudo bash -s -- --hub %s --ticket %s", updateShellQuote(hubURL+"/install/agent-update.sh"), updateShellQuote(hubURL), updateShellQuote(start.BootstrapTicket))
+		if o.original.Present() {
+			start.BootstrapCommand += " --original-version " + updateShellQuote(o.original.Version) + " --original-sha256 " + updateShellQuote(o.original.SHA256)
+		}
 		err = ctx.Printer.Payload(start, func(w io.Writer, _ any) error {
 			_, err := fmt.Fprintf(w, "Operation: %s\nRun on the node through direct SSH before the ticket expires:\n%s\nThen inspect: vey servers update %s --status --operation %s\n", start.Operation.ID, start.BootstrapCommand, updateShellQuote(o.node), start.Operation.ID)
 			return err

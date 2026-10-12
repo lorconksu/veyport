@@ -677,33 +677,69 @@ For an older enrolled agent, or an agent that cannot report complete file/log
 quiescence (including prototype.4 agents), the CLI's check response includes
 `bootstrap_required`, `bootstrap_idle_confirmation_required`, and the current
 `connection_id`. Close file and log clients, agent sessions, and other work;
-allow it to finish and verify the node is idle over direct SSH. Then run
-`vey servers update web01 --bootstrap-idle-confirmed`. This flag is the
-operator's explicit idle assertion, not an automatic activity detector. The CLI
-binds it to the exact checked connection generation; the Hub rejects a changed
-connection and still refuses known active work. If you cannot confirm idle,
-leave the node untouched and check again later.
+allow it to finish and verify the node is idle over direct SSH. The ordinary
+preserving bootstrap uses only the explicit idle assertion:
 
-After that assertion, the CLI returns a one-use bootstrap command tied to the
-node, Hub artifact, and operation. Run that printed command through direct SSH
-on the node within 120 seconds. It uses a short-lived ticket, verifies the Hub's
-artifact, independently checks the service cgroup is idle, and updates the
-existing installation while preserving its mTLS identity, `agent.conf`, service
-configuration, and node ID. It does not re-enroll or use a registration token.
-The HTTPS Hub hostname in the bootstrap
-command must match the Hub hostname configured for the agent's mTLS connection;
-the HTTPS and gRPC ports may differ. The command format is:
+```bash
+vey servers update web01 --bootstrap-idle-confirmed
+```
+
+If the original binary is unstamped (for example, the legacy 0.1.0 agent from
+the prototype.5 staging incident), also establish its version from trustworthy
+deployment records and measure the installed bytes over direct SSH. Do not
+infer a version from an arbitrary unstamped executable. For that one-time path,
+pass both assertions:
+
+```bash
+vey servers update web01 --bootstrap-idle-confirmed \
+  --bootstrap-original-version 0.1.0 \
+  --bootstrap-original-sha256 <sha256-from-direct-ssh>
+```
+
+Obtain the digest on the target with `sudo sha256sum /usr/local/bin/veyport-agent`.
+The version and hash flags are mandatory as a
+pair. They bind the operator's assertion to the exact bytes being replaced.
+The helper checks the local package/platform, confirms that both linker-stamped
+identity fields are absent, and verifies the measured SHA-256. A stamped binary
+cannot use this original-identity path. The target must be newer than the
+asserted original version. The Hub binds the original-identity assertion to
+the authenticated actor, session, node, fresh connection, and one-use ticket.
+The idle flag remains an operator assertion, not an automatic activity
+detector; the Hub still rejects known active work and a changed connection. If
+you cannot confirm idle, leave the node untouched and check again later.
+
+The CLI prints a one-use direct-SSH bootstrap command tied to the node, Hub
+artifact, operation, and (for an unstamped binary) the same version and SHA-256
+assertions. Run that exact printed command on the node within 120 seconds. It
+verifies the Hub artifact and original bytes, checks the service is idle, then
+updates the existing installation while preserving its mTLS identity,
+`agent.conf`, service configuration, and node ID. It does not re-enroll or use
+a registration token. The HTTPS Hub hostname in the printed command must match
+the hostname configured for the agent's mTLS connection; HTTPS and gRPC ports
+may differ. Do not substitute or reconstruct the command by hand.
+
+For the unstamped-original case, the printed command has this form and includes
+the same assertions supplied to `vey servers update`:
 
 ```bash
 curl -fsS --proto '=https' 'https://<hub>/install/agent-update.sh' | \
-  sudo bash -s -- --hub 'https://<hub>' --ticket '<one-use-ticket>'
+  sudo bash -s -- --hub 'https://<hub>' --ticket '<64-char-ticket>' \
+    --original-version '0.1.0' --original-sha256 '<sha256>'
 ```
 
-Use the exact command printed by the CLI rather than substituting a ticket or
-Hub address by hand. The updater restarts the existing systemd service and the
-Hub confirms success only after the agent reconnects and durably confirms the
-exact target artifact. After the script finishes, use the printed operation
-command to inspect the result.
+Creating the operation and printing a command does not mean installation
+succeeded. After running the command, inspect the durable operation and wait for
+`succeeded`:
+
+```bash
+vey servers update web01 --status
+vey servers update web01 --status --operation <operation-id>
+vey ssh web01 -- 'hostname; id; uname -s'
+```
+
+The Hub records success only after the agent reconnects and durably confirms the
+exact target artifact. Verify the node's identity and OS over `vey ssh` as a
+separate operational check.
 
 An update that fails can be `failed`, `rolled_back`, or `unknown`. A legacy
 agent's rollback may remain `unknown` because the old protocol cannot report an

@@ -5040,11 +5040,14 @@ func (x *UpdateAuthorization) GetExpiresUnixMilli() int64 {
 }
 
 type UpdateBootstrapRequest struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Ticket        string                 `protobuf:"bytes,1,opt,name=ticket,proto3" json:"ticket,omitempty"`
-	Capabilities  *UpdateCapabilities    `protobuf:"bytes,2,opt,name=capabilities,proto3" json:"capabilities,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	state        protoimpl.MessageState `protogen:"open.v1"`
+	Ticket       string                 `protobuf:"bytes,1,opt,name=ticket,proto3" json:"ticket,omitempty"`
+	Capabilities *UpdateCapabilities    `protobuf:"bytes,2,opt,name=capabilities,proto3" json:"capabilities,omitempty"`
+	// True only after the helper verified an exact unstamped original against an
+	// operator assertion. The Hub requires the same assertion bound to the ticket.
+	OriginalIdentityAsserted bool `protobuf:"varint,3,opt,name=original_identity_asserted,json=originalIdentityAsserted,proto3" json:"original_identity_asserted,omitempty"`
+	unknownFields            protoimpl.UnknownFields
+	sizeCache                protoimpl.SizeCache
 }
 
 func (x *UpdateBootstrapRequest) Reset() {
@@ -5089,6 +5092,13 @@ func (x *UpdateBootstrapRequest) GetCapabilities() *UpdateCapabilities {
 		return x.Capabilities
 	}
 	return nil
+}
+
+func (x *UpdateBootstrapRequest) GetOriginalIdentityAsserted() bool {
+	if x != nil {
+		return x.OriginalIdentityAsserted
+	}
+	return false
 }
 
 var File_proto_veyport_v1_agent_proto protoreflect.FileDescriptor
@@ -5467,10 +5477,11 @@ const file_proto_veyport_v1_agent_proto_rawDesc = "" +
 	"\x04data\x18\x02 \x01(\fR\x04data\"f\n" +
 	"\x13UpdateAuthorization\x12!\n" +
 	"\foperation_id\x18\x01 \x01(\tR\voperationId\x12,\n" +
-	"\x12expires_unix_milli\x18\x02 \x01(\x03R\x10expiresUnixMilli\"t\n" +
+	"\x12expires_unix_milli\x18\x02 \x01(\x03R\x10expiresUnixMilli\"\xb2\x01\n" +
 	"\x16UpdateBootstrapRequest\x12\x16\n" +
 	"\x06ticket\x18\x01 \x01(\tR\x06ticket\x12B\n" +
-	"\fcapabilities\x18\x02 \x01(\v2\x1e.veyport.v1.UpdateCapabilitiesR\fcapabilities*m\n" +
+	"\fcapabilities\x18\x02 \x01(\v2\x1e.veyport.v1.UpdateCapabilitiesR\fcapabilities\x12<\n" +
+	"\x1aoriginal_identity_asserted\x18\x03 \x01(\bR\x18originalIdentityAsserted*m\n" +
 	"\x0fExecutionOutput\x12 \n" +
 	"\x1cEXECUTION_OUTPUT_UNSPECIFIED\x10\x00\x12\x1b\n" +
 	"\x17EXECUTION_OUTPUT_STDOUT\x10\x01\x12\x1b\n" +

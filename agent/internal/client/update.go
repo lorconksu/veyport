@@ -6,6 +6,7 @@ import (
 	"log"
 
 	"github.com/wyiu/veyport/agent/internal/update"
+	"github.com/wyiu/veyport/proto/updateutil"
 	pb "github.com/wyiu/veyport/proto/veyport/v1"
 )
 
@@ -83,11 +84,11 @@ func (c *Client) RunUpdateSupervisor(ctx context.Context, operation string) erro
 	})
 }
 
-func (c *Client) RunUpdateBootstrap(ctx context.Context, ticket, version, revision string) error {
+func (c *Client) RunUpdateBootstrap(ctx context.Context, ticket, version, revision string, assertions ...updateutil.BootstrapOriginal) error {
 	connection, err := c.dialExecutionHub()
 	if err != nil {
 		return fmt.Errorf("bootstrap requires existing enrolled mTLS: %w", err)
 	}
 	defer connection.Close()
-	return update.Bootstrap(ctx, ticket, version, revision, pb.NewAgentServiceClient(connection))
+	return update.Bootstrap(ctx, ticket, version, revision, pb.NewAgentServiceClient(connection), assertions...)
 }

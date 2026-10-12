@@ -441,8 +441,8 @@ func TestResolveNoCredentialsIsNotAnError(t *testing.T) {
 	if code := cmdutil.Code(err); code != cmdutil.ExitAuth {
 		t.Errorf("Client error exit code = %d, want %d", code, cmdutil.ExitAuth)
 	}
-	if !strings.Contains(err.Error(), "vey login") {
-		t.Errorf("error lacks re-login guidance: %s", err)
+	if !strings.Contains(err.Error(), "vey --hub "+f.hub.url()+" login") {
+		t.Errorf("error lacks correctly ordered re-login guidance: %s", err)
 	}
 
 	if err := ac.Do(context.Background(), listServers(context.Background())); err == nil {
@@ -648,8 +648,8 @@ func TestRefreshFailsWhenNoNewerTokenExists(t *testing.T) {
 	if code := cmdutil.Code(err); code != cmdutil.ExitAuth {
 		t.Errorf("exit code = %d, want %d", code, cmdutil.ExitAuth)
 	}
-	if !strings.Contains(err.Error(), "vey login") {
-		t.Errorf("error lacks re-login guidance: %s", err)
+	if !strings.Contains(err.Error(), "vey --hub "+f.hub.url()+" login") {
+		t.Errorf("error lacks correctly ordered re-login guidance: %s", err)
 	}
 	// Exactly one refresh attempt: the reread found nothing newer, so there
 	// was nothing to retry with, and the protected route was never reached.
@@ -674,8 +674,8 @@ func TestRefreshFailsWhenNothingIsStored(t *testing.T) {
 	if code := cmdutil.Code(err); code != cmdutil.ExitAuth {
 		t.Errorf("exit code = %d, want %d", code, cmdutil.ExitAuth)
 	}
-	if !strings.Contains(err.Error(), "vey login") {
-		t.Errorf("error lacks re-login guidance: %s", err)
+	if !strings.Contains(err.Error(), "vey --hub "+f.hub.url()+" login") {
+		t.Errorf("error lacks correctly ordered re-login guidance: %s", err)
 	}
 	assertCounts(t, f.hub, 0, 0)
 }
@@ -1084,8 +1084,8 @@ func TestRotateRaceLostBothAttemptsRejected(t *testing.T) {
 	if code := cmdutil.Code(err); code != cmdutil.ExitAuth {
 		t.Errorf("exit code = %d, want %d (both rejections are plain 401s)", code, cmdutil.ExitAuth)
 	}
-	if !strings.Contains(err.Error(), "vey login") {
-		t.Errorf("error lacks re-login guidance: %s", err)
+	if !strings.Contains(err.Error(), "vey --hub "+f.hub.url()+" login") {
+		t.Errorf("error lacks correctly ordered re-login guidance: %s", err)
 	}
 }
 

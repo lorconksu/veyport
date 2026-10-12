@@ -19,7 +19,7 @@ func TestBootstrapScriptRejectsSourceIdentityAndArtifactFaults(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, fault := range []string{"valid", "valid_ipv6", "valid_arm64", "valid_arm64_alias", "source", "config_mode", "cert_symlink", "tls_mode", "directory_group_write", "directory_other_write", "checksum", "truncated", "platform", "manifest_path", "unsupported_arch"} {
+	for _, fault := range []string{"valid", "valid_asserted", "valid_asserted_metadata", "assertion_partial", "assertion_malformed", "assertion_duplicate", "assertion_empty", "valid_ipv6", "valid_arm64", "valid_arm64_alias", "source", "config_mode", "cert_symlink", "tls_mode", "directory_group_write", "directory_other_write", "checksum", "truncated", "platform", "manifest_path", "unsupported_arch"} {
 		t.Run(fault, func(t *testing.T) {
 			root := t.TempDir()
 			os.Chmod(root, 0700)
@@ -94,7 +94,7 @@ func TestBootstrapScriptRejectsSourceIdentityAndArtifactFaults(t *testing.T) {
 			os.WriteFile(filepath.Join(tools, "curl"), []byte(fakeCurl), 0700)
 			os.WriteFile(filepath.Join(tools, "uname"), []byte("#!/bin/sh\ncase \"$1\" in -s) printf '%s\\n' Linux;; -m) printf '%s\\n' \"$FIXTURE_MACHINE_ARCH\";; *) exit 1;; esac\n"), 0700)
 			script := string(source)
-			for _, replacement := range [][2]string{{"/usr/local/bin", bin}, {"/etc/veyport/tls", tls}, {"/etc/veyport", cfg}, {"/run/systemd/system", systemd}, {"for dir in /usr /usr/local ", "for dir in "}, {" /etc ", " "}, {"${EUID} -eq 0", fmt.Sprintf("${EUID} -eq %d", os.Geteuid())}, {"== '0:600:1'", fmt.Sprintf("== '%d:600:1'", os.Getuid())}, {"== 0 ]]", fmt.Sprintf("== %d ]]", os.Getuid())}, {`"$workdir/candidate" --update-bootstrap "$ticket" --update-hub "$hub"`, `printf 'FIXTURE_VERIFIED_CANDIDATE\n'`}} {
+			for _, replacement := range [][2]string{{"/usr/local/bin", bin}, {"/etc/veyport/tls", tls}, {"/etc/veyport", cfg}, {"/run/systemd/system", systemd}, {"for dir in /usr /usr/local ", "for dir in "}, {" /etc ", " "}, {"${EUID} -eq 0", fmt.Sprintf("${EUID} -eq %d", os.Geteuid())}, {"== '0:600:1'", fmt.Sprintf("== '%d:600:1'", os.Getuid())}, {"== 0 ]]", fmt.Sprintf("== %d ]]", os.Getuid())}, {`"$workdir/candidate" --update-bootstrap "$ticket" --update-hub "$hub" "${original_args[@]}"`, `printf 'FIXTURE_VERIFIED_CANDIDATE %s\n' "${original_args[@]}"`}} {
 				script = strings.ReplaceAll(script, replacement[0], replacement[1])
 			}
 			scriptPath := filepath.Join(root, "bootstrap.sh")
@@ -106,13 +106,34 @@ func TestBootstrapScriptRejectsSourceIdentityAndArtifactFaults(t *testing.T) {
 			if fault == "source" {
 				hub = "https://other.test"
 			}
-			cmd := exec.Command("bash", scriptPath, "--hub", hub, "--ticket", strings.Repeat("x", 64))
+			arguments := []string{scriptPath, "--hub", hub, "--ticket", strings.Repeat("x", 64)}
+			originalVersion := "0.1.0"
+			if fault == "valid_asserted_metadata" {
+				originalVersion = "0.1.0-prototype.1+legacy"
+			}
+			if strings.Contains(fault, "assert") {
+				arguments = append(arguments, "--original-version", originalVersion, "--original-sha256", strings.Repeat("b", 64))
+				switch fault {
+				case "assertion_partial":
+					arguments = arguments[:len(arguments)-2]
+				case "assertion_malformed":
+					arguments[len(arguments)-1] = "bad"
+				case "assertion_duplicate":
+					arguments = append(arguments, "--original-version", "0.1.0")
+				case "assertion_empty":
+					arguments[len(arguments)-3] = ""
+				}
+			}
+			cmd := exec.Command("bash", arguments...)
 			cmd.Env = append(os.Environ(), "PATH="+tools+":"+os.Getenv("PATH"), "FIXTURE_METADATA="+metadata, "FIXTURE_ARTIFACT="+artifact, "FIXTURE_CURL_LOG="+filepath.Join(root, "curl-log"), "FIXTURE_MACHINE_ARCH="+machineArch)
 			output, err := cmd.CombinedOutput()
 			verified := strings.Contains(string(output), "FIXTURE_VERIFIED_CANDIDATE")
 			if strings.HasPrefix(fault, "valid") {
 				if err != nil || !verified {
 					t.Fatalf("valid script refused: %v %s", err, output)
+				}
+				if strings.Contains(fault, "asserted") && (!strings.Contains(string(output), "--update-original-version") || !strings.Contains(string(output), originalVersion) || !strings.Contains(string(output), "--update-original-sha256") || !strings.Contains(string(output), strings.Repeat("b", 64))) {
+					t.Fatal("shell discarded original assertion", string(output))
 				}
 			} else if err == nil || verified {
 				t.Fatalf("unsafe script passed: %s", output)

@@ -1165,6 +1165,9 @@ func TestErrorsNeverContainTheRefreshToken(t *testing.T) {
 		if strings.Contains(err.Error(), testToken) {
 			t.Errorf("error leaked the refresh token: %s", err)
 		}
+		if !strings.Contains(err.Error(), "vey --hub "+hubA+" login") {
+			t.Errorf("error lacks correctly ordered re-login guidance: %s", err)
+		}
 	})
 }
 
