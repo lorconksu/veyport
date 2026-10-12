@@ -83,3 +83,24 @@ func TestSupportedHostProbeAndFailClosedRecovery(t *testing.T) {
 		})
 	}
 }
+
+func TestCapabilitiesHashRunningInodeAfterCanonicalPathChanged(t *testing.T) {
+	p, _ := installation(t)
+	p.config = filepath.Join(p.root, "agent.conf")
+	p.systemdDir = filepath.Join(p.root, "systemd")
+	p.systemdRun = filepath.Join(p.root, "systemd-run")
+	p.systemctl = filepath.Join(p.root, "systemctl")
+	os.WriteFile(p.config, []byte("existing identity"), 0600)
+	os.Mkdir(p.systemdDir, 0700)
+	for _, tool := range []string{p.systemdRun, p.systemctl} {
+		os.WriteFile(tool, []byte("fixture"), 0755)
+	}
+	actualExecutable := filepath.Join(p.root, "running-inode")
+	os.WriteFile(actualExecutable, oldBytes, 0755)
+	os.WriteFile(p.binary, newBytes, 0755)
+	r := newRuntime(oldMetadata.Version, oldMetadata.Revision, p.config, p.journalDir, false, sessionlimit.New(8), hostEnvironment{paths: p, executable: p.binary, runningExecutable: actualExecutable, uid: 0, os: "linux", arch: runtime.GOARCH})
+	capabilities := r.Capabilities()
+	if capabilities.Sha256 != oldMetadata.SHA256 || capabilities.Supported {
+		t.Fatal("capabilities attested canonical replacement instead of actual running bytes")
+	}
+}

@@ -54,19 +54,28 @@ func runCommand(ctx context.Context, program string, args ...string) error {
 
 func New(version, revision, config, certDir string, insecure bool, budget *sessionlimit.Budget) *Runtime {
 	executable, _ := os.Executable()
-	return newRuntime(version, revision, config, certDir, insecure, budget, hostEnvironment{paths: fixedPaths(), executable: executable, uid: os.Geteuid(), os: runtime.GOOS, arch: runtime.GOARCH})
+	runningExecutable := executable
+	if runtime.GOOS == "linux" {
+		runningExecutable = "/proc/self/exe"
+	}
+	return newRuntime(version, revision, config, certDir, insecure, budget, hostEnvironment{paths: fixedPaths(), executable: executable, runningExecutable: runningExecutable, uid: os.Geteuid(), os: runtime.GOOS, arch: runtime.GOARCH})
 }
 
 type hostEnvironment struct {
-	paths      paths
-	executable string
-	uid        int
-	os, arch   string
+	paths             paths
+	executable        string
+	runningExecutable string
+	uid               int
+	os, arch          string
 }
 
 func newRuntime(version, revision, config, certDir string, insecure bool, budget *sessionlimit.Budget, host hostEnvironment) *Runtime {
 	r := &Runtime{paths: host.paths, budget: budget, launch: runCommand, config: config, certDir: certDir, insecure: insecure, host: host, capabilities: &pb.UpdateCapabilities{ProtocolVersion: 1, Os: host.os, Arch: host.arch, Version: version, Revision: revision, BootId: bootID()}}
-	if executable := host.executable; executable != "" {
+	actualExecutable := host.runningExecutable
+	if actualExecutable == "" {
+		actualExecutable = host.executable
+	}
+	if executable := actualExecutable; executable != "" {
 		if f, err := os.Open(executable); err == nil {
 			hash, _, err := hashFile(f)
 			_ = f.Close()
