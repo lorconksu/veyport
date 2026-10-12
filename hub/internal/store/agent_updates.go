@@ -19,15 +19,15 @@ func (s *Store) CreateAgentUpdate(u model.AgentUpdate) error {
 	return err
 }
 func (s *Store) GetAgentUpdate(id string) (model.AgentUpdate, error) {
-	return s.readAgentUpdate("id=?", id)
+	return scanAgentUpdate(s.db.QueryRow("SELECT metadata,actor_id,session_id,ticket_hash FROM agent_updates WHERE id=?", id))
 }
 func (s *Store) LatestAgentUpdate(node string) (model.AgentUpdate, error) {
-	return s.readAgentUpdate("node_id=? ORDER BY created_at DESC,rowid DESC LIMIT 1", node)
+	return scanAgentUpdate(s.db.QueryRow("SELECT metadata,actor_id,session_id,ticket_hash FROM agent_updates WHERE node_id=? ORDER BY created_at DESC,rowid DESC LIMIT 1", node))
 }
-func (s *Store) readAgentUpdate(where string, arg any) (model.AgentUpdate, error) {
+func scanAgentUpdate(row rowScanner) (model.AgentUpdate, error) {
 	var u model.AgentUpdate
 	var raw string
-	err := s.db.QueryRow("SELECT metadata,actor_id,session_id,ticket_hash FROM agent_updates WHERE "+where, arg).Scan(&raw, &u.ActorID, &u.SessionID, &u.TicketHash)
+	err := row.Scan(&raw, &u.ActorID, &u.SessionID, &u.TicketHash)
 	if err != nil {
 		return u, err
 	}
@@ -60,12 +60,8 @@ func (s *Store) ActiveAgentUpdates() ([]model.AgentUpdate, error) {
 	defer rows.Close()
 	var result []model.AgentUpdate
 	for rows.Next() {
-		var u model.AgentUpdate
-		var raw string
-		if err = rows.Scan(&raw, &u.ActorID, &u.SessionID, &u.TicketHash); err != nil {
-			return nil, err
-		}
-		if err = unmarshalAgentUpdate(raw, &u); err != nil {
+		u, err := scanAgentUpdate(rows)
+		if err != nil {
 			return nil, err
 		}
 		result = append(result, u)
@@ -96,5 +92,5 @@ func unmarshalAgentUpdate(raw string, u *model.AgentUpdate) error {
 	return nil
 }
 func (s *Store) AgentUpdateByTicketHash(hash string) (model.AgentUpdate, error) {
-	return s.readAgentUpdate("ticket_hash=? AND state='bootstrap_required'", hash)
+	return scanAgentUpdate(s.db.QueryRow("SELECT metadata,actor_id,session_id,ticket_hash FROM agent_updates WHERE ticket_hash=? AND state='bootstrap_required'", hash))
 }

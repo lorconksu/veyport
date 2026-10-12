@@ -31,7 +31,10 @@ for dir in /usr /usr/local /usr/local/bin /etc /etc/veyport /etc/veyport/tls; do
   [[ -d "$dir" && ! -L "$dir" ]] || fail 'the enrolled installation contains an unsafe directory'
   [[ $(stat -c '%u' -- "$dir") == 0 ]] || fail 'installation directories must be root-owned'
   mode=$(stat -c '%a' -- "$dir")
-  (( (8#$mode & 8#022) == 0 )) || fail 'installation directories must not be group or world writable'
+  # Octal group/other digits 0, 1, 4 and 5 omit the write bit. Padding also
+  # handles short modes; this is exactly the traditional mode & 0022 test.
+  protected_mode_expression='^[0-7]*[0145][0145]$'
+  [[ "00$mode" =~ $protected_mode_expression ]] || fail 'installation directories must not be group or world writable'
 done
 [[ $(stat -c '%a' -- /etc/veyport/tls) == 700 ]] || fail 'TLS directory must have mode 0700'
 private_file /etc/veyport/agent.conf
@@ -47,9 +50,20 @@ enrolled=$(sed -n 's/^[[:space:]]*"hub_url"[[:space:]]*:[[:space:]]*"\([^"\\]*\)
 [[ -n "$enrolled" && "$enrolled" != *$'\n'* ]] || fail 'could not read one canonical enrolled Hub address'
 configured_host="${enrolled%:*}"
 authority="${hub#https://}"
-if [[ "$authority" == \[* ]]; then public_host="${authority%%]*}]"; else public_host="${authority%%:*}"; fi
+if [[ "$authority" == '['* ]]; then public_host="${authority%%]*}]"; else public_host="${authority%%:*}"; fi
 [[ "$public_host" == "$configured_host" ]] || fail 'HTTPS source differs from the enrolled Hub'
-case $(uname -m) in x86_64) arch=amd64; machine='3e 00' ;; aarch64|arm64) arch=arm64; machine='b7 00' ;; *) fail 'unsupported Linux architecture' ;; esac
+machine_arch=$(uname -m)
+case "$machine_arch" in
+  x86_64)
+    arch=amd64
+    machine='3e 00'
+    ;;
+  aarch64|arm64)
+    arch=arm64
+    machine='b7 00'
+    ;;
+  *) fail 'unsupported Linux architecture' ;;
+esac
 
 workdir=$(mktemp -d /usr/local/bin/.veyport-agent-bootstrap-XXXXXXXX)
 chmod 700 "$workdir"

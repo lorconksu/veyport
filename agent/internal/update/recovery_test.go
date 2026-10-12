@@ -316,3 +316,100 @@ func TestReconnectObservesPreinstallFailureAfterWorkerCancellation(t *testing.T)
 		t.Fatal("terminal preinstall failure left admission permanently locked")
 	}
 }
+
+func TestSupervisorPreinstallRefusalsAndLostStopReply(t *testing.T) {
+	for _, fault := range []string{"expired", "existing_backup", "lost_stop_reply", "candidate_changed_after_stop", "live_supervisor", "stale_operation"} {
+		t.Run(fault, func(t *testing.T) {
+			p, entry := staged(t)
+			operation := entry.Operation
+			identity := filepath.Join(p.journalDir, "node_key.enc")
+			if err := os.WriteFile(identity, []byte("preserved fixture identity"), 0600); err != nil {
+				t.Fatal(err)
+			}
+			if fault == "expired" {
+				entry.Expires = time.Now().Add(-time.Second).UnixMilli()
+				if err := p.write(entry); err != nil {
+					t.Fatal(err)
+				}
+			}
+			priorBackup := []byte("existing recovery backup must not be overwritten")
+			if fault == "existing_backup" {
+				if err := os.WriteFile(p.backup(operation), priorBackup, 0600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if fault == "live_supervisor" {
+				owner, err := p.lock("agent-update-supervisor.lock")
+				if err != nil {
+					t.Fatal(err)
+				}
+				defer owner.Close()
+			}
+			if fault == "stale_operation" {
+				operation = "stale-operation"
+			}
+			authorized := false
+			var commands []string
+			s := supervisor{paths: p, wait: time.Millisecond, rollbackWait: time.Millisecond, authorize: func(context.Context, string) (*pb.UpdateAuthorization, error) {
+				authorized = true
+				return &pb.UpdateAuthorization{OperationId: entry.Operation, ExpiresUnixMilli: entry.Expires}, nil
+			}}
+			s.run = func(_ context.Context, program string, args ...string) error {
+				if program != "/usr/bin/systemctl" || len(args) != 2 || args[1] != Service {
+					t.Fatalf("unexpected service command: %s %v", program, args)
+				}
+				commands = append(commands, args[0])
+				if len(commands) == 1 && fault == "lost_stop_reply" {
+					return errors.New("service stop reply lost after dispatch")
+				}
+				if len(commands) == 1 && fault == "candidate_changed_after_stop" {
+					data := append([]byte(nil), newBytes...)
+					data[len(data)-1] ^= 1
+					return os.WriteFile(p.candidate(entry.Operation), data, 0700)
+				}
+				if args[0] == "start" {
+					current, err := os.ReadFile(p.binary)
+					if err != nil || string(current) != string(oldBytes) {
+						t.Fatal("recovery started an unverified replacement")
+					}
+				}
+				return nil
+			}
+			if err := s.runOperation(context.Background(), operation); err == nil {
+				t.Fatal("refused or unconfirmed update claimed success")
+			}
+			current, err := os.ReadFile(p.binary)
+			if err != nil || string(current) != string(oldBytes) {
+				t.Fatal("refusal/recovery did not preserve original binary")
+			}
+			key, err := os.ReadFile(identity)
+			if err != nil || string(key) != "preserved fixture identity" {
+				t.Fatal("refusal/recovery changed enrolled identity")
+			}
+			journal, err := p.read()
+			if err != nil || journal.Confirmed {
+				t.Fatal("unobserved recovery durably certified an outcome")
+			}
+			if fault == "lost_stop_reply" || fault == "candidate_changed_after_stop" {
+				if strings.Join(commands, ",") != "stop,stop,start" || journal.State != "rolled_back" {
+					t.Fatalf("recovery commands=%v state=%s", commands, journal.State)
+				}
+				backup, err := os.ReadFile(p.backup(entry.Operation))
+				if err != nil || string(backup) != string(oldBytes) {
+					t.Fatal("recovery lost the original backup")
+				}
+			} else if len(commands) != 0 {
+				t.Fatal("preinstall refusal changed the service")
+			}
+			if (fault == "expired" || fault == "live_supervisor" || fault == "stale_operation") && authorized {
+				t.Fatal("invalid staged operation attempted fresh authorization")
+			}
+			if fault == "existing_backup" {
+				backup, err := os.ReadFile(p.backup(entry.Operation))
+				if err != nil || string(backup) != string(priorBackup) {
+					t.Fatal("existing recovery backup was overwritten")
+				}
+			}
+		})
+	}
+}
