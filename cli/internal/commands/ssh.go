@@ -34,7 +34,6 @@ import (
 	"os/exec"
 	"os/signal"
 	"path/filepath"
-	"sort"
 	"strconv"
 	"strings"
 	"syscall"
@@ -274,57 +273,10 @@ func certPrincipal(certLine string) (string, error) {
 	return cert.ValidPrincipals[0], nil
 }
 
-// resolveSSHServer resolves ref to a server using exactly the algorithm
-// runServersGet (servers.go) uses for `vey servers get`: a direct GET by
-// ID/name first, falling back to exactly one search call on 404, ambiguous
-// matches reported with candidates (exit 2 via cmdutil.NewUsageError),
-// unknown reported as exit 5 (cmdutil.NewNotFoundError).
-//
-// This task's file-touch scope is ssh.go/ssh_test.go and the context.go
-// registry line only, so the algorithm is duplicated here rather than
-// factored out of servers.go into a shared helper; TestServersGet_* and this
-// file's own resolution tests both pin the same behavior, so the two would
-// need to drift in the same direction to go unnoticed.
+// resolveSSHServer uses the same caller-visible resolution as servers get.
 func resolveSSHServer(bg context.Context, actx *auth.AuthContext, ref string) (api.Server, error) {
-	var server api.Server
-	getErr := actx.Do(bg, func(c *api.Client) error {
-		return c.Get(bg, "/api/servers/"+url.PathEscape(ref), nil, &server)
-	})
-	if getErr == nil {
-		return server, nil
-	}
-	if cmdutil.Code(getErr) != cmdutil.ExitNotFound {
-		return api.Server{}, getErr
-	}
-
-	var page api.ServersPage
-	query := url.Values{"search": []string{ref}}
-	if err := actx.Do(bg, func(c *api.Client) error {
-		return c.Get(bg, "/api/servers", query, &page)
-	}); err != nil {
-		return api.Server{}, err
-	}
-
-	var matches []api.Server
-	for _, s := range page.Servers {
-		if s.Name == ref {
-			matches = append(matches, s)
-		}
-	}
-
-	switch len(matches) {
-	case 1:
-		return matches[0], nil
-	case 0:
-		return api.Server{}, cmdutil.NewNotFoundError(fmt.Errorf("no server found matching %q", ref))
-	default:
-		names := make([]string, 0, len(matches))
-		for _, m := range matches {
-			names = append(names, fmt.Sprintf("%s (%s)", m.Name, m.ID))
-		}
-		sort.Strings(names)
-		return api.Server{}, cmdutil.NewUsageError(fmt.Errorf("%q matches multiple servers: %s", ref, strings.Join(names, ", ")))
-	}
+	server, _, err := resolveServer(bg, actx, ref)
+	return server, err
 }
 
 // warnIfHostFingerprintChanged tells the operator when the gateway's live

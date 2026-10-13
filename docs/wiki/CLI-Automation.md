@@ -75,6 +75,14 @@ first. Upgrade an online agent only when its version lacks execution support,
 using the supported deployment procedure; repeating the command will not fix
 either condition.
 
+Server names resolve by exact match among servers visible to your identity,
+including for non-admin users. The CLI tries an ID lookup first, then one
+bounded name search after a `404` or permission-denied `403`. If that search
+page is incomplete, select an ID using the paginated list above. An unknown
+or inaccessible reference may retain `403` (exit 4) because the Hub hides
+whether an ID exists; a complete search after `404` with no exact match exits
+5. Resolving a name does not change SSH, file, log, or update permissions.
+
 The current prototype pairing above describes what has been published. It
 does not establish that a particular Hub, CLI, or target has been updated or
 qualified. Confirm versions in your environment before relying on this flow.
