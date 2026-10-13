@@ -51,6 +51,11 @@ Use the status filter buttons at the top of the dashboard to quickly narrow the 
 
 The active filter is highlighted. The count next to each filter label updates in real time.
 
+The table shows up to **25 servers per page**. Use **Previous page** and
+**Next page** to move through the filtered results. The select-all checkbox
+selects rows on the current page only; changing pages, filters, or the search
+clears the selection.
+
 ---
 
 ## Searching
@@ -119,6 +124,43 @@ tabs; see [[Logging In]] and [[Troubleshooting]] for session limits and network 
 ## Opening a Server
 
 Click a **server name** to open the [[Server Detail]] page for that server. From there you can browse the remote filesystem, tail logs, and upload files.
+
+---
+
+## Updating an Agent
+
+Admins can update an eligible enrolled agent from the **Agent Version** cell in
+its server row. The Hub reports **Update available** when a newer supported
+agent release is ready, or **Up to date** when there is no newer release. Older
+agents that need the direct-SSH bootstrap show **Manual upgrade required**;
+installations the updater cannot support show **Update unsupported**. These
+checks use the Hub's verified distribution and do not query GitHub directly.
+
+To update, choose **Update available** for one row. Review the node, current and
+target versions, and restart warning, then click **Update agent** to confirm.
+The dialog shows reported operation stages and the final result. It monitors
+for up to 150 seconds while open; close and reopen it or click **Refresh
+status** to continue checking. There is no bulk update action.
+
+The agent must be idle. The Hub blocks new work during the update and refuses to
+start while tracked file, log, terminal, command, or other agent work is active
+or cannot be confirmed idle. Let that work finish and retry later. A successful
+result is recorded only after the agent reconnects and confirms the exact target
+version and artifact. If you close the dialog, reopen the action for that
+server to retrieve its operation status. After a full page reload, open that
+server's Agent Version action to retrieve the latest operation, even while the
+node is offline. An interrupted request alone does not establish success or
+failure. Checking or refreshing status does not restart an update. An unknown
+outcome remains blocking until it is reconciled; follow the documented CLI or
+direct-SSH recovery procedure before creating another update. Review a failed
+operation and confirm the node is ready before trying again.
+
+The Fleet Dashboard action uses the standard update flow documented in
+[[Deployment#update-the-cli-and-enrolled-agents]]. It requires a live interactive
+administrator session and a Standard installation. Older agents that require a
+one-time preserving bootstrap still need the direct-SSH process there, including
+the operator's idle confirmation where required; the dashboard does not assert
+that a legacy node is idle on the operator's behalf.
 
 ---
 
