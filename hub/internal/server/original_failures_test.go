@@ -37,7 +37,7 @@ func TestOriginalRESTCrashRecoveryRecordsUnknownCountWithoutReading(t *testing.T
 	})
 	// Simulate process loss immediately after the durable one-use claim, before
 	// the handler can record a start/result. Recovery must not open the original.
-	a, err := h.s.store.ConsumeOriginalAccess(auditrecord.Hash([]byte(issued.Handle)), "original-reader", h.sid, h.clock.Now(), h.s.lockoutPolicy().SessionIdle)
+	a, err := h.s.store.ConsumeOriginalAccess(auditrecord.Hash([]byte(issued.Handle)), "original-reader", h.sid, h.clock.Now(), h.s.lockoutPolicy())
 	if err != nil {
 		t.Fatal(err)
 	}

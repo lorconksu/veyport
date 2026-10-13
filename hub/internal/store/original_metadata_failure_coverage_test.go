@@ -1,6 +1,7 @@
 package store_test
 
 import (
+	"github.com/wyiu/veyport/hub/internal/lockout"
 	"testing"
 	"time"
 
@@ -11,11 +12,11 @@ func TestOriginalConfirmationAndConsumptionWriteFailuresNeverReleasePartialAutho
 	s := testStore(t)
 	now := time.Now().UTC()
 	a, proof := originalFixture(t, s, "confirmation-delete-failure", now)
-	if err := s.CreateOriginalAccess(a, proof, now.Add(24*time.Hour), now, 0); err != nil {
+	if err := s.CreateOriginalAccess(a, proof, now.Add(24*time.Hour), now, lockout.Policy{}); err != nil {
 		t.Fatal(err)
 	}
 	originalExec(t, s, `CREATE TRIGGER evidence_delete_fault BEFORE DELETE ON original_read_evidence BEGIN SELECT RAISE(ABORT,'synthetic durable delete failure'); END`)
-	if err := s.AuthorizeOriginalAccess(a.ID, "verified-intent", a.ExpiresAt, a.Object, now, 0); err == nil {
+	if err := s.AuthorizeOriginalAccess(a.ID, "verified-intent", a.ExpiresAt, a.Object, now, lockout.Policy{}); err == nil {
 		t.Fatal("partial confirmation created download authority")
 	}
 	got, err := s.GetOriginalAccess(a.ID)
@@ -27,11 +28,11 @@ func TestOriginalConfirmationAndConsumptionWriteFailuresNeverReleasePartialAutho
 		t.Fatal("failed authorization retained a false confirmation")
 	}
 	originalExec(t, s, "DROP TRIGGER evidence_delete_fault")
-	if err := s.AuthorizeOriginalAccess(a.ID, "verified-intent", a.ExpiresAt, a.Object, now, 0); err != nil {
+	if err := s.AuthorizeOriginalAccess(a.ID, "verified-intent", a.ExpiresAt, a.Object, now, lockout.Policy{}); err != nil {
 		t.Fatal(err)
 	}
 	originalExec(t, s, `CREATE TRIGGER handle_claim_fault BEFORE UPDATE ON original_access WHEN NEW.state='started' BEGIN SELECT RAISE(ABORT,'synthetic claim write failure'); END`)
-	if _, err := s.ConsumeOriginalAccess(a.HandleSHA256, a.UserID, a.SessionID, now, 0); err == nil {
+	if _, err := s.ConsumeOriginalAccess(a.HandleSHA256, a.UserID, a.SessionID, now, lockout.Policy{}); err == nil {
 		t.Fatal("failed claim returned original-read authority")
 	}
 	got, err = s.GetOriginalAccess(a.ID)
@@ -39,10 +40,10 @@ func TestOriginalConfirmationAndConsumptionWriteFailuresNeverReleasePartialAutho
 		t.Fatal("failed claim lost the atomic one-use boundary")
 	}
 	originalExec(t, s, "DROP TRIGGER handle_claim_fault")
-	if _, err := s.ConsumeOriginalAccess(a.HandleSHA256, a.UserID, a.SessionID, now, 0); err != nil {
+	if _, err := s.ConsumeOriginalAccess(a.HandleSHA256, a.UserID, a.SessionID, now, lockout.Policy{}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := s.ConsumeOriginalAccess(a.HandleSHA256, a.UserID, a.SessionID, now, 0); err == nil {
+	if _, err := s.ConsumeOriginalAccess(a.HandleSHA256, a.UserID, a.SessionID, now, lockout.Policy{}); err == nil {
 		t.Fatal("repair recreated a consumed permit")
 	}
 }
@@ -52,7 +53,7 @@ func TestOriginalResultAndPermanentGapPersistenceFailuresKeepExactRecoverableEvi
 	now := time.Now().UTC()
 	a, proof := originalFixture(t, s, "result-update-failure", now)
 	authorizeOriginal(t, s, a, proof, now)
-	if _, err := s.ConsumeOriginalAccess(a.HandleSHA256, a.UserID, a.SessionID, now, 0); err != nil {
+	if _, err := s.ConsumeOriginalAccess(a.HandleSHA256, a.UserID, a.SessionID, now, lockout.Policy{}); err != nil {
 		t.Fatal(err)
 	}
 	a.BytesWritten = 3
@@ -101,7 +102,7 @@ func TestOriginalMetadataCorruptionBlocksRecoveryAndPruningRemainsAtomic(t *test
 	s := testStore(t)
 	now := time.Now().UTC()
 	a, proof := originalFixture(t, s, "corrupt-retention", now)
-	if err := s.CreateOriginalAccess(a, proof, now.Add(24*time.Hour), now, 0); err != nil {
+	if err := s.CreateOriginalAccess(a, proof, now.Add(24*time.Hour), now, lockout.Policy{}); err != nil {
 		t.Fatal(err)
 	}
 	originalExec(t, s, "UPDATE original_read_evidence SET min_retain_until='corrupt timestamp' WHERE access_id=?", a.ID)
@@ -149,7 +150,7 @@ func TestOriginalMissingEvidenceTablesDoNotConsumeFreshOperationProof(t *testing
 			now := time.Now().UTC()
 			a, proof := originalFixture(t, s, "unavailable-evidence", now)
 			originalExec(t, s, "DROP TABLE "+table)
-			if err := s.CreateOriginalAccess(a, proof, now.Add(24*time.Hour), now, 0); err == nil {
+			if err := s.CreateOriginalAccess(a, proof, now.Add(24*time.Hour), now, lockout.Policy{}); err == nil {
 				t.Fatal("missing durable evidence storage created original authority")
 			}
 			if _, err := s.GetOriginalAccess(a.ID); err == nil {

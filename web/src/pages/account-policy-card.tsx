@@ -9,6 +9,7 @@ type PolicyField =
   | 'lockout_duration_minutes'
   | 'dormant_days'
   | 'session_idle_minutes'
+  | 'cli_session_idle_minutes'
   | 'session_max_hours'
 
 const FIELDS: { key: PolicyField; label: string; helper: string; id: string }[] = [
@@ -16,7 +17,8 @@ const FIELDS: { key: PolicyField; label: string; helper: string; id: string }[] 
   { key: 'lockout_window_minutes', label: 'Lockout window (minutes)', helper: '', id: 'policy-lockout-window-minutes' },
   { key: 'lockout_duration_minutes', label: 'Lock duration (minutes)', helper: '0 = no auto-unlock', id: 'policy-lockout-duration-minutes' },
   { key: 'dormant_days', label: 'Dormant after (days)', helper: '0 disables dormancy', id: 'policy-dormant-days' },
-  { key: 'session_idle_minutes', label: 'Idle timeout (minutes)', helper: '0 disables the idle limit', id: 'policy-session-idle-minutes' },
+  { key: 'session_idle_minutes', label: 'Web session idle timeout (minutes)', helper: '0 disables the idle limit', id: 'policy-session-idle-minutes' },
+  { key: 'cli_session_idle_minutes', label: 'CLI session idle timeout (minutes)', helper: '0 disables the idle limit', id: 'policy-cli-session-idle-minutes' },
   { key: 'session_max_hours', label: 'Maximum session (hours)', helper: '0 disables the absolute limit', id: 'policy-session-max-hours' },
 ]
 
@@ -36,6 +38,7 @@ export function AccountPolicyCard() {
     lockout_duration_minutes: '',
     dormant_days: '',
     session_idle_minutes: '',
+    cli_session_idle_minutes: '',
     session_max_hours: '',
   })
   const [formLoaded, setFormLoaded] = useState(false)
@@ -55,6 +58,7 @@ export function AccountPolicyCard() {
         lockout_duration_minutes: String(data.lockout_duration_minutes ?? 0),
         dormant_days: String(data.dormant_days ?? 0),
         session_idle_minutes: String(data.session_idle_minutes ?? 0),
+        cli_session_idle_minutes: String(data.cli_session_idle_minutes ?? 45),
         session_max_hours: String(data.session_max_hours ?? 0),
       })
       setFormLoaded(true)

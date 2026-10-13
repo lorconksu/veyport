@@ -85,7 +85,7 @@ func (s *Server) originalAuthority(user, sid string, revision *int) (*model.User
 		return nil, e, authorization.ErrDenied
 	}
 	sess, err := s.store.GetSession(sid)
-	if err != nil || sess.UserID != user || session.Evaluate(session.State{CreatedAt: sess.CreatedAt, LastSeenAt: sess.LastSeenAt, ExpiresAt: sess.ExpiresAt, EndedAt: sess.EndedAt}, s.now(), s.lockoutPolicy()) != session.VerdictOK {
+	if err != nil || sess.UserID != user || session.Evaluate(session.StateFromModel(sess), s.now(), s.lockoutPolicy()) != session.VerdictOK {
 		return nil, e, authorization.ErrDenied
 	}
 	return u, e, nil
@@ -397,7 +397,7 @@ func (s *Server) handleOriginalAccess(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	retain := now.Add(time.Duration(selected.policy.Policy.RetentionHours) * time.Hour)
-	if err = s.store.CreateOriginalAccess(a, req.StepupProof, retain, now, s.lockoutPolicy().SessionIdle); err != nil {
+	if err = s.store.CreateOriginalAccess(a, req.StepupProof, retain, now, s.lockoutPolicy()); err != nil {
 		originalError(w, err)
 		return
 	}
@@ -421,7 +421,7 @@ func (s *Server) handleOriginalAccess(w http.ResponseWriter, r *http.Request) {
 	if claims.ExpiresAt.Time.Before(expires) {
 		expires = claims.ExpiresAt.Time
 	}
-	if err = s.store.AuthorizeOriginalAccess(a.ID, receipt.Token, expires, receipt.Manifest, s.now(), s.lockoutPolicy().SessionIdle); err != nil {
+	if err = s.store.AuthorizeOriginalAccess(a.ID, receipt.Token, expires, receipt.Manifest, s.now(), s.lockoutPolicy()); err != nil {
 		s.wakeOriginalRecovery()
 		originalError(w, err)
 		return

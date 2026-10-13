@@ -127,10 +127,12 @@ OS permissions. See [[SSH Gateway]] and [[Server Detail]].
 ## Session Activity and Lifetimes
 
 Completed browser and CLI sign-ins create server-side sessions. Access and refresh
-tokens bind to the session ID. The default idle limit is **15 minutes** and the
-absolute lifetime is **12 hours**; administrators configure both in Account policy.
-Validated authenticated requests update `last_seen_at`, with writes throttled to
-`min(60 seconds, idle limit / 10)` (60 seconds when idle expiry is disabled).
+tokens bind to the session ID. The default idle limit is **15 minutes for web
+sessions** and **45 minutes for CLI sessions**; the absolute lifetime is **12 hours
+for both**. Administrators configure these in Account policy. The saved session
+kind selects the idle limit. Validated authenticated requests update `last_seen_at`,
+with writes throttled to `min(60 seconds, idle limit / 10)` (60 seconds when idle
+expiry is disabled).
 Refreshing a session atomically rotates only that session's one-use refresh token.
 It leaves other sessions and still-valid access tokens untouched. Logging out,
 session expiry, account or security changes, and explicit session revocation keep
@@ -148,9 +150,11 @@ alive until its absolute limit. See [[Logging In]] and [[Troubleshooting]].
 
 SSH certificates have a separate validity period and are checked when connecting.
 Established shells are not governed by HTTP session idle or absolute timers, and
-certificate expiry does not terminate an existing SSH connection. Administrative
-session revocation and account disable can close running shells through the shared
-terminal registry. See [[SSH Gateway]] and [[Settings]].
+certificate expiry does not terminate an existing SSH connection. An already-running
+CLI SSH command continues when its login session expires from inactivity; subsequent
+CLI requests require a new sign-in. Administrative session revocation and account
+disable can close running shells through the shared terminal registry. See [[SSH
+Gateway]] and [[Settings]].
 
 ## Agent Certificate Lifecycle
 

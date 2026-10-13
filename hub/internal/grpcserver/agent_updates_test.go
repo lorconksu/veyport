@@ -78,6 +78,44 @@ func newUpdateFixture(t *testing.T) *updateFixture {
 	}
 	return &updateFixture{h, u, st, stream, a, c, body}
 }
+
+func TestAgentUpdateAuthorityUsesStoredCLISessionIdle(t *testing.T) {
+	for _, tc := range []struct {
+		name, kind              string
+		gap                     time.Duration
+		ended, absolute, wantOK bool
+	}{
+		{"cli20m", model.SessionKindCLI, 20 * time.Minute, false, false, true},
+		{"cli45m", model.SessionKindCLI, 45 * time.Minute, false, false, true},
+		{"cli46m", model.SessionKindCLI, 46 * time.Minute, false, false, false},
+		{"web20m", model.SessionKindWeb, 20 * time.Minute, false, false, false},
+		{"cliended", model.SessionKindCLI, 20 * time.Minute, true, false, false},
+		{"cliabsolute", model.SessionKindCLI, 20 * time.Minute, false, true, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newUpdateFixture(t)
+			now := time.Date(2026, 10, 13, 12, 0, 0, 0, time.UTC)
+			f.u.now = func() time.Time { return now }
+			if _, err := f.st.DB().Exec("UPDATE sessions SET kind=?,user_agent='vey/spoof',last_seen_at=? WHERE id='session'", tc.kind, now.Add(-tc.gap).Format("2006-01-02 15:04:05")); err != nil {
+				t.Fatal(err)
+			}
+			if tc.ended {
+				if _, err := f.st.EndSession("session", model.SessionEndRevokedAdmin, nil, now); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if tc.absolute {
+				if _, err := f.st.DB().Exec("UPDATE sessions SET expires_at=? WHERE id='session'", now.Format("2006-01-02 15:04:05")); err != nil {
+					t.Fatal(err)
+				}
+			}
+			err := f.u.authorizeAdmin("admin", "session")
+			if tc.wantOK && err != nil || !tc.wantOK && !errors.Is(err, ErrAgentUpdateDenied) {
+				t.Fatalf("agent update authority=%v, wantOK=%v", err, tc.wantOK)
+			}
+		})
+	}
+}
 func (f *updateFixture) start(t *testing.T) model.AgentUpdate {
 	t.Helper()
 	op, _, err := f.u.Start(context.Background(), "admin", "session", "node", f.target.Version, f.target.Revision, f.idleAssertion())

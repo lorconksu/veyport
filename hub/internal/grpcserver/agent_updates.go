@@ -113,7 +113,7 @@ func (u *AgentUpdates) authorizeAdmin(actor, sid string) error {
 		return ErrAgentUpdateDenied
 	}
 	sess, err := u.store.GetSession(sid)
-	if err != nil || sess.UserID != actor || session.Evaluate(session.State{CreatedAt: sess.CreatedAt, LastSeenAt: sess.LastSeenAt, ExpiresAt: sess.ExpiresAt, EndedAt: sess.EndedAt}, u.now(), lockout.Load(u.store.GetConfig)) != session.VerdictOK {
+	if err != nil || sess.UserID != actor || session.Evaluate(session.StateFromModel(sess), u.now(), lockout.Load(u.store.GetConfig)) != session.VerdictOK {
 		return ErrAgentUpdateDenied
 	}
 	return nil

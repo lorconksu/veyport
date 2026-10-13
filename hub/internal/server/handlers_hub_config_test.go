@@ -5,7 +5,10 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"testing"
+
+	"github.com/wyiu/veyport/hub/internal/lockout"
 )
 
 func TestUpdateHubConfig_ValidAddress(t *testing.T) {
@@ -210,8 +213,50 @@ func TestHandleGetHubConfig_LockoutDefaults(t *testing.T) {
 	if got, want := resp["session_idle_minutes"], float64(15); got != want {
 		t.Fatalf("expected session_idle_minutes %v, got %v", want, got)
 	}
+	if got, want := resp["cli_session_idle_minutes"], float64(45); got != want {
+		t.Fatalf("expected cli_session_idle_minutes %v, got %v", want, got)
+	}
 	if got, want := resp["session_max_hours"], float64(12); got != want {
 		t.Fatalf("expected session_max_hours %v, got %v", want, got)
+	}
+}
+
+func TestUpdateHubConfig_CLIIdleIndependentBoundsAndNoPartialWrites(t *testing.T) {
+	s := testServer(t)
+	token := registerAndGetAdminToken(t, s)
+	for _, tc := range []struct {
+		name   string
+		value  int64
+		status int
+	}{
+		{"custom", 2, http.StatusOK},
+		{"disabled", 0, http.StatusOK},
+		{"maximum", lockout.MaxCLISessionIdleMinutes, http.StatusOK},
+		{"overflow", lockout.MaxCLISessionIdleMinutes + 1, http.StatusBadRequest},
+		{"negative", -1, http.StatusBadRequest},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			before := getHubConfig(t, s, token)
+			body := `{"cli_session_idle_minutes":` + strconv.FormatInt(tc.value, 10) + `}`
+			if tc.status != http.StatusOK {
+				body = `{"session_idle_minutes":1,"cli_session_idle_minutes":` + strconv.FormatInt(tc.value, 10) + `}`
+			}
+			req := httptest.NewRequest("PUT", testHubSettingsPath, bytes.NewBufferString(body))
+			req.Header.Set("Authorization", testBearerPrefix+token)
+			rec := httptest.NewRecorder()
+			s.routes().ServeHTTP(rec, req)
+			if rec.Code != tc.status {
+				t.Fatalf("PUT=%d body=%s, want%d", rec.Code, rec.Body.String(), tc.status)
+			}
+			after := getHubConfig(t, s, token)
+			wantCLI := float64(tc.value)
+			if tc.status != http.StatusOK {
+				wantCLI = before["cli_session_idle_minutes"].(float64)
+			}
+			if after["cli_session_idle_minutes"] != wantCLI || after["session_idle_minutes"] != float64(15) || after["session_max_hours"] != float64(12) {
+				t.Fatalf("policy update altered unrelated or rejected fields: %+v", after)
+			}
+		})
 	}
 }
 

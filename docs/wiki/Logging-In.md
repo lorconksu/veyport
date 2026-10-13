@@ -84,18 +84,23 @@ Admins configure directory integration in [[Settings]] under the **Directory** t
 Every completed sign-in - web or the `vey` CLI - creates a session on the hub, and that session
 has two limits, both administrator-configurable in **Settings → Users → Account policy**:
 
-- **Idle timeout** (default **15 minutes**) - if no authenticated session request reaches the
-  Hub for this long, the session expires. Signed-in pages send throttled session checks after
-  recent keyboard, pointer, input, touch, or scroll interaction in a visible tab, including
-  inside dialogs. These checks run independently of data polling and have a network timeout.
-  They stop when the tab is hidden or interaction ends. Data polling also counts as activity;
-  a visible page alone still does not guarantee the Hub is reachable.
+- **Idle timeout** - the default is **15 minutes for web sessions** and **45 minutes for CLI
+  sessions**. If no authenticated session request reaches the Hub for this long, the session
+  expires. The Hub uses the session kind recorded at sign-in to select the limit. Signed-in pages
+  send throttled session checks after recent keyboard, pointer, input, touch, or scroll interaction
+  in a visible tab, including inside dialogs. These checks run independently of data polling and
+  have a network timeout. They stop when the tab is hidden or interaction ends. Data polling also
+  counts as activity; a visible page alone still does not guarantee the Hub is reachable.
 - **Maximum session** (default **12 hours**) - a session cannot be extended past this no matter
   how active you are. It is set when you sign in and never moves, even across activity that would
   otherwise reset the idle clock.
 
 Either limit can be turned off by an administrator (set to `0`), and each is enforced
 independently - reaching either one ends the session the same way.
+
+These limits govern authenticated session requests. An SSH command that is already running
+continues if its CLI session later expires from inactivity; the next CLI request requires a new
+sign-in. SSH command authorization and explicit account or access revocation remain separate.
 
 When a session expires or is ended - by either limit, by an administrator, or by using **Sign out
 other sessions** on the Profile tab (see [[Settings]]) - the next request is refused with **"session
@@ -110,9 +115,9 @@ end the sessions they apply to.
 
 ### Why was I signed out?
 
-- **You were idle past the timeout.** The session's idle clock (default 15 minutes) ran out.
-  Sign in again; if this happens too often for your workflow, ask an administrator whether the
-  idle timeout can reasonably be increased.
+- **You were idle past the timeout.** The session's idle clock ran out (default 15 minutes for
+  web, 45 minutes for CLI). Sign in again; if this happens too often for your workflow, ask an
+  administrator whether that session kind's idle timeout can reasonably be increased.
 - **You'd been signed in a long time.** The absolute session limit (default 12 hours) was
   reached regardless of activity. Sign in again - there's nothing to configure on your end.
 - **An administrator ended your session.** Either one specific session (from the Sessions panel

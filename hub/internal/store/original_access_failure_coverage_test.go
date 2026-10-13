@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/wyiu/veyport/hub/internal/auditrecord"
+	"github.com/wyiu/veyport/hub/internal/lockout"
 	"github.com/wyiu/veyport/hub/internal/model"
 	"github.com/wyiu/veyport/hub/internal/store"
 )
@@ -15,7 +16,7 @@ func TestOriginalDatabaseWriteFailuresRollbackProofAndHandleAuthority(t *testing
 	now := time.Now().UTC()
 	a, proof := originalFixture(t, s, "failed-write", now)
 	originalExec(t, s, `CREATE TRIGGER fail_original_queue BEFORE INSERT ON original_read_evidence BEGIN SELECT RAISE(ABORT,'synthetic evidence disk failure'); END`)
-	if err := s.CreateOriginalAccess(a, proof, now.Add(24*time.Hour), now, 0); err == nil {
+	if err := s.CreateOriginalAccess(a, proof, now.Add(24*time.Hour), now, lockout.Policy{}); err == nil {
 		t.Fatal("unpreserved intent created authority")
 	}
 	if _, err := s.GetOriginalAccess(a.ID); err == nil {
@@ -26,25 +27,25 @@ func TestOriginalDatabaseWriteFailuresRollbackProofAndHandleAuthority(t *testing
 		t.Fatal("failed durable intent consumed proof")
 	}
 	originalExec(t, s, "DROP TRIGGER fail_original_queue")
-	if err := s.CreateOriginalAccess(a, proof, now.Add(24*time.Hour), now, 0); err != nil {
+	if err := s.CreateOriginalAccess(a, proof, now.Add(24*time.Hour), now, lockout.Policy{}); err != nil {
 		t.Fatal("rolled back proof could not be used after repaired storage:", err)
 	}
 	originalExec(t, s, `CREATE TRIGGER fail_original_confirmation BEFORE INSERT ON original_read_confirmations BEGIN SELECT RAISE(ABORT,'synthetic confirmation disk failure'); END`)
-	if err := s.AuthorizeOriginalAccess(a.ID, "verified-token", a.ExpiresAt, a.Object, now, 0); err == nil {
+	if err := s.AuthorizeOriginalAccess(a.ID, "verified-token", a.ExpiresAt, a.Object, now, lockout.Policy{}); err == nil {
 		t.Fatal("failed confirmation authorized a handle")
 	}
 	stored, err := s.GetOriginalAccess(a.ID)
 	if err != nil || stored.State != "pending" || stored.IntentToken != "" {
 		t.Fatal("failed confirmation left partial authority")
 	}
-	if _, err = s.ConsumeOriginalAccess(a.HandleSHA256, a.UserID, a.SessionID, now, 0); err == nil {
+	if _, err = s.ConsumeOriginalAccess(a.HandleSHA256, a.UserID, a.SessionID, now, lockout.Policy{}); err == nil {
 		t.Fatal("rolled back handle could be consumed")
 	}
 	originalExec(t, s, "DROP TRIGGER fail_original_confirmation")
-	if err = s.AuthorizeOriginalAccess(a.ID, "verified-token", a.ExpiresAt, a.Object, now, 0); err != nil {
+	if err = s.AuthorizeOriginalAccess(a.ID, "verified-token", a.ExpiresAt, a.Object, now, lockout.Policy{}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err = s.ConsumeOriginalAccess(a.HandleSHA256, a.UserID, a.SessionID, now, 0); err != nil {
+	if _, err = s.ConsumeOriginalAccess(a.HandleSHA256, a.UserID, a.SessionID, now, lockout.Policy{}); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -54,7 +55,7 @@ func TestOriginalOutcomeConflictsCannotReplaceQueuedOrConfirmedExactEvidence(t *
 	now := time.Now().UTC()
 	a, proof := originalFixture(t, s, "exact-failure", now)
 	authorizeOriginal(t, s, a, proof, now)
-	if _, err := s.ConsumeOriginalAccess(a.HandleSHA256, a.UserID, a.SessionID, now, 0); err != nil {
+	if _, err := s.ConsumeOriginalAccess(a.HandleSHA256, a.UserID, a.SessionID, now, lockout.Policy{}); err != nil {
 		t.Fatal(err)
 	}
 	a.BytesWritten = 3
@@ -92,15 +93,15 @@ func TestOriginalMalformedMetadataAndBoundaryArgumentsNeverClaim(t *testing.T) {
 	a, proof := originalFixture(t, s, "invalid-boundary", now)
 	authorizeOriginal(t, s, a, proof, now)
 	for _, token := range []string{"", "not-a-hash"} {
-		if _, err := s.ConsumeOriginalAccess(token, a.UserID, a.SessionID, now, 0); err == nil {
+		if _, err := s.ConsumeOriginalAccess(token, a.UserID, a.SessionID, now, lockout.Policy{}); err == nil {
 			t.Fatal("malformed handle claimed an original")
 		}
 	}
-	if _, err := s.ConsumeOriginalAccess(a.HandleSHA256, a.UserID, "", now, 0); err == nil {
+	if _, err := s.ConsumeOriginalAccess(a.HandleSHA256, a.UserID, "", now, lockout.Policy{}); err == nil {
 		t.Fatal("sessionless handle was accepted")
 	}
 	originalExec(t, s, "UPDATE original_access SET object_ref=? WHERE id=?", []byte(`{"private_unknown":"SYNTHETIC_CANARY"}`), a.ID)
-	if _, err := s.ConsumeOriginalAccess(a.HandleSHA256, a.UserID, a.SessionID, now, 0); err == nil {
+	if _, err := s.ConsumeOriginalAccess(a.HandleSHA256, a.UserID, a.SessionID, now, lockout.Policy{}); err == nil {
 		t.Fatal("corrupted exact-version metadata claimed an original")
 	}
 	var consumed any
@@ -112,7 +113,7 @@ func TestOriginalMalformedMetadataAndBoundaryArgumentsNeverClaim(t *testing.T) {
 			t.Fatal("unbounded/fabricated outcome was accepted")
 		}
 	}
-	if err := s.AuthorizeOriginalAccess(a.ID, "", now.Add(time.Minute), a.Object, now, 0); err == nil {
+	if err := s.AuthorizeOriginalAccess(a.ID, "", now.Add(time.Minute), a.Object, now, lockout.Policy{}); err == nil {
 		t.Fatal("empty admission authorization was accepted")
 	}
 }
@@ -125,10 +126,12 @@ func TestOriginalClosedStorageNeverReportsConfirmationOrPruningSuccess(t *testin
 		t.Fatal(err)
 	}
 	for name, call := range map[string]func() error{
-		"create":    func() error { return s.CreateOriginalAccess(a, proof, now.Add(time.Hour), now, 0) },
-		"authorize": func() error { return s.AuthorizeOriginalAccess(a.ID, "token", a.ExpiresAt, a.Object, now, 0) },
+		"create": func() error { return s.CreateOriginalAccess(a, proof, now.Add(time.Hour), now, lockout.Policy{}) },
+		"authorize": func() error {
+			return s.AuthorizeOriginalAccess(a.ID, "token", a.ExpiresAt, a.Object, now, lockout.Policy{})
+		},
 		"claim": func() error {
-			_, err := s.ConsumeOriginalAccess(a.HandleSHA256, a.UserID, a.SessionID, now, 0)
+			_, err := s.ConsumeOriginalAccess(a.HandleSHA256, a.UserID, a.SessionID, now, lockout.Policy{})
 			return err
 		},
 		"outcome": func() error {
@@ -155,10 +158,10 @@ func TestOriginalOutcomeSchemaAndStateBoundariesPreserveClaim(t *testing.T) {
 	now := time.Now().UTC()
 	a, proof := originalFixture(t, s, "outcome-boundary", now)
 	authorizeOriginal(t, s, a, proof, now)
-	if err := s.AuthorizeOriginalAccess(a.ID, "token", a.ExpiresAt, a.Object, now, 0); err == nil {
+	if err := s.AuthorizeOriginalAccess(a.ID, "token", a.ExpiresAt, a.Object, now, lockout.Policy{}); err == nil {
 		t.Fatal("authorized permit returned to pending authorization")
 	}
-	if _, err := s.ConsumeOriginalAccess(a.HandleSHA256, a.UserID, a.SessionID, now, 0); err != nil {
+	if _, err := s.ConsumeOriginalAccess(a.HandleSHA256, a.UserID, a.SessionID, now, lockout.Policy{}); err != nil {
 		t.Fatal(err)
 	}
 	for _, state := range []string{"completed", "expired"} {

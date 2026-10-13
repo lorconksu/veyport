@@ -133,7 +133,7 @@ the session, and the reason (see [[Audit Logs]]). Underlying endpoints: `GET
 
 ### Account Policy
 
-An "Account policy" card above the table lets administrators read and edit six values in one
+An "Account policy" card above the table lets administrators read and edit seven values in one
 place, replacing the API-only configuration from the previous release:
 
 | Field | Default | `0` means |
@@ -142,20 +142,22 @@ place, replacing the API-only configuration from the previous release:
 | Lockout window (minutes) | 15 | - (not zero-able; the window a failure counts toward the threshold) |
 | Lock duration (minutes) | 15 | A lock never expires on its own - only an admin's **Unlock** or **Enable** clears it |
 | Dormant after (days) | 35 | Dormancy is disabled entirely - no account is ever evaluated as dormant |
-| Idle timeout (minutes) | 15 | The idle limit is disabled - a session never times out from inactivity alone |
+| Web session idle timeout (minutes) | 15 | The idle limit is disabled - a web session never times out from inactivity alone |
+| CLI session idle timeout (minutes) | 45 | The idle limit is disabled - a CLI session never times out from inactivity alone |
 | Maximum session (hours) | 12 | The absolute limit is disabled - a session can run indefinitely as long as it stays active |
 
 The card shows the effective values on load, validates each field as a non-negative integer with
 an inline error on a bad entry (nothing is saved until every field is valid), and confirms with
 "Account policy saved." on success. See `PUT /api/settings/hub` in [[API Reference]] for the
 underlying fields (`lockout_threshold`, `lockout_window_minutes`, `lockout_duration_minutes`,
-`dormant_days`, `session_idle_minutes`, `session_max_hours`).
+`dormant_days`, `session_idle_minutes`, `cli_session_idle_minutes`, `session_max_hours`).
 
-**Idle timeout** and **maximum session** (feature 009) govern every server-side session - see
-[[Logging In]] for what a user actually sees when one expires. An idle-timeout change takes effect
-on every session's very next check; a maximum-session change only affects sessions created after
-the save - a session already running keeps the absolute expiry it was issued with, even if the
-policy is later lowered or raised.
+The two **idle timeout** fields apply to the saved kind of each server-side session (web or CLI) -
+see [[Logging In]] for what a user sees when one expires. An idle-timeout change takes effect on
+the next check for sessions of that kind; a maximum-session change only affects sessions created
+after the save - a session already running keeps the absolute expiry it was issued with, even if
+the policy is later lowered or raised. Idle expiry alone does not cancel an SSH command already
+running; see [[Logging In]].
 
 ### Dormant Accounts
 

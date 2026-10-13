@@ -59,7 +59,7 @@ func (s *Server) handleOriginalDownload(w http.ResponseWriter, r *http.Request) 
 		originalError(w, err)
 		return
 	}
-	a, err := s.store.ConsumeOriginalAccess(auditrecord.Hash([]byte(handle)), user, sid, s.now(), s.lockoutPolicy().SessionIdle)
+	a, err := s.store.ConsumeOriginalAccess(auditrecord.Hash([]byte(handle)), user, sid, s.now(), s.lockoutPolicy())
 	if err != nil {
 		originalError(w, err)
 		return

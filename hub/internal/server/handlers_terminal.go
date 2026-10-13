@@ -78,7 +78,7 @@ func (s *Server) handleCreateTerminalSession(w http.ResponseWriter, r *http.Requ
 	_, executionUser, err := s.terminalSessions.RegisterInteractive(s.store, s.connMgr, serverID, sessionID, userID, func() (string, error) {
 		if sid != "" {
 			sess, err := s.store.GetSession(sid)
-			if err != nil || sess.UserID != userID || session.Evaluate(session.State{CreatedAt: sess.CreatedAt, LastSeenAt: sess.LastSeenAt, ExpiresAt: sess.ExpiresAt, EndedAt: sess.EndedAt}, s.now(), s.lockoutPolicy()) != session.VerdictOK {
+			if err != nil || sess.UserID != userID || session.Evaluate(session.StateFromModel(sess), s.now(), s.lockoutPolicy()) != session.VerdictOK {
 				return "", ErrTerminalNotAuthorized
 			}
 		}

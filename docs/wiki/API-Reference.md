@@ -2048,6 +2048,7 @@ Get the Hub configuration (currently the gRPC external address and the account l
   "lockout_duration_minutes": 15,
   "dormant_days": 35,
   "session_idle_minutes": 15,
+  "cli_session_idle_minutes": 45,
   "session_max_hours": 12
 }
 ```
@@ -2060,7 +2061,8 @@ Get the Hub configuration (currently the gRPC external address and the account l
 | `lockout_window_minutes` | Effective window, in minutes, that failures count toward the threshold before it restarts at 1. Built-in default `15`. |
 | `lockout_duration_minutes` | Effective lock length in minutes. Built-in default `15`. `0` means a lock does not auto-expire. |
 | `dormant_days` | Effective number of days of inactivity (no interactive sign-in and no API-token use) after which an account is treated as dormant. Built-in default `35`. `0` disables dormancy entirely — no account is ever evaluated as dormant. |
-| `session_idle_minutes` | Effective idle timeout, in minutes, for server-side sessions (feature 009). Built-in default `15`. `0` disables the idle limit — sessions never expire from inactivity alone. |
+| `session_idle_minutes` | Effective idle timeout, in minutes, for web sessions (feature 009). Built-in default `15`. `0` disables the web idle limit. |
+| `cli_session_idle_minutes` | Effective idle timeout, in minutes, for CLI sessions. Built-in default `45`. `0` disables the CLI idle limit. The recorded session kind selects which idle policy applies. |
 | `session_max_hours` | Effective absolute lifetime, in hours, for server-side sessions (feature 009). Built-in default `12`. `0` disables the absolute limit. Applies to sessions created after the change; an existing session keeps the lifetime it was issued with. |
 
 **cURL:**
@@ -2090,6 +2092,7 @@ Update the Hub configuration.
   "lockout_duration_minutes": 1,
   "dormant_days": 30,
   "session_idle_minutes": 1,
+  "cli_session_idle_minutes": 45,
   "session_max_hours": 1
 }
 ```
@@ -2098,7 +2101,8 @@ Update the Hub configuration.
 - All fields are optional. A field left out of the request body is unchanged.
 - `grpc_external_addr`, if present and non-empty, must match `^[a-zA-Z0-9._:\-\[\]]+$` (hostnames, IPs, and ports only -- no shell metacharacters). A present-but-empty string (`""`) clears the stored address; omitting the field entirely leaves it unchanged.
 - `lockout_threshold`, `lockout_window_minutes`, `lockout_duration_minutes`, `dormant_days` are each optional non-negative integers. `lockout_threshold: 0` disables locking (failures are still counted); `lockout_duration_minutes: 0` means a lock never auto-expires; `dormant_days: 0` disables dormancy. Changes apply to future evaluations only -- an account already locked keeps its original expiry, and an account already dormant stays dormant until an admin enables it, even if the policy is raised afterward.
-- `session_idle_minutes`, `session_max_hours` (feature 009) are each optional non-negative integers. `session_idle_minutes: 0` disables the idle limit; `session_max_hours: 0` disables the absolute limit. An idle change applies to every session's next evaluation immediately; an absolute-lifetime change applies only to sessions created afterward -- an existing session keeps the `expires_at` it was issued with.
+- `session_idle_minutes`, `cli_session_idle_minutes`, and `session_max_hours` are optional non-negative integers. The first controls web sessions (default `15`), the second controls CLI sessions (default `45`), and `session_max_hours` is the shared absolute lifetime (default `12`). Either idle field set to `0` disables that kind's idle limit. The recorded session kind selects the idle policy. An idle change applies on the next evaluation of sessions of that kind; an absolute-lifetime change applies only to sessions created afterward -- an existing session keeps the `expires_at` it was issued with.
+- `cli_session_idle_minutes` must be at most `153722867` minutes so its duration remains representable. Larger values return `400` before any settings are written.
 
 **Response (200):**
 
@@ -2112,7 +2116,8 @@ Update the Hub configuration.
 - `400` - Invalid gRPC address format
 - `400` - Invalid lockout field, field-specific message, e.g. `{"error":"lockout_threshold must be a non-negative integer"}`
 - `400` - `{"error":"dormant_days must be a non-negative integer"}`
-- `400` - `{"error":"session_idle_minutes must be a non-negative integer"}` / `{"error":"session_max_hours must be a non-negative integer"}`
+- `400` - `{"error":"session_idle_minutes must be a non-negative integer"}`, `{"error":"cli_session_idle_minutes must be a non-negative integer"}`, or `{"error":"session_max_hours must be a non-negative integer"}`
+- `400` - `{"error":"cli_session_idle_minutes exceeds the maximum supported duration"}`
 
 **cURL:**
 
@@ -2860,17 +2865,19 @@ caller's session before anything else runs:
 | No `sid` claim, or the session it names no longer exists (pre-upgrade credentials) | `401 {"error":"session expired — sign in again"}` |
 | Session ended (revoked by an admin, by the user, by logout, or by an account disable) | `401 {"error":"session ended — sign in again"}` |
 | Absolute lifetime reached | `401 {"error":"session expired — sign in again"}` (session marked `expired_absolute`, audited once on first detection) |
-| Idle limit exceeded | `401 {"error":"session expired — sign in again"}` (session marked `expired_idle`, audited once on first detection) |
-| None of the above | request proceeds; `last_seen_at` writes are throttled to `min(60 seconds, idle limit / 10)`, or 60 seconds when idle expiry is disabled |
+| Idle limit exceeded | `401 {"error":"session expired — sign in again"}` (session marked `expired_idle`, audited once on first detection); the recorded kind selects the web or CLI idle limit |
+| None of the above | request proceeds; `last_seen_at` writes are throttled to `min(60 seconds, selected idle limit / 10)`, or 60 seconds when idle expiry is disabled |
 
 **Upgrade note:** a session that existed before this release has no session record, so its access
 and refresh tokens are refused with the `session expired` message the first time they're used
 after upgrading -- every user, web and CLI, signs in once more. There is no migration path for
 pre-upgrade sessions; see [[Troubleshooting]] ("everyone had to sign in again after upgrading").
 
-The idle and absolute limits are configured as `session_idle_minutes` and `session_max_hours` on
-the Account policy card alongside the 007/008 lockout and dormancy fields -- see endpoints 37/38
-above. Signed-in browser pages use `HEAD /api/auth/me` as a throttled activity check
+The web and CLI idle limits are configured as `session_idle_minutes` and
+`cli_session_idle_minutes`, respectively; the shared absolute limit is `session_max_hours` on the
+Account policy card alongside the 007/008 lockout and dormancy fields -- see endpoints 37/38
+above. Idle expiry does not cancel an SSH command already running; it requires a new sign-in for
+later CLI requests. Signed-in browser pages use `HEAD /api/auth/me` as a throttled activity check
 following recent interaction in a visible tab. HEAD returns the same status as GET
 without a response body, avoiding repeated profile and avatar downloads. It uses the same session checks
 as other authenticated requests: it cannot revive an expired or revoked session,

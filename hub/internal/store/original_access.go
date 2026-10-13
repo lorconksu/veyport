@@ -8,7 +8,9 @@ import (
 	"time"
 
 	"github.com/wyiu/veyport/hub/internal/auditrecord"
+	"github.com/wyiu/veyport/hub/internal/lockout"
 	"github.com/wyiu/veyport/hub/internal/model"
+	"github.com/wyiu/veyport/hub/internal/session"
 )
 
 var ErrOriginalAccess = errors.New("original access unavailable, expired or already used")
@@ -24,12 +26,19 @@ func (s *Store) originalTransaction(ctx context.Context) (*sql.Tx, func(), error
 	return s.protectedWriteTransaction(ctx, "UPDATE original_access SET state=state WHERE 0")
 }
 
-func originalPrincipal(tx *sql.Tx, a model.OriginalAccess, now time.Time, idle time.Duration) error {
+func originalPrincipal(tx *sql.Tx, a model.OriginalAccess, now time.Time, policy lockout.Policy) error {
 	var count int
+	cliIdle := session.IdleTimeout(model.SessionKindCLI, policy)
+	webIdle := session.IdleTimeout(model.SessionKindWeb, policy)
 	err := tx.QueryRow(`SELECT COUNT(*) FROM users u JOIN security_identity_links l ON l.user_id=u.id JOIN sessions s ON s.user_id=u.id
  WHERE u.id=? AND u.disabled_at IS NULL AND u.security_revision=? AND u.totp_enabled=1 AND u.must_change_password=0
  AND l.person_id=? AND s.id=? AND s.ended_at IS NULL AND (s.expires_at IS NULL OR s.expires_at>?)
- AND (?=0 OR s.last_seen_at>?) AND EXISTS(SELECT 1 FROM user_roles r WHERE r.user_id=u.id AND r.role='original-reader')`, a.UserID, a.SecurityRevision, a.PersonID, a.SessionID, now.UTC().Format(sqliteTimeFormat), idle > 0, now.Add(-idle).UTC().Format(sqliteTimeFormat)).Scan(&count)
+ AND (CASE WHEN s.kind=? THEN ? ELSE ? END<=0
+      OR s.last_seen_at>=CASE WHEN s.kind=? THEN ? ELSE ? END)
+ AND EXISTS(SELECT 1 FROM user_roles r WHERE r.user_id=u.id AND r.role='original-reader')`,
+		a.UserID, a.SecurityRevision, a.PersonID, a.SessionID, now.UTC().Format(sqliteTimeFormat),
+		model.SessionKindCLI, cliIdle.Nanoseconds(), webIdle.Nanoseconds(), model.SessionKindCLI,
+		now.Add(-cliIdle).UTC().Format(sqliteTimeFormat), now.Add(-webIdle).UTC().Format(sqliteTimeFormat)).Scan(&count)
 	if err != nil {
 		return err
 	}
@@ -79,7 +88,7 @@ func queueOriginal(tx *sql.Tx, a model.OriginalAccess, raw []byte, retain, now t
 
 // CreateOriginalAccess consumes the operation proof and durably records the
 // pending intent together. No handle is usable until independent preservation.
-func (s *Store) CreateOriginalAccess(a model.OriginalAccess, proof string, retain, now time.Time, idle time.Duration) error {
+func (s *Store) CreateOriginalAccess(a model.OriginalAccess, proof string, retain, now time.Time, policy lockout.Policy) error {
 	if !auditrecord.ValidID(a.ID) || !auditrecord.ValidID(a.ExecutionID) || !auditrecord.ValidHash(a.HandleSHA256) || !auditrecord.ValidHash(a.Digest) || !a.Object.Valid() || a.ExpiresAt.After(now.Add(time.Minute)) || !a.ExpiresAt.After(now) || len(proof) != 64 || (a.Kind != "envelope" && a.Kind != "script") {
 		return ErrOriginalAccess
 	}
@@ -88,7 +97,7 @@ func (s *Store) CreateOriginalAccess(a model.OriginalAccess, proof string, retai
 		return err
 	}
 	defer cleanup()
-	if err = originalPrincipal(tx, a, now, idle); err != nil {
+	if err = originalPrincipal(tx, a, now, policy); err != nil {
 		return err
 	}
 	var count int
@@ -164,7 +173,7 @@ func confirmOriginal(tx *sql.Tx, event string, manifest auditrecord.ObjectRef, n
 	return err
 }
 
-func (s *Store) AuthorizeOriginalAccess(id, token string, expiry time.Time, manifest auditrecord.ObjectRef, now time.Time, idle time.Duration) error {
+func (s *Store) AuthorizeOriginalAccess(id, token string, expiry time.Time, manifest auditrecord.ObjectRef, now time.Time, policy lockout.Policy) error {
 	if len(token) == 0 || len(token) > auditrecord.MaxReceiptBytes || !manifest.Valid() || !expiry.After(now) {
 		return ErrOriginalAccess
 	}
@@ -177,7 +186,7 @@ func (s *Store) AuthorizeOriginalAccess(id, token string, expiry time.Time, mani
 	if err != nil || a.State != "pending" || expiry.UnixMilli() > a.ExpiresAt.UnixMilli() {
 		return ErrOriginalAccess
 	}
-	if err = originalPrincipal(tx, a, now, idle); err != nil {
+	if err = originalPrincipal(tx, a, now, policy); err != nil {
 		return err
 	}
 	if _, err = tx.Exec(`UPDATE original_access SET intent_token=?,expires_at=?,state='authorized' WHERE id=?`, token, expiry.UnixMilli(), id); err != nil {
@@ -191,7 +200,7 @@ func (s *Store) AuthorizeOriginalAccess(id, token string, expiry time.Time, mani
 
 // ConsumeOriginalAccess commits the hashed one-use claim before any archive
 // stream opens. Permission, identity revision and session are checked inside it.
-func (s *Store) ConsumeOriginalAccess(hash, user, session string, now time.Time, idle time.Duration) (model.OriginalAccess, error) {
+func (s *Store) ConsumeOriginalAccess(hash, user, session string, now time.Time, policy lockout.Policy) (model.OriginalAccess, error) {
 	var a model.OriginalAccess
 	if !auditrecord.ValidHash(hash) || session == "" {
 		return a, ErrOriginalAccess
@@ -205,7 +214,7 @@ func (s *Store) ConsumeOriginalAccess(hash, user, session string, now time.Time,
 	if err != nil {
 		return a, ErrOriginalAccess
 	}
-	if err = originalPrincipal(tx, a, now, idle); err != nil {
+	if err = originalPrincipal(tx, a, now, policy); err != nil {
 		return a, err
 	}
 	res, err := tx.Exec(`UPDATE original_access SET consumed_at=?,state='started',evidence_state='pending' WHERE id=? AND consumed_at IS NULL AND state='authorized'`, now.UnixMilli(), a.ID)

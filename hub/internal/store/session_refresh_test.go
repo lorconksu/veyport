@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/wyiu/veyport/hub/internal/lockout"
 	"github.com/wyiu/veyport/hub/internal/model"
 	"github.com/wyiu/veyport/hub/internal/store"
 )
@@ -45,10 +46,10 @@ func TestSessionRefreshPersistsSpendAcrossRestartWithoutDisclosingDigest(t *test
 	u := refreshStoreOwner(t, s)
 	sid := refreshStoreSession(t, s, u)
 	old, next := strings.Repeat("a", 64), strings.Repeat("b", 64)
-	if err := s.RotateSessionRefresh(context.Background(), u, sid, "", old, refreshTime, 15*time.Minute); err != nil {
+	if err := s.RotateSessionRefresh(context.Background(), u, sid, "", old, refreshTime, lockout.Policy{SessionIdle: 15 * time.Minute, CLISessionIdle: 15 * time.Minute}); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.RotateSessionRefresh(context.Background(), u, sid, old, next, refreshTime.Add(time.Minute), 15*time.Minute); err != nil {
+	if err := s.RotateSessionRefresh(context.Background(), u, sid, old, next, refreshTime.Add(time.Minute), lockout.Policy{SessionIdle: 15 * time.Minute, CLISessionIdle: 15 * time.Minute}); err != nil {
 		t.Fatal(err)
 	}
 	var durability int
@@ -63,10 +64,10 @@ func TestSessionRefreshPersistsSpendAcrossRestartWithoutDisclosingDigest(t *test
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = s.Close() })
-	if err := s.RotateSessionRefresh(context.Background(), u, sid, old, strings.Repeat("c", 64), refreshTime.Add(2*time.Minute), 15*time.Minute); !errors.Is(err, store.ErrSessionRefreshRejected) {
+	if err := s.RotateSessionRefresh(context.Background(), u, sid, old, strings.Repeat("c", 64), refreshTime.Add(2*time.Minute), lockout.Policy{SessionIdle: 15 * time.Minute, CLISessionIdle: 15 * time.Minute}); !errors.Is(err, store.ErrSessionRefreshRejected) {
 		t.Fatalf("spent token after restart: %v", err)
 	}
-	if err := s.RotateSessionRefresh(context.Background(), u, sid, next, strings.Repeat("d", 64), refreshTime.Add(2*time.Minute), 15*time.Minute); err != nil {
+	if err := s.RotateSessionRefresh(context.Background(), u, sid, next, strings.Repeat("d", 64), refreshTime.Add(2*time.Minute), lockout.Policy{SessionIdle: 15 * time.Minute, CLISessionIdle: 15 * time.Minute}); err != nil {
 		t.Fatalf("current token after restart: %v", err)
 	}
 	sessions, err := s.ListUserSessions(u.ID, false, refreshTime)
@@ -98,7 +99,7 @@ func TestLegacySessionRefreshAdoptionHasOneDurableWinner(t *testing.T) {
 		go func() {
 			defer wg.Done()
 			<-start
-			errs <- s.RotateSessionRefresh(context.Background(), u, sid, strings.Repeat("a", 64), strings.Repeat("b", 64), refreshTime.Add(time.Minute), time.Hour)
+			errs <- s.RotateSessionRefresh(context.Background(), u, sid, strings.Repeat("a", 64), strings.Repeat("b", 64), refreshTime.Add(time.Minute), lockout.Policy{SessionIdle: time.Hour, CLISessionIdle: time.Hour})
 		}()
 	}
 	close(start)
@@ -158,11 +159,11 @@ func TestSessionRefreshRefusesRevokedAuthorityBeforeDurableSpend(t *testing.T) {
 			u := refreshStoreOwner(t, s)
 			sid := refreshStoreSession(t, s, u)
 			old := strings.Repeat("a", 64)
-			if err := s.RotateSessionRefresh(context.Background(), u, sid, "", old, refreshTime, time.Hour); err != nil {
+			if err := s.RotateSessionRefresh(context.Background(), u, sid, "", old, refreshTime, lockout.Policy{SessionIdle: time.Hour, CLISessionIdle: time.Hour}); err != nil {
 				t.Fatal(err)
 			}
 			mutation.apply(t, s, u, sid)
-			if err := s.RotateSessionRefresh(context.Background(), u, sid, old, strings.Repeat("b", 64), refreshTime.Add(time.Minute), time.Hour); !errors.Is(err, store.ErrSessionRefreshRejected) {
+			if err := s.RotateSessionRefresh(context.Background(), u, sid, old, strings.Repeat("b", 64), refreshTime.Add(time.Minute), lockout.Policy{SessionIdle: time.Hour, CLISessionIdle: time.Hour}); !errors.Is(err, store.ErrSessionRefreshRejected) {
 				t.Fatalf("revoked snapshot rotation: %v", err)
 			}
 			var stored string
@@ -186,10 +187,10 @@ func TestRecoverySessionPublishesOnlyItsAuthenticatedInitialPasswordState(t *tes
 		}
 		sid := refreshStoreSession(t, s, u)
 		issued := strings.Repeat("a", 64)
-		if err := s.RotateSessionRefresh(context.Background(), u, sid, "", issued, refreshTime, time.Hour); err != nil {
+		if err := s.RotateSessionRefresh(context.Background(), u, sid, "", issued, refreshTime, lockout.Policy{SessionIdle: time.Hour, CLISessionIdle: time.Hour}); err != nil {
 			t.Fatalf("authenticated mandatory-change sign-in: %v", err)
 		}
-		if err := s.RotateSessionRefresh(context.Background(), u, sid, issued, strings.Repeat("b", 64), refreshTime.Add(time.Minute), time.Hour); !errors.Is(err, store.ErrSessionRefreshRejected) {
+		if err := s.RotateSessionRefresh(context.Background(), u, sid, issued, strings.Repeat("b", 64), refreshTime.Add(time.Minute), lockout.Policy{SessionIdle: time.Hour, CLISessionIdle: time.Hour}); !errors.Is(err, store.ErrSessionRefreshRejected) {
 			t.Fatalf("unfinished recovery rotated refresh authority: %v", err)
 		}
 		var current string
@@ -216,7 +217,7 @@ func TestRecoverySessionPublishesOnlyItsAuthenticatedInitialPasswordState(t *tes
 			if _, err := s.DB().Exec("UPDATE users SET must_change_password=? WHERE id=?", !initial, u.ID); err != nil {
 				t.Fatal(err)
 			}
-			if err := s.RotateSessionRefresh(context.Background(), u, sid, "", strings.Repeat("a", 64), refreshTime, time.Hour); !errors.Is(err, store.ErrSessionRefreshRejected) {
+			if err := s.RotateSessionRefresh(context.Background(), u, sid, "", strings.Repeat("a", 64), refreshTime, lockout.Policy{SessionIdle: time.Hour, CLISessionIdle: time.Hour}); !errors.Is(err, store.ErrSessionRefreshRejected) {
 				t.Fatalf("stale authenticated password state issued a session pair: %v", err)
 			}
 			var current string
@@ -249,7 +250,7 @@ func TestSessionRefreshEnforcesOwnerAndExactSessionLimits(t *testing.T) {
 				copy.ID = "another-owner"
 				u = &copy
 			}
-			err := s.RotateSessionRefresh(context.Background(), u, sid, strings.Repeat("a", 64), strings.Repeat("b", 64), tc.now, tc.idle)
+			err := s.RotateSessionRefresh(context.Background(), u, sid, strings.Repeat("a", 64), strings.Repeat("b", 64), tc.now, lockout.Policy{SessionIdle: tc.idle, CLISessionIdle: tc.idle})
 			if tc.wantOK && err != nil {
 				t.Fatal(err)
 			}
@@ -270,7 +271,7 @@ func TestSessionRefreshIndependentStoreHandlesHaveOneSpend(t *testing.T) {
 	u := refreshStoreOwner(t, first)
 	sid := refreshStoreSession(t, first, u)
 	old := strings.Repeat("a", 64)
-	if err := first.RotateSessionRefresh(context.Background(), u, sid, "", old, refreshTime, time.Hour); err != nil {
+	if err := first.RotateSessionRefresh(context.Background(), u, sid, "", old, refreshTime, lockout.Policy{SessionIdle: time.Hour, CLISessionIdle: time.Hour}); err != nil {
 		t.Fatal(err)
 	}
 	second, err := store.New(path)
@@ -283,7 +284,7 @@ func TestSessionRefreshIndependentStoreHandlesHaveOneSpend(t *testing.T) {
 	for _, handle := range []*store.Store{first, second} {
 		go func() {
 			<-start
-			errs <- handle.RotateSessionRefresh(context.Background(), u, sid, old, strings.Repeat("b", 64), refreshTime.Add(time.Minute), time.Hour)
+			errs <- handle.RotateSessionRefresh(context.Background(), u, sid, old, strings.Repeat("b", 64), refreshTime.Add(time.Minute), lockout.Policy{SessionIdle: time.Hour, CLISessionIdle: time.Hour})
 		}()
 	}
 	close(start)
@@ -306,12 +307,12 @@ func TestSessionRefreshCancellationAndUnavailableStorePreserveAuthority(t *testi
 	u := refreshStoreOwner(t, s)
 	sid := refreshStoreSession(t, s, u)
 	old := strings.Repeat("a", 64)
-	if err := s.RotateSessionRefresh(context.Background(), u, sid, "", old, refreshTime, time.Hour); err != nil {
+	if err := s.RotateSessionRefresh(context.Background(), u, sid, "", old, refreshTime, lockout.Policy{SessionIdle: time.Hour, CLISessionIdle: time.Hour}); err != nil {
 		t.Fatal(err)
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	if err := s.RotateSessionRefresh(ctx, u, sid, old, strings.Repeat("b", 64), refreshTime.Add(time.Minute), time.Hour); !errors.Is(err, context.Canceled) {
+	if err := s.RotateSessionRefresh(ctx, u, sid, old, strings.Repeat("b", 64), refreshTime.Add(time.Minute), lockout.Policy{SessionIdle: time.Hour, CLISessionIdle: time.Hour}); !errors.Is(err, context.Canceled) {
 		t.Fatalf("cancelled rotation: %v", err)
 	}
 	var digest string
@@ -321,7 +322,7 @@ func TestSessionRefreshCancellationAndUnavailableStorePreserveAuthority(t *testi
 	if err := s.Close(); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.RotateSessionRefresh(context.Background(), u, sid, old, strings.Repeat("b", 64), refreshTime, time.Hour); err == nil {
+	if err := s.RotateSessionRefresh(context.Background(), u, sid, old, strings.Repeat("b", 64), refreshTime, lockout.Policy{SessionIdle: time.Hour, CLISessionIdle: time.Hour}); err == nil {
 		t.Fatal("unavailable database granted refresh authority")
 	}
 }
@@ -331,10 +332,10 @@ func TestSessionRefreshCannotReplaceAuthorityWithTheSameDigest(t *testing.T) {
 	u := refreshStoreOwner(t, s)
 	sid := refreshStoreSession(t, s, u)
 	digest := strings.Repeat("a", 64)
-	if err := s.RotateSessionRefresh(context.Background(), u, sid, "", digest, refreshTime, time.Hour); err != nil {
+	if err := s.RotateSessionRefresh(context.Background(), u, sid, "", digest, refreshTime, lockout.Policy{SessionIdle: time.Hour, CLISessionIdle: time.Hour}); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.RotateSessionRefresh(context.Background(), u, sid, digest, digest, refreshTime.Add(time.Minute), time.Hour); !errors.Is(err, store.ErrSessionRefreshRejected) {
+	if err := s.RotateSessionRefresh(context.Background(), u, sid, digest, digest, refreshTime.Add(time.Minute), lockout.Policy{SessionIdle: time.Hour, CLISessionIdle: time.Hour}); !errors.Is(err, store.ErrSessionRefreshRejected) {
 		t.Fatalf("unchanged refresh authority could be reused: %v", err)
 	}
 	if got := mustGetSession(t, s, sid); !got.LastSeenAt.Equal(refreshTime) {

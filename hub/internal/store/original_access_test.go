@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/wyiu/veyport/hub/internal/auditrecord"
+	"github.com/wyiu/veyport/hub/internal/lockout"
 	"github.com/wyiu/veyport/hub/internal/model"
 	"github.com/wyiu/veyport/hub/internal/store"
 )
@@ -66,12 +67,12 @@ func originalRaw(t *testing.T, a model.OriginalAccess, state, suffix string, now
 }
 func authorizeOriginal(t *testing.T, s *store.Store, a model.OriginalAccess, proof string, now time.Time) {
 	t.Helper()
-	if err := s.CreateOriginalAccess(a, proof, now.Add(24*time.Hour), now, 15*time.Minute); err != nil {
+	if err := s.CreateOriginalAccess(a, proof, now.Add(24*time.Hour), now, lockout.Policy{SessionIdle: 15 * time.Minute, CLISessionIdle: 15 * time.Minute}); err != nil {
 		t.Fatal(err)
 	}
 	manifest := a.Object
 	manifest.Key = a.ID + ".intent.manifest"
-	if err := s.AuthorizeOriginalAccess(a.ID, "verified-intent-token", a.ExpiresAt, manifest, now, 15*time.Minute); err != nil {
+	if err := s.AuthorizeOriginalAccess(a.ID, "verified-intent-token", a.ExpiresAt, manifest, now, lockout.Policy{SessionIdle: 15 * time.Minute, CLISessionIdle: 15 * time.Minute}); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -91,7 +92,7 @@ func TestOriginalHandleOneUseFullDurabilityAndReopen(t *testing.T) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			_, err := s.ConsumeOriginalAccess(a.HandleSHA256, a.UserID, a.SessionID, now, 15*time.Minute)
+			_, err := s.ConsumeOriginalAccess(a.HandleSHA256, a.UserID, a.SessionID, now, lockout.Policy{SessionIdle: 15 * time.Minute, CLISessionIdle: 15 * time.Minute})
 			results <- err
 		}()
 	}
@@ -118,7 +119,7 @@ func TestOriginalHandleOneUseFullDurabilityAndReopen(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer s.Close()
-	if _, err = s.ConsumeOriginalAccess(a.HandleSHA256, a.UserID, a.SessionID, now, 15*time.Minute); err == nil {
+	if _, err = s.ConsumeOriginalAccess(a.HandleSHA256, a.UserID, a.SessionID, now, lockout.Policy{SessionIdle: 15 * time.Minute, CLISessionIdle: 15 * time.Minute}); err == nil {
 		t.Fatal("consumed handle replayed after reopen")
 	}
 	stored, err := s.GetOriginalAccess(a.ID)
@@ -160,7 +161,7 @@ func TestOriginalHandleLiveAuthoritySessionAndExpiry(t *testing.T) {
 			case "wrong-session":
 				sid = "another-session"
 			}
-			if _, err := s.ConsumeOriginalAccess(a.HandleSHA256, user, sid, now, 15*time.Minute); err == nil {
+			if _, err := s.ConsumeOriginalAccess(a.HandleSHA256, user, sid, now, lockout.Policy{SessionIdle: 15 * time.Minute, CLISessionIdle: 15 * time.Minute}); err == nil {
 				t.Fatal("stale authority consumed handle")
 			}
 		})
@@ -173,30 +174,30 @@ func TestOriginalProofAndIntentAreAtomicBounded(t *testing.T) {
 	a, proof := originalFixture(t, s, "atomic", now)
 	bad := a
 	bad.Digest = auditrecord.Hash([]byte("changed-purpose"))
-	if err := s.CreateOriginalAccess(bad, proof, now.Add(time.Hour), now, 0); err == nil {
+	if err := s.CreateOriginalAccess(bad, proof, now.Add(time.Hour), now, lockout.Policy{}); err == nil {
 		t.Fatal("changed digest consumed proof")
 	}
 	if _, err := s.GetOriginalAccess(a.ID); err == nil {
 		t.Fatal("failed proof persisted access")
 	}
-	if err := s.CreateOriginalAccess(a, proof, now.Add(time.Hour), now, 0); err != nil {
+	if err := s.CreateOriginalAccess(a, proof, now.Add(time.Hour), now, lockout.Policy{}); err != nil {
 		t.Fatal(err)
 	}
 	other := a
 	other.ID = "replay"
 	other.HandleSHA256 = auditrecord.Hash([]byte("new-handle"))
 	other.Intent = originalRaw(t, other, "authorized", "intent", now)
-	if err := s.CreateOriginalAccess(other, proof, now.Add(time.Hour), now, 0); err == nil {
+	if err := s.CreateOriginalAccess(other, proof, now.Add(time.Hour), now, lockout.Policy{}); err == nil {
 		t.Fatal("MFA proof reused")
 	}
 	events, err := s.DueOriginalEvidence(now)
 	if err != nil || len(events) != 1 || string(events[0].Raw) != string(a.Intent) {
 		t.Fatalf("intent queue:%+v %v", events, err)
 	}
-	if _, err := s.ConsumeOriginalAccess(a.HandleSHA256, a.UserID, a.SessionID, now, 0); err == nil {
+	if _, err := s.ConsumeOriginalAccess(a.HandleSHA256, a.UserID, a.SessionID, now, lockout.Policy{}); err == nil {
 		t.Fatal("pending intent became usable")
 	}
-	if err := s.CreateOriginalAccess(other, "bad", now.Add(time.Hour), now, 0); err == nil {
+	if err := s.CreateOriginalAccess(other, "bad", now.Add(time.Hour), now, lockout.Policy{}); err == nil {
 		t.Fatal("unbounded/malformed proof")
 	}
 }
@@ -206,7 +207,7 @@ func TestOriginalEvidencePreservesExactResultsAndPermanentGaps(t *testing.T) {
 	now := time.Now().UTC()
 	a, proof := originalFixture(t, s, "results", now)
 	authorizeOriginal(t, s, a, proof, now)
-	if _, err := s.ConsumeOriginalAccess(a.HandleSHA256, a.UserID, a.SessionID, now, 0); err != nil {
+	if _, err := s.ConsumeOriginalAccess(a.HandleSHA256, a.UserID, a.SessionID, now, lockout.Policy{}); err != nil {
 		t.Fatal(err)
 	}
 	a.BytesWritten = 3
@@ -257,7 +258,7 @@ func TestOriginalEvidencePreservesExactResultsAndPermanentGaps(t *testing.T) {
 	}
 	// Expired recovery entries become a durable permanent gap, not renewed authority.
 	b, proof := originalFixture(t, s, "expired-evidence", now)
-	if err := s.CreateOriginalAccess(b, proof, now.Add(time.Hour), now, 0); err != nil {
+	if err := s.CreateOriginalAccess(b, proof, now.Add(time.Hour), now, lockout.Policy{}); err != nil {
 		t.Fatal(err)
 	}
 	events, _ = s.DueOriginalEvidence(now)
@@ -277,7 +278,7 @@ func TestOriginalCapacityFailureRollsBackProofAndIntent(t *testing.T) {
 	s := testStore(t)
 	now := time.Now().UTC()
 	a, proof := originalFixture(t, s, "capacity-source", now)
-	if err := s.CreateOriginalAccess(a, proof, now.Add(time.Hour), now, 0); err != nil {
+	if err := s.CreateOriginalAccess(a, proof, now.Add(time.Hour), now, lockout.Policy{}); err != nil {
 		t.Fatal(err)
 	}
 	// Existing metadata occupies the actual table; no runtime limit is bypassed.
@@ -287,7 +288,7 @@ func TestOriginalCapacityFailureRollsBackProofAndIntent(t *testing.T) {
 		t.Fatal(err)
 	}
 	b, proof := originalFixture(t, s, "capacity-next", now)
-	if err := s.CreateOriginalAccess(b, proof, now.Add(time.Hour), now, 0); err == nil {
+	if err := s.CreateOriginalAccess(b, proof, now.Add(time.Hour), now, lockout.Policy{}); err == nil {
 		t.Fatal("metadata capacity admitted another handle")
 	}
 	if _, err := s.GetOriginalAccess(b.ID); err == nil {
@@ -296,7 +297,7 @@ func TestOriginalCapacityFailureRollsBackProofAndIntent(t *testing.T) {
 	if _, err := s.DB().Exec("DELETE FROM original_access WHERE id LIKE 'metadata-slot-%'"); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.CreateOriginalAccess(b, proof, now.Add(time.Hour), now, 0); err != nil {
+	if err := s.CreateOriginalAccess(b, proof, now.Add(time.Hour), now, lockout.Policy{}); err != nil {
 		t.Fatal("capacity refusal consumed its proof:", err)
 	}
 	if _, err := s.DB().Exec(`WITH RECURSIVE slots(n) AS (VALUES(1) UNION ALL SELECT n+1 FROM slots WHERE n<?)
@@ -305,7 +306,7 @@ func TestOriginalCapacityFailureRollsBackProofAndIntent(t *testing.T) {
 		t.Fatal(err)
 	}
 	c, proof := originalFixture(t, s, "capacity-evidence", now)
-	if err := s.CreateOriginalAccess(c, proof, now.Add(time.Hour), now, 0); err == nil {
+	if err := s.CreateOriginalAccess(c, proof, now.Add(time.Hour), now, lockout.Policy{}); err == nil {
 		t.Fatal("full evidence queue admitted another handle")
 	}
 	if _, err := s.GetOriginalAccess(c.ID); err == nil {
@@ -314,7 +315,7 @@ func TestOriginalCapacityFailureRollsBackProofAndIntent(t *testing.T) {
 	if _, err := s.DB().Exec("DELETE FROM original_read_evidence WHERE event_id LIKE 'evidence-slot-%'"); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.CreateOriginalAccess(c, proof, now.Add(time.Hour), now, 0); err != nil {
+	if err := s.CreateOriginalAccess(c, proof, now.Add(time.Hour), now, lockout.Policy{}); err != nil {
 		t.Fatal("queue refusal consumed its proof:", err)
 	}
 }
@@ -333,7 +334,7 @@ func TestOriginalExpirySweepAndHistoryPruningNeverRevivesPermit(t *testing.T) {
 	if err := s.RecordOriginalOutcome(a.ID, "expired", 0, raw, now.Add(24*time.Hour), stamp); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := s.ConsumeOriginalAccess(a.HandleSHA256, a.UserID, a.SessionID, now, 0); err == nil {
+	if _, err := s.ConsumeOriginalAccess(a.HandleSHA256, a.UserID, a.SessionID, now, lockout.Policy{}); err == nil {
 		t.Fatal("expired result revived handle under clock rollback")
 	}
 	if _, err := s.SweepOriginalAccess(now.Add(31 * 24 * time.Hour)); err != nil {
@@ -377,7 +378,7 @@ func TestOriginalIndependentFileWALClaimsAndOutcomes(t *testing.T) {
 		result := originalRaw(t, a, "completed", "result", now)
 		go func(a model.OriginalAccess, start, result []byte) {
 			<-begin
-			if _, err := s.ConsumeOriginalAccess(a.HandleSHA256, a.UserID, a.SessionID, now, 0); err != nil {
+			if _, err := s.ConsumeOriginalAccess(a.HandleSHA256, a.UserID, a.SessionID, now, lockout.Policy{}); err != nil {
 				results <- fmt.Errorf("claim %s: %w", a.ID, err)
 				return
 			}

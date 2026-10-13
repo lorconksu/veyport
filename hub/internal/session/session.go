@@ -46,6 +46,8 @@ const (
 // session has no EndedAt. CreatedAt is always present; it is carried for
 // callers that render the row, not for the verdict itself.
 type State struct {
+	// Kind is the client kind recorded when the session was established.
+	Kind string
 	// CreatedAt is when the session was established.
 	CreatedAt time.Time
 	// LastSeenAt is the most recent request made on the session; it starts
@@ -102,20 +104,31 @@ func (v Verdict) String() string {
 // work, where the access-token lifetime equals the default idle limit and a
 // refresh arriving exactly on the limit must succeed.
 //
-// A SessionIdle of zero or less disables the idle limit entirely, and a nil
+// A selected idle limit of zero or less disables idle expiry, and a nil
 // ExpiresAt disables the absolute one; with both disabled a session stays live
 // until something ends it.
 func Evaluate(st State, now time.Time, p lockout.Policy) Verdict {
+	idle := IdleTimeout(st.Kind, p)
 	switch {
 	case st.EndedAt != nil:
 		return VerdictEnded
 	case st.ExpiresAt != nil && !now.Before(*st.ExpiresAt):
 		return VerdictExpiredAbsolute
-	case p.SessionIdle > 0 && now.Sub(st.LastSeenAt) > p.SessionIdle:
+	case idle > 0 && now.Sub(st.LastSeenAt) > idle:
 		return VerdictExpiredIdle
 	default:
 		return VerdictOK
 	}
+}
+
+// IdleTimeout selects the idle policy from the stored client kind. Only the
+// exact CLI kind receives its own limit; missing and unknown kinds use the web
+// limit. Request headers never change the policy of an established session.
+func IdleTimeout(kind string, p lockout.Policy) time.Duration {
+	if kind == model.SessionKindCLI {
+		return p.CLISessionIdle
+	}
+	return p.SessionIdle
 }
 
 // IdleDeadline returns when the session will go idle: its last-seen time plus
@@ -126,10 +139,11 @@ func Evaluate(st State, now time.Time, p lockout.Policy) Verdict {
 // The value moves every time the session is used, so it is derived on read
 // rather than stored.
 func IdleDeadline(st State, p lockout.Policy) *time.Time {
-	if p.SessionIdle <= 0 {
+	idle := IdleTimeout(st.Kind, p)
+	if idle <= 0 {
 		return nil
 	}
-	deadline := st.LastSeenAt.Add(p.SessionIdle)
+	deadline := st.LastSeenAt.Add(idle)
 	return &deadline
 }
 
@@ -151,6 +165,7 @@ func Message(v Verdict) string {
 // s must not be nil; callers reach this only after a successful store read.
 func StateFromModel(s *model.Session) State {
 	return State{
+		Kind:       s.Kind,
 		CreatedAt:  s.CreatedAt,
 		LastSeenAt: s.LastSeenAt,
 		ExpiresAt:  s.ExpiresAt,

@@ -83,11 +83,12 @@ const (
 //
 // An idle limit of zero means idle expiry is switched off, so nothing depends
 // on the stamp's freshness and the cheapest throttle applies.
-func touchInterval(p lockout.Policy) time.Duration {
-	if p.SessionIdle <= 0 {
+func touchInterval(p lockout.Policy, kind string) time.Duration {
+	idle := session.IdleTimeout(kind, p)
+	if idle <= 0 {
 		return maxTouchInterval
 	}
-	if scaled := p.SessionIdle / touchIntervalFraction; scaled < maxTouchInterval {
+	if scaled := idle / touchIntervalFraction; scaled < maxTouchInterval {
 		return scaled
 	}
 	return maxTouchInterval
@@ -230,7 +231,7 @@ func (s *Server) checkSessionAccess(claims *auth.Claims, touch bool) error {
 		// Throttled inside the store, so this costs at most one cheap guarded
 		// UPDATE per session per touchInterval however fast requests arrive.
 		if touch {
-			if touchErr := s.store.TouchSession(sess.ID, now, touchInterval(policy)); touchErr != nil {
+			if touchErr := s.store.TouchSession(sess.ID, now, touchInterval(policy, sess.Kind)); touchErr != nil {
 				log.Printf("warning: failed to touch session %s: %v", sess.ID, touchErr)
 			}
 		}

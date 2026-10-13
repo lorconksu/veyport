@@ -26,7 +26,7 @@ func (s *Server) issueSessionTokens(ctx context.Context, user *model.User, sessi
 	if previous != "" {
 		previousDigest = refreshDigest(previous)
 	}
-	if err := s.store.RotateSessionRefresh(ctx, user, sessionID, previousDigest, refreshDigest(refresh), now, s.lockoutPolicy().SessionIdle); err != nil {
+	if err := s.store.RotateSessionRefresh(ctx, user, sessionID, previousDigest, refreshDigest(refresh), now, s.lockoutPolicy()); err != nil {
 		return "", "", err
 	}
 	return access, refresh, nil

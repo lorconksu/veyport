@@ -375,6 +375,7 @@ export interface HubConfig {
   lockout_duration_minutes?: number
   dormant_days?: number
   session_idle_minutes?: number
+  cli_session_idle_minutes?: number
   session_max_hours?: number
 }
 

@@ -283,13 +283,16 @@ Global flags precede the subcommand; each subcommand's own flags follow it (e.g.
 
 As of feature 009, every completed `vey login` creates a server-side session on the hub, exactly
 like a browser sign-in - it shows up in the admin's Sessions panel and the user's own "Your
-sessions" list (see [[Settings]]), it is subject to the hub's idle and absolute session limits
-(see [[Logging In]]), and it can be ended by an administrator or by the user themselves without
-touching any other session.
+sessions" list (see [[Settings]]), it is subject to the hub's CLI idle limit (default 45 minutes)
+and shared 12-hour absolute session limit (see [[Logging In]]), and it can be ended by an
+administrator or by the user themselves without touching any other session.
 
-- **How the hub tells CLI sessions apart:** every `vey` request carries `User-Agent:
-  vey/<version>`, which the hub records as session kind `cli` (anything else is recorded as
-  `web`).
+- **How the hub tells CLI sessions apart:** during sign-in, `vey` sends `User-Agent:
+  vey/<version>`, which the Hub records as the session kind `cli` (anything else is recorded as
+  `web`). The saved kind determines the idle policy for that session.
+- **Running SSH commands:** idle expiry ends the authenticated CLI session for later requests,
+  but does not cancel an SSH command already running. Command authorization and explicit account
+  or access revocation remain separate.
 - **`vey status`** now also reports when the current session expires and when it goes idle (see
   below).
 - **`vey logout`** now genuinely ends the server-side session, not just the locally-stored
