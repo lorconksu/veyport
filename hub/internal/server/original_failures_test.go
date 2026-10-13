@@ -2,10 +2,12 @@ package server
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"net"
 	"net/http"
+	"net/http/httptest"
 	"net/url"
 	"strings"
 	"sync/atomic"
@@ -169,11 +171,93 @@ func TestOriginalRESTClientAbortTruthfullyArchivesInterruptedDelivery(t *testing
 	h.json(t, "GET", issued.DownloadURL, h.token, nil, 403)
 }
 
+type delayedOriginalReader struct {
+	reader auditgate.OriginalReader
+	delay  time.Duration
+}
+
+func (r delayedOriginalReader) ReadOriginal(ctx context.Context, ref auditrecord.ObjectRef, token string) (io.ReadCloser, error) {
+	timer := time.NewTimer(r.delay)
+	defer timer.Stop()
+	select {
+	case <-timer.C:
+		return r.reader.ReadOriginal(ctx, ref, token)
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
+}
+
+type originalIOObservation struct {
+	operation                   string
+	started, deadline, finished time.Time
+	err                         error
+}
+
+// Observe the real connection's Write and Flush separately: buffered HTTP
+// output may block in either. Only the handler goroutine owns these fields;
+// its completed snapshot is handed to the test through a buffered channel.
+type observedOriginalWriter struct {
+	http.ResponseWriter
+	deadline     time.Time
+	observations []originalIOObservation
+}
+
+func (w *observedOriginalWriter) SetWriteDeadline(deadline time.Time) error {
+	if err := http.NewResponseController(w.ResponseWriter).SetWriteDeadline(deadline); err != nil {
+		return err
+	}
+	w.deadline = deadline
+	return nil
+}
+
+func (w *observedOriginalWriter) Write(p []byte) (int, error) {
+	started := time.Now()
+	n, err := w.ResponseWriter.Write(p)
+	w.observations = append(w.observations, originalIOObservation{"write", started, w.deadline, time.Now(), err})
+	return n, err
+}
+
+func (w *observedOriginalWriter) FlushError() error {
+	started := time.Now()
+	err := http.NewResponseController(w.ResponseWriter).Flush()
+	w.observations = append(w.observations, originalIOObservation{"flush", started, w.deadline, time.Now(), err})
+	return err
+}
+
+func (w *observedOriginalWriter) Unwrap() http.ResponseWriter { return w.ResponseWriter }
+
 func TestOriginalRESTSlowConsumerHasBoundedWriteWithoutWriterGoroutine(t *testing.T) {
+	for _, delay := range []time.Duration{0, 3 * time.Second} {
+		t.Run("archive-delay-"+delay.String(), func(t *testing.T) {
+			testOriginalSlowConsumer(t, delay)
+		})
+	}
+}
+
+func testOriginalSlowConsumer(t *testing.T, archiveDelay time.Duration) {
+	t.Helper()
 	script := []byte(strings.Repeat("SYNTHETIC_SLOW_CANARY\n", 700000))
 	h := newOriginalHTTP(t, script)
+	if archiveDelay > 0 {
+		// Valid progress before the first write is independent of a later
+		// blocked write. This deterministically reproduces the old test's
+		// incorrect whole-request eight-second assertion.
+		h.setReader(func(reader auditgate.OriginalReader) auditgate.OriginalReader {
+			return delayedOriginalReader{reader: reader, delay: archiveDelay}
+		})
+	}
 	issued := h.handle(t, "Slow consumer investigation", "script")
-	u, err := url.Parse(h.api.URL)
+	observed := make(chan []originalIOObservation, 1)
+	routes := h.s.routes()
+	// Install observation before starting a dedicated listener; do not mutate
+	// the live fixture server's handler or add a network writer goroutine.
+	api := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		writer := &observedOriginalWriter{ResponseWriter: w}
+		defer func() { observed <- writer.observations }()
+		routes.ServeHTTP(writer, r)
+	}))
+	defer api.Close()
+	u, err := url.Parse(api.URL)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -193,15 +277,46 @@ func TestOriginalRESTSlowConsumerHasBoundedWriteWithoutWriterGoroutine(t *testin
 	}
 	// Deliberately never read the socket. The underlying write deadline must
 	// release the handler, rather than a cancellation goroutine leaking a writer.
-	a := awaitInterruptedOriginal(t, h, issued.Handle)
-	if elapsed := time.Since(started); elapsed > 8*time.Second {
-		t.Fatalf("write remained blocked:%s", elapsed)
+	var observations []originalIOObservation
+	select {
+	case observations = <-observed:
+	case <-time.After(45 * time.Second):
+		// This completion watchdog includes the existing 30s request and 10s
+		// result-preservation bounds. The security assertion below concerns
+		// each actual write's 5s deadline, rather than the whole request.
+		t.Fatal("download handler exceeded request and evidence completion bounds")
 	}
-	if a.BytesWritten >= int64(len(script)) {
-		t.Fatal("slow unread consumer reported completion")
+	timedOut := false
+	var longest time.Duration
+	for _, observation := range observations {
+		elapsed := observation.finished.Sub(observation.started)
+		if elapsed > longest {
+			longest = elapsed
+		}
+		if observation.deadline.IsZero() || observation.deadline.After(observation.started.Add(5*time.Second)) {
+			t.Fatalf("%s had no five-second write bound", observation.operation)
+		}
+		// Keep the old 3s scheduler allowance, measured from the correct
+		// blocked-I/O boundary, and also check overrun of the applied deadline.
+		if elapsed > 8*time.Second || observation.finished.After(observation.deadline.Add(3*time.Second)) {
+			t.Fatalf("%s remained blocked:%s deadline=%s", observation.operation, elapsed, observation.deadline)
+		}
+		var networkError net.Error
+		if errors.As(observation.err, &networkError) && networkError.Timeout() {
+			timedOut = true
+		}
+	}
+	if !timedOut {
+		t.Fatal("unread consumer did not exercise a connection write timeout")
+	}
+	t.Logf("request elapsed=%s; longest Write/Flush=%s; applied deadlines<=5s", time.Since(started), longest)
+	a := h.awaitAccess(t, issued.Handle, "interrupted", "confirmed")
+	if a.BytesWritten <= 0 || a.BytesWritten >= int64(len(script)) {
+		t.Fatal("slow unread consumer reported completion or lost known byte count")
 	}
 	if a.ConsumedAt == nil {
 		t.Fatal("bounded failed stream did not consume handle")
 	}
 	h.s.recoverOriginalEvidence(context.Background())
+	h.json(t, "GET", issued.DownloadURL, h.token, nil, http.StatusForbidden)
 }
