@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"io"
 	"net/url"
-	"sort"
 	"strings"
 	"text/tabwriter"
 
@@ -169,56 +168,11 @@ func resolveHubAuth(ctx *Context) (*auth.AuthContext, error) {
 	return actx, nil
 }
 
-// resolveServerID resolves ref (a server ID or unique name) to its ID: a
-// direct GET /api/servers/{id} first, falling back to exactly one
-// GET /api/servers?search= call on a 404 (contracts/cli-commands.md `vey
-// servers get`: "<server> is an ID or unique name, resolved via one search
-// call; ambiguity → exit 2 listing candidates"). vey files ls/cat need the
-// server's ID to build /api/servers/{id}/files*, so they resolve the same
-// way runServersGet does (servers.go), duplicated here rather than shared
-// since it is not exported as its own helper there.
+// resolveServerID supplies the resolved ID for files and agent updates.
 func resolveServerID(actx *auth.AuthContext, ref string) (string, error) {
-	bg := context.Background()
-
-	var server api.Server
-	getErr := actx.Do(bg, func(c *api.Client) error {
-		return c.Get(bg, apiServersPathPrefix+url.PathEscape(ref), nil, &server)
-	})
-	if getErr == nil {
-		return server.ID, nil
-	}
-	if cmdutil.Code(getErr) != cmdutil.ExitNotFound {
-		return "", getErr
-	}
-
-	// Direct lookup 404'd: ref may be a name. One fallback search call
-	// resolves it.
-	var page api.ServersPage
-	query := url.Values{"search": []string{ref}}
-	if err := actx.Do(bg, func(c *api.Client) error {
-		return c.Get(bg, "/api/servers", query, &page)
-	}); err != nil {
+	server, _, err := resolveServer(context.Background(), actx, ref)
+	if err != nil {
 		return "", err
 	}
-
-	var matches []api.Server
-	for _, s := range page.Servers {
-		if s.Name == ref {
-			matches = append(matches, s)
-		}
-	}
-
-	switch len(matches) {
-	case 1:
-		return matches[0].ID, nil
-	case 0:
-		return "", cmdutil.NewNotFoundError(fmt.Errorf("no server found matching %q", ref))
-	default:
-		names := make([]string, 0, len(matches))
-		for _, m := range matches {
-			names = append(names, fmt.Sprintf("%s (%s)", m.Name, m.ID))
-		}
-		sort.Strings(names)
-		return "", cmdutil.NewUsageError(fmt.Errorf("%q matches multiple servers: %s", ref, strings.Join(names, ", ")))
-	}
+	return server.ID, nil
 }

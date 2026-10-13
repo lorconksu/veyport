@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"io"
 	"net/url"
-	"sort"
 	"strings"
 	"text/tabwriter"
 
@@ -108,9 +107,7 @@ func runServersList(ctx *Context, args []string) int {
 }
 
 // runServersGet implements `vey servers get <server>`: <server> is an ID or
-// unique name, resolved via a direct GET by ID first; on 404, exactly one
-// fallback GET /api/servers?search=<server> resolves it by exact name
-// match. Ambiguous matches exit 2 listing candidates; no match exits 5.
+// unique name, using the shared caller-visible resolution in resolveServer.
 func runServersGet(ctx *Context, args []string) int {
 	if len(args) < 1 || strings.TrimSpace(args[0]) == "" {
 		err := cmdutil.NewUsageError(errors.New("usage: vey servers get <server>"))
@@ -131,56 +128,13 @@ func runServersGet(ctx *Context, args []string) int {
 	}
 
 	bg := context.Background()
-	var server api.Server
-	getErr := actx.Do(bg, func(c *api.Client) error {
-		return c.Get(bg, "/api/servers/"+url.PathEscape(ref), nil, &server)
-	})
-	if getErr == nil {
-		printServer(ctx, server)
-		return cmdutil.ExitOK
-	}
-	if cmdutil.Code(getErr) != cmdutil.ExitNotFound {
-		ctx.Printer.Error(getErr)
-		return cmdutil.Code(getErr)
-	}
-
-	// Direct lookup 404'd: ref may be a name. One fallback search call
-	// resolves it (contracts/cli-commands.md: "resolved via one search
-	// call").
-	var page api.ServersPage
-	query := url.Values{"search": []string{ref}}
-	if err := actx.Do(bg, func(c *api.Client) error {
-		return c.Get(bg, "/api/servers", query, &page)
-	}); err != nil {
+	server, _, err := resolveServer(bg, actx, ref)
+	if err != nil {
 		ctx.Printer.Error(err)
 		return cmdutil.Code(err)
 	}
-
-	var matches []api.Server
-	for _, s := range page.Servers {
-		if s.Name == ref {
-			matches = append(matches, s)
-		}
-	}
-
-	switch len(matches) {
-	case 1:
-		printServer(ctx, matches[0])
-		return cmdutil.ExitOK
-	case 0:
-		notFound := cmdutil.NewNotFoundError(fmt.Errorf("no server found matching %q", ref))
-		ctx.Printer.Error(notFound)
-		return cmdutil.Code(notFound)
-	default:
-		names := make([]string, 0, len(matches))
-		for _, m := range matches {
-			names = append(names, fmt.Sprintf("%s (%s)", m.Name, m.ID))
-		}
-		sort.Strings(names)
-		ambiguous := cmdutil.NewUsageError(fmt.Errorf("%q matches multiple servers: %s", ref, strings.Join(names, ", ")))
-		ctx.Printer.Error(ambiguous)
-		return cmdutil.Code(ambiguous)
-	}
+	printServer(ctx, server)
+	return cmdutil.ExitOK
 }
 
 // printServer renders one server: field/value lines in human mode, the raw
