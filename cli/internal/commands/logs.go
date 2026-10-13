@@ -12,7 +12,6 @@ import (
 	"net/url"
 	"os"
 	"os/signal"
-	"sort"
 	"strings"
 	"syscall"
 
@@ -154,52 +153,18 @@ func failLogs(cmd *Context, err error) int {
 }
 
 // resolveLogServerID turns a server ID or unique name into an ID, using the
-// same two-step resolution as `vey servers get`: a direct lookup by ID
-// first, then exactly one search call to resolve a name. Resolving up front
+// same caller-visible resolution as `vey servers get`. Resolving up front
 // (rather than passing the reference straight into the tail URL) keeps a
 // 404 from being ambiguous between "no such server" and "no such log path".
 func resolveLogServerID(ctx context.Context, actx *auth.AuthContext, ref string) (string, error) {
-	var server api.Server
-	err := actx.Do(ctx, func(c *api.Client) error {
-		return c.Get(ctx, "/api/servers/"+url.PathEscape(ref), nil, &server)
-	})
-	if err == nil {
-		if server.ID != "" {
-			return server.ID, nil
-		}
+	server, byID, err := resolveServer(ctx, actx, ref)
+	if err != nil {
+		return "", err
+	}
+	if byID && server.ID == "" {
 		return ref, nil
 	}
-	if cmdutil.Code(err) != cmdutil.ExitNotFound {
-		return "", err
-	}
-
-	var page api.ServersPage
-	if err := actx.Do(ctx, func(c *api.Client) error {
-		return c.Get(ctx, "/api/servers", url.Values{"search": []string{ref}}, &page)
-	}); err != nil {
-		return "", err
-	}
-
-	var matches []api.Server
-	for _, s := range page.Servers {
-		if s.Name == ref {
-			matches = append(matches, s)
-		}
-	}
-
-	switch len(matches) {
-	case 1:
-		return matches[0].ID, nil
-	case 0:
-		return "", cmdutil.NewNotFoundError(fmt.Errorf("no server found matching %q", ref))
-	default:
-		names := make([]string, 0, len(matches))
-		for _, m := range matches {
-			names = append(names, fmt.Sprintf("%s (%s)", m.Name, m.ID))
-		}
-		sort.Strings(names)
-		return "", cmdutil.NewUsageError(fmt.Errorf("%q matches multiple servers: %s", ref, strings.Join(names, ", ")))
-	}
+	return server.ID, nil
 }
 
 // logLine is the --json stream shape: one JSON document per log line

@@ -427,7 +427,7 @@ Human output: an aligned `NAME  STATUS  ID` table, with the `total` count report
 
 ### `vey servers get <server>`
 
-`<server>` is a server ID or a unique name. `vey` looks it up directly by ID first; if that 404s, it falls back to exactly one name-search call — ambiguous name matches exit 2 and list the candidates. Human output: a field/value listing. `--json`: the raw server object. Unknown server exits 5.
+`<server>` is a server ID or an exact, unique name. `vey` looks it up directly by ID first; a `404` or permission-denied `403` triggers one name-search call restricted to servers visible to your identity. Ambiguous exact matches exit 2 and list the visible candidates. The search requests at most 100 entries; if the page is incomplete, use a server ID from `vey servers list`. With no exact visible match, the original `403` remains exit 4, preserving the Hub's privacy for unknown or inaccessible IDs; a complete search after `404` exits 5. Human output: a field/value listing. `--json`: the raw server object. Files, logs, SSH, and agent updates use the same resolution and retain their own permission checks.
 
 ### `vey files ls <server> <path>`
 
@@ -451,7 +451,7 @@ Provisions or refreshes your SSH credential for the SSH gateway. Generates (or r
 
 ### `vey ssh <server>`
 
-Opens a native interactive SSH session to a fleet server through the Hub's SSH gateway. `<server>` resolves the same way as `vey servers get` (unique name/ID → connect; ambiguous → exit 2 listing candidates; unknown → exit 5). Checks for a valid, unexpired certificate up front (missing/expired → guidance to run `vey ssh-cert`, exit 3), fetches the current gateway public key over the Hub API, and pins host verification to that key in a temporary file. It compares the key's fingerprint with the value cached by `vey ssh-cert` and warns if it changed. The saved fingerprint detects rotation; it does not supply the pinned key. `vey` execs your machine's own `ssh` client and never edits `~/.ssh/config`. Exits with whatever status code the underlying `ssh` process returns. For the prototype command form, see the next entry. `scp`/`sftp`, forwarding, and Windows clients are not supported. Full details and the `user+server` addressing scheme: [[SSH Gateway]].
+Opens a native interactive SSH session to a fleet server through the Hub's SSH gateway. `<server>` resolves the same way as `vey servers get`, including exact names visible to non-admins and the Hub's privacy-preserving exit 4 for unknown or inaccessible references. Checks for a valid, unexpired certificate up front (missing/expired → guidance to run `vey ssh-cert`, exit 3), fetches the current gateway public key over the Hub API, and pins host verification to that key in a temporary file. It compares the key's fingerprint with the value cached by `vey ssh-cert` and warns if it changed. The saved fingerprint detects rotation; it does not supply the pinned key. `vey` execs your machine's own `ssh` client and never edits `~/.ssh/config`. Exits with whatever status code the underlying `ssh` process returns. For the prototype command form, see the next entry. `scp`/`sftp`, forwarding, and Windows clients are not supported. Full details and the `user+server` addressing scheme: [[SSH Gateway]].
 
 ### `vey ssh <server> -- '<command>'`
 
