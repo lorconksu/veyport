@@ -230,8 +230,8 @@ export function DashboardPage() {
         </div>
       )}
       {!isLoading && servers.length > 0 && (
-        <div className="border border-border rounded overflow-hidden">
-          <table className="w-full text-sm">
+        <div className="border border-border rounded overflow-x-auto">
+          <table className="w-full min-w-[900px] text-sm">
             <thead>
               <tr className="bg-elevated text-text-muted text-xs uppercase tracking-wider">
                 {isAdmin && (
@@ -248,6 +248,7 @@ export function DashboardPage() {
                 <th className="px-3 py-2 text-left">Name</th>
                 <th className="px-3 py-2 text-left">Hostname / IP</th>
                 <th className="px-3 py-2 text-left">OS</th>
+                <th className="px-3 py-2 text-left">Agent Version</th>
                 <th className="px-3 py-2 text-left">Last Seen</th>
                 <th className="px-3 py-2 text-right">Actions</th>
               </tr>
@@ -280,6 +281,9 @@ export function DashboardPage() {
                     {srv.hostname || srv.ip_address ? `${srv.hostname ?? '—'} / ${srv.ip_address ?? '—'}` : '—'}
                   </td>
                   <td className="px-3 py-2 text-text-secondary">{srv.os ?? '—'}</td>
+                  <td className="px-3 py-2 max-w-64 break-all text-text-secondary">
+                    {srv.agent_version?.trim() ? srv.agent_version : 'Not reported'}
+                  </td>
                   <td className="px-3 py-2 text-text-muted">
                     {srv.status === 'pending' ? (
                       <span className="text-status-warning">Pending agent</span>
