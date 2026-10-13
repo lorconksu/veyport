@@ -70,8 +70,10 @@ func (a *failingExecBridgeAgent) Send(msg *pb.HubMessage) error {
 			return errors.New("attach transport unavailable")
 		}
 		if a.phase == "attach-disconnect" {
-			a.fixture.connMgr.UnregisterIfCurrent(testServerID, a)
+			// Match onAgentDisconnected: publish the execution's reason before
+			// closing conn.Done(), which can wake the control-send waiter first.
 			a.executions.EndConnection(testServerID, a, "execution transport lost")
+			a.fixture.connMgr.UnregisterIfCurrent(testServerID, a)
 			return nil
 		}
 		if a.phase == "credential-change" {
