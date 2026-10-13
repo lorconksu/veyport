@@ -198,6 +198,15 @@ func TestManagerOpenInputResizeAndExit(t *testing.T) {
 	if !strings.Contains(data, "veyport-ready") {
 		t.Fatalf("expected command output, got %q", data)
 	}
+	// TerminalExit reports process exit; waitLoop removes the session after
+	// publishing it. Observe that asynchronous cleanup without causing it.
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		if _, err := m.get("session-pty"); errorsIsSessionNotFound(err) {
+			break
+		}
+		time.Sleep(time.Millisecond)
+	}
 	if _, err := m.get("session-pty"); !errorsIsSessionNotFound(err) {
 		t.Fatalf("expected session cleanup after exit, got %v", err)
 	}
