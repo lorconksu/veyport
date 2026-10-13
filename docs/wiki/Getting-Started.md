@@ -41,12 +41,16 @@ The Standard profile needs only the Hub, its SQLite data volume, and connected
 agents; no external audit service is required. Enhanced command evidence is an
 optional prototype and needs its separately qualified receipt and encrypted
 archive services. Do not enable it by supplying an arbitrary archive URL. See
-[[Architecture]] for the prototype's guarantees and limits. This branch targets version `2.0.50-prototype.5` and immutable tag
-`prototype-ssh-passthrough.5`; stable `2.0.49` does not include this feature.
-Before installing, verify publication, required assets, and qualification on
-the [release page](https://github.com/lorconksu/veyport/releases). Use the Hub and CLI from the same source revision
-with a compatible agent. Resolve the immutable OCI tag to its published digest
-and verify the source revision.
+[[Architecture]] for the prototype's guarantees and limits. The currently
+published command-passthrough prototype is Hub `2.0.50-prototype.9` / tag
+`prototype-ssh-passthrough.9`, with CLI and agent prototype 9 artifacts. Older
+CLI prototype 6 builds are also compatible with the Hub. These prototype
+builds are not a stable
+or main-branch release. Check current publication and qualification on the
+[release page](https://github.com/lorconksu/veyport/releases), use compatible
+builds, and verify target agent support. See [[CLI Automation]] for safe
+scripted use; this publication information is not new runtime qualification
+evidence.
 
 For later maintenance, use `vey update` for the operator CLI and
 `vey servers update <node>` for a supported enrolled Linux agent. Do not rerun

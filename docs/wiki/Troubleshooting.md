@@ -246,12 +246,13 @@ Terminal endpoints require an interactive browser session. CLI-created API token
 
 ### `vey ssh node -- command` is refused or hangs while sending input
 
-This branch targets version `2.0.50-prototype.5` and immutable tag
-`prototype-ssh-passthrough.5`; stable `2.0.49` does not include it. Before
-installing, verify publication, required assets, and qualification on the
-[release page](https://github.com/lorconksu/veyport/releases). Use the Hub and CLI from the same source revision
-with a compatible agent. Resolve the immutable OCI tag to its published digest
-and verify the source revision. Use one command string after `--`, for example
+The published command-passthrough prototype is Hub `2.0.50-prototype.9` / tag
+`prototype-ssh-passthrough.9`, with CLI and agent prototype 9 artifacts. Older
+CLI prototype 6 builds are also compatible with the Hub. These prototype
+builds are not a stable or main-branch release. Check current
+publication and qualification on the [release page](https://github.com/lorconksu/veyport/releases),
+and verify target agent support. See [[CLI Automation]] for auth and retry
+guidance. Use one command string after `--`, for example
 `vey ssh web01 -- 'uname -a'`; do not
 split one command across multiple shell arguments. The mode has no PTY and
 starts OpenSSH in BatchMode. It does not ask for a terminal password or open an

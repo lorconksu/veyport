@@ -185,8 +185,8 @@ dormant account refused at sign-in produces `user.login_failed` with detail `acc
 `account dormant`, again as a failure outcome that does not touch the failure count. The
 equivalent refusals at the SSH gateway are `ssh.cert_issue_refused` (certificate issuance) and
 `ssh.session_refused` (an established certificate, but the shell itself refused), both carrying
-the same `account disabled` / `account dormant` reason - see [[SSH Gateway]] and [[API
-Reference]].
+the same `account disabled` / `account dormant` reason - see [[SSH Gateway]] and
+[[API Reference]].
 
 ### Server actions
 

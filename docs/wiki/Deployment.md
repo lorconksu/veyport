@@ -84,13 +84,14 @@ Replace `latest` with a specific version tag to avoid unexpected upgrades:
 image: yiucloud/veyport:vX.Y.Z
 ```
 
-This branch targets version `2.0.50-prototype.5` and immutable tag
-`prototype-ssh-passthrough.5`; stable `2.0.49` does not include this feature.
-Before installing, verify publication, required assets, and qualification on
-the [release page](https://github.com/lorconksu/veyport/releases). Use the reviewed Hub artifact from that release,
-resolve the immutable OCI tag to its published digest, and verify its source
-revision. Use a CLI from the same source revision with a compatible agent.
-Follow the owner-approved staging and rollback procedure.
+The published command-passthrough prototype is Hub `2.0.50-prototype.9` / tag
+`prototype-ssh-passthrough.9`, with CLI and agent prototype 9 artifacts. Older
+CLI prototype 6 builds are also compatible with the Hub. These prototype
+builds are not a stable or main-branch release. Check current
+publication and qualification on the [release page](https://github.com/lorconksu/veyport/releases),
+verify compatible builds and target agent support, and follow the
+owner-approved staging and rollback procedure. This publication information
+is not new runtime qualification evidence.
 
 ---
 

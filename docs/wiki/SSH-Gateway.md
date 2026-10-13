@@ -6,7 +6,7 @@
 |---|---|
 | **What** | Native `ssh` access to fleet servers, terminated at the Hub instead of connecting straight to each node |
 | **Who** | Operators who already have `vey` (see [[CLI]]) and want a real terminal (full-screen editors, `htop`, window resize) instead of the browser terminal |
-| **Why** | The Hub stays on the data path for every byte, so SSH sessions get the same audit trail, live authorization, and zero-agent-change guarantee as the web terminal — without requiring per-node SSH keys or `sshd` reachability |
+| **Why** | The Hub brokers SSH access and checks live authorization; enrolled agents provide the execution stream, without requiring per-node SSH keys or `sshd` reachability |
 | **Where** | A dedicated TCP port on the Hub (default `:2222`), separate from the HTTP/gRPC ports |
 | **How** | `vey ssh-cert` to obtain a short-lived certificate, then `vey ssh <server>` (or a manually-constructed `ssh` command) to connect |
 
@@ -41,12 +41,13 @@ That means:
 - Interactive PTY and no-PTY execution use separate protocol paths; command streams have bounded buffering and explicit results.
 - Authorization and target identity are checked live. A valid SSH certificate does not grant terminal or command authority by itself.
 
-This branch targets version `2.0.50-prototype.5` and immutable tag
-`prototype-ssh-passthrough.5`; stable `2.0.49` does not include this feature.
-Before installing, verify publication, required assets, and qualification on
-the [release page](https://github.com/lorconksu/veyport/releases). Use the Hub and CLI from the same source revision
-with a compatible agent. Resolve the immutable OCI tag to its published digest
-and verify the source revision.
+The currently published command-passthrough prototype 9 includes Hub, CLI,
+and agent artifacts. CLI prototype 6 is also compatible with the prototype 9
+Hub. These prototype builds are not a stable or main-branch release. Check
+current publication and qualification on the [release page](https://github.com/lorconksu/veyport/releases)
+and verify target agent support. This publication information is not new
+runtime qualification evidence. See [[CLI Automation]] for script examples
+and outcome handling.
 Standard command execution has no external audit-service dependency. Enhanced
 is opt-in and requires a qualified external receipt/archive configuration.
 
@@ -81,7 +82,7 @@ This provisions or refreshes your SSH credential:
 | **`--json` shape** | `{principal, expires_at, host_key_fingerprint, gateway_port}` |
 | **Idempotent** | Yes — re-running refreshes the certificate and keeps the keypair |
 
-**Why interactive-only?** SSH access is an operator capability, not something a script holding a long-lived API token should be able to reach for. The Hub enforces this server-side (`interactiveOnly` middleware); `vey ssh-cert` additionally refuses before making a request, so a misconfigured automation script fails fast and locally instead of hitting a rate limit or leaving a refusal in the audit log.
+**Why interactive-only?** Certificate issuance requires an operator's interactive login. The Hub enforces this server-side (`interactiveOnly` middleware); `vey ssh-cert` also refuses API-token credentials before making a request. Once issued, a certificate may be used by a delegated script. It remains the operator's credential, and an API token alone cannot obtain or renew it. See [[CLI Automation]] for the supported workflow and its limits.
 
 ```bash
 $ vey --hub https://hub.example.com ssh-cert
@@ -100,7 +101,7 @@ vey --hub https://hub.example.com ssh web01
 
 1. Checks that you have a stored, unexpired certificate; if not, it explains and points you to `vey ssh-cert`.
 2. Resolves `<server>` the same way `vey servers get` does — a unique name or ID; an ambiguous name lists the candidates; an unknown server is a clean not-found error.
-3. Builds a temporary host-verification file from the cached gateway fingerprint (no blind trust-on-first-use prompt).
+3. Fetches the gateway's current public host key over the authenticated Hub API and builds a temporary host-verification file from that key. The fingerprint saved by `vey ssh-cert` is used to warn if it changed; it is not the source of the pinned key.
 4. Execs your operator's actual `ssh` binary with the certificate, the resolved `user+server` login name, and pinned host verification — it never edits your `~/.ssh/config`.
 5. Propagates the `ssh` client's exit status back to your shell.
 
@@ -198,10 +199,10 @@ curl -H "Authorization: Bearer <token>" https://hub.example.com/api/ssh/host-key
 or read it back from your last `vey ssh-cert` run:
 
 ```bash
-vey --hub https://hub.example.com ssh-cert --json | jq -r .host_key_fingerprint
+vey --json --hub https://hub.example.com ssh-cert | jq -r .host_key_fingerprint
 ```
 
-`vey ssh-cert` caches this fingerprint and `vey ssh` uses it to pre-configure host verification, so you are never prompted with a blind trust-on-first-use ("the authenticity of host ... can't be established") prompt the way a fresh manual `ssh` connection normally would be. If you connect manually, pass the fingerprint to your client's own pinning mechanism (for example a scoped `known_hosts` entry) instead of accepting on trust.
+`vey ssh-cert` caches this fingerprint. Each `vey ssh` connection fetches the current public host key over the Hub API and pins native SSH to that returned key in a temporary known-hosts file; it compares the key's fingerprint with the saved value and warns if it changed. The saved fingerprint detects rotation but does not supply the pinned key. This avoids a blind trust-on-first-use prompt. If you connect manually, verify the fingerprint through a trusted channel and pin it in your client's own `known_hosts` instead of accepting on trust.
 
 ## Certificate lifetime and re-issuance
 
@@ -237,10 +238,11 @@ If you need any of these, use the existing [[Server Detail]] file browser/log ta
 | Code | Meaning for SSH commands |
 |---|---|
 | `0` | Success |
+| `1` | Local `ssh` client could not start, or a local I/O/process error occurred |
 | `2` | Usage error, or an ambiguous server name for `vey ssh <server>` |
-| `3` | Auth failure — API-token mode, no/expired stored certificate, or the Hub's interactive-only refusal |
+| `3` | Auth failure — no/expired stored certificate or a Hub authentication refusal |
 | `5` | Unknown server for `vey ssh <server>` |
-| `6` | Connectivity failure reaching the Hub or the gateway port |
+| `6` | Connectivity failure during Hub API preflight; a gateway connection failure is returned by native SSH (often `255`) |
 | `7` | Rate-limited (`429`) on certificate issuance |
 | *(varies)* | `vey ssh` propagates whatever exit status your native `ssh` client returns once a session is actually open |
 
@@ -264,10 +266,10 @@ veyport: session ended by an administrator
 exit status `1`. This is audited as `ssh.session_closed` with detail `reason=forced` - see
 [[Audit Logs]].
 
-**Shells are not subject to the idle or absolute session timers** that apply to web and CLI
-sessions (see [[Logging In]]). A long-running shell is bounded only by its certificate's ~12-hour
-lifetime (above) and by explicit termination as described here - it does not go idle on its own
-and does not expire at a fixed wall-clock time the way a web session does.
+**Open shells are not subject to the idle or absolute session timers** that apply to web and CLI
+sessions (see [[Logging In]]). Certificate expiry limits new SSH connections; it does not end an
+already-open shell. Shells remain subject to live account/access revocation and explicit
+termination as described here. No web or CLI idle timer closes an open SSH shell.
 
 ## Troubleshooting
 

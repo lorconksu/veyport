@@ -7,7 +7,7 @@ Veyport uses a **Hub-and-Spoke** model. The Hub hosts the web UI, REST API, SSH 
 ## Components
 
 - **Browser** - React single-page app served by the Hub over HTTPS.
-- **CLI (`vey`)** - Standalone client for HTTPS API operations and native SSH. On the `011-cli-command-passthrough` feature branch it can also submit one no-PTY command through the same gateway. The Hub serves platform-specific CLI binaries through `/install/cli/{os}/{arch}`.
+- **CLI (`vey`)** - Standalone client for HTTPS API operations and native SSH. The published command-passthrough prototype can submit one no-PTY command through the gateway. The Hub serves platform-specific CLI binaries through `/install/cli/{os}/{arch}`.
 - **SSH gateway** - Hub listener on `:2222` by default. Validates Hub-issued SSH certificates, checks live authorization, and brokers interactive PTY or command execution over the enrolled agent stream; it does not connect to the managed server's SSH daemon.
 - **Hub** - Go server that serves the web UI, exposes REST APIs, stores state in SQLite, enforces authentication and authorization, and brokers requests to agents.
 - **SQLite** - Local persistent store for users, sessions, audit logs, server inventory, configuration, and persisted gateway keys.
@@ -98,12 +98,14 @@ closed when it cannot reconcile. Replacing the trusted binary, runtime trust
 configuration, or installation identity as root/hypervisor administrator is
 outside the tested application boundary, as are host destruction and key loss.
 See the repo-local [audit lab notes](../../infra/audit-lab/README.md) for
-qualification detail. This branch targets version `2.0.50-prototype.5` and
-immutable tag `prototype-ssh-passthrough.5`; stable `2.0.49` does not include
-this feature. Before installing, verify publication, required assets, and
-qualification on the [release page](https://github.com/lorconksu/veyport/releases). Use the Hub and CLI from the same source revision
-with a compatible agent. Resolve the immutable OCI tag to its published digest
-and verify the source revision.
+qualification detail. The published command-passthrough prototype is Hub
+`2.0.50-prototype.9` / tag `prototype-ssh-passthrough.9`, with CLI and agent
+prototype 9 artifacts. Older CLI prototype 6 builds are also compatible with
+the Hub. These are prototype builds, not a stable or main-branch release. Check
+current publication and qualification on the [release page](https://github.com/lorconksu/veyport/releases),
+verify compatible builds and target agent support. This publication
+information is not new runtime qualification evidence. See [[CLI Automation]]
+for command use and limits.
 
 ## Terminal Execution Identity
 
@@ -153,8 +155,8 @@ Established shells are not governed by HTTP session idle or absolute timers, and
 certificate expiry does not terminate an existing SSH connection. An already-running
 CLI SSH command continues when its login session expires from inactivity; subsequent
 CLI requests require a new sign-in. Administrative session revocation and account
-disable can close running shells through the shared terminal registry. See [[SSH
-Gateway]] and [[Settings]].
+disable can close running shells through the shared terminal registry. See
+[[SSH Gateway]] and [[Settings]].
 
 ## Agent Certificate Lifecycle
 

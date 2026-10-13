@@ -50,7 +50,7 @@ for issue and pull-request expectations.
 - **Secure File Transfers (Dropzone)** — Admin-only drag-and-drop chunked file uploads to a quarantined staging directory on the target server
 - **Email Notifications** — 8 configurable alert types (agent connect/disconnect, file uploads, login events, and more)
 - **Audit Logging** — Local audit metadata for security and workflow actions; optional Enhanced command evidence uses external admission receipts and encrypted originals
-- **Command Passthrough** — `vey ssh <node> -- '<command>'` runs one opaque command through the Hub without a PTY and keeps stdout, stderr, stdin, and exit results separate
+- **Command Passthrough** — The published CLI prototype supports `vey ssh <node> -- '<command>'` for one no-PTY command through the Hub; stdout, stderr, stdin, and exit results remain separate
 - **Verified Updates** — `vey update` updates the local CLI from its configured Hub; `vey servers update <node>` updates supported Standard agents while preserving their enrolled identity and configuration
 - **Optional Enhanced Audit** — External admission receipts and encrypted original evidence for covered commands, with redacted search projections kept separate
 - **2FA (TOTP)** — Mandatory TOTP-based two-factor authentication for all users, no exceptions
@@ -67,7 +67,7 @@ Veyport uses a **Hub-and-Spoke** model. The Hub is the central server that hosts
 
 - **Hub** — Central Go server. Serves the web UI, exposes REST APIs, manages SQLite, and enforces authentication and permissions. Runs HTTP on `:8081`, agent gRPC on `:9090`, and an SSH gateway on `:2222` by default.
 - **Agent** — Lightweight Go binary on each remote server. Maintains a persistent bidirectional mTLS gRPC stream to the Hub, executing file, log, upload, and PTY terminal operations on demand.
-- **CLI (`vey`)** — Connects to the Hub over HTTPS for API operations and SSH certificates, then uses native SSH for interactive PTY access or (on the feature branch) one no-PTY command through the Hub gateway and agent stream.
+- **CLI (`vey`)** — Connects to the Hub over HTTPS for API operations and SSH certificates, then uses native SSH for interactive PTY access or one no-PTY command through the Hub gateway and agent stream.
 - **Frontend** — React SPA embedded into the Hub binary via `go:embed`. Single-binary deployment with zero external dependencies.
 
 For the full architecture breakdown, see [Architecture](docs/wiki/Architecture.md).
@@ -81,13 +81,34 @@ for the current request-based session activity model.
 Enhanced command evidence covers the submitted command string or complete
 supported stdin script. It does not attest every internal shell instruction,
 fetched program, child-process action, or remote output; command execution is not
-a sandbox. This branch targets version `2.0.50-prototype.5` and immutable tag
-`prototype-ssh-passthrough.5`; stable `2.0.49` does not include this feature.
-Verify publication, required assets, and qualification on the [release page](https://github.com/lorconksu/veyport/releases) before installing. Use the Hub and CLI from the same source
-revision with a compatible agent. Resolve the immutable OCI tag to its published
-digest and verify the source revision. See
+a sandbox. The published command-passthrough prototype 9 includes Hub, CLI,
+and agent artifacts. CLI prototype 6 is also compatible with the prototype 9
+Hub. These are prototype builds, not a stable or main-branch release. Verify
+current availability and qualification on the [release page](https://github.com/lorconksu/veyport/releases);
+published artifacts alone do not establish new runtime qualification. Use
+compatible Hub, CLI, and agent builds and verify target
+agent support. See the [CLI automation guide](docs/wiki/CLI-Automation.md),
+[CLI reference](docs/wiki/CLI.md), and
 the public [Architecture guide](docs/wiki/Architecture.md#command-execution-boundary)
 for its guarantees and limits.
+
+### CLI quick start
+
+Install the CLI served by your Hub, then sign in interactively and obtain an
+SSH certificate before using command passthrough:
+
+```bash
+curl -fsSL https://hub.example.com/install/cli.sh | sh
+vey --hub https://hub.example.com login
+vey ssh-cert
+vey --json servers list
+vey ssh web01 -- 'hostname; id'
+```
+
+Human login is required to issue or renew the SSH certificate. Scripts may use
+an existing operator-issued certificate with a permitted REST credential; an
+API token alone cannot issue the certificate. See the [CLI automation guide](docs/wiki/CLI-Automation.md) for stdin, JSON,
+timeouts, retry safety, and Standard/Enhanced behavior.
 
 ## Quick Start
 

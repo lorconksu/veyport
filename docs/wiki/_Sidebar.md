@@ -9,6 +9,7 @@
 - [[Fleet Dashboard]]
 - [[Server Detail]]
 - [[CLI]]
+- [[CLI Automation]]
 - [[SSH Gateway]]
 
 **Administration**

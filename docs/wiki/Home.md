@@ -19,7 +19,7 @@ complete supported script, not all remote process activity.
 - Provides a file tree browser to navigate the remote filesystem from your browser
 - Streams live log tailing with grep filtering directly in the browser
 - Opens browser-based terminal sessions for admins and authorized LDAP users
-- Provides no-PTY command passthrough with `vey ssh <node> -- '<command>'` in the prototype described below ([[CLI]])
+- Provides no-PTY command passthrough with `vey ssh <node> -- '<command>'` in the published CLI prototype ([[CLI Automation]])
 - Supports drag-and-drop file transfers via the Dropzone uploader
 - Records local audit metadata for supported account, server, file, terminal, and governance actions
 - Requires two-factor authentication for every account - no exceptions
@@ -33,13 +33,16 @@ complete supported script, not all remote process activity.
 Standard mode keeps these local audit features standalone. Enhanced command
 evidence is an opt-in prototype with external receipt/archive requirements and
 separate operational limits; it is not enabled by installing Veyport alone. See
-[[CLI]], [[SSH Gateway]], [[Audit Logs]], and [[Architecture]] for the feature
-boundary and prototype identity. This branch targets version
-`2.0.50-prototype.5` and immutable tag `prototype-ssh-passthrough.5`; stable
-`2.0.49` does not include this feature. Before installing, verify publication,
-required assets, and qualification on the [release page](https://github.com/lorconksu/veyport/releases). Use a Hub and CLI from the same source revision
-and a compatible agent. Resolve the immutable OCI tag to its published digest
-and verify the source revision.
+[[CLI]], [[CLI Automation]], [[SSH Gateway]], [[Audit Logs]], and
+[[Architecture]] for the feature boundary and prototype identity. The currently
+published command-passthrough prototype is Hub `2.0.50-prototype.9` / tag
+`prototype-ssh-passthrough.9`, with CLI and agent prototype 9 artifacts. Older
+CLI prototype 6 builds are also compatible with the Hub. These prototype
+builds are not a stable
+or main-branch release. Check current publication and qualification on the
+[release page](https://github.com/lorconksu/veyport/releases), then use
+compatible builds and verify target agent support. See [[CLI Automation]] for
+safe scripted use.
 
 ---
 
