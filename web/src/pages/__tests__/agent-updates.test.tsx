@@ -8,7 +8,10 @@ import { useAuth } from '@/hooks/use-auth'
 import type { Server, User } from '@/types/api'
 import type { AgentUpdate, AgentUpdateCheck } from '@/types/agent-updates'
 
-vi.mock('@/lib/api', async importOriginal => ({ ...await importOriginal<typeof import('@/lib/api')>(), apiFetch: vi.fn(), apiFetchOnce: vi.fn() }))
+vi.mock('@/lib/api', async importOriginal => {
+  const actual = await importOriginal() as typeof import('@/lib/api')
+  return { ...actual, apiFetch: vi.fn(), apiFetchOnce: vi.fn() }
+})
 vi.mock('@/hooks/use-auth', () => ({ useAuth: vi.fn() }))
 
 const admin: User = { id: 'admin', username: 'admin', role: 'admin', email: 'admin@example.test', avatar: null, totp_enabled: true, created_at: '', updated_at: '' }
