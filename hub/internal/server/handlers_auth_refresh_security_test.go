@@ -76,6 +76,16 @@ func TestRefresh_DemotedUser_GetsCurrentRole(t *testing.T) {
 	var createResp model.CreateUserResponse
 	json.NewDecoder(createRec.Body).Decode(&createResp)
 	userID := createResp.User.ID
+	// Complete the account's password/MFA setup before modeling its signed-in
+	// session. A temporary-password setup credential cannot refresh a session.
+	if err := s.store.UpdateUserPassword(userID, "completed-test-password-hash"); err != nil {
+		t.Fatal(err)
+	}
+	completedUser, err := s.store.GetUserByID(userID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	enableTOTPForUser(t, s, completedUser)
 
 	// Generate a refresh token with admin role, bound to a session the way a
 	// real sign-in binds it (009: an unbound refresh token is refused).

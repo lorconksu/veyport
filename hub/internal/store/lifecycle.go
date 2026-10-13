@@ -174,6 +174,9 @@ func (s *Store) EnableUser(userID string, now time.Time) (wasDisabled bool, err 
 	stamp := now.UTC().Format(sqliteTimeFormat)
 
 	err = s.withImmediateTx(func(ctx context.Context, conn *sql.Conn) error {
+		if err := guardSecurityPrincipal(ctx, conn, userID); err != nil {
+			return err
+		}
 		var disabledAt sql.NullString
 		scanErr := conn.QueryRowContext(
 			ctx, "SELECT disabled_at FROM users WHERE id = ?", userID,

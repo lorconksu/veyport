@@ -13,7 +13,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/wyiu/veyport/hub/internal/auth"
-	"github.com/wyiu/veyport/hub/internal/model"
+	"github.com/wyiu/veyport/hub/internal/authorization"
 )
 
 type contextKey string
@@ -133,7 +133,21 @@ func (s *Server) authenticateRequestToken(tokenStr string) (userID, role, tokenT
 				return "", "", "", "", sessionErr
 			}
 		}
-		return claims.Subject, claims.Role, claims.TokenType, claims.SessionID, nil
+		if claims.TokenType == auth.TokenTypeSetup || claims.TokenType == auth.TokenTypeTOTP {
+			user, err := s.store.GetUserByID(claims.Subject)
+			if err != nil || user.TokenGeneration != claims.TokenGeneration || user.DisabledAt != nil {
+				return "", "", "", "", fmt.Errorf("password-stage credential was revoked")
+			}
+		}
+		role := claims.Role
+		if claims.TokenType == auth.TokenTypeAccess {
+			user, err := s.store.GetUserByID(claims.Subject)
+			if err != nil {
+				return "", "", "", "", err
+			}
+			role = string(user.Role)
+		}
+		return claims.Subject, role, claims.TokenType, claims.SessionID, nil
 	}
 
 	if !auth.LooksLikeAPIToken(tokenStr) {
@@ -186,7 +200,8 @@ func (s *Server) interactiveOnly(next http.Handler) http.Handler {
 // adminOnly wraps a handler to require admin role.
 func (s *Server) adminOnly(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if UserRoleFromContext(r.Context()) != string(model.RoleAdmin) {
+		effective, err := authorization.New(s.store).Effective(UserIDFromContext(r.Context()))
+		if err != nil || !effective.Can("operations.admin") {
 			respondError(w, http.StatusForbidden, "admin access required")
 			return
 		}
@@ -201,7 +216,8 @@ func (s *Server) terminalAccessOnly(next http.Handler) http.Handler {
 			respondError(w, http.StatusForbidden, "terminal access required")
 			return
 		}
-		if user.Role == model.RoleAdmin || (user.AuthProvider == model.AuthProviderLDAP && user.TerminalAccess) {
+		effective, err := authorization.New(s.store).Effective(user.ID)
+		if err == nil && effective.Can("terminal.execute") {
 			next.ServeHTTP(w, r)
 			return
 		}
@@ -211,8 +227,8 @@ func (s *Server) terminalAccessOnly(next http.Handler) http.Handler {
 
 func (s *Server) auditAccessOnly(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		role := UserRoleFromContext(r.Context())
-		if role != string(model.RoleAdmin) && role != string(model.RoleAuditor) {
+		effective, err := authorization.New(s.store).Effective(UserIDFromContext(r.Context()))
+		if err != nil || !effective.Can("audit.read") {
 			respondError(w, http.StatusForbidden, "audit access required")
 			return
 		}
@@ -275,6 +291,7 @@ func (s *Server) corsMiddleware(next http.Handler) http.Handler {
 
 // rateLimiter tracks login attempts per IP.
 type rateLimiter struct {
+	now      func() time.Time
 	mu       sync.Mutex
 	attempts map[string][]time.Time
 	limit    int
@@ -318,6 +335,9 @@ func (rl *rateLimiter) allow(ip string) bool {
 	defer rl.mu.Unlock()
 
 	now := time.Now()
+	if rl.now != nil {
+		now = rl.now()
+	}
 	cutoff := now.Add(-rl.window)
 
 	// Filter expired entries

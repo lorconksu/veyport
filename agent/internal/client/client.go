@@ -33,7 +33,10 @@ import (
 	"github.com/wyiu/veyport/agent/internal/heartbeat"
 	"github.com/wyiu/veyport/agent/internal/logtailer"
 	"github.com/wyiu/veyport/agent/internal/nodekey"
+	"github.com/wyiu/veyport/agent/internal/sessionlimit"
 	"github.com/wyiu/veyport/agent/internal/terminal"
+	"github.com/wyiu/veyport/agent/internal/update"
+	"github.com/wyiu/veyport/proto/protectedinput"
 	pb "github.com/wyiu/veyport/proto/veyport/v1"
 )
 
@@ -45,6 +48,8 @@ type Config struct {
 	IPAddress       string
 	OS              string
 	AgentVersion    string
+	AgentRevision   string
+	ConfigPath      string
 	CertDir         string // directory for mTLS cert storage; empty uses /etc/veyport/tls/
 	UnregisterToken string
 	Insecure        bool
@@ -86,9 +91,13 @@ type Client struct {
 	allowedPaths       []string
 	hubCAPin           string
 	onRegistered       func(serverID string)
-	reconnectCh        chan struct{} // signals connectAndStream to reconnect (e.g. to adopt a renewed cert)
-	sealedNodeKeyHex   string        // AES-GCM sealed Ed25519 private key (hex), empty if not yet enrolled
-	transportPrivBytes []byte        // X25519 transport private key (32 bytes), empty until first enrollment
+	reconnectCh        chan struct{}        // signals connectAndStream to reconnect (e.g. to adopt a renewed cert)
+	sealedNodeKeyHex   string               // AES-GCM sealed Ed25519 private key (hex), empty if not yet enrolled
+	executionSpool     protectedinput.Store // explicit internal storage dependency; runtime provisions encrypted storage
+	transportPrivBytes []byte               // X25519 transport private key (32 bytes), empty until first enrollment
+	budget             *sessionlimit.Budget
+	updates            *update.Runtime
+	updateWorkers      chan struct{}
 }
 
 func New(cfg Config) *Client {
@@ -117,7 +126,7 @@ func New(cfg Config) *Client {
 		}
 	}
 
-	return &Client{
+	c := &Client{
 		hubAddr:            cfg.HubAddr,
 		serverID:           cfg.ServerID,
 		token:              cfg.Token,
@@ -128,7 +137,6 @@ func New(cfg Config) *Client {
 		backoff:            1 * time.Second,
 		maxBackoff:         60 * time.Second,
 		tailSessions:       make(map[string]chan struct{}),
-		dropzone:           dropzone.New(dropzoneDir),
 		certStore:          certs.NewStore(certDir),
 		certDir:            certDir,
 		unregisterToken:    cfg.UnregisterToken,
@@ -139,7 +147,12 @@ func New(cfg Config) *Client {
 		reconnectCh:        make(chan struct{}, 1),
 		sealedNodeKeyHex:   sealedNodeKeyHex,
 		transportPrivBytes: transportPrivBytes,
+		budget:             sessionlimit.New(8),
+		updateWorkers:      make(chan struct{}, 1),
 	}
+	c.dropzone = dropzone.NewWithBudget(dropzoneDir, c.budget)
+	c.updates = update.New(cfg.AgentVersion, cfg.AgentRevision, cfg.ConfigPath, certDir, cfg.Insecure, c.budget)
+	return c
 }
 
 func (c *Client) ServerID() string {
@@ -443,41 +456,41 @@ func (c *Client) resolveAgentPath(path string) string {
 	return path
 }
 
-func (c *Client) handleFileListRequest(p *pb.HubMessage_FileListRequest, sendCh chan<- *pb.AgentMessage) {
+func (c *Client) handleFileListRequest(p *pb.HubMessage_FileListRequest, sendCh chan<- *pb.AgentMessage, contexts ...context.Context) {
 	resolvedPath := c.resolveAgentPath(p.FileListRequest.Path)
 	if !isPathAllowed(resolvedPath, c.allowedPaths) {
-		sendCh <- &pb.AgentMessage{
+		sendResponse(responseContext(contexts), sendCh, &pb.AgentMessage{
 			Payload: &pb.AgentMessage_FileListResponse{
 				FileListResponse: &pb.FileListResponse{
 					RequestId: p.FileListRequest.RequestId,
 					Error:     "path not in allowed list",
 				},
 			},
-		}
+		})
 		return
 	}
 	resp, _ := filebrowser.ListDir(resolvedPath)
 	if resp != nil {
 		resp.RequestId = p.FileListRequest.RequestId
-		sendCh <- &pb.AgentMessage{
+		sendResponse(responseContext(contexts), sendCh, &pb.AgentMessage{
 			Payload: &pb.AgentMessage_FileListResponse{
 				FileListResponse: resp,
 			},
-		}
+		})
 	}
 }
 
-func (c *Client) handleFileReadRequest(p *pb.HubMessage_FileReadRequest, sendCh chan<- *pb.AgentMessage) {
+func (c *Client) handleFileReadRequest(p *pb.HubMessage_FileReadRequest, sendCh chan<- *pb.AgentMessage, contexts ...context.Context) {
 	resolvedPath := c.resolveAgentPath(p.FileReadRequest.Path)
 	if !isPathAllowed(resolvedPath, c.allowedPaths) {
-		sendCh <- &pb.AgentMessage{
+		sendResponse(responseContext(contexts), sendCh, &pb.AgentMessage{
 			Payload: &pb.AgentMessage_FileReadResponse{
 				FileReadResponse: &pb.FileReadResponse{
 					RequestId: p.FileReadRequest.RequestId,
 					Error:     "path not in allowed list",
 				},
 			},
-		}
+		})
 		return
 	}
 	resp, _ := filebrowser.ReadFile(
@@ -487,11 +500,11 @@ func (c *Client) handleFileReadRequest(p *pb.HubMessage_FileReadRequest, sendCh 
 	)
 	if resp != nil {
 		resp.RequestId = p.FileReadRequest.RequestId
-		sendCh <- &pb.AgentMessage{
+		sendResponse(responseContext(contexts), sendCh, &pb.AgentMessage{
 			Payload: &pb.AgentMessage_FileReadResponse{
 				FileReadResponse: resp,
 			},
-		}
+		})
 	}
 }
 
@@ -542,19 +555,19 @@ func (c *Client) handleLogStreamStop(p *pb.HubMessage_LogStreamStop) {
 	}
 }
 
-func (c *Client) handleFileUploadRequest(p *pb.HubMessage_FileUploadRequest, sendCh chan<- *pb.AgentMessage) {
+func (c *Client) handleFileUploadRequest(p *pb.HubMessage_FileUploadRequest, sendCh chan<- *pb.AgentMessage, contexts ...context.Context) {
 	req := p.FileUploadRequest
 	ack := c.dropzone.HandleChunk(req.RequestId, req.Filename, req.Chunk, req.Done)
 	if ack != nil {
-		sendCh <- &pb.AgentMessage{
+		sendResponse(responseContext(contexts), sendCh, &pb.AgentMessage{
 			Payload: &pb.AgentMessage_FileUploadAck{
 				FileUploadAck: ack,
 			},
-		}
+		})
 	}
 }
 
-func (c *Client) handleFileDeleteRequest(p *pb.HubMessage_FileDeleteRequest, sendCh chan<- *pb.AgentMessage) {
+func (c *Client) handleFileDeleteRequest(p *pb.HubMessage_FileDeleteRequest, sendCh chan<- *pb.AgentMessage, contexts ...context.Context) {
 	req := p.FileDeleteRequest
 	resp := &pb.FileDeleteResponse{RequestId: req.RequestId}
 	// Only allow deletion from dropzone directory
@@ -570,11 +583,11 @@ func (c *Client) handleFileDeleteRequest(p *pb.HubMessage_FileDeleteRequest, sen
 	} else {
 		resp.Success = true
 	}
-	sendCh <- &pb.AgentMessage{
+	sendResponse(responseContext(contexts), sendCh, &pb.AgentMessage{
 		Payload: &pb.AgentMessage_FileDeleteResponse{
 			FileDeleteResponse: resp,
 		},
-	}
+	})
 }
 
 func (c *Client) handleUnregisterRequest(p *pb.HubMessage_UnregisterRequest, sendCh chan<- *pb.AgentMessage) {
@@ -973,15 +986,16 @@ func (c *Client) sendRegisterAndRecvAck(stream pb.AgentService_ConnectClient, cs
 	if err := stream.Send(&pb.AgentMessage{
 		Payload: &pb.AgentMessage_Register{
 			Register: &pb.RegisterAgent{
-				Token:               c.token,
-				Hostname:            c.hostname,
-				IpAddress:           c.ipAddress,
-				Os:                  c.os,
-				AgentVersion:        c.agentVersion,
-				Csr:                 csrDER,
-				NodePubkey:          pubBytes,
-				EnrollFingerprint:   fingerprint,
-				NodeTransportPubkey: transportPubBytes,
+				Token:                 c.token,
+				Hostname:              c.hostname,
+				IpAddress:             c.ipAddress,
+				Os:                    c.os,
+				AgentVersion:          c.agentVersion,
+				Csr:                   csrDER,
+				NodePubkey:            pubBytes,
+				EnrollFingerprint:     fingerprint,
+				NodeTransportPubkey:   transportPubBytes,
+				ExecutionCapabilities: &pb.ExecutionCapabilities{ProtocolVersion: 1, StandardExec: false, ProtectedScript: false},
 			},
 		},
 	}); err != nil {
@@ -1154,17 +1168,41 @@ func (c *Client) startRecvLoop(stream pb.AgentService_ConnectClient, sendCh chan
 		terminalMgr = managers[0]
 	}
 
+	return c.startRecvLoopForSession(stream, sendCh, terminalMgr, nil)
+}
+func (c *Client) startRecvLoopForSession(stream pb.AgentService_ConnectClient, sendCh chan<- *pb.AgentMessage, terminalMgr *terminal.Manager, executions *executionTransport, sessions ...*activitySession) <-chan error {
+	var activities *activitySession
+	if len(sessions) != 0 {
+		activities = sessions[0]
+	} else if c.budget != nil && c.dropzone != nil {
+		activities = newActivitySession(stream.Context(), c, sendCh)
+	}
 	recvErr := make(chan error, 1)
 	go func() {
 		for {
 			msg, err := stream.Recv()
 			if err == io.EOF {
+				if activities != nil {
+					activities.close()
+				}
 				recvErr <- nil
 				return
 			}
 			if err != nil {
+				if activities != nil {
+					activities.close()
+				}
 				recvErr <- err
 				return
+			}
+			if executions != nil && executions.handle(msg) {
+				continue
+			}
+			if c.handleUpdateMessage(stream.Context(), msg, sendCh) {
+				continue
+			}
+			if activities != nil && activities.dispatch(msg) {
+				continue
 			}
 			// File upload chunks must be sequential to avoid race conditions.
 			// Other messages can be handled concurrently.
@@ -1179,6 +1217,9 @@ func (c *Client) startRecvLoop(stream pb.AgentService_ConnectClient, sendCh chan
 }
 
 func (c *Client) connectAndStream(ctx context.Context) error {
+	sessionCtx, cancelSession := context.WithCancel(ctx)
+	defer cancelSession()
+	ctx = sessionCtx
 	if c.reconnectCh == nil {
 		c.reconnectCh = make(chan struct{}, 1)
 	}
@@ -1206,23 +1247,47 @@ func (c *Client) connectAndStream(ctx context.Context) error {
 	log.Printf("connected to hub at %s", c.hubAddr)
 
 	sendCh := make(chan *pb.AgentMessage, 16)
-	terminalMgr := terminal.NewManager(sendCh)
-	defer func() {
-		c.tailSessionsMu.Lock()
-		for id, stop := range c.tailSessions {
-			close(stop)
-			delete(c.tailSessions, id)
-		}
-		c.tailSessionsMu.Unlock()
+	budget := c.budget
+	if budget == nil {
+		budget = sessionlimit.New(8)
+		c.budget = budget
+	}
+	terminalMgr := terminal.NewManagerWithBudget(sendCh, budget)
+	activities := newActivitySession(ctx, c, sendCh, cancelSession)
+	defer activities.close()
+	executions, execErr := c.newExecutionTransport(ctx, budget, sendCh, cancelSession)
+	if execErr != nil {
+		log.Printf("noninteractive execution unavailable: %v", execErr)
+	}
+	capabilities := &pb.ExecutionCapabilities{ProtocolVersion: 1}
+	if executions != nil {
+		capabilities = executions.manager.Capabilities()
+	}
+	if err := stream.Send(&pb.AgentMessage{Payload: &pb.AgentMessage_ExecutionCapabilities{ExecutionCapabilities: capabilities}}); err != nil {
 		terminalMgr.CloseAll()
-		c.dropzone.Cleanup()
+		if executions != nil {
+			executions.close()
+		}
+		return fmt.Errorf("send execution capabilities: %w", err)
+	}
+	if c.updates != nil {
+		c.updates.Recheck()
+		status := c.updates.ResumeStatus()
+		activities.observe(c.updates.Capabilities(), status)
+	}
+	defer func() {
+		cancelSession()
+		terminalMgr.CloseAll()
+		if executions != nil {
+			executions.close()
+		}
 	}()
 	hbStop := make(chan struct{})
 	defer close(hbStop)
 	go heartbeat.StartTicker(c.serverID, 10*time.Second, sendCh, hbStop)
 	go c.startCertRenewalTicker(10*time.Second, sendCh, hbStop)
 
-	recvErr := c.startRecvLoop(stream, sendCh, terminalMgr)
+	recvErr := c.startRecvLoopForSession(stream, sendCh, terminalMgr, executions, activities)
 
 	for {
 		select {

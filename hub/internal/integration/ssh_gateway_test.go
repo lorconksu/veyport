@@ -83,22 +83,28 @@ const (
 // sshGWHarness owns the real hub components shared by the gRPC server and the
 // SSH gateway, exactly as main.go shares them.
 type sshGWHarness struct {
-	store     *store.Store
-	connMgr   *connmgr.ConnManager
-	pending   *grpcserver.PendingRequests
-	terminals *grpcserver.TerminalSessions
-	userCA    *userca.UserCA
-	hostKey   ssh.Signer
-	caCert    *x509.Certificate
-	caPin     string
-	grpcAddr  string
-	sshAddr   string
+	store      *store.Store
+	connMgr    *connmgr.ConnManager
+	pending    *grpcserver.PendingRequests
+	terminals  *grpcserver.TerminalSessions
+	executions *grpcserver.ExecutionSessions
+	gateway    *sshgw.Server
+	userCA     *userca.UserCA
+	hostKey    ssh.Signer
+	caCert     *x509.Certificate
+	caPin      string
+	grpcAddr   string
+	sshAddr    string
 }
 
 // startSSHGWHarness brings up a real gRPC server and a real SSH gateway on
 // ephemeral ports over a temp-file store, sharing one ConnManager,
 // PendingRequests and TerminalSessions.
 func startSSHGWHarness(t *testing.T) *sshGWHarness {
+	return startSSHGWHarnessWithOptions(t, nil)
+}
+
+func startSSHGWHarnessWithOptions(t *testing.T, configure func(*sshgw.Config)) *sshGWHarness {
 	t.Helper()
 
 	st, err := store.New(filepath.Join(t.TempDir(), "veyport.db"))
@@ -145,6 +151,7 @@ func startSSHGWHarness(t *testing.T) *sshGWHarness {
 		grpcAddr:  grpcLis.Addr().String(),
 		sshAddr:   sshLis.Addr().String(),
 	}
+	h.executions = grpcserver.NewExecutionSessions(h.terminals, h.connMgr)
 
 	gs := grpcserver.New(grpcserver.Config{
 		Addr:                   h.grpcAddr,
@@ -154,6 +161,7 @@ func startSSHGWHarness(t *testing.T) *sshGWHarness {
 		Pending:                h.pending,
 		LogSessions:            grpcserver.NewLogSessions(),
 		TerminalSessions:       h.terminals,
+		ExecutionSessions:      h.executions,
 		CACert:                 caCert,
 		CAKey:                  caKey,
 		StorageKey:             storageKey,
@@ -161,17 +169,23 @@ func startSSHGWHarness(t *testing.T) *sshGWHarness {
 	})
 	go func() { _ = gs.Start() }()
 
-	sshSrv := sshgw.New(sshgw.Config{
-		Store:     st,
-		UserCA:    userCA,
-		HostKey:   hostKey,
-		Terminals: h.terminals,
-		ConnMgr:   h.connMgr,
-		Pending:   h.pending,
-		Addr:      h.sshAddr,
-		Enabled:   true,
-		Listener:  sshLis,
-	})
+	sshConfig := sshgw.Config{
+		Store:      st,
+		UserCA:     userCA,
+		HostKey:    hostKey,
+		Terminals:  h.terminals,
+		ConnMgr:    h.connMgr,
+		Pending:    h.pending,
+		Executions: h.executions,
+		Addr:       h.sshAddr,
+		Enabled:    true,
+		Listener:   sshLis,
+	}
+	if configure != nil {
+		configure(&sshConfig)
+	}
+	sshSrv := sshgw.New(sshConfig)
+	h.gateway = sshSrv
 	go func() { _ = sshSrv.Start() }()
 
 	t.Cleanup(func() {

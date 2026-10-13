@@ -36,10 +36,8 @@ const (
 	reqExec         = "exec"
 )
 
-// outOfScope maps a refused request type to the explanation written to the
-// client's stderr. v1 is an interactive-PTY gateway only.
+// outOfScope maps accessory requests to an explanation on client stderr.
 var outOfScope = map[string]string{
-	reqExec:                      "remote command execution is not available through the Veyport SSH gateway; open an interactive session instead",
 	"subsystem":                  "file-transfer subsystems (sftp/scp) are not available through the Veyport SSH gateway",
 	"auth-agent-req@openssh.com": "SSH agent forwarding is not available through the Veyport SSH gateway",
 	"x11-req":                    "X11 forwarding is not available through the Veyport SSH gateway",
@@ -80,6 +78,8 @@ type sessionState struct {
 	rows    uint32
 	win     chan windowSize
 	started bool
+	pty     bool
+	exec    bool
 
 	// clientGone closes when the session channel is finished. That, and not a
 	// half-closed stdin, is the authoritative end-of-session signal.
@@ -106,12 +106,17 @@ func (st *sessionState) finish(ch ssh.Channel) {
 
 // applyPTY records the geometry carried by a pty-req.
 func (st *sessionState) applyPTY(req *ssh.Request) {
+	if st.exec {
+		replyTo(req, false)
+		return
+	}
 	var payload ptyRequest
 	if err := ssh.Unmarshal(req.Payload, &payload); err != nil {
 		replyTo(req, false)
 		return
 	}
 	st.cols, st.rows = sanitizeGeometry(payload.Cols, payload.Rows)
+	st.pty = true
 	replyTo(req, true)
 }
 
@@ -155,37 +160,16 @@ func (s *Server) handleSessionRequest(sshConn *ssh.ServerConn, ch ssh.Channel, r
 	case reqShell:
 		s.startShell(sshConn, ch, req, st)
 	case reqExec:
-		refuseExec(ch, req, st)
+		s.startExec(sshConn, ch, req, st)
 	default:
 		s.refuseRequest(ch, req)
 	}
 }
 
-// refuseExec declines an exec request in the one way real clients actually
-// display (FR-010): accept it at the protocol level, put the explanation on
-// stderr, and fail the "command" immediately with exit-status 1. A plain
-// request-refusal is invisible in practice — OpenSSH prints only its own
-// "exec request failed on channel 0" and tears the channel down before
-// showing any stderr data racing the failure reply (observed 0/11 message
-// deliveries against OpenSSH in the T026 staging run). Non-fatal accessory
-// requests (x11, agent forwarding) keep the plain refusal in refuseRequest:
-// their session continues, so their stderr message does reach the operator.
-func refuseExec(ch ssh.Channel, req *ssh.Request, st *sessionState) {
-	if st.started {
-		replyTo(req, false)
-		return
-	}
-	st.started = true
-	replyTo(req, true)
-	writeClientMessage(ch, outOfScope[reqExec])
-	sendExitStatus(ch, 1)
-	_ = ch.Close()
-}
-
 // startShell honours the first shell request on a channel and refuses every
 // later one: a session channel carries exactly one shell.
 func (s *Server) startShell(sshConn *ssh.ServerConn, ch ssh.Channel, req *ssh.Request, st *sessionState) {
-	if st.started {
+	if st.started || len(req.Payload) != 0 {
 		replyTo(req, false)
 		return
 	}
@@ -247,9 +231,13 @@ func (s *Server) runShell(sshConn *ssh.ServerConn, ch ssh.Channel, cols, rows ui
 		return
 	}
 
-	// The single shared authorization decision (research R5). An authorized
-	// LOCAL admin legitimately yields an EMPTY execution user, which means
-	// "the agent's default RunAsUser" — success, not failure.
+	// Refuse obvious denials before admission. The bridge revalidates the live
+	// grant and policy under the registration lock and before each ordered send.
+	// An authorized LOCAL admin yields an empty user for the agent default.
+	if err := s.securityService().GuardInteractive(user.ID, srv.ID); err != nil {
+		s.refuseShell(ch, user.ID, srv.ID, ip, "enhanced policy requires protected command execution", err.Error())
+		return
+	}
 	executionUser, err := server.AuthorizeTerminalExecution(s.cfg.Store, user.ID, srv.ID)
 	if err != nil {
 		s.refuseShell(ch, user.ID, srv.ID, ip,

@@ -12,12 +12,15 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"sync/atomic"
 	"syscall"
 	"time"
 
 	"golang.org/x/crypto/ssh"
 
 	hub "github.com/wyiu/veyport/hub"
+	"github.com/wyiu/veyport/hub/internal/auditruntime"
+	"github.com/wyiu/veyport/hub/internal/authorization"
 	"github.com/wyiu/veyport/hub/internal/ca"
 	"github.com/wyiu/veyport/hub/internal/connmgr"
 	"github.com/wyiu/veyport/hub/internal/grpcserver"
@@ -27,6 +30,7 @@ import (
 	"github.com/wyiu/veyport/hub/internal/sshgw"
 	"github.com/wyiu/veyport/hub/internal/store"
 	"github.com/wyiu/veyport/hub/internal/userca"
+	"github.com/wyiu/veyport/proto/protectedinput"
 )
 
 const legacyDBName = "aerodocs.db"
@@ -54,7 +58,15 @@ func runServer() error {
 	grpcExternalAddr := flag.String("grpc-external-addr", "", "external gRPC address for agent install commands (e.g. hub.example.com:9443)")
 	agentBinDir := flag.String("agent-bin-dir", "./bin", "directory containing agent binaries")
 	sshAddr := flag.String("ssh-addr", sshconfig.DefaultAddr, "SSH gateway listen address")
+	securityStateDir := flag.String("security-state-dir", "", "private persistent security state directory (default beside database)")
+	auditRuntimePath := flag.String("audit-runtime-config", "", "private operator-pinned audit runtime configuration (optional in Standard)")
+	executionSpoolDir := flag.String("execution-spool-dir", "", "private pre-provisioned encrypted filesystem directory for protected execution input")
+	showVersion := flag.Bool("version", false, "print version and exit")
 	flag.Parse()
+	if *showVersion {
+		fmt.Println(server.Version)
+		return nil
+	}
 
 	// Detect legacy aerodocs.db when the configured veyport.db doesn't exist on the
 	// same volume; refuse to start rather than silently presenting the fresh-install
@@ -68,6 +80,13 @@ func runServer() error {
 		return fmt.Errorf("open database: %w", err)
 	}
 	defer st.Close()
+	if *securityStateDir == "" {
+		*securityStateDir = filepath.Join(filepath.Dir(*dbPath), ".veyport-security")
+	}
+	installationID, err := authorization.InitInstallation(*securityStateDir)
+	if err != nil {
+		return fmt.Errorf("initialize durable security state: %w", err)
+	}
 
 	// Effective SSH gateway configuration; consumed by both the REST handlers
 	// (certificate issuance) and the gateway listener below.
@@ -105,43 +124,89 @@ func runServer() error {
 	pending := grpcserver.NewPendingRequests()
 	logSessions := grpcserver.NewLogSessions()
 	terminalSessions := grpcserver.NewTerminalSessions()
+	executionSessions := grpcserver.NewExecutionSessions(terminalSessions, cm)
+	agentUpdates, err := grpcserver.NewAgentUpdates(st, cm, terminalSessions)
+	if err != nil {
+		return fmt.Errorf("initialize agent update reconciliation: %w", err)
+	}
+	transition := authorization.TransitionConfig{InstallationID: installationID, EnrollmentPath: filepath.Join(*securityStateDir, "enhanced-enrollment.json")}
+	var auditRuntime *auditruntime.Runtime
+	var protectedExecution *sshgw.ProtectedExecutionConfig
+	var gatewayState atomic.Pointer[sshgw.Server]
+	if *auditRuntimePath != "" {
+		var spool protectedinput.Store
+		manager, spoolErr := protectedinput.New(*executionSpoolDir)
+		if spoolErr != nil {
+			log.Printf("Protected execution unavailable: encrypted input storage is not ready")
+		} else {
+			spool = manager
+		}
+		auditRuntime, err = auditruntime.Load(*auditRuntimePath, auditruntime.Options{
+			Store: st, Spool: spool,
+			GatewayReady:      func() bool { gateway := gatewayState.Load(); return gateway != nil && gateway.Ready() },
+			SupportsProtected: executionSessions.SupportsProtected,
+			ResolveSecret:     func(ref string) (string, string, error) { return server.ResolveSecuritySecret(st, storageKey, ref) },
+		})
+		if err != nil {
+			return fmt.Errorf("load protected audit runtime: %w", err)
+		}
+		defer auditRuntime.Close()
+		transition.Evidence = auditRuntime.Evidence()
+		protectedExecution = &sshgw.ProtectedExecutionConfig{Spool: spool, ResolveArchive: auditRuntime.ResolveArchive}
+	}
+	var destinationTester server.SecurityDestinationTester
+	var allowedAuditHosts []string
+	var originalAccess server.OriginalAccessConfig
+	if auditRuntime != nil {
+		destinationTester = auditRuntime
+		allowedAuditHosts = auditRuntime.AllowedHosts()
+		originalAccess.ResolveArchive = auditRuntime.ResolveOriginalArchive
+	}
 
 	srv := server.New(server.Config{
-		Addr:             *addr,
-		Store:            st,
-		JWTSecret:        jwtSecret,
-		StorageKey:       storageKey,
-		IsDev:            *dev,
-		FrontendFS:       &hub.FrontendFS,
-		AgentBinDir:      *agentBinDir,
-		GRPCAddr:         *grpcAddr,
-		GRPCExternalAddr: *grpcExternalAddr,
-		GRPCCACertSHA256: grpcCAPin,
-		ConnMgr:          cm,
-		Pending:          pending,
-		LogSessions:      logSessions,
-		TerminalSessions: terminalSessions,
-		Notifier:         notifier,
-		UserCA:           userCA,
-		SSHHostKey:       hostKey,
-		SSHConfig:        sshCfg,
+		SecurityTransition:        transition,
+		SecurityDestinationTester: destinationTester,
+		SecurityAllowedHosts:      allowedAuditHosts,
+		OriginalAccess:            originalAccess,
+		Addr:                      *addr,
+		Store:                     st,
+		JWTSecret:                 jwtSecret,
+		StorageKey:                storageKey,
+		IsDev:                     *dev,
+		FrontendFS:                &hub.FrontendFS,
+		AgentBinDir:               *agentBinDir,
+		GRPCAddr:                  *grpcAddr,
+		GRPCExternalAddr:          *grpcExternalAddr,
+		GRPCCACertSHA256:          grpcCAPin,
+		ConnMgr:                   cm,
+		Pending:                   pending,
+		LogSessions:               logSessions,
+		TerminalSessions:          terminalSessions,
+		AgentUpdates:              agentUpdates,
+		Notifier:                  notifier,
+		UserCA:                    userCA,
+		SSHHostKey:                hostKey,
+		SSHConfig:                 sshCfg,
 	})
 
 	// Extract hostname from external gRPC address for TLS SAN
+	agentUpdates.SetArtifactResolver(srv.ResolveAgentArtifact)
 	grpcExternalHost := resolveGRPCExternalHost(*grpcExternalAddr)
 
 	grpcSrv := grpcserver.New(grpcserver.Config{
-		Addr:             *grpcAddr,
-		ExternalHostname: grpcExternalHost,
-		Store:            st,
-		ConnMgr:          cm,
-		Pending:          pending,
-		LogSessions:      logSessions,
-		TerminalSessions: terminalSessions,
-		CACert:           caCert,
-		CAKey:            caKey,
-		Notifier:         notifier,
-		StorageKey:       storageKey,
+		Addr:              *grpcAddr,
+		ExternalHostname:  grpcExternalHost,
+		Store:             st,
+		ConnMgr:           cm,
+		Pending:           pending,
+		LogSessions:       logSessions,
+		TerminalSessions:  terminalSessions,
+		ExecutionSessions: executionSessions,
+		AgentUpdates:      agentUpdates,
+		CACert:            caCert,
+		CAKey:             caKey,
+		Notifier:          notifier,
+		StorageKey:        storageKey,
 	})
 
 	// The gateway shares the CA, host key and terminal machinery with the HTTP
@@ -149,15 +214,19 @@ func runServer() error {
 	// the gateway presents, and an SSH session must land in the same terminal
 	// registry the web terminal uses.
 	sshSrv := sshgw.New(sshgw.Config{
-		Store:     st,
-		UserCA:    userCA,
-		HostKey:   hostKey,
-		Terminals: terminalSessions,
-		ConnMgr:   cm,
-		Pending:   pending,
-		Addr:      sshCfg.Addr,
-		Enabled:   sshCfg.Enabled,
+		SecurityTransition: authorization.TransitionConfig{InstallationID: transition.InstallationID, EnrollmentPath: transition.EnrollmentPath},
+		ProtectedExecution: protectedExecution,
+		Store:              st,
+		UserCA:             userCA,
+		HostKey:            hostKey,
+		Terminals:          terminalSessions,
+		ConnMgr:            cm,
+		Pending:            pending,
+		Executions:         executionSessions,
+		Addr:               sshCfg.Addr,
+		Enabled:            sshCfg.Enabled,
 	})
+	gatewayState.Store(sshSrv)
 
 	// Wire the gRPC handler into the HTTP server so the re-enroll approve
 	// endpoint can call ReleaseKEK without a global or import cycle.

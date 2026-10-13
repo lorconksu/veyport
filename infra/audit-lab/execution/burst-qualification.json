@@ -1,0 +1,24 @@
+{
+  "schema": 1,
+  "at": "2026-10-11T10:24:30.814425+00:00",
+  "scope": "isolated synthetic .59/.64 Enhanced load; no human approvals or staging mutation",
+  "build": {
+    "source_commit": "23e5294926571491f9980f9c4cada5667fa55f61",
+    "toolchain": "go1.26.9",
+    "version": "dev-23e5294",
+    "frontend": "fresh13f00a0 production build; frontend source identical at23e5294",
+    "binaries": {
+      "veyport-hub": "628bbc0a8a089ceb868dd111646b179d6a071c4ee2cd498ac9a7cd245cc2435f",
+      "veyport-agent": "7046466a77c956efc1c76fa184956be0821c3a0053284015cddad50dfb5d49fb",
+      "vey": "bfd2b3e6f41ccfb3b8e80ead5b96fa915ef380d7b7c9321bae4e00fd1e98eeb6"
+    }
+  },
+  "policy_version": 4,
+  "actor_count": 2,
+  "actor_execution_limit": 4,
+  "node_execution_limit": 8,
+  "passed": false,
+  "phase": "eight-simultaneous-commands",
+  "failure_type": "RuntimeError",
+  "load_accounts_disabled": true
+}

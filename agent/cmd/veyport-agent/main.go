@@ -15,9 +15,14 @@ import (
 
 	"github.com/wyiu/veyport/agent/internal/client"
 	"github.com/wyiu/veyport/agent/internal/sysinfo"
+	"github.com/wyiu/veyport/agent/internal/update"
+	"github.com/wyiu/veyport/proto/updateutil"
 )
 
-const version = "0.1.0"
+// version is stamped into the binary and advertised on agent registration.
+var version = "0.1.0"
+var revision = "unknown"
+
 const defaultConfigPath = "/etc/veyport/agent.conf"
 const defaultCertDir = "/etc/veyport/tls/"
 const defaultDropzoneDir = "/tmp/veyport-dropzone"
@@ -40,7 +45,53 @@ func main() {
 	selfUnregister := flag.Bool("self-unregister", false, "connect to Hub, request deletion of this server, then exit")
 	insecureFlag := flag.Bool("insecure", false, "disable TLS (for development only)")
 	allowedPathsFlag := flag.String("allowed-paths", "", "comma-separated list of allowed filesystem paths")
+	showVersion := flag.Bool("version", false, "print version and exit")
+	updateSupervisor := flag.String("update-supervisor", "", "internal tracked update supervisor operation")
+	updateBootstrap := flag.String("update-bootstrap", "", "one-use enrolled update bootstrap ticket")
+	updateHub := flag.String("update-hub", "", "configured HTTPS Hub for enrolled update bootstrap")
+	updateOriginalVersion := flag.String("update-original-version", "", "operator-asserted version of an exact unstamped bootstrap original")
+	updateOriginalSHA256 := flag.String("update-original-sha256", "", "operator-asserted SHA256 of an exact unstamped bootstrap original")
 	flag.Parse()
+	original := updateutil.BootstrapOriginal{Version: *updateOriginalVersion, SHA256: *updateOriginalSHA256}
+	if err := original.Validate(); err != nil {
+		log.Fatal(err)
+	}
+	if original.Present() && (*updateBootstrap == "" || *updateSupervisor != "" || *showVersion) {
+		log.Fatal("original binary assertions are only valid for preserving update bootstrap")
+	}
+	if *showVersion {
+		fmt.Println(version)
+		return
+	}
+	if *updateSupervisor != "" || *updateBootstrap != "" {
+		if *configPath != defaultConfigPath || (*certDir != "" && filepath.Clean(*certDir) != filepath.Clean(defaultCertDir)) || *insecureFlag || *token != "" || *selfUnregister || (*updateSupervisor != "" && *updateBootstrap != "") {
+			log.Fatal("update helpers require the canonical existing enrolled configuration")
+		}
+		if err := update.ValidateHelperFiles(); err != nil {
+			log.Fatal(err)
+		}
+		cfg, err := loadConfig(defaultConfigPath)
+		if err != nil || cfg.ServerID == "" || cfg.HubURL == "" {
+			log.Fatal("update helper requires an existing enrolled agent")
+		}
+		if *updateBootstrap != "" {
+			if err := update.ValidateBootstrapConfig(*updateHub, cfg.HubURL); err != nil {
+				log.Fatal(err)
+			}
+		}
+		c := client.New(client.Config{HubAddr: cfg.HubURL, ServerID: cfg.ServerID, CertDir: defaultCertDir, ConfigPath: defaultConfigPath, AgentVersion: version, AgentRevision: revision, HubCAPin: cfg.HubCAPin})
+		ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+		defer stop()
+		if *updateSupervisor != "" {
+			err = c.RunUpdateSupervisor(ctx, *updateSupervisor)
+		} else {
+			err = c.RunUpdateBootstrap(ctx, *updateBootstrap, version, revision, original)
+		}
+		if err != nil {
+			log.Fatal(err)
+		}
+		return
+	}
 
 	if *selfUnregister {
 		runSelfUnregister(*configPath, *insecureFlag)
@@ -59,18 +110,20 @@ func main() {
 	osInfo := sysinfo.OSInfo()
 
 	c := client.New(client.Config{
-		HubAddr:      hubAddr,
-		ServerID:     serverID,
-		Token:        regToken,
-		CertDir:      resolveCertDir(*configPath, *certDir),
-		DropzoneDir:  resolveDropzoneDir(*configPath, *dropzoneDir),
-		HubCAPin:     hubCAPin,
-		Hostname:     hostname,
-		IPAddress:    "",
-		OS:           osInfo,
-		AgentVersion: version,
-		Insecure:     *insecureFlag,
-		AllowedPaths: allowedPaths,
+		HubAddr:       hubAddr,
+		ServerID:      serverID,
+		Token:         regToken,
+		CertDir:       resolveCertDir(*configPath, *certDir),
+		DropzoneDir:   resolveDropzoneDir(*configPath, *dropzoneDir),
+		HubCAPin:      hubCAPin,
+		Hostname:      hostname,
+		IPAddress:     "",
+		OS:            osInfo,
+		AgentVersion:  version,
+		AgentRevision: revision,
+		ConfigPath:    *configPath,
+		Insecure:      *insecureFlag,
+		AllowedPaths:  allowedPaths,
 		OnRegistered: func(serverID string) {
 			if cfg != nil || serverID == "" {
 				return

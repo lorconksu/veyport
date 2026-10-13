@@ -19,6 +19,9 @@ import (
 //	-ldflags "-X main.version=$(VERSION)"
 var version = "dev"
 
+// revision binds distribution metadata to this exact source revision.
+var revision = "unknown"
+
 // usage documents the command surface from
 // specs/004-cli-connector/contracts/cli-commands.md. Global flags precede
 // the subcommand name; each subcommand's own flags follow it (e.g.
@@ -38,14 +41,27 @@ Commands:
   login          sign in to a hub interactively
   logout         sign out and remove stored credentials for the hub
   status         show the effective hub, auth mode, and reachability
+  update         install a newer verified CLI from the configured Hub
+                 add --check to read metadata without changing files
   ssh-cert       obtain an SSH certificate for server connections
   ssh <server>   open an interactive SSH session by server name or ID
+                 add -- '<command>' to run a command without a PTY
   servers list   list servers on the hub
   servers get    show one server's details
   files ls       list a path on a remote server
   files cat      print a remote file to stdout
   logs tail      stream a remote log file
   audit export   stream the audit log export
+  security       request, review, approve and apply protected security changes
+                 run 'vey security --help' for MFA and exact-digest usage
+
+SSH command examples:
+  vey ssh bastion1 -- 'uname -a'
+  vey ssh bastion1 -- 'bash -s' < script.sh
+
+Pass one quoted command after --. Redirected stdin passes through; terminal
+stdin is EOF. Remote stdout/stderr and the native SSH exit status pass through.
+Exit 255 may be either a remote exit or a native SSH failure.
 `
 
 func main() {
@@ -116,5 +132,7 @@ func run(args []string) int {
 	}
 
 	ctx := commands.NewContext(*hubFlag, os.Getenv("VEYPORT_HUB"), cfg, filepath.Dir(configPath), printer, cmdArgs)
+	ctx.Version = version
+	ctx.Revision = revision
 	return fn(ctx)
 }

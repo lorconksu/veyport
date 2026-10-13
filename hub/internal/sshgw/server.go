@@ -1,8 +1,7 @@
 // Package sshgw implements the Veyport SSH gateway: a hardened SSH listener
 // that authenticates operators by short-lived user certificate and bridges an
-// interactive PTY to a fleet agent over the existing hub↔agent terminal
-// channel. The hub stays on the data path, so every byte remains observable
-// and no new agent capability is required (feature 005-ssh-gateway).
+// interactive PTY over the terminal channel or a noninteractive command over
+// a separate lossless enrolled-node execution stream.
 //
 // The gateway owns no state of its own: TerminalSessions, ConnManager,
 // PendingRequests and Store are injected so it shares the exact machinery the
@@ -22,6 +21,7 @@ import (
 
 	"golang.org/x/crypto/ssh"
 
+	"github.com/wyiu/veyport/hub/internal/authorization"
 	"github.com/wyiu/veyport/hub/internal/connmgr"
 	"github.com/wyiu/veyport/hub/internal/grpcserver"
 	"github.com/wyiu/veyport/hub/internal/model"
@@ -74,6 +74,9 @@ var errUsernameFormat = errors.New("ssh username is not of the form <veyport-use
 type Config struct {
 	// Store is the hub datastore, used for live authorization and audit.
 	Store *store.Store
+	// SecurityTransition supplies the immutable local enrollment identity. The
+	// gateway performs no external archive calls while validating live policy.
+	SecurityTransition authorization.TransitionConfig
 	// UserCA is the trust root for user certificates. Nil disables the
 	// listener (corrupt-key case, FR-006).
 	UserCA *userca.UserCA
@@ -84,7 +87,8 @@ type Config struct {
 	// ConnMgr is the shared agent connection manager.
 	ConnMgr *connmgr.ConnManager
 	// Pending is the shared request/response correlation registry.
-	Pending *grpcserver.PendingRequests
+	Pending    *grpcserver.PendingRequests
+	Executions *grpcserver.ExecutionSessions
 
 	// Addr is the listen address (sshconfig.Config.Addr).
 	Addr string
@@ -107,6 +111,10 @@ type Config struct {
 	// OpenTimeout bounds the wait for TerminalOpenAck.
 	// Zero means DefaultOpenTimeout.
 	OpenTimeout time.Duration
+	// ExecutionConsumerTimeout can shorten the default one-minute blocked
+	// write budget. It never imposes an idle timeout on quiet commands.
+	ExecutionConsumerTimeout time.Duration
+	ProtectedExecution       *ProtectedExecutionConfig
 }
 
 // Server is the SSH gateway listener. The zero value is not usable; build one
@@ -119,18 +127,27 @@ type Server struct {
 	conns    map[net.Conn]struct{}
 	closing  bool
 
-	wg        sync.WaitGroup
-	ready     chan struct{}
-	readyOnce sync.Once
+	wg             sync.WaitGroup
+	ready          chan struct{}
+	readyOnce      sync.Once
+	evidenceCancel context.CancelFunc
+	evidenceWake   chan struct{}
 }
 
 // New builds a gateway from cfg. It performs no I/O; call Start to listen.
 func New(cfg Config) *Server {
 	return &Server{
-		cfg:   cfg,
-		conns: make(map[net.Conn]struct{}),
-		ready: make(chan struct{}),
+		cfg:          cfg,
+		conns:        make(map[net.Conn]struct{}),
+		ready:        make(chan struct{}),
+		evidenceWake: make(chan struct{}, 1),
 	}
+}
+
+func (s *Server) securityService() *authorization.Service {
+	service := authorization.New(s.cfg.Store)
+	_ = service.ConfigureExecutionPolicy(s.cfg.SecurityTransition)
+	return service
 }
 
 // Start binds the listener and serves connections until Stop is called. It
@@ -140,6 +157,14 @@ func New(cfg Config) *Server {
 // without ever opening a port: the hub's REST and gRPC planes keep serving
 // (FR-006, FR-015). Only a genuine bind failure is returned as an error.
 func (s *Server) Start() error {
+	if s.cfg.Store != nil {
+		if err := authorization.New(s.cfg.Store).ConfigureExecutionPolicy(s.cfg.SecurityTransition); err != nil {
+			s.closeUnusedListener()
+			s.markReady()
+			return fmt.Errorf("configure execution policy continuity: %w", err)
+		}
+	}
+	s.startEvidenceRecovery()
 	lis, err := s.listen()
 	s.markReady()
 	if err != nil {
@@ -148,6 +173,13 @@ func (s *Server) Start() error {
 	if lis == nil {
 		return nil
 	}
+	defer func() {
+		s.mu.Lock()
+		if s.listener == lis {
+			s.listener = nil
+		}
+		s.mu.Unlock()
+	}()
 	return s.serve(lis)
 }
 
@@ -237,7 +269,6 @@ func (s *Server) serve(lis net.Listener) error {
 			_ = conn.Close()
 			continue
 		}
-		s.wg.Add(1)
 		go func() {
 			defer s.wg.Done()
 			defer s.untrackConn(conn)
@@ -256,6 +287,9 @@ func (s *Server) Stop(ctx context.Context) error {
 		return nil
 	}
 	s.closing = true
+	if s.evidenceCancel != nil {
+		s.evidenceCancel()
+	}
 	lis := s.listener
 	s.mu.Unlock()
 
@@ -293,6 +327,17 @@ func (s *Server) Addr() string {
 	return s.listener.Addr().String()
 }
 
+// Ready reports an actual bound gateway listener. It cannot approve protected
+// activation from configuration flags or key material alone.
+func (s *Server) Ready() bool {
+	if s == nil {
+		return false
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.listener != nil && !s.closing
+}
+
 func (s *Server) markReady() {
 	s.readyOnce.Do(func() { close(s.ready) })
 }
@@ -310,6 +355,9 @@ func (s *Server) trackConn(conn net.Conn) bool {
 		return false
 	}
 	s.conns[conn] = struct{}{}
+	// Reserve the handler before releasing the admission lock. Stop closes
+	// admission under this same lock before waiting for all reserved work.
+	s.wg.Add(1)
 	return true
 }
 

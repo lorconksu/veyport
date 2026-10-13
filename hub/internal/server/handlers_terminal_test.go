@@ -318,6 +318,21 @@ func TestHandleTerminalInputAndResize_SendFailures(t *testing.T) {
 		t.Fatalf("expected 502 for input send failure, got %d: %s", inputRec.Code, inputRec.Body.String())
 	}
 
+	// An ambiguous control-send failure invalidates that exact registration.
+	info, _ := s.terminalSessions.Get(serverID, sessionID)
+	if !info.Closed {
+		t.Fatal("failed input send left registration live")
+	}
+	// Exercise resize failure on a fresh live shell, rather than retrying the
+	// already invalidated shell. Serialize fixture mutation with async cleanup.
+	conn.SendMu.Lock()
+	stream.sendErr = nil
+	conn.SendMu.Unlock()
+	sessionID = createTerminalSessionForTest(t, s, adminToken, serverID)
+	conn.SendMu.Lock()
+	stream.sendErr = errors.New("send failed")
+	conn.SendMu.Unlock()
+
 	resizeReq := httptest.NewRequest("POST", testServersPrefix+serverID+testTerminalSessionsSuffix+"/"+sessionID+"/resize", mustJSON(t, map[string]int{"cols": 100, "rows": 32}))
 	resizeReq.Header.Set("Authorization", testBearerPrefix+adminToken)
 	resizeRec := httptest.NewRecorder()

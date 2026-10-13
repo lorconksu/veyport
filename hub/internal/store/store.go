@@ -15,6 +15,12 @@ import (
 type Store struct {
 	db *sql.DB
 
+	interactivePolicyMu        sync.Mutex
+	interactivePolicyObservers []func()
+	executionPolicyMu          sync.RWMutex
+	executionPolicyKey         string
+	executionPolicyValidator   func(model.PolicyState) error
+
 	auditStateMu    sync.Mutex
 	auditDegraded   bool
 	onAuditFailure  func(model.AuditHealth)
@@ -72,6 +78,10 @@ func New(dbPath string) (*Store, error) {
 	}
 
 	st := &Store{db: db}
+	if err := st.ReconcileExecutions(); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("reconcile executions: %w", err)
+	}
 	if health, err := st.GetAuditHealth(); err == nil {
 		st.auditDegraded = health.Degraded
 	}

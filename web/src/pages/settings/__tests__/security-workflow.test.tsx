@@ -1,0 +1,221 @@
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
+import type { User } from '@/types/api'
+import type { SecurityChange, SecurityPreview } from '@/types/security'
+import { SecurityWorkspace } from '../security-workflow'
+
+const m = vi.hoisted(() => ({ user: null as User | null, refreshUser: vi.fn(), getSecurityChange: vi.fn(), previewSecurityChange: vi.fn(), securityStepUp: vi.fn(), requestSecurityChange: vi.fn(), approveSecurityChange: vi.fn(), applySecurityChange: vi.fn(), reconcileSecurityChange: vi.fn(), createSecuritySecret: vi.fn() }))
+vi.mock('@/hooks/use-auth', () => ({ useAuth: () => ({ user: m.user, refreshUser: m.refreshUser }) }))
+vi.mock('@/lib/security-api', () => m)
+vi.mock('../security-settings-tab', () => ({ SecuritySettingsTab: ({ onRequest }: { onRequest: (preview: SecurityPreview) => void }) => <button onClick={() => onRequest(preview)}>Start exact request</button> }))
+const digest = 'a'.repeat(64)
+const policy = { profile: 'enhanced' as const, actors: [], nodes: ['node-1'], runtime_seconds: 60, retention_hours: 24, destination: 'https://archive.invalid', credential_ref: 'immutable-ref', trust_key_ids: ['key'], qualification_sha256: 'b'.repeat(64) }
+const preview: SecurityPreview = { digest, proposal: { reason: 'Verified independent synthetic people', expected_version: 1, change: { kind: 'bootstrap', policy, nominations: [{ user_id: 'requester', person_id: 'person-requester', roles: ['security-officer'], verification: 'synthetic' }, { user_id: 'approver', person_id: 'person-approver', roles: ['security-approver'], verification: 'synthetic' }] } } }
+const original: SecurityChange = { ...preview.proposal, id: 'change-1', revision: 1, requester_id: 'requester', requester_person_id: 'person-requester', digest, state: 'requested', created_at: '2026-10-11T00:00:00Z', expires_at: '2050-10-12T00:00:00Z', approvals: [] }
+function principal(id = 'approver', capabilities: User['capabilities'] = []): User { return { id, username: id, person_id: `person-${id}`, role: 'viewer', roles: ['viewer'], capabilities, totp_enabled: true, created_at: '', updated_at: '', email: '', avatar: null } }
+function setup(broadAccess = false, requestId = 'change-1') {
+  const client = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+  const onRequestId = vi.fn()
+  const view = render(<QueryClientProvider client={client}><SecurityWorkspace broadAccess={broadAccess} requestId={requestId} onRequestId={onRequestId} /></QueryClientProvider>)
+  return { ...view, client, onRequestId }
+}
+async function confirm(action = 'Approve this exact request') {
+  fireEvent.click(await screen.findByRole('button', { name: action }))
+  fireEvent.change(screen.getByLabelText('Fresh MFA code'), { target: { value: '123456' } })
+  fireEvent.click(screen.getByRole('button', { name: 'Confirm with fresh MFA' }))
+}
+beforeEach(() => {
+  vi.clearAllMocks(); localStorage.clear()
+  m.user = principal()
+  m.refreshUser.mockImplementation(async () => m.user)
+  m.getSecurityChange.mockResolvedValue(original)
+  m.previewSecurityChange.mockResolvedValue(preview)
+  m.securityStepUp.mockResolvedValue({ proof: 'PRIVATE-MFA-PROOF', expires_at: new Date(Date.now() + 60_000).toISOString() })
+  m.approveSecurityChange.mockResolvedValue({ ...original, state: 'partially_approved' })
+  m.applySecurityChange.mockResolvedValue({ ...original, state: 'applied' })
+  m.requestSecurityChange.mockResolvedValue(original)
+  m.reconcileSecurityChange.mockResolvedValue({ ...original, state: 'applied' })
+})
+it('allows only the nominated single request, binds fresh approval and retains no MFA material in caches/storage', async () => {
+  const { client, onRequestId } = setup()
+  expect(await screen.findByText('Reason: Verified independent synthetic people')).toBeInTheDocument()
+  expect(screen.queryByText('Start exact request')).not.toBeInTheDocument()
+  await confirm()
+  await waitFor(() => expect(m.approveSecurityChange).toHaveBeenCalledTimes(1))
+  expect(m.securityStepUp).toHaveBeenCalledWith('security.approve', digest, '123456', 'change-1', expect.any(AbortSignal))
+  expect(m.approveSecurityChange).toHaveBeenCalledWith(original, 'PRIVATE-MFA-PROOF', expect.any(AbortSignal))
+  await waitFor(() => expect(onRequestId).toHaveBeenCalledWith('change-1'))
+  expect(m.refreshUser).toHaveBeenCalled()
+  expect(client.getMutationCache().getAll()).toHaveLength(0)
+  expect(JSON.stringify(client.getQueryCache().getAll().map(query => query.state.data))).not.toMatch(/PRIVATE-MFA-PROOF|123456/)
+  expect(localStorage.length).toBe(0)
+})
+it('submits only the unchanged canonical request after fresh request-specific MFA', async () => {
+  m.user = principal('requester', ['security.bootstrap'])
+  setup(true, '')
+  fireEvent.click(screen.getByText('Start exact request'))
+  const dialog = screen.getByRole('dialog')
+  expect(within(dialog).getByText(`Digest: ${digest}`)).toBeInTheDocument()
+  fireEvent.change(within(dialog).getByLabelText('Fresh MFA code'), { target: { value: '123456' } })
+  fireEvent.click(within(dialog).getByText('Confirm with fresh MFA'))
+  await waitFor(() => expect(m.requestSecurityChange).toHaveBeenCalledWith(preview, 'PRIVATE-MFA-PROOF', expect.any(AbortSignal)))
+  expect(m.securityStepUp).toHaveBeenCalledWith('security.request', digest, '123456', undefined, expect.any(AbortSignal))
+})
+it('refuses edited canonical proposals without issuing a proof', async () => {
+  m.user = principal('requester', ['security.bootstrap'])
+  m.previewSecurityChange.mockResolvedValue({ ...preview, digest: 'c'.repeat(64) })
+  setup(true, '')
+  fireEvent.click(screen.getByText('Start exact request'))
+  fireEvent.change(screen.getByLabelText('Fresh MFA code'), { target: { value: '123456' } })
+  fireEvent.click(screen.getByText('Confirm with fresh MFA'))
+  expect(await screen.findByRole('alert')).toHaveTextContent('could not be confirmed')
+  expect(m.securityStepUp).not.toHaveBeenCalled()
+  expect(screen.queryByLabelText('Fresh MFA code')).not.toBeInTheDocument()
+})
+it.each(['self', 'duplicate-person', 'expired', 'ordinary-unrelated'])('does not present an approval for %s', async kind => {
+  if (kind === 'self') m.user = principal('requester', ['security.approve'])
+  if (kind === 'ordinary-unrelated') m.user = principal('unrelated')
+  if (kind === 'duplicate-person') m.getSecurityChange.mockResolvedValue({ ...original, approvals: [{ user_id: 'alias', person_id: 'person-approver', proof_sha256: 'x', approved_at: '' }] })
+  if (kind === 'expired') m.getSecurityChange.mockResolvedValue({ ...original, expires_at: '2000-01-01T00:00:00Z' })
+  setup()
+  await screen.findByText(/Request change-1 · requested/)
+  expect(screen.queryByRole('button', { name: 'Approve this exact request' })).not.toBeInTheDocument()
+})
+it('rechecks live revision and digest before issuing approval MFA', async () => {
+  setup(); await screen.findByRole('button', { name: 'Approve this exact request' })
+  m.getSecurityChange.mockResolvedValue({ ...original, revision: 2, digest: 'c'.repeat(64) })
+  await confirm()
+  expect(await screen.findByRole('alert')).toHaveTextContent('refused')
+  expect(m.securityStepUp).not.toHaveBeenCalled()
+})
+it('refuses an expired proof and a backend denial without exposing reflected secrets or retry', async () => {
+  m.securityStepUp.mockResolvedValue({ proof: 'PRIVATE-MFA-PROOF', expires_at: '2000-01-01T00:00:00Z' })
+  setup(); await confirm()
+  expect(await screen.findByRole('alert')).toHaveTextContent('refused')
+  expect(m.approveSecurityChange).not.toHaveBeenCalled()
+  expect(screen.queryByText(/PRIVATE-MFA-PROOF/)).not.toBeInTheDocument()
+})
+it('aborts a pending step-up on cancellation and never sends its late proof', async () => {
+  let complete!: (value: unknown) => void
+  m.securityStepUp.mockReturnValue(new Promise(resolve => { complete = resolve }))
+  setup(); await confirm()
+  await waitFor(() => expect(m.securityStepUp).toHaveBeenCalled())
+  const signal = m.securityStepUp.mock.calls[0][4] as AbortSignal
+  fireEvent.click(screen.getByRole('button', { name: 'Cancel' }))
+  expect(signal.aborted).toBe(true)
+  await act(async () => complete({ proof: 'LATE-PRIVATE', expires_at: new Date(Date.now() + 60_000).toISOString() }))
+  expect(m.approveSecurityChange).not.toHaveBeenCalled()
+  expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
+})
+it('clears an open review when live identity or authority changes', async () => {
+  const view = setup(); fireEvent.click(await screen.findByRole('button', { name: 'Approve this exact request' }))
+  fireEvent.change(screen.getByLabelText('Fresh MFA code'), { target: { value: '123456' } })
+  m.user = { ...principal(), status: 'disabled' }
+  view.rerender(<QueryClientProvider client={view.client}><SecurityWorkspace broadAccess={false} requestId="change-1" onRequestId={view.onRequestId} /></QueryClientProvider>)
+  expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
+  expect(m.securityStepUp).not.toHaveBeenCalled()
+})
+it('applies the exact approved request through a separate fresh MFA action', async () => {
+  m.user = principal('requester', ['security.bootstrap'])
+  const approved = { ...original, state: 'approved' as const }
+  m.getSecurityChange.mockResolvedValue(approved)
+  setup(); await confirm('Apply this exact request')
+  await waitFor(() => expect(m.applySecurityChange).toHaveBeenCalledWith(approved, 'PRIVATE-MFA-PROOF', expect.any(AbortSignal)))
+  expect(m.securityStepUp).toHaveBeenCalledWith('security.apply', digest, '123456', 'change-1', expect.any(AbortSignal))
+})
+it('reconciles only an existing applying transition without inventing a new MFA decision', async () => {
+  m.user = principal('officer', ['security.apply'])
+  m.getSecurityChange.mockResolvedValue({ ...original, change: { kind: 'policy', policy }, state: 'applying' })
+  setup(); fireEvent.click(await screen.findByRole('button', { name: 'Reconcile this transition' }))
+  expect(screen.queryByLabelText('Fresh MFA code')).not.toBeInTheDocument()
+  fireEvent.click(screen.getByRole('button', { name: 'Confirm reconciliation' }))
+  await waitFor(() => expect(m.reconcileSecurityChange).toHaveBeenCalledWith('change-1', expect.any(AbortSignal)))
+  expect(m.securityStepUp).not.toHaveBeenCalled()
+})
+it('uploads a credential separately and clears its input even on ambiguous failure', async () => {
+  m.user = principal('officer', ['security.request'])
+  m.createSecuritySecret.mockRejectedValue(new Error('PRIVATE-CREDENTIAL'))
+  setup(true, '')
+  fireEvent.change(screen.getByLabelText('Write-only secret value'), { target: { value: 'PRIVATE-CREDENTIAL' } })
+  fireEvent.click(screen.getByText('Upload credential'))
+  expect(await screen.findByRole('alert')).toHaveTextContent('No secret value is retained')
+  expect(screen.getByLabelText('Write-only secret value')).toHaveValue('')
+  expect(screen.queryByText('PRIVATE-CREDENTIAL')).not.toBeInTheDocument()
+  expect(m.requestSecurityChange).not.toHaveBeenCalled()
+})
+it('loads bounded UTF-8 credential files exactly and returns only the immutable reference', async () => {
+  m.user = principal('officer', ['security.bootstrap'])
+  m.createSecuritySecret.mockResolvedValue({ credential_ref: 'immutable-uploaded-ref', credential_set: true })
+  setup(true, '')
+  const exact = '{\n"certificate_pem":"PRIVATE-PEM"\n}\n'
+  const file = new File([exact], 'private-credential.json')
+  Object.defineProperty(file, 'arrayBuffer', { value: async () => new TextEncoder().encode(exact).buffer })
+  fireEvent.change(screen.getByLabelText('Credential file (UTF-8, at most 8192 bytes)'), { target: { files: [file] } })
+  await waitFor(() => expect(screen.getByText('Upload credential')).toBeEnabled())
+  fireEvent.click(screen.getByText('Upload credential'))
+  expect(await screen.findByText('Immutable credential reference: immutable-uploaded-ref')).toBeInTheDocument()
+  expect(m.createSecuritySecret).toHaveBeenCalledWith('destination', exact, expect.any(AbortSignal))
+  expect(screen.getByLabelText('Write-only secret value')).toHaveValue('')
+  expect(screen.queryByText(/PRIVATE-PEM/)).not.toBeInTheDocument()
+})
+it.each(['too-large', 'invalid-utf8'])('rejects %s credential files without any HTTP upload', async kind => {
+  m.user = principal('officer', ['security.bootstrap'])
+  setup(true, '')
+  const file = new File([kind === 'too-large' ? 'x'.repeat(8193) : 'x'], 'private.json')
+  Object.defineProperty(file, 'arrayBuffer', { value: async () => new Uint8Array([0xff]).buffer })
+  fireEvent.change(screen.getByLabelText('Credential file (UTF-8, at most 8192 bytes)'), { target: { files: [file] } })
+  expect(await screen.findByRole('alert')).toHaveTextContent('No secret value is retained')
+  expect(m.createSecuritySecret).not.toHaveBeenCalled()
+})
+it('bounds stalled MFA I/O and requires a new review after timeout', async () => {
+  setup(); fireEvent.click(await screen.findByRole('button', { name: 'Approve this exact request' }))
+  m.securityStepUp.mockImplementation((_action, _digest, _code, _id, signal: AbortSignal) => new Promise((_, reject) => signal.addEventListener('abort', () => reject(signal.reason), { once: true })))
+  vi.useFakeTimers()
+  fireEvent.change(screen.getByLabelText('Fresh MFA code'), { target: { value: '123456' } })
+  fireEvent.click(screen.getByText('Confirm with fresh MFA'))
+  await act(async () => { await vi.advanceTimersByTimeAsync(30_001) })
+  expect(screen.getByRole('alert')).toHaveTextContent('proof will not be reused')
+  expect(m.approveSecurityChange).not.toHaveBeenCalled()
+  expect(screen.queryByLabelText('Fresh MFA code')).not.toBeInTheDocument()
+  vi.useRealTimers()
+})
+it('refuses an unavailable request and does not retain old review data', async () => {
+  m.getSecurityChange.mockRejectedValue(new Error('denied'))
+  setup()
+  expect(await screen.findByRole('alert')).toHaveTextContent('do not have authority')
+  expect(screen.queryByText('Reason: Verified independent synthetic people')).not.toBeInTheDocument()
+})
+it('opens a typed request ID without placing proof or MFA material in its navigation callback', async () => {
+  const view = setup(false, '')
+  fireEvent.change(screen.getByLabelText('Request ID'), { target: { value: 'change-typed' } })
+  fireEvent.click(screen.getByText('Open request'))
+  expect(view.onRequestId).toHaveBeenCalledWith('change-typed')
+})
+it('shows protected principal requests only while broad access and request authority are present', async () => {
+  m.user = principal('officer', ['security.request'])
+  const policyResponse = { state: 'standard', governance_enrolled: true, policy: { version: 1, policy }, pending: null }
+  m.getAuditPolicy = vi.fn().mockResolvedValue(policyResponse)
+  m.listSecurityPrincipals = vi.fn().mockResolvedValue({ principals: [], total: 0, limit: 50, offset: 0 })
+  const view = setup(true, '')
+
+  expect(await screen.findByRole('heading', { name: 'Protected principal request' })).toBeInTheDocument()
+  expect(screen.getByLabelText('Protected operation')).toBeInTheDocument()
+
+  m.user = principal('officer')
+  view.rerender(<QueryClientProvider client={view.client}><SecurityWorkspace broadAccess requestId="" onRequestId={view.onRequestId} /></QueryClientProvider>)
+  expect(screen.queryByRole('heading', { name: 'Protected principal request' })).not.toBeInTheDocument()
+
+  m.user = principal('officer', ['security.request'])
+  view.rerender(<QueryClientProvider client={view.client}><SecurityWorkspace broadAccess={false} requestId="" onRequestId={view.onRequestId} /></QueryClientProvider>)
+  expect(screen.queryByRole('heading', { name: 'Protected principal request' })).not.toBeInTheDocument()
+})
+it('shows reconciliation uncertainty without replaying it', async () => {
+  m.user = principal('officer', ['security.apply'])
+  m.getSecurityChange.mockResolvedValue({ ...original, change: { kind: 'policy', policy }, state: 'applying', expires_at: '2000-01-01T00:00:00Z' })
+  m.reconcileSecurityChange.mockRejectedValue(new Error('archive unavailable'))
+  setup(); fireEvent.click(await screen.findByRole('button', { name: 'Reconcile this transition' }))
+  fireEvent.click(screen.getByText('Confirm reconciliation'))
+  expect(await screen.findByText(/Reconciliation could not be confirmed/)).toBeInTheDocument()
+  expect(m.reconcileSecurityChange).toHaveBeenCalledTimes(1)
+  expect(m.securityStepUp).not.toHaveBeenCalled()
+})

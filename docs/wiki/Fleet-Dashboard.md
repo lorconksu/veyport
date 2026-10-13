@@ -10,14 +10,13 @@ The Fleet Dashboard is the main screen of Veyport. It shows all the servers that
 
 ## Overview
 
-Each server is displayed as a card showing:
+Each server is displayed as a row in the fleet table showing:
 
 - **Server name** - the label you gave it when adding it
 - **Status indicator** - a coloured dot showing whether the server is reachable
 - **Hostname and IP address** - populated automatically when the agent registers
 - **Operating system** - detected by the agent
-- **Agent version** - the version of the Veyport agent running on that server
-- **Labels** - any tags you assigned when creating the server
+- **Agent version** - the version last reported by the Veyport agent. Blank or missing versions show **Not reported**; an offline server continues to show its last reported version.
 - **Last seen** - when the Hub last received a heartbeat from the agent
 
 ---
@@ -35,9 +34,9 @@ A server stays in initial "pending" state until you run the install command on t
 
 ### Pending Re-Enrollment
 
-When a server shows **Pending re-enrollment**, its agent certificate has expired and the agent has phoned home to request a new one. The server card shows the node's hostname, IP address, the time the request arrived, and — if anything looks anomalous — a **"possible clone"** warning.
+When a server shows **Pending re-enrollment**, its agent certificate has expired and the agent has phoned home to request a new one. The server row shows the node's hostname and IP address. Click its name to open the [[Server Detail]] page for more information.
 
-Only admins can approve or deny re-enrollment. Click the server card to open the [[Server Detail]] page, where the approve/deny controls are located. Approval requires a TOTP step-up. Once approved, the node reconnects automatically with the same server identity — no ghost records, no path reassignment needed.
+Only admins can approve or deny re-enrollment. Click the server name to open the [[Server Detail]] page, where the approve/deny controls are located. Approval requires a TOTP step-up. Once approved, the node reconnects automatically with the same server identity — no ghost records, no path reassignment needed.
 
 ---
 
@@ -78,7 +77,7 @@ Only admins can add servers.
    ```
 
 7. Copy the command and run it on the target server as root (or with `sudo`). The script downloads and installs the Veyport agent, then registers the server with the Hub using the embedded token.
-8. Once the agent connects, the server card changes from amber (Pending) to green (Online) automatically - no page refresh needed.
+8. Once the agent connects, the server row changes from amber (Pending) to green (Online) automatically - no page refresh needed.
 
 The registration token is single-use and expires after a short period. If you do not run the command in time, delete the server and add it again to get a fresh token.
 
@@ -107,7 +106,7 @@ full command reference, and manual install path, and [[SSH Gateway]] for gateway
 
 ## Auto-Refresh
 
-The Fleet Dashboard polls the Hub every **10 seconds** and updates all server cards in place. You do not need to reload the page to see status changes.
+The Fleet Dashboard polls the Hub every **10 seconds** and updates all server rows in place. You do not need to reload the page to see status changes.
 
 Polling pauses when the browser considers the tab hidden. A stalled request can also block later
 polls. Signed-in pages send separate, throttled session checks after recent keyboard, pointer,
@@ -119,7 +118,7 @@ tabs; see [[Logging In]] and [[Troubleshooting]] for session limits and network 
 
 ## Opening a Server
 
-Click a **server name** (or anywhere on the server card body) to open the [[Server Detail]] page for that server. From there you can browse the remote filesystem, tail logs, and upload files.
+Click a **server name** to open the [[Server Detail]] page for that server. From there you can browse the remote filesystem, tail logs, and upload files.
 
 ---
 
@@ -127,7 +126,7 @@ Click a **server name** (or anywhere on the server card body) to open the [[Serv
 
 ### Selecting Multiple Servers
 
-Click the checkbox on any server card to select it. A toolbar will appear at the bottom of the screen showing how many servers are selected and offering bulk actions:
+Click the checkbox on any server row to select it. A toolbar will appear above the table showing how many servers are selected and offering bulk actions:
 
 - **Unregister Selected** - Removes all selected servers from the Hub (admin only). You will be asked to confirm before proceeding.
 
@@ -141,7 +140,7 @@ Only admins can unregister servers.
 
 > **Warning:** Unregistering a server is permanent. The server record is deleted from the Hub database and cannot be recovered. If the agent is online, it will be automatically uninstalled from the remote machine. To re-add the server later, you must go through the full add-and-install process again.
 
-**Single server:** Click the three-dot menu on a server card and choose **Unregister**. You will be asked to confirm.
+**Single server:** Click **Unregister** in the server row's Actions column.
 
 **Multiple servers:** Select the servers you want to remove using the checkboxes, then click **Unregister Selected** in the bulk action toolbar.
 

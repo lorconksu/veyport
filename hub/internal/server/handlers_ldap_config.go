@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/wyiu/veyport/hub/internal/model"
+	"github.com/wyiu/veyport/hub/internal/store"
 )
 
 // configKeyLDAPBindPassword names the stored LDAP bind password config entry
@@ -103,6 +104,13 @@ func (s *Server) handleGetLDAPConfig(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleUpdateLDAPConfig(w http.ResponseWriter, r *http.Request) {
+	if protected, err := s.store.ProtectedLDAPPrincipals(); err != nil {
+		securityError(w, err)
+		return
+	} else if protected {
+		securityError(w, store.ErrProtectedChange)
+		return
+	}
 	var req ldapConfigRequest
 	if err := decodeJSON(r, &req); err != nil {
 		respondError(w, http.StatusBadRequest, errInvalidRequestBody)
@@ -126,7 +134,7 @@ func (s *Server) handleUpdateLDAPConfig(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	if err := s.saveLDAPConfigValues(configs); err != nil {
-		respondError(w, http.StatusInternalServerError, "failed to save LDAP configuration")
+		securityError(w, err)
 		return
 	}
 
@@ -323,17 +331,7 @@ func ldapGroupListStoreValue(groups []string) string {
 }
 
 func (s *Server) saveLDAPConfigValues(configs map[string]string) error {
-	tx, err := s.store.DB().Begin()
-	if err != nil {
-		return err
-	}
-	defer tx.Rollback()
-	for key, value := range configs {
-		if _, err := tx.Exec("INSERT INTO _config (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value", key, value); err != nil {
-			return err
-		}
-	}
-	return tx.Commit()
+	return s.store.UpdateLegacyLDAPConfig(configs)
 }
 
 func (s *Server) testLDAPConnection(cfg LDAPConfig) error {

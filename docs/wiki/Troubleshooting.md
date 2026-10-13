@@ -244,6 +244,34 @@ LDAP terminal access requires both the terminal LDAP group and a root (`/`) assi
 
 Terminal endpoints require an interactive browser session. CLI-created API tokens are intentionally rejected so long-lived automation tokens cannot be used for interactive shell access.
 
+### `vey ssh node -- command` is refused or hangs while sending input
+
+The published command-passthrough prototype is Hub `2.0.50-prototype.9` / tag
+`prototype-ssh-passthrough.9`, with CLI and agent prototype 9 artifacts. Older
+CLI prototype 6 builds are also compatible with the Hub. These prototype
+builds are not a stable or main-branch release. Check current
+publication and qualification on the [release page](https://github.com/lorconksu/veyport/releases),
+and verify target agent support. See [[CLI Automation]] for auth and retry
+guidance. Use one command string after `--`, for example
+`vey ssh web01 -- 'uname -a'`; do not
+split one command across multiple shell arguments. The mode has no PTY and
+starts OpenSSH in BatchMode. It does not ask for a terminal password or open an
+interactive shell. Check that the target agent advertises execution support and
+is online.
+
+In Enhanced mode, redirected stdin must be empty unless the command is exactly
+`bash -s`, `/bin/bash -s`, `sh -s`, or `/bin/sh -s`. For a script, send the entire
+finite file on stdin and finish within 120 seconds; the size limit is 16 MiB.
+Partial scripts do not run. A remote result of 255 can be indistinguishable from
+an SSH transport error, and the client does not retry commands automatically.
+Check the execution detail and evidence state before deciding whether to submit a
+new command. A disconnected client does not prove the remote process did not
+start.
+
+If Standard execution works but Enhanced admission fails, inspect Hub readiness
+and the exact receipt/archive error. An ELK search outage alone does not block a
+healthy archive receipt path; an archive, trust-key, or receipt failure does.
+
 ---
 
 ## Upload / Dropzone Issues
@@ -320,9 +348,62 @@ To recover:
 2. Review any **"possible clone"** warning (if present, verify you recognise this hardware before approving).
 3. Click **Approve** and enter your TOTP code when prompted.
 
-The node reconnects automatically within seconds, keeping the same serverID, history, and path assignments.
+Approval releases a proof exchange for that specific request and bootstrap
+stream. The node proves its identity, receives a new certificate, closes the
+bootstrap stream, and reconnects with verified mTLS before normal agent work is
+accepted. It keeps the same server ID, history, and path assignments.
 
 If the approval returns **"re-register required,"** the node predates transport-key support. Re-register it once using the standard install command; the node will have transport-key support after that and can use re-enrollment in future.
+
+### `vey update` reports a permission or destination error
+
+The built-in CLI updater changes only `/usr/local/bin/vey`; it does not choose a
+different destination or elevate itself. Run the command printed in the error,
+including its explicit `sudo` and `--hub` arguments. If it reports that the
+running executable differs from `/usr/local/bin/vey`, invoke the installed
+binary directly and retry. Development or unrecognized versions cannot be
+updated in place; install a versioned CLI from the Hub first. If the new
+executable fails its final version or checksum check, the updater restores the
+previous executable automatically. If it reports that rollback failed, use the
+backup path printed in the error to restore the previous binary.
+
+### `vey servers update` refuses or does not confirm an update
+
+Agent updates require a live interactive administrator CLI session. Clear
+`VEYPORT_TOKEN` and configured API-token overrides, then run `vey login`. The
+node must be online with a valid enrolled mTLS identity, run Linux amd64 or
+arm64 under the root-owned `/usr/local/bin/veyport-agent` systemd service, and
+belong to a Standard installation that has never enrolled Enhanced or other
+governance controls. These checks cannot be bypassed by re-enrolling the node.
+
+The Hub tracks file list/read/delete, uploads, log tails, PTY, execution, and
+other agent work until the operation itself completes. A caller cancellation or
+timeout does not release an active remote operation; maintenance also blocks new
+work. Let all work finish and run `vey servers update NODE --check` again.
+The update uses only the exact Hub artifact and does not accept a URL or target
+version. If the wait ends before the new agent reports its exact artifact
+identity, inspect the operation before retrying:
+
+```bash
+vey servers update NODE --status
+vey servers update NODE --status --operation OPERATION_ID
+```
+
+For `bootstrap_required` with `bootstrap_idle_confirmation_required`, close file
+and log clients and agent sessions, let all work finish, and verify the node is
+idle through direct SSH. Then rerun
+`vey servers update NODE --bootstrap-idle-confirmed`. This is an explicit
+operator assertion bound by the Hub to the checked `connection_id`; it is not an
+automatic detector, and known active work still refuses the update. The CLI then
+prints the one-use command. Its ticket expires after 120 seconds. Confirm that
+the HTTPS host in that command matches the Hub host
+configured for the agent's mTLS connection; the ports can differ. The bootstrap
+preserves the node identity and configuration and does not use the normal
+registration installer. If the outcome is `unknown`, do not retry blindly. For
+legacy agents, the old protocol may not report the binary hash after rollback.
+Verify the original SHA-256 and service state over direct SSH, wait until the
+time printed by the CLI, then acknowledge with the exact expected hash. That
+action records your attestation and is not remote confirmation of rollback.
 
 ---
 

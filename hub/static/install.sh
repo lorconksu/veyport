@@ -155,7 +155,7 @@ fi
 # --- Download agent binary ---
 if [[ -z "$URL" ]]; then
   # Handle IPv6 addresses in HUB (e.g., [::1]:9090)
-  if [[ "$HUB" == \[* ]]; then
+  if [[ "${HUB:0:1}" == '[' ]]; then
     HUB_HOST=$(echo "$HUB" | sed 's/\[\(.*\)\]:.*/\1/')
     URL="https://[${HUB_HOST}]"
   else

@@ -3,6 +3,7 @@ import { useSearchParams } from 'react-router-dom'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { Upload, X } from 'lucide-react'
 import { useAuth } from '@/hooks/use-auth'
+import { assignedRoles, canViewSecurity, hasCapability } from '@/lib/auth'
 import { apiFetch } from '@/lib/api'
 import { getAvatarColor, setAvatarColor as persistAvatarColor, AVATAR_COLORS } from '@/lib/avatar'
 import { validatePassword } from '@/lib/password'
@@ -17,6 +18,8 @@ import { ConfirmActionModal } from '@/pages/confirm-action-modal'
 import { SessionsModal, SessionsTable } from '@/pages/sessions-modal'
 import { isShell } from '@/lib/sessions'
 import { firstMutationError, mutationErrorMessage } from '@/lib/mutation'
+import { getAuditPolicy } from '@/lib/security-api'
+import { SecurityWorkspace } from '@/pages/settings/security-workflow'
 
 /** u.status when present; otherwise derives from `locked_until` (007 fallback, still exercised by pre-008 fixtures). */
 function effectiveStatus(u: User): AccountStatus {
@@ -369,7 +372,7 @@ function ProfileTab() {
           </div>
           <div className="flex justify-between">
             <span className="text-text-muted">Role</span>
-            <span className="text-text-primary capitalize">{user?.role}</span>
+            <span className="text-text-primary capitalize">{assignedRoles(user).join(', ')}</span>
           </div>
           <div className="flex justify-between">
             <span className="text-text-muted">2FA</span>
@@ -911,11 +914,21 @@ function UsersTab() {
 
 export function SettingsPage() {
   const { user } = useAuth()
-  const isAdmin = user?.role === 'admin'
+  const isAdmin = hasCapability(user, 'operations.admin')
+  const canReadSecurity = hasCapability(user, 'security.read')
+  const securityPolicyQuery = useQuery({
+    queryKey: ['security', 'policy', user?.id],
+    queryFn: ({ signal }) => getAuditPolicy(signal),
+    enabled: !canReadSecurity && hasCapability(user, 'security.bootstrap'),
+  })
+  const showSecurity = canViewSecurity(user, securityPolicyQuery.data)
   const [searchParams, setSearchParams] = useSearchParams()
   const tabFromUrl = searchParams.get('tab')
+  const requestId = searchParams.get('request') ?? ''
+  const specificReview = /^[a-zA-Z0-9_-]{1,128}$/.test(requestId)
 
-  const resolveTab = (): 'profile' | 'users' | 'directory' | 'notifications' | 'alerts' => {
+  const resolveTab = (): 'profile' | 'users' | 'directory' | 'notifications' | 'alerts' | 'security' => {
+    if (tabFromUrl === 'security' && (showSecurity || specificReview)) return 'security'
     if (tabFromUrl === 'users' && isAdmin) return 'users'
     if (tabFromUrl === 'directory' && isAdmin) return 'directory'
     if (tabFromUrl === 'notifications' && isAdmin) return 'notifications'
@@ -925,7 +938,7 @@ export function SettingsPage() {
 
   const activeTab = resolveTab()
 
-  const setActiveTab = (tab: 'profile' | 'users' | 'directory' | 'notifications' | 'alerts') => {
+  const setActiveTab = (tab: 'profile' | 'users' | 'directory' | 'notifications' | 'alerts' | 'security') => {
     setSearchParams({ tab }, { replace: true })
   }
 
@@ -957,6 +970,19 @@ export function SettingsPage() {
             }`}
           >
             Users
+          </button>
+        )}
+        {showSecurity && (
+          <button
+            type="button"
+            onClick={() => setActiveTab('security')}
+            className={`px-4 py-2 text-sm font-medium border-b-2 transition-colors ${
+              activeTab === 'security'
+                ? 'border-accent text-text-primary'
+                : 'border-transparent text-text-muted hover:text-text-secondary'
+            }`}
+          >
+            Security
           </button>
         )}
         {isAdmin && (
@@ -1003,6 +1029,7 @@ export function SettingsPage() {
       {activeTab === 'users' && isAdmin && <UsersTab />}
       {activeTab === 'directory' && isAdmin && <DirectoryTab />}
       {activeTab === 'notifications' && isAdmin && <NotificationsTab />}
+      {activeTab === 'security' && (showSecurity || specificReview) && <SecurityWorkspace broadAccess={showSecurity} requestId={specificReview ? requestId : ''} onRequestId={id => setSearchParams({ tab: 'security', request: id }, { replace: true })} />}
       {activeTab === 'alerts' && <PreferencesTab />}
     </div>
   )

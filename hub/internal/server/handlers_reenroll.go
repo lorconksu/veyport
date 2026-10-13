@@ -10,6 +10,7 @@ import (
 	"github.com/wyiu/veyport/hub/internal/auth"
 	"github.com/wyiu/veyport/hub/internal/grpcserver"
 	"github.com/wyiu/veyport/hub/internal/model"
+	"github.com/wyiu/veyport/hub/internal/store"
 )
 
 const (
@@ -77,7 +78,7 @@ func (s *Server) handleReEnrollApprove(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := s.reEnrollReleaser.ReleaseKEK(serverID, adminID); err != nil {
+	if err := s.reEnrollReleaser.ReleaseKEK(serverID, req.RequestID, adminID); err != nil {
 		// Map common errors to appropriate HTTP status codes.
 		switch {
 		case errors.Is(err, grpcserver.ErrNoPendingReEnroll):
@@ -187,8 +188,18 @@ func (s *Server) handleReEnrollDeny(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := s.store.UpdateReEnrollStatus(req.RequestID, "denied", adminID); err != nil {
-		respondError(w, http.StatusInternalServerError, "failed to update re-enroll status")
+	var err error
+	if s.reEnrollReleaser != nil {
+		err = s.reEnrollReleaser.DenyReEnroll(serverID, req.RequestID, adminID)
+	} else {
+		err = s.store.DecidePendingReEnroll(serverID, req.RequestID, "denied", adminID)
+	}
+	if err != nil {
+		if errors.Is(err, grpcserver.ErrNoPendingReEnroll) || errors.Is(err, store.ErrReEnrollNotPending) || errors.Is(err, grpcserver.ErrReEnrollDecisionInProgress) {
+			respondError(w, http.StatusConflict, "re-enrollment request is no longer pending")
+		} else {
+			respondError(w, http.StatusInternalServerError, "failed to deny re-enrollment request")
+		}
 		return
 	}
 

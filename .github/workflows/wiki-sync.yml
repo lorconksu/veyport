@@ -16,10 +16,10 @@ jobs:
       contents: write
     steps:
       - name: Checkout repo
-        uses: actions/checkout@v6
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
 
       - name: Checkout wiki
-        uses: actions/checkout@v6
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
           repository: ${{ github.repository }}.wiki
           path: wiki
@@ -37,7 +37,7 @@ jobs:
 
           # Fix image paths in wiki pages (../screenshots/ -> screenshots/)
           cd wiki
-          sed -i 's|\.\./screenshots/|screenshots/|g' *.md
+          sed -i 's|\.\./screenshots/|screenshots/|g' ./*.md
 
       - name: Push to wiki
         run: |

@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/pquerna/otp/totp"
 	"github.com/wyiu/veyport/hub/internal/account"
 	"github.com/wyiu/veyport/hub/internal/auth"
 	"github.com/wyiu/veyport/hub/internal/model"
@@ -260,7 +261,7 @@ func TestAccountLifecycle_TOTPStageRefusesPreIssuedToken(t *testing.T) {
 			totpToken := f.totpStageToken(t)
 			state.apply(t, f)
 
-			code := validTOTPCode(t, f.totpSecret)
+			code := validTOTPCode(t, f.totpSecret, f.s.now())
 			rec := attemptTOTP(t, f.s, totpToken, code)
 			assertRefused(t, rec, http.StatusForbidden, state.message, "code stage")
 
@@ -343,13 +344,13 @@ func TestAccountLifecycle_RestoredAccountRegainsEveryPath(t *testing.T) {
 			if rec := f.bearer(t, "GET", testMePath, f.apiToken); rec.Code != http.StatusOK {
 				t.Fatalf("api token after restore: %d: %s", rec.Code, rec.Body.String())
 			}
-			// Refresh rotates the generation, so it runs after the tokens above.
+			// Restoring an account also restores its still-current session refresh.
 			if rec := f.refresh(t); rec.Code != http.StatusOK {
 				t.Fatalf("refresh after restore: %d: %s", rec.Code, rec.Body.String())
 			}
 
 			totpToken := f.totpStageToken(t)
-			code := validTOTPCode(t, f.totpSecret)
+			code := validTOTPCode(t, f.totpSecret, f.s.now())
 			if rec := attemptTOTP(t, f.s, totpToken, code); rec.Code != http.StatusOK {
 				t.Fatalf("code stage after restore: %d: %s", rec.Code, rec.Body.String())
 			}
@@ -428,9 +429,9 @@ func sameTimePtr(a, b *time.Time) bool {
 }
 
 // validTOTPCode generates a code the fixture's secret currently accepts.
-func validTOTPCode(t *testing.T, secret string) string {
+func validTOTPCode(t *testing.T, secret string, now time.Time) string {
 	t.Helper()
-	code, err := auth.GenerateValidCode(secret)
+	code, err := totp.GenerateCode(secret, now)
 	if err != nil {
 		t.Fatalf("generate totp code: %v", err)
 	}

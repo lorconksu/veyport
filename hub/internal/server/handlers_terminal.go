@@ -1,6 +1,7 @@
 package server
 
 import (
+	"context"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
@@ -10,8 +11,12 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/wyiu/veyport/hub/internal/account"
+	"github.com/wyiu/veyport/hub/internal/authorization"
 	"github.com/wyiu/veyport/hub/internal/grpcserver"
+	"github.com/wyiu/veyport/hub/internal/lockout"
 	"github.com/wyiu/veyport/hub/internal/model"
+	"github.com/wyiu/veyport/hub/internal/session"
 	"github.com/wyiu/veyport/hub/internal/store"
 	pb "github.com/wyiu/veyport/proto/veyport/v1"
 )
@@ -62,6 +67,7 @@ func (s *Server) handleCreateTerminalSession(w http.ResponseWriter, r *http.Requ
 	}
 
 	userID := UserIDFromContext(r.Context())
+	sid := SessionIDFromContext(r.Context())
 	executionUser, ok := s.resolveTerminalExecutionUser(w, r, serverID)
 	if !ok {
 		return
@@ -69,34 +75,39 @@ func (s *Server) handleCreateTerminalSession(w http.ResponseWriter, r *http.Requ
 	sessionID := uuid.NewString()
 	// The shell is tied to the session that opened it, so revoking that
 	// session closes the terminal with it (feature 009, FR-010).
-	_, created := s.terminalSessions.Register(serverID, sessionID, userID, executionUser,
-		grpcserver.WithKind(grpcserver.TerminalKindWeb),
-		grpcserver.WithSessionID(SessionIDFromContext(r.Context())))
-	if !created {
-		respondError(w, http.StatusConflict, "terminal session already exists")
+	_, executionUser, err := s.terminalSessions.RegisterInteractive(s.store, s.connMgr, serverID, sessionID, userID, func() (string, error) {
+		if sid != "" {
+			sess, err := s.store.GetSession(sid)
+			if err != nil || sess.UserID != userID || session.Evaluate(session.StateFromModel(sess), s.now(), s.lockoutPolicy()) != session.VerdictOK {
+				return "", ErrTerminalNotAuthorized
+			}
+		}
+		if err := s.securityService().GuardInteractive(userID, serverID); err != nil {
+			return "", err
+		}
+		return AuthorizeTerminalExecution(s.store, userID, serverID)
+	}, grpcserver.WithKind(grpcserver.TerminalKindWeb), grpcserver.WithSessionID(SessionIDFromContext(r.Context())))
+	if err != nil {
+		status := http.StatusForbidden
+		if errors.Is(err, grpcserver.ErrInteractiveRegistration) {
+			status = http.StatusConflict
+		}
+		if errors.Is(err, grpcserver.ErrInteractiveAgentNotConnected) {
+			status = http.StatusBadGateway
+		}
+		respondError(w, status, err.Error())
 		return
 	}
-
-	resp := s.sendAgentRequestWithID(w, serverID, sessionID, func(requestID string) *pb.HubMessage {
-		return &pb.HubMessage{
-			Payload: &pb.HubMessage_TerminalOpenRequest{
-				TerminalOpenRequest: &pb.TerminalOpenRequest{
-					SessionId: requestID,
-					Cols:      req.Cols,
-					Rows:      req.Rows,
-					Cwd:       req.Cwd,
-					RunAsUser: executionUser,
-				},
-			},
-		}
-	}, 5*time.Second)
+	resp := s.openInteractiveTerminal(w, r, serverID, sessionID, &pb.TerminalOpenRequest{SessionId: sessionID, Cols: req.Cols, Rows: req.Rows, Cwd: req.Cwd, RunAsUser: executionUser})
 	if resp == nil {
+		s.terminalSessions.CloseInteractive(serverID, sessionID)
 		s.terminalSessions.Remove(serverID, sessionID)
 		return
 	}
 
 	ack, ok := resp.(*pb.TerminalOpenAck)
 	if !ok {
+		s.terminalSessions.CloseInteractive(serverID, sessionID)
 		s.terminalSessions.Remove(serverID, sessionID)
 		respondError(w, http.StatusBadGateway, "unexpected terminal response")
 		return
@@ -108,6 +119,13 @@ func (s *Server) handleCreateTerminalSession(w http.ResponseWriter, r *http.Requ
 			status = http.StatusBadRequest
 		}
 		respondError(w, status, ack.Error)
+		return
+	}
+	info, exists := s.terminalSessions.Get(serverID, sessionID)
+	if !exists || info.Closed {
+		s.terminalSessions.CloseInteractive(serverID, sessionID)
+		s.terminalSessions.Remove(serverID, sessionID)
+		respondError(w, http.StatusForbidden, "terminal authorization changed")
 		return
 	}
 	ip := clientIP(r)
@@ -197,10 +215,16 @@ func (s *Server) handleTerminalStream(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) expireUnattachedTerminalSession(serverID, sessionID, userID, ip, correlationID string) {
 	time.AfterFunc(terminalStreamAttachDelay, func() {
-		if s.terminalSessions == nil || !s.terminalSessions.RemoveUnattached(serverID, sessionID) {
+		if s.terminalSessions == nil {
 			return
 		}
-		if s.connMgr != nil {
+		close, removed := s.terminalSessions.RemoveUnattachedWithClose(serverID, sessionID)
+		if !removed {
+			return
+		}
+		if close != nil {
+			close()
+		} else if s.connMgr != nil {
 			_ = s.connMgr.SendToAgent(serverID, &pb.HubMessage{
 				Payload: &pb.HubMessage_TerminalClose{
 					TerminalClose: &pb.TerminalClose{
@@ -255,7 +279,9 @@ func (s *Server) handleTerminalInput(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	err := s.connMgr.SendToAgent(serverID, &pb.HubMessage{
+	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
+	defer cancel()
+	err := s.terminalSessions.SendInteractive(ctx, serverID, sessionID, &pb.HubMessage{
 		Payload: &pb.HubMessage_TerminalInput{
 			TerminalInput: &pb.TerminalInput{
 				SessionId: sessionID,
@@ -264,7 +290,7 @@ func (s *Server) handleTerminalInput(w http.ResponseWriter, r *http.Request) {
 		},
 	})
 	if err != nil {
-		respondError(w, http.StatusBadGateway, "failed to send terminal input")
+		respondTerminalSendError(w, err, "failed to send terminal input")
 		return
 	}
 	w.WriteHeader(http.StatusAccepted)
@@ -291,7 +317,9 @@ func (s *Server) handleTerminalResize(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	err := s.connMgr.SendToAgent(serverID, &pb.HubMessage{
+	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
+	defer cancel()
+	err := s.terminalSessions.SendInteractive(ctx, serverID, sessionID, &pb.HubMessage{
 		Payload: &pb.HubMessage_TerminalResize{
 			TerminalResize: &pb.TerminalResize{
 				SessionId: sessionID,
@@ -345,11 +373,19 @@ var (
 // agent interprets as its default RunAsUser.
 func AuthorizeTerminalExecution(st *store.Store, userID, serverID string) (string, error) {
 	user, err := st.GetUserByID(userID)
-	if err != nil {
+	if err != nil || user.MustChangePassword {
+		return "", ErrTerminalNotAuthorized
+	}
+	status := account.Evaluate(account.InputFromUser(user), time.Now().UTC(), lockout.Load(st.GetConfig))
+	if _, refuse := account.Refusal(status); refuse {
 		return "", ErrTerminalNotAuthorized
 	}
 
-	if user.Role == model.RoleAdmin {
+	effective, err := authorization.New(st).Effective(user.ID)
+	if err != nil {
+		return "", ErrTerminalNotAuthorized
+	}
+	if effective.HasRole(model.RoleAdmin) {
 		return ldapExecutionUsername(user), nil
 	}
 
@@ -376,6 +412,10 @@ func AuthorizeTerminalExecution(st *store.Store, userID, serverID string) (strin
 // AuthorizeTerminalExecution: it maps each authorization outcome to the status
 // code and message the web terminal expects.
 func (s *Server) resolveTerminalExecutionUser(w http.ResponseWriter, r *http.Request, serverID string) (string, bool) {
+	if err := authorization.New(s.store).GuardInteractive(UserIDFromContext(r.Context()), serverID); err != nil {
+		respondError(w, http.StatusForbidden, err.Error())
+		return "", false
+	}
 	executionUser, err := AuthorizeTerminalExecution(s.store, UserIDFromContext(r.Context()), serverID)
 	if err != nil {
 		respondError(w, terminalAuthzStatus(err), terminalAuthzMessage(err))
@@ -424,6 +464,12 @@ func ldapExecutionUsername(user *model.User) string {
 }
 
 func (s *Server) requireTerminalSession(w http.ResponseWriter, r *http.Request, serverID, sessionID string) (grpcserver.TerminalSessionInfo, bool) {
+	if r.Method != "DELETE" {
+		if err := s.securityService().GuardInteractive(UserIDFromContext(r.Context()), serverID); err != nil {
+			respondError(w, http.StatusForbidden, err.Error())
+			return grpcserver.TerminalSessionInfo{}, false
+		}
+	}
 	if s.terminalSessions == nil {
 		respondError(w, http.StatusInternalServerError, errTerminalServiceUnavailable)
 		return grpcserver.TerminalSessionInfo{}, false
@@ -450,13 +496,19 @@ func (s *Server) closeTerminalSession(r *http.Request, serverID, sessionID strin
 	if s.terminalSessions == nil {
 		return
 	}
+	info, exists := s.terminalSessions.Get(serverID, sessionID)
+	handledClose := false
+	if exists && (!info.Closed || forced) {
+		handledClose = s.terminalSessions.CloseInteractive(serverID, sessionID)
+	}
 	alreadyClosed, removed := s.terminalSessions.RemoveIfHubInitiated(serverID, sessionID)
+	alreadyClosed = alreadyClosed && info.Closed
 	if !removed {
 		return
 	}
 	// Suppress the TerminalClose gRPC send when the agent already reported
 	// its exit via End() — the session is already dead on the agent side.
-	if (!alreadyClosed || forced) && s.connMgr != nil {
+	if !handledClose && (!alreadyClosed || forced) && s.connMgr != nil {
 		_ = s.connMgr.SendToAgent(serverID, &pb.HubMessage{
 			Payload: &pb.HubMessage_TerminalClose{
 				TerminalClose: &pb.TerminalClose{
@@ -482,4 +534,42 @@ func (s *Server) closeTerminalSession(r *http.Request, serverID, sessionID strin
 		Detail:    &detail,
 		IPAddress: &ip,
 	})
+}
+
+// openInteractiveTerminal waits without holding policy or registry locks. A
+// policy change can cancel the registration while its agent ACK is pending.
+func (s *Server) openInteractiveTerminal(w http.ResponseWriter, r *http.Request, serverID, sessionID string, open *pb.TerminalOpenRequest) interface{} {
+	ch := s.pending.Register(serverID, sessionID)
+	defer s.pending.Remove(serverID, sessionID)
+	info, exists := s.terminalSessions.Get(serverID, sessionID)
+	if !exists || info.Closed {
+		respondError(w, http.StatusForbidden, "terminal authorization changed")
+		return nil
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
+	defer cancel()
+	err := s.terminalSessions.SendInteractive(ctx, serverID, sessionID, &pb.HubMessage{Payload: &pb.HubMessage_TerminalOpenRequest{TerminalOpenRequest: open}})
+	if err != nil {
+		respondError(w, http.StatusBadGateway, errAgentNotConnected)
+		return nil
+	}
+	select {
+	case resp := <-ch:
+		return resp
+	case <-info.AgentDone:
+		respondError(w, http.StatusBadGateway, errAgentNotConnected)
+	case <-info.Done:
+		respondError(w, http.StatusForbidden, "terminal authorization changed")
+	case <-ctx.Done():
+		respondError(w, http.StatusGatewayTimeout, "agent timeout")
+	}
+	return nil
+}
+
+func respondTerminalSendError(w http.ResponseWriter, err error, fallback string) {
+	if errors.Is(err, grpcserver.ErrInteractiveSessionClosed) || errors.Is(err, authorization.ErrInteractive) || errors.Is(err, authorization.ErrTransition) || errors.Is(err, authorization.ErrRecovery) || errors.Is(err, ErrTerminalNotAuthorized) || errors.Is(err, ErrTerminalNoAssignment) || errors.Is(err, ErrTerminalNoExecUser) {
+		respondError(w, http.StatusForbidden, "terminal authorization changed")
+		return
+	}
+	respondError(w, http.StatusBadGateway, fallback)
 }

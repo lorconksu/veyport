@@ -171,11 +171,14 @@ func TestInteractiveOnly_RejectsAPIToken(t *testing.T) {
 }
 
 func TestAuthMiddleware_WrongTokenType(t *testing.T) {
-	secret := testJWTSecret
-	s := &Server{jwtSecret: secret}
+	s := testServer(t)
+	user := &model.User{ID: testUserID1, Username: "setup-principal", Email: "setup-principal@test.invalid", Role: model.RoleAdmin}
+	if err := s.store.CreateUser(user); err != nil {
+		t.Fatal(err)
+	}
 
 	// Generate a setup token, try to use it on an access-required endpoint
-	setupToken, _ := auth.GenerateSetupToken(secret, testUserID1, "admin")
+	setupToken, _ := auth.GenerateSetupToken(s.jwtSecret, testUserID1, "admin")
 
 	handler := s.authMiddleware(auth.TokenTypeAccess, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		t.Fatal(testHandlerNotCall)

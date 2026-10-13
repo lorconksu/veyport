@@ -7,6 +7,21 @@ const BASE_URL = '/api'
 let refreshPromise: Promise<boolean> | null = null
 const REFRESH_TIMEOUT_MS = 10_000
 
+export class ApiError extends Error {
+  readonly status: number
+
+  constructor(message: string, status: number) {
+    super(message)
+    this.name = 'ApiError'
+    this.status = status
+  }
+}
+
+async function responseError(response: Response): Promise<ApiError> {
+  const body = await response.json().catch(() => ({ error: 'Unknown error' })) as { error?: string }
+  return new ApiError(typeof body?.error === 'string' && body.error ? body.error : `HTTP ${response.status}`, response.status)
+}
+
 function shouldSetJsonContentType(body: BodyInit | null | undefined): boolean {
   return body != null && !(body instanceof FormData)
 }
@@ -54,6 +69,7 @@ async function refreshToken(): Promise<boolean> {
 export async function apiFetch<T>(
   path: string,
   options: RequestInit = {},
+  refreshOnUnauthorized = true,
 ): Promise<T> {
   const headers = buildHeaders(options)
 
@@ -64,7 +80,7 @@ export async function apiFetch<T>(
   })
 
   // Handle 401 with automatic refresh (singleton to prevent race conditions)
-  if (res.status === 401) {
+  if (res.status === 401 && refreshOnUnauthorized) {
     const refreshed = await refreshToken()
     // A hidden/unmounted page can cancel its check while another request shares
     // the refresh. Do not retry or redirect on behalf of that cancelled caller.
@@ -83,19 +99,24 @@ export async function apiFetch<T>(
       })
     } else {
       globalThis.location.href = '/login'
-      throw new Error('Session expired')
+      throw new ApiError('Session expired', 401)
     }
   }
 
   if (!res.ok) {
-    const error = await res.json().catch(() => ({ error: 'Unknown error' }))
-    throw new Error((error as { error?: string }).error || `HTTP ${res.status}`)
+    throw await responseError(res)
   }
 
   if (options.method?.toUpperCase() === 'HEAD' || res.status === 204 || res.headers.get('content-length') === '0') {
     return undefined as T
   }
   return res.json() as Promise<T>
+}
+
+// Original-access operations consume one-use authority. A 401 is returned to
+// the caller directly; automatic session refresh must not replay their request.
+export function apiFetchOnce<T>(path: string, options: RequestInit = {}): Promise<T> {
+  return apiFetch(path, options, false)
 }
 
 // Re-enrollment API
@@ -137,8 +158,7 @@ export async function apiFetchWithToken<T>(
   })
 
   if (!res.ok) {
-    const error = await res.json().catch(() => ({ error: 'Unknown error' }))
-    throw new Error((error as { error?: string }).error || `HTTP ${res.status}`)
+    throw await responseError(res)
   }
 
   return res.json() as Promise<T>

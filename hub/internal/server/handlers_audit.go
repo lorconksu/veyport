@@ -67,6 +67,15 @@ func (s *Server) handleGetAuditSettings(w http.ResponseWriter, r *http.Request) 
 }
 
 func (s *Server) handleUpdateAuditSettings(w http.ResponseWriter, r *http.Request) {
+	state, err := s.store.GetPolicyState()
+	if err != nil {
+		securityError(w, err)
+		return
+	}
+	if state.State != "standard" || state.Pending != nil {
+		securityError(w, store.ErrProtectedChange)
+		return
+	}
 	var settings model.AuditSettings
 	if err := decodeJSON(r, &settings); err != nil {
 		respondError(w, http.StatusBadRequest, errInvalidRequestBody)
@@ -77,7 +86,7 @@ func (s *Server) handleUpdateAuditSettings(w http.ResponseWriter, r *http.Reques
 		return
 	}
 	if err := s.store.UpdateAuditSettings(settings); err != nil {
-		respondError(w, http.StatusInternalServerError, "failed to update audit settings")
+		securityError(w, err)
 		return
 	}
 
@@ -522,8 +531,10 @@ func validateJSONBlob(data string, maxBytes int64) error {
 	if int64(len(data)) > maxBytes {
 		return fmt.Errorf("json blob too large")
 	}
-	var decoded interface{}
-	return json.Unmarshal([]byte(data), &decoded)
+	if !json.Valid([]byte(data)) {
+		return fmt.Errorf("invalid json blob")
+	}
+	return nil
 }
 
 func sqliteAuditTimeFormat(value string) string {

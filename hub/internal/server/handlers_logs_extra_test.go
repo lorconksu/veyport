@@ -115,7 +115,7 @@ func TestHandleTailLog_GrepTooLong(t *testing.T) {
 // TestHandleTailLog_OverflowSSE verifies the overflow SSE event is emitted when the log
 // channel is full and data is dropped.
 func TestHandleTailLog_OverflowSSE(t *testing.T) {
-	s, adminToken, serverID := testServerWithAgentAndLogOverflow(t)
+	s, adminToken, serverID, stream := testServerWithAgentAndLogOverflow(t)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 1*time.Second)
 	defer cancel()
@@ -130,16 +130,22 @@ func TestHandleTailLog_OverflowSSE(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf(testExpected200Body, rec.Code, rec.Body.String())
 	}
+	if stream.dropped != 2 {
+		t.Fatalf("overflow fixture dropped %d chunks, want 2", stream.dropped)
+	}
 
 	body := rec.Body.String()
 	if !strings.Contains(body, "event: overflow") {
 		t.Fatalf("expected overflow SSE event in body, got: %s", body)
 	}
+	if !strings.Contains(body, "event: overflow\ndata: {\"dropped\":2}\n\n") {
+		t.Fatalf("expected overflow SSE data to report exactly two dropped chunks, got: %s", body)
+	}
 }
 
 // testServerWithAgentAndLogOverflow creates a test server with a mock agent stream
-// that fills the log channel buffer to trigger overflow, then delivers one more chunk.
-func testServerWithAgentAndLogOverflow(t *testing.T) (s *Server, adminToken, serverID string) {
+// that fills the 64-slot log channel buffer and drops two further chunks.
+func testServerWithAgentAndLogOverflow(t *testing.T) (s *Server, adminToken, serverID string, stream *mockGRPCStreamOverflow) {
 	t.Helper()
 	st, err := store.New(testMemoryDB)
 	if err != nil {
@@ -173,20 +179,21 @@ func testServerWithAgentAndLogOverflow(t *testing.T) (s *Server, adminToken, ser
 	adminToken = registerAndGetAdminToken(t, s)
 	serverID = createTestServer(t, s, adminToken, "overflow-test-srv")
 
-	stream := &mockGRPCStreamOverflow{
+	stream = &mockGRPCStreamOverflow{
 		mockGRPCStream: mockGRPCStream{pending: pending, serverID: serverID},
 		logSessions:    logSessions,
 	}
 	cm.Register(serverID, stream)
 	t.Cleanup(func() { cm.Unregister(serverID) })
 
-	return s, adminToken, serverID
+	return s, adminToken, serverID, stream
 }
 
 // mockGRPCStreamOverflow fills the log channel buffer to trigger overflow.
 type mockGRPCStreamOverflow struct {
 	mockGRPCStream
 	logSessions *grpcserver.LogSessions
+	dropped     int
 }
 
 func (m *mockGRPCStreamOverflow) Send(msg *pb.HubMessage) error {
@@ -195,17 +202,13 @@ func (m *mockGRPCStreamOverflow) Send(msg *pb.HubMessage) error {
 		switch p := msg.Payload.(type) {
 		case *pb.HubMessage_LogStreamRequest:
 			if m.logSessions != nil {
-				go func() {
-					reqID := p.LogStreamRequest.RequestId
-					time.Sleep(10 * time.Millisecond)
-					// Fill the channel buffer (capacity 64) to trigger overflow
-					for i := 0; i < 66; i++ {
-						m.logSessions.Deliver(m.serverID, reqID, []byte("filling buffer\n"))
+				// SendToAgent waits for this Send to return before the handler
+				// reads the channel. Fill its 64 slots now, then drop two chunks.
+				for i := 0; i < 66; i++ {
+					if !m.logSessions.Deliver(m.serverID, p.LogStreamRequest.RequestId, []byte("filling buffer\n")) {
+						m.dropped++
 					}
-					// Give time for the SSE handler to read and detect overflow
-					time.Sleep(200 * time.Millisecond)
-					m.logSessions.Remove(m.serverID, reqID)
-				}()
+				}
 			}
 		}
 	}

@@ -13,7 +13,7 @@ import (
 
 // --- Vulnerability #30: Refresh token rotation ---
 
-func TestRefreshToken_RotatesGeneration(t *testing.T) {
+func TestRefreshToken_SpendsSessionDigest(t *testing.T) {
 	s := testServer(t)
 	_ = registerAndGetAdminToken(t, s)
 
@@ -30,7 +30,7 @@ func TestRefreshToken_RotatesGeneration(t *testing.T) {
 		t.Fatalf("first refresh: expected 200, got %d: %s", rec.Code, rec.Body.String())
 	}
 
-	// Using the SAME refresh token a second time should fail (generation was incremented)
+	// Using the same refresh token again fails because its session digest was spent.
 	body2, _ := json.Marshal(model.RefreshRequest{RefreshToken: refreshToken})
 	req2 := httptest.NewRequest("POST", testRefreshPath, bytes.NewReader(body2))
 	rec2 := httptest.NewRecorder()
@@ -88,7 +88,7 @@ func TestRefreshToken_StaleGeneration_Rejected(t *testing.T) {
 	// Create a refresh token with generation 0
 	_, refreshToken, _ := auth.GenerateTokenPair(s.jwtSecret, user.ID, string(user.Role), 0)
 
-	// Manually increment the generation in the DB (simulating another refresh or admin action)
+	// Explicit revocation advances the user generation independently of refresh.
 	_, _ = s.store.IncrementTokenGeneration(user.ID)
 
 	// The old refresh token should now be rejected

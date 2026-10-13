@@ -67,12 +67,12 @@ func GenerateSessionTokenPair(secret, userID, role string, tokenGen int, sid str
 	return accessToken, refreshToken, nil
 }
 
-func GenerateSetupToken(secret, userID, role string) (string, error) {
-	return GenerateTokenWithExpiry(secret, userID, role, TokenTypeSetup, SetupTokenExpiry)
+func GenerateSetupToken(secret, userID, role string, tokenGen ...int) (string, error) {
+	return GenerateTokenWithExpiry(secret, userID, role, TokenTypeSetup, SetupTokenExpiry, tokenGen...)
 }
 
-func GenerateTOTPToken(secret, userID, role string) (string, error) {
-	return GenerateTokenWithExpiry(secret, userID, role, TokenTypeTOTP, TOTPTokenExpiry)
+func GenerateTOTPToken(secret, userID, role string, tokenGen ...int) (string, error) {
+	return GenerateTokenWithExpiry(secret, userID, role, TokenTypeTOTP, TOTPTokenExpiry, tokenGen...)
 }
 
 func GenerateTokenWithExpiry(secret, userID, role, tokenType string, expiry time.Duration, tokenGen ...int) (string, error) {

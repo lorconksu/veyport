@@ -1,0 +1,51 @@
+{
+  "schema": 1,
+  "recorded_at": "2026-10-11T10:23:39.904465+00:00",
+  "scope": "isolated synthetic .59/.64; no human approvals or staging mutation",
+  "phase": "API/CLI/native transport qualification; browser evidence tracked separately",
+  "build": {
+    "source_commit": "23e5294926571491f9980f9c4cada5667fa55f61",
+    "toolchain": "go1.26.9",
+    "version": "dev-23e5294",
+    "frontend": "fresh13f00a0 production build; frontend source identical at23e5294",
+    "binaries": {
+      "veyport-hub": "628bbc0a8a089ceb868dd111646b179d6a071c4ee2cd498ac9a7cd245cc2435f",
+      "veyport-agent": "7046466a77c956efc1c76fa184956be0821c3a0053284015cddad50dfb5d49fb",
+      "vey": "bfd2b3e6f41ccfb3b8e80ead5b96fa915ef380d7b7c9321bae4e00fd1e98eeb6"
+    }
+  },
+  "hub_https": "https://10.10.1.59:8443",
+  "target": "10.10.1.64",
+  "receipt": "https://10.10.1.60:8443",
+  "active_policy_version": 4,
+  "previous_cli_change_id": "9005f871-0849-4b23-b13a-e1151114be7a",
+  "execution": [
+    {
+      "case": "confirmed",
+      "exact_once_marker": true,
+      "exit_code": 42,
+      "execution_id": "783e7833-1395-49f7-95ec-380ecca39af0",
+      "record_sha256": "6c3b15ab424d8c6efaaeec2d8a1e65b167e62cdcba4bfac4cc5b69b82e5ce450",
+      "receipt_sha256": "ab7831a55518b11b38cefca0673d421c37de16cf5adac599442077f86bedfa04",
+      "manifest_version": "67228d6be07084d9172105909f59f9aa",
+      "signature_verified": true
+    },
+    {
+      "case": "receipt-outage",
+      "denied_without_side_effect": true
+    },
+    {
+      "case": "restored",
+      "exact_once_marker": true,
+      "exit_code": 42,
+      "execution_id": "b7ede02a-3f5e-41e8-86e4-09308b339dac",
+      "record_sha256": "82beeacf69f67675e4f4975f63c231f46727bd058385d43fbd95376520a5aa9d",
+      "receipt_sha256": "8877d3d1f8bd109cde8e2a1bcadd87ce468f8b37277f2b4064e334347f8547c9",
+      "manifest_version": "67228d69d1ccb46322b7f3cefb733ac6",
+      "signature_verified": true
+    }
+  ],
+  "limitations": [
+    "Prototype VM/fault qualification only; final Sonar and broader failure matrix remain separate"
+  ]
+}

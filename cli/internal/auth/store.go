@@ -335,7 +335,7 @@ func (s *keyringStore) loadEntry(hubURL string) (hubEntry, bool, error) {
 	// fragments of the input, and the input here is the refresh token and the
 	// SSH private key.
 	if err := json.Unmarshal([]byte(blob), &entry); err != nil {
-		return hubEntry{}, false, fmt.Errorf("auth: stored credentials for %s are corrupt; run: vey login --hub %s", hubURL, hubURL)
+		return hubEntry{}, false, fmt.Errorf("auth: stored credentials for %s are corrupt; run: vey --hub %s login", hubURL, hubURL)
 	}
 	return entry, true, nil
 }

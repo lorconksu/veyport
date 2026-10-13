@@ -393,10 +393,10 @@ func (a *AuthContext) accessToken() string {
 // remediation command needs.
 func (a *AuthContext) errNotAuthenticated() error {
 	return cmdutil.NewAuthError(fmt.Errorf(
-		"not authenticated for %s; run: vey login --hub %s", a.hubURL, a.hubURL))
+		"not authenticated for %s; run: vey --hub %s login", a.hubURL, a.hubURL))
 }
 
 func (a *AuthContext) errSessionExpired() error {
 	return cmdutil.NewAuthError(fmt.Errorf(
-		"session for %s has expired or was revoked; run: vey login --hub %s", a.hubURL, a.hubURL))
+		"session for %s has expired or was revoked; run: vey --hub %s login", a.hubURL, a.hubURL))
 }

@@ -1,0 +1,25 @@
+{
+  "description": "Example queries; no notification connectors or licensed rules are enabled automatically.",
+  "examples": [
+    {
+      "name": "Execution refused in the last fifteen minutes",
+      "query": {"bool": {"filter": [{"term": {"event_type": "execution.denial"}}, {"range": {"@timestamp": {"gte": "now-15m"}}}]}},
+      "investigation": "Correlate event_id and node_id with the Veyport execution detail and current effective policy. No OS identity is implied before preparation."
+    },
+    {
+      "name": "Prepared root execution",
+      "query": {"bool": {"filter": [{"term": {"event_type": "execution.admission"}}, {"term": {"uid": 0}}, {"range": {"@timestamp": {"gte": "now-15m"}}}]}},
+      "investigation": "Check actual run_as and actor_person_id; operational admin and prepared root identity are separate facts."
+    },
+    {
+      "name": "Interrupted or uncertain outcome",
+      "query": {"bool": {"filter": [{"terms": {"process_state": ["interrupted", "unconfirmed", "unknown", "uncertain"]}}, {"range": {"@timestamp": {"gte": "now-15m"}}}]}},
+      "investigation": "Search only proves which records were projected. Check Veyport authoritative process/evidence state and export lag before interpreting absence."
+    },
+    {
+      "name": "Protected original-read activity",
+      "query": {"bool": {"filter": [{"terms": {"event_type": ["original_read.intent", "original_read.result"]}}, {"range": {"@timestamp": {"gte": "now-15m"}}}]}},
+      "investigation": "Correlate stable event/correlation IDs with the externally preserved intent and delivery result. Purpose and raw original bytes stay outside search."
+    }
+  ]
+}

@@ -8,7 +8,6 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	"github.com/wyiu/veyport/hub/internal/auth"
 	"github.com/wyiu/veyport/hub/internal/model"
 )
 
@@ -37,7 +36,7 @@ func registerAndGetAdminToken(t *testing.T, s *Server) string {
 	json.NewDecoder(rec2.Body).Decode(&totpResp)
 
 	// Generate valid TOTP code and enable
-	code, _ := auth.GenerateValidCode(totpResp.Secret)
+	code := validTOTPCode(t, totpResp.Secret, s.now())
 
 	enableBody, _ := json.Marshal(model.TOTPEnableRequest{Code: code})
 	req3 := httptest.NewRequest("POST", testTOTPEnablePath, bytes.NewReader(enableBody))

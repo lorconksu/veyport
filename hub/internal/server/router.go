@@ -12,6 +12,7 @@ func (s *Server) routes() http.Handler {
 
 	loginLimiter := newRateLimiter(10, 60*time.Second)
 	totpLimiter := newRateLimiter(3, 60*time.Second)
+	totpLimiter.now = s.now
 	refreshLimiter := newRateLimiter(30, 60*time.Second)
 	fileOpsLimiter := newRateLimiter(60, 60*time.Second)
 	terminalLimiter := newRateLimiter(3600, 60*time.Second)
@@ -39,6 +40,22 @@ func (s *Server) routes() http.Handler {
 	mux.Handle("PUT /api/auth/password", loggingMiddleware(s.authMiddleware(auth.TokenTypeAccess, s.interactiveOnly(http.HandlerFunc(s.handleChangePassword)))))
 	mux.Handle("PUT /api/auth/avatar", loggingMiddleware(s.authMiddleware(auth.TokenTypeAccess, s.interactiveOnly(http.HandlerFunc(s.handleUpdateAvatar)))))
 	mux.Handle("POST /api/auth/totp/disable", loggingMiddleware(s.authMiddleware(auth.TokenTypeAccess, s.interactiveOnly(s.adminOnly(http.HandlerFunc(s.handleTOTPDisable))))))
+
+	// Independent security governance. All mutations require an interactive session.
+	mux.Handle("GET /api/audit-policy", loggingMiddleware(s.authMiddleware(auth.TokenTypeAccess, http.HandlerFunc(s.handleAuditPolicy))))
+	mux.Handle("POST /api/audit-policy/test", loggingMiddleware(s.authMiddleware(auth.TokenTypeAccess, s.interactiveOnly(http.HandlerFunc(s.handleAuditPolicyTest)))))
+	mux.Handle("POST /api/security/changes/preview", loggingMiddleware(s.authMiddleware(auth.TokenTypeAccess, s.interactiveOnly(http.HandlerFunc(s.handleSecurityPreview)))))
+	mux.Handle("POST /api/security/step-up", loggingMiddleware(totpLimiter.middleware(s.authMiddleware(auth.TokenTypeAccess, s.interactiveOnly(http.HandlerFunc(s.handleSecurityStepup))))))
+	mux.Handle("POST /api/security/secrets", loggingMiddleware(s.authMiddleware(auth.TokenTypeAccess, s.interactiveOnly(http.HandlerFunc(s.handleSecuritySecret)))))
+	mux.Handle("POST /api/security/changes", loggingMiddleware(s.authMiddleware(auth.TokenTypeAccess, s.interactiveOnly(http.HandlerFunc(s.handleSecurityRequest)))))
+	mux.Handle("GET /api/security/changes", loggingMiddleware(s.authMiddleware(auth.TokenTypeAccess, http.HandlerFunc(s.handleSecurityList))))
+	mux.Handle("GET /api/security/principals", loggingMiddleware(s.authMiddleware(auth.TokenTypeAccess, http.HandlerFunc(s.handleSecurityPrincipals))))
+	mux.Handle("GET /api/security/changes/{id}", loggingMiddleware(s.authMiddleware(auth.TokenTypeAccess, http.HandlerFunc(s.handleSecurityGet))))
+	mux.Handle("POST /api/security/changes/{id}/approve", loggingMiddleware(s.authMiddleware(auth.TokenTypeAccess, s.interactiveOnly(http.HandlerFunc(s.handleSecurityApprove)))))
+	mux.Handle("POST /api/security/changes/{id}/apply", loggingMiddleware(s.authMiddleware(auth.TokenTypeAccess, s.interactiveOnly(http.HandlerFunc(s.handleSecurityApply)))))
+
+	mux.Handle("POST /api/security/changes/{id}/reconcile", loggingMiddleware(s.authMiddleware(auth.TokenTypeAccess, s.interactiveOnly(http.HandlerFunc(s.handleSecurityReconcile)))))
+	s.registerOriginalAccessRoutes(mux, totpLimiter)
 
 	// Self-service session management (feature 009): a person managing their
 	// own sessions, so an API token — which is not a session — is refused.
@@ -107,6 +124,10 @@ func (s *Server) routes() http.Handler {
 	mux.Handle("GET /api/servers/{id}", loggingMiddleware(s.authMiddleware(auth.TokenTypeAccess, http.HandlerFunc(s.handleGetServer))))
 	mux.Handle("PUT /api/servers/{id}", loggingMiddleware(s.authMiddleware(auth.TokenTypeAccess, s.adminOnly(http.HandlerFunc(s.handleUpdateServer)))))
 	mux.Handle("DELETE /api/servers/{id}", loggingMiddleware(s.authMiddleware(auth.TokenTypeAccess, s.adminOnly(http.HandlerFunc(s.handleDeleteServer)))))
+	mux.Handle("GET /api/servers/{id}/agent-update", loggingMiddleware(s.authMiddleware(auth.TokenTypeAccess, s.interactiveOnly(s.adminOnly(http.HandlerFunc(s.handleAgentUpdateCheck))))))
+	mux.Handle("POST /api/servers/{id}/agent-update", loggingMiddleware(s.authMiddleware(auth.TokenTypeAccess, s.interactiveOnly(s.adminOnly(http.HandlerFunc(s.handleAgentUpdateStart))))))
+	mux.Handle("GET /api/servers/{id}/agent-update/status", loggingMiddleware(s.authMiddleware(auth.TokenTypeAccess, s.interactiveOnly(s.adminOnly(http.HandlerFunc(s.handleAgentUpdateStatus))))))
+	mux.Handle("POST /api/servers/{id}/agent-update/recovery", loggingMiddleware(s.authMiddleware(auth.TokenTypeAccess, s.interactiveOnly(s.adminOnly(http.HandlerFunc(s.handleAgentUpdateRecovery))))))
 
 	// File access path management (admin)
 	mux.Handle("GET /api/servers/{id}/paths", loggingMiddleware(s.authMiddleware(auth.TokenTypeAccess, s.adminOnly(http.HandlerFunc(s.handleListPaths)))))
@@ -146,6 +167,8 @@ func (s *Server) routes() http.Handler {
 	mux.Handle("GET /api/ssh/host-key", loggingMiddleware(s.authMiddleware(auth.TokenTypeAccess, http.HandlerFunc(s.handleSSHHostKey))))
 
 	// Public endpoints (no auth required)
+	mux.Handle("GET /install/metadata/{component}/{os}/{arch}", loggingMiddleware(http.HandlerFunc(s.handleDistributionMetadata)))
+	mux.Handle("GET /install/agent-update.sh", loggingMiddleware(http.HandlerFunc(s.handleAgentUpdateScript)))
 	mux.Handle("GET /install.sh", loggingMiddleware(http.HandlerFunc(s.handleInstallScript)))
 	mux.Handle("GET /install/cli.sh", loggingMiddleware(http.HandlerFunc(s.handleInstallCLIScript)))
 	mux.Handle("GET /install/{os}/{arch}", loggingMiddleware(http.HandlerFunc(s.handleAgentBinary)))

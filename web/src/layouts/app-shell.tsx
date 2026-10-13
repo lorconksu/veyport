@@ -3,6 +3,7 @@ import { Outlet, NavLink, useNavigate, Link } from 'react-router-dom'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { LayoutDashboard, ScrollText, Settings, LogOut, PanelLeftClose, PanelLeftOpen } from 'lucide-react'
 import { useAuth } from '@/hooks/use-auth'
+import { hasCapability } from '@/lib/auth'
 import { useSessionActivity } from '@/hooks/use-session-activity'
 import { Logo } from '@/components/logo'
 import { getAvatarColor } from '@/lib/avatar'
@@ -44,7 +45,7 @@ export function AppShell() {
 
   const navItems = [
     { to: '/', icon: LayoutDashboard, label: 'Fleet Dashboard' },
-    ...(user?.role === 'admin' || user?.role === 'auditor' ? [{ to: '/audit-logs', icon: ScrollText, label: 'Audit Logs' }] : []),
+    ...(hasCapability(user, 'audit.read') ? [{ to: '/audit-logs', icon: ScrollText, label: 'Audit Logs' }] : []),
     { to: '/settings', icon: Settings, label: 'Settings' },
   ]
 

@@ -17,6 +17,7 @@ const defaultHubConfig = {
   lockout_duration_minutes: 30,
   dormant_days: 35,
   session_idle_minutes: 15,
+  cli_session_idle_minutes: 45,
   session_max_hours: 12,
 }
 
@@ -50,7 +51,8 @@ describe('AccountPolicyCard', () => {
     expect(screen.getByLabelText('Lockout window (minutes)')).toHaveValue(15)
     expect(screen.getByLabelText('Lock duration (minutes)')).toHaveValue(30)
     expect(screen.getByLabelText('Dormant after (days)')).toHaveValue(35)
-    expect(screen.getByLabelText('Idle timeout (minutes)')).toHaveValue(15)
+    expect(screen.getByLabelText('Web session idle timeout (minutes)')).toHaveValue(15)
+    expect(screen.getByLabelText('CLI session idle timeout (minutes)')).toHaveValue(45)
     expect(screen.getByLabelText('Maximum session (hours)')).toHaveValue(12)
   })
 
@@ -62,14 +64,14 @@ describe('AccountPolicyCard', () => {
     expect(screen.getByText('0 disables locking')).toBeInTheDocument()
     expect(screen.getByText('0 = no auto-unlock')).toBeInTheDocument()
     expect(screen.getByText('0 disables dormancy')).toBeInTheDocument()
-    expect(screen.getByText('0 disables the idle limit')).toBeInTheDocument()
+    expect(screen.getAllByText('0 disables the idle limit')).toHaveLength(2)
     expect(screen.getByText('0 disables the absolute limit')).toBeInTheDocument()
   })
 
   it.each([
     { label: 'Lockout threshold (failures)', value: '-1', description: 'a negative value' },
     { label: 'Dormant after (days)', value: '1.5', description: 'a non-integer value' },
-    { label: 'Idle timeout (minutes)', value: '-5', description: 'a negative idle-timeout value' },
+    { label: 'CLI session idle timeout (minutes)', value: '-5', description: 'a negative CLI idle-timeout value' },
   ])('shows a field error and does not PUT when $label has $description', async ({ label, value }) => {
     mockApiFetch.mockResolvedValueOnce(defaultHubConfig)
     renderCard()
@@ -84,13 +86,14 @@ describe('AccountPolicyCard', () => {
     expect(mockApiFetch).not.toHaveBeenCalledWith('/settings/hub', expect.objectContaining({ method: 'PUT' }))
   })
 
-  it('saves with exactly the six fields as integers and shows a success message', async () => {
+  it('saves with exactly the seven fields as integers and shows a success message', async () => {
     mockApiFetch.mockResolvedValueOnce(defaultHubConfig) // GET
     mockApiFetch.mockResolvedValueOnce({ ...defaultHubConfig, dormant_days: 1 }) // PUT response
     renderCard()
 
     await screen.findByLabelText('Dormant after (days)')
     fireEvent.change(screen.getByLabelText('Dormant after (days)'), { target: { value: '1' } })
+    fireEvent.change(screen.getByLabelText('CLI session idle timeout (minutes)'), { target: { value: '0' } })
     fireEvent.click(screen.getByRole('button', { name: 'Save' }))
 
     await waitFor(() => {
@@ -102,6 +105,7 @@ describe('AccountPolicyCard', () => {
           lockout_duration_minutes: 30,
           dormant_days: 1,
           session_idle_minutes: 15,
+          cli_session_idle_minutes: 0,
           session_max_hours: 12,
         }),
       })

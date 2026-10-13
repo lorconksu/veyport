@@ -84,6 +84,15 @@ Replace `latest` with a specific version tag to avoid unexpected upgrades:
 image: yiucloud/veyport:vX.Y.Z
 ```
 
+The published command-passthrough prototype is Hub `2.0.50-prototype.9` / tag
+`prototype-ssh-passthrough.9`, with CLI and agent prototype 9 artifacts. Older
+CLI prototype 6 builds are also compatible with the Hub. These prototype
+builds are not a stable or main-branch release. Check current
+publication and qualification on the [release page](https://github.com/lorconksu/veyport/releases),
+verify compatible builds and target agent support, and follow the
+owner-approved staging and rollback procedure. This publication information
+is not new runtime qualification evidence.
+
 ---
 
 ## Running Behind Traefik
@@ -184,7 +193,7 @@ Traefik handles TLS termination (Let's Encrypt). The Hub sees plain HTTP on port
 
 Agents are lightweight Go binaries deployed on each managed server. They dial out to the Hub's gRPC port - no inbound firewall rules are needed on the agent host.
 
-### One-command install (recommended)
+### Initial enrollment (one command)
 
 The Hub serves an install script and the agent binaries. On the managed server, run:
 
@@ -194,7 +203,7 @@ curl -sSL https://veyport.example.com/install.sh | sudo bash -s -- \
   --hub veyport.example.com:443
 ```
 
-The script will:
+For a new node, the script will:
 1. Detect the OS and CPU architecture
 2. **Auto-detect an existing installation** - if `veyport-agent` is already installed and has a valid `agent.conf`, the script calls `veyport-agent --self-unregister` to remove the old server entry from the Hub before proceeding
 3. Download the correct agent binary from `/install/{os}/{arch}`
@@ -202,12 +211,19 @@ The script will:
 5. Install and enable a systemd service for the agent
 6. **Verify registration** - after starting the agent service, the script checks that the agent successfully registered with the Hub before reporting success
 
+This script is an enrollment or replacement workflow, not an upgrade command.
+On an existing installation it calls `--self-unregister`, which removes the
+current Hub server entry before registering again. That can change the node's
+identity and lose the continuity of its server history and assignments. Use the
+built-in update flow below to preserve an enrolled node's identity, local
+configuration, and credentials.
+
 #### Piped vs. manual execution
 
 | Mode | Behaviour |
 |------|-----------|
-| Piped from `curl` (non-interactive) | Automatically replaces any existing installation without prompting |
-| Run as a script manually (interactive terminal) | Prompts **[R]eplace / [K]eep** if an existing installation is detected; exits with a non-zero status if the user selects Keep |
+| Piped from `curl` (non-interactive) | Automatically replaces any existing installation without prompting; this unregisters and re-enrolls it |
+| Run as a script manually (interactive terminal) | Prompts **[R]eplace / [K]eep**; Replace unregisters and re-enrolls, while Keep exits with a non-zero status |
 
 ### Manual install
 
@@ -378,9 +394,12 @@ ExecStart=/opt/veyport/bin/veyport \
   --require-mtls
 ```
 
-### Upgrading existing agents
+### Migrating pre-v1.1 agents without mTLS
 
-Existing agents deployed before v1.1 do not have mTLS certificates. To upgrade them:
+This is a one-time transport migration for agents deployed before v1.1 that do
+not have mTLS certificates. It is separate from normal agent updates, which use
+`vey servers update <node>` and preserve the enrolled identity. To migrate an
+agent that cannot establish mTLS:
 
 1. Re-register the agent (unregister from the Hub UI, then re-run the install script with a new token)
 2. The new agent will automatically receive an mTLS certificate during registration
@@ -610,6 +629,136 @@ systemctl restart veyport
 
 ## Updating / Redeploying
 
+### Update the CLI and enrolled agents
+
+Update the operator's CLI from its configured Hub with `vey update`. Use
+`vey update --check` first to inspect the Hub version and verified artifact
+metadata without downloading or changing files. The local updater supports
+Linux and macOS amd64/arm64 and installs only to `/usr/local/bin/vey`. If it
+reports a permission problem, rerun the exact command printed by the error with
+explicit `sudo`; the command does not elevate itself. See [[CLI#update-the-cli]]
+for version checks and recovery details. A CLI build that predates the built-in
+updater needs one final install from the configured Hub's `Install CLI` command
+before it can use `vey update`.
+
+For a node update, the node must already be enrolled with a valid mTLS identity,
+and its Veyport installation must never have enrolled Enhanced or other
+governance controls. Updates are available only for Standard installations.
+They require a live interactive administrator session; API tokens are refused.
+The command uses the effective Hub selected by `--hub`, `VEYPORT_HUB`, or the
+configured default. That Hub selects the exact artifact for the enrolled node's
+Linux amd64/arm64 platform. No arbitrary URL or version can be supplied, and
+the command will not downgrade an agent. Linux systemd nodes using the root-owned
+`/usr/local/bin/veyport-agent` service are supported.
+
+```bash
+vey servers update web01 --check
+vey servers update web01
+```
+
+`--check` reports the current agent capability, Hub artifact, version, checksum,
+and whether a one-time bootstrap is required. Current agents report file-list,
+file-read, file-delete, upload, and log-tail activity to the Hub. These records
+stay active until the agent reports actual completion, even if the HTTP caller
+cancels or times out. Maintenance is refused while any known or unconfirmed
+activity, terminal, command, or other agent work remains; once reserved, new
+work is blocked. A client timeout, cancellation, disconnect, or stop request is
+not proof that remote work finished. Let the work complete and verify the node
+is idle before retrying. The command waits up to 150 seconds for the agent to
+reconnect, report the exact target version, revision, and checksum, and durably
+confirm the update. If it cannot confirm that evidence, inspect the durable
+operation before retrying:
+
+```bash
+vey servers update web01 --status
+vey servers update web01 --status --operation <operation-id>
+```
+
+For an older enrolled agent, or an agent that cannot report complete file/log
+quiescence (including prototype.4 agents), the CLI's check response includes
+`bootstrap_required`, `bootstrap_idle_confirmation_required`, and the current
+`connection_id`. Close file and log clients, agent sessions, and other work;
+allow it to finish and verify the node is idle over direct SSH. The ordinary
+preserving bootstrap uses only the explicit idle assertion:
+
+```bash
+vey servers update web01 --bootstrap-idle-confirmed
+```
+
+If the original binary is unstamped (for example, the legacy 0.1.0 agent from
+the prototype.5 staging incident), also establish its version from trustworthy
+deployment records and measure the installed bytes over direct SSH. Do not
+infer a version from an arbitrary unstamped executable. For that one-time path,
+pass both assertions:
+
+```bash
+vey servers update web01 --bootstrap-idle-confirmed \
+  --bootstrap-original-version 0.1.0 \
+  --bootstrap-original-sha256 <sha256-from-direct-ssh>
+```
+
+Obtain the digest on the target with `sudo sha256sum /usr/local/bin/veyport-agent`.
+The version and hash flags are mandatory as a
+pair. They bind the operator's assertion to the exact bytes being replaced.
+The helper checks the local package/platform, confirms that both linker-stamped
+identity fields are absent, and verifies the measured SHA-256. A stamped binary
+cannot use this original-identity path. The target must be newer than the
+asserted original version. The Hub binds the original-identity assertion to
+the authenticated actor, session, node, fresh connection, and one-use ticket.
+The idle flag remains an operator assertion, not an automatic activity
+detector; the Hub still rejects known active work and a changed connection. If
+you cannot confirm idle, leave the node untouched and check again later.
+
+The CLI prints a one-use direct-SSH bootstrap command tied to the node, Hub
+artifact, operation, and (for an unstamped binary) the same version and SHA-256
+assertions. Run that exact printed command on the node within 120 seconds. It
+verifies the Hub artifact and original bytes, checks the service is idle, then
+updates the existing installation while preserving its mTLS identity,
+`agent.conf`, service configuration, and node ID. It does not re-enroll or use
+a registration token. The HTTPS Hub hostname in the printed command must match
+the hostname configured for the agent's mTLS connection; HTTPS and gRPC ports
+may differ. Do not substitute or reconstruct the command by hand.
+
+For the unstamped-original case, the printed command has this form and includes
+the same assertions supplied to `vey servers update`:
+
+```bash
+curl -fsS --proto '=https' 'https://<hub>/install/agent-update.sh' | \
+  sudo bash -s -- --hub 'https://<hub>' --ticket '<64-char-ticket>' \
+    --original-version '0.1.0' --original-sha256 '<sha256>'
+```
+
+Creating the operation and printing a command does not mean installation
+succeeded. After running the command, inspect the durable operation and wait for
+`succeeded`:
+
+```bash
+vey servers update web01 --status
+vey servers update web01 --status --operation <operation-id>
+vey ssh web01 -- 'hostname; id; uname -s'
+```
+
+The Hub records success only after the agent reconnects and durably confirms the
+exact target artifact. Verify the node's identity and OS over `vey ssh` as a
+separate operational check.
+
+An update that fails can be `failed`, `rolled_back`, or `unknown`. A legacy
+agent's rollback may remain `unknown` because the old protocol cannot report an
+exact binary hash. In that case, inspect the operation and use direct SSH to
+verify the original binary checksum and service before acknowledging recovery.
+The CLI prints the expected original SHA-256 and earliest recovery time. Only
+after verification, run:
+
+```bash
+vey servers update web01 --acknowledge-recovery <operation-id> \
+  --verified-sha256 <verified-original-sha256>
+```
+
+This is an administrator attestation that direct SSH checks passed; it is not
+remote confirmation of the binary. Do not acknowledge recovery if the checksum
+or service state is uncertain. A recovery acknowledgement releases the update
+maintenance reservation and is audited.
+
 ### Docker (recommended)
 
 ```bash
@@ -618,6 +767,21 @@ docker compose up -d
 ```
 
 New migrations (if any) run automatically on startup.
+
+Do not use this generic latest/tag upgrade procedure for an unreleased feature
+branch. For the command-passthrough prototype, preserve a consistent SQLite and
+configuration backup, retain the current image for rollback, verify the exact
+prototype image digest/revision, and confirm that every target agent supports the
+new execution protocol before testing command mode. Legacy agents must retain
+interactive compatibility; do not replace unrelated production agents solely to
+exercise the prototype. The project owner controls staging deployment and release.
+
+Enhanced audit is optional. Standard Hub operation requires no receipt, archive,
+key service, or ELK service. Enabling Enhanced requires the separately qualified
+receipt/archive services and fixed trust configuration; do not point a candidate
+destination at an arbitrary user-supplied endpoint. The repository's isolated
+lab runbooks under `infra/audit-lab/` describe its private test topology and are
+not general production deployment instructions.
 
 ### Bare-metal
 

@@ -104,6 +104,10 @@ func TestAgentBinaryConnectAndFileList(t *testing.T) {
 	t.Log("agent binary connected to hub")
 
 	assertServerStatus(t, h, serverID, "online")
+	srv, err := h.Store.GetServerByID(serverID)
+	if err != nil || srv.AgentVersion == nil || *srv.AgentVersion != agentBinaryVersion {
+		t.Fatalf("registered agent did not advertise its linker-stamped version: %+v, %v", srv, err)
+	}
 
 	tmpDir := t.TempDir()
 	testFiles := createTestFiles(t, tmpDir)

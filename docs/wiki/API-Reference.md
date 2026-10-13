@@ -346,7 +346,10 @@ Exchange a refresh token for a new access/refresh token pair.
 {}
 ```
 
-On success, the Hub rotates the refresh token and sets new `veyport_access`, `veyport_refresh`, and `veyport_csrf` cookies.
+On success, the Hub atomically rotates the refresh token for the session making this request and
+sets new `veyport_access`, `veyport_refresh`, and `veyport_csrf` cookies. Rotation does not
+invalidate independent sessions or access tokens that remain valid. Explicit logout, expiry,
+account or security changes, and session revocation retain their existing effects.
 
 **Error Cases:**
 - `401` - Invalid or expired refresh token
@@ -1008,6 +1011,104 @@ Audit viewing and workflow endpoints are available to **admins and auditors**. A
 - `POST /api/audit-logs/flags`
 - `GET /api/audit-logs/detections`
 - `GET /api/audit-users`
+
+### Protected security governance
+
+The feature-branch governance API uses live capabilities and a protected preview,
+step-up, approval, and apply flow. Operations `admin` is not a security role.
+Browser and CLI mutation calls require an interactive session; API tokens cannot
+provide fresh action-bound MFA.
+
+| Method and path | Purpose / authority |
+|---|---|
+| `GET /api/audit-policy` | Read active policy, readiness, and effective capabilities. Full details require security-read or valid initial-bootstrap authority. |
+| `POST /api/audit-policy/test` | Bounded explicit destination qualification test under the fixed operator-managed endpoint allowlist; it does not activate policy or run a command. |
+| `POST /api/security/secrets` | Write-only destination/password material; returns only an immutable `credential_ref` and set indicator. There is no read-back route. |
+| `POST /api/security/changes/preview` | Preview `{reason, expected_version, change}`; returns the canonical proposal and digest. |
+| `POST /api/security/step-up` | Bind fresh MFA to `security.request`, `security.approve`, or `security.apply`, exact digest, and (for approve/apply) exact change ID. |
+| `POST /api/security/changes` | Submit the returned proposal and action-bound `step_up_proof`. |
+| `GET /api/security/changes?limit=50&offset=0` | Bounded summaries for live security readers; list page limit is 1–100. |
+| `GET /api/security/changes/{id}` | Read one exact authorized request, including a request where the caller is specifically nominated. Nomination permits this request-scoped review only. |
+| `GET /api/security/principals?limit=50&offset=0&search=...` | Bounded safe principal selector for security readers or initial-bootstrap authority; search is limited and does not expose credentials or LDAP details. |
+| `POST /api/security/changes/{id}/approve` | Record one independent-person approval with a proof bound to this request and digest. |
+| `POST /api/security/changes/{id}/apply` | Apply an approved exact change using a current-version compare-and-swap and fresh proof. |
+| `POST /api/security/changes/{id}/reconcile` | Resume reconciliation of that existing application decision; it does not create a new decision or bypass quorum. |
+
+Changes are typed (`bootstrap`, `policy`, `role`, `person`, `recovery`,
+`audit-settings`, or `ldap`). Reasons and expected positive policy versions are
+required. The baseline quorum is the requester and two approvers linked to
+distinct verified person identities. Editing a request invalidates prior votes;
+stale, expired, revoked, or digest-mismatched approvals do not count. The server
+rechecks live authority at approval and application.
+
+Bootstrap nominations include the requester as officer and two other people as
+approvers, all with verified person IDs, operator evidence, and completed MFA.
+An initial nominee may still be an ordinary viewer without global
+`security.read` or `security.approve`. Such a nominee can review only the exact
+nominated request ID through the request-specific route; nomination never grants
+broad request listing, policy visibility, principal lookup, or global
+capabilities. Do not use global `/auth/me` capabilities to infer the rights for a
+particular nominated request.
+
+Credentials are uploaded separately and never appear in request diffs or policy
+readback. Credential-bearing URLs, private keys, and secret values do not belong
+in proposal files or reasons. A fresh proof authorizes only its action, request,
+and digest, and is not a reusable bearer token. See [[Settings]] and [[CLI]] for
+the operator workflows.
+
+### Execution investigation and controlled originals
+
+`GET /api/executions` and `GET /api/executions/{id}` require the live `audit.read`
+capability. They return redacted execution metadata: actor, target, hashes and
+lengths, policy version, process/evidence state, and prepared OS identity. An
+attempt refused before preparation has `preparation: null`. These responses
+exclude command/script bytes, output, receipt tokens, and archive references.
+List filters are `actor_id`, `node_id`, `os_user`, `policy_version`, `state`, and
+`evidence_state`; `limit` defaults to 50 and is capped at 100, with `offset`
+pagination.
+
+Standard SSH command preparation or admission failures return a diagnostic on
+stderr and a nonzero exit status to a responsive client; Enhanced mode provides
+this response after complete input collection. Cancellation during Enhanced
+collection may instead close the channel. Inspect the redacted execution
+record for its durable state. An admission failure does not establish that a
+process ran. After an attempted launch, a transport failure can leave the remote
+outcome uncertain. Once finalization begins for an accepted execution, final SSH
+response delivery and relay cleanup have a deadline of at most two seconds, with SSH connection closure
+if response delivery stalls. Do not automatically retry an uncertain execution.
+
+Original access requires a live interactive session with `audit.original.read`,
+enrolled MFA, and a fresh action-bound TOTP proof. Each request selects exactly
+one `envelope` or `script`, with a nonempty purpose of at most 1,024 UTF-8 bytes.
+
+| Method and path | Request / response |
+|---|---|
+| `POST /api/executions/{id}/original-access/preview` | `{purpose, records: [kind]}` → `{action, digest, records: [{kind, event_id, sha256, bytes, version_id}]}` |
+| `POST /api/executions/{id}/original-access/step-up` | Same selection plus `digest` and `code` → `{proof, expires_at}`; proof expires after five minutes |
+| `POST /api/executions/{id}/original-access` | Same selection plus `digest` and `step_up_proof` → `201 {handle, expires_at, download_url}` |
+| `GET /api/audit-originals/{handle}` | Downloads the selected exact archived version once; `Cache-Control: no-store, private` |
+
+The handle expires within 60 seconds, is bound to the actor and session, and is
+consumed durably before the archive opens. Permission, identity revision, and
+session validity are checked again before bytes are delivered. Do not retry a
+download automatically, including after a `401`, disconnect, or archive error;
+obtain a new preview, fresh MFA proof, and handle instead. API tokens cannot use
+the preview, step-up, authorization, or download routes.
+
+Required intent and start evidence must be preserved externally before original
+bytes are read. Results distinguish completed, interrupted, and unconfirmed
+delivery. `delivery.scope` is `hub_response`; `bytes_written: null` means the byte
+count is unknown. A completed result measures bytes accepted by the Hub response
+writer, without asserting that a client saved them. Archive/evidence failures
+return opaque `503` errors; missing permission, expired authority, or replay
+returns `403` (an expired login may return `401`).
+
+Local original-access metadata is bounded to 4,096 records, with confirmed or
+permanently incomplete history pruned after 30 days. Pending evidence is bounded
+to 1,024 records / 16 MiB, retried with a one-minute backoff for at most 24 hours.
+Capacity exhaustion refuses access; expired recovery becomes permanently
+incomplete and never recreates a download handle. The original objects retain
+their separately approved external retention.
 
 ### 16. GET /api/audit-logs
 
@@ -1947,6 +2048,7 @@ Get the Hub configuration (currently the gRPC external address and the account l
   "lockout_duration_minutes": 15,
   "dormant_days": 35,
   "session_idle_minutes": 15,
+  "cli_session_idle_minutes": 45,
   "session_max_hours": 12
 }
 ```
@@ -1959,7 +2061,8 @@ Get the Hub configuration (currently the gRPC external address and the account l
 | `lockout_window_minutes` | Effective window, in minutes, that failures count toward the threshold before it restarts at 1. Built-in default `15`. |
 | `lockout_duration_minutes` | Effective lock length in minutes. Built-in default `15`. `0` means a lock does not auto-expire. |
 | `dormant_days` | Effective number of days of inactivity (no interactive sign-in and no API-token use) after which an account is treated as dormant. Built-in default `35`. `0` disables dormancy entirely — no account is ever evaluated as dormant. |
-| `session_idle_minutes` | Effective idle timeout, in minutes, for server-side sessions (feature 009). Built-in default `15`. `0` disables the idle limit — sessions never expire from inactivity alone. |
+| `session_idle_minutes` | Effective idle timeout, in minutes, for web sessions (feature 009). Built-in default `15`. `0` disables the web idle limit. |
+| `cli_session_idle_minutes` | Effective idle timeout, in minutes, for CLI sessions. Built-in default `45`. `0` disables the CLI idle limit. The recorded session kind selects which idle policy applies. |
 | `session_max_hours` | Effective absolute lifetime, in hours, for server-side sessions (feature 009). Built-in default `12`. `0` disables the absolute limit. Applies to sessions created after the change; an existing session keeps the lifetime it was issued with. |
 
 **cURL:**
@@ -1989,6 +2092,7 @@ Update the Hub configuration.
   "lockout_duration_minutes": 1,
   "dormant_days": 30,
   "session_idle_minutes": 1,
+  "cli_session_idle_minutes": 45,
   "session_max_hours": 1
 }
 ```
@@ -1997,7 +2101,8 @@ Update the Hub configuration.
 - All fields are optional. A field left out of the request body is unchanged.
 - `grpc_external_addr`, if present and non-empty, must match `^[a-zA-Z0-9._:\-\[\]]+$` (hostnames, IPs, and ports only -- no shell metacharacters). A present-but-empty string (`""`) clears the stored address; omitting the field entirely leaves it unchanged.
 - `lockout_threshold`, `lockout_window_minutes`, `lockout_duration_minutes`, `dormant_days` are each optional non-negative integers. `lockout_threshold: 0` disables locking (failures are still counted); `lockout_duration_minutes: 0` means a lock never auto-expires; `dormant_days: 0` disables dormancy. Changes apply to future evaluations only -- an account already locked keeps its original expiry, and an account already dormant stays dormant until an admin enables it, even if the policy is raised afterward.
-- `session_idle_minutes`, `session_max_hours` (feature 009) are each optional non-negative integers. `session_idle_minutes: 0` disables the idle limit; `session_max_hours: 0` disables the absolute limit. An idle change applies to every session's next evaluation immediately; an absolute-lifetime change applies only to sessions created afterward -- an existing session keeps the `expires_at` it was issued with.
+- `session_idle_minutes`, `cli_session_idle_minutes`, and `session_max_hours` are optional non-negative integers. The first controls web sessions (default `15`), the second controls CLI sessions (default `45`), and `session_max_hours` is the shared absolute lifetime (default `12`). Either idle field set to `0` disables that kind's idle limit. The recorded session kind selects the idle policy. An idle change applies on the next evaluation of sessions of that kind; an absolute-lifetime change applies only to sessions created afterward -- an existing session keeps the `expires_at` it was issued with.
+- `cli_session_idle_minutes` must be at most `153722867` minutes so its duration remains representable. Larger values return `400` before any settings are written.
 
 **Response (200):**
 
@@ -2011,7 +2116,8 @@ Update the Hub configuration.
 - `400` - Invalid gRPC address format
 - `400` - Invalid lockout field, field-specific message, e.g. `{"error":"lockout_threshold must be a non-negative integer"}`
 - `400` - `{"error":"dormant_days must be a non-negative integer"}`
-- `400` - `{"error":"session_idle_minutes must be a non-negative integer"}` / `{"error":"session_max_hours must be a non-negative integer"}`
+- `400` - `{"error":"session_idle_minutes must be a non-negative integer"}`, `{"error":"cli_session_idle_minutes must be a non-negative integer"}`, or `{"error":"session_max_hours must be a non-negative integer"}`
+- `400` - `{"error":"cli_session_idle_minutes exceeds the maximum supported duration"}`
 
 **cURL:**
 
@@ -2420,7 +2526,7 @@ curl https://hub.example.com/api/servers/reenroll/pending \
 
 ### POST /api/servers/{id}/reenroll/approve
 
-Approve a pending re-enrollment request. Requires the approving admin's current TOTP code (step-up authentication). On success, the hub encrypts the KEK to the node's X25519 transport public key, issues a new client certificate for the same serverID, and the node reconnects automatically.
+Approve one exact pending re-enrollment request. Requires the approving admin's current TOTP code (step-up authentication). Approval releases a challenge exchange on that request's originating bootstrap stream; the Hub issues a new certificate only after verifying the node's proof on that stream. The bootstrap stream cannot enter normal routing. The node reconnects using the issued certificate, which the Hub verifies before accepting normal agent traffic.
 
 | Property | Value |
 |---|---|
@@ -2759,17 +2865,19 @@ caller's session before anything else runs:
 | No `sid` claim, or the session it names no longer exists (pre-upgrade credentials) | `401 {"error":"session expired — sign in again"}` |
 | Session ended (revoked by an admin, by the user, by logout, or by an account disable) | `401 {"error":"session ended — sign in again"}` |
 | Absolute lifetime reached | `401 {"error":"session expired — sign in again"}` (session marked `expired_absolute`, audited once on first detection) |
-| Idle limit exceeded | `401 {"error":"session expired — sign in again"}` (session marked `expired_idle`, audited once on first detection) |
-| None of the above | request proceeds; `last_seen_at` writes are throttled to `min(60 seconds, idle limit / 10)`, or 60 seconds when idle expiry is disabled |
+| Idle limit exceeded | `401 {"error":"session expired — sign in again"}` (session marked `expired_idle`, audited once on first detection); the recorded kind selects the web or CLI idle limit |
+| None of the above | request proceeds; `last_seen_at` writes are throttled to `min(60 seconds, selected idle limit / 10)`, or 60 seconds when idle expiry is disabled |
 
 **Upgrade note:** a session that existed before this release has no session record, so its access
 and refresh tokens are refused with the `session expired` message the first time they're used
 after upgrading -- every user, web and CLI, signs in once more. There is no migration path for
 pre-upgrade sessions; see [[Troubleshooting]] ("everyone had to sign in again after upgrading").
 
-The idle and absolute limits are configured as `session_idle_minutes` and `session_max_hours` on
-the Account policy card alongside the 007/008 lockout and dormancy fields -- see endpoints 37/38
-above. Signed-in browser pages use `HEAD /api/auth/me` as a throttled activity check
+The web and CLI idle limits are configured as `session_idle_minutes` and
+`cli_session_idle_minutes`, respectively; the shared absolute limit is `session_max_hours` on the
+Account policy card alongside the 007/008 lockout and dormancy fields -- see endpoints 37/38
+above. Idle expiry does not cancel an SSH command already running; it requires a new sign-in for
+later CLI requests. Signed-in browser pages use `HEAD /api/auth/me` as a throttled activity check
 following recent interaction in a visible tab. HEAD returns the same status as GET
 without a response body, avoiding repeated profile and avatar downloads. It uses the same session checks
 as other authenticated requests: it cannot revive an expired or revoked session,
@@ -3010,3 +3118,132 @@ disabling an account now also ends every session and closes every shell it has o
 curl -X DELETE https://hub.example.com/api/users/USER_UUID/sessions \
   -H 'Authorization: Bearer <access_token>'
 ```
+
+## Update Distribution and Agent Endpoints
+
+### GET /install/metadata/{component}/{os}/{arch}
+
+Returns the verified public manifest for a build offered by this Hub. This
+public route supports `component=cli` on Linux and macOS amd64/arm64, and
+`component=agent` on Linux amd64/arm64. Local `vey update` uses the CLI
+manifest and fixed binary path `/install/cli/{os}/{arch}`. The agent bootstrap
+uses the matching agent manifest and `/install/{os}/{arch}` binary. Neither
+route requires login. Update clients require HTTPS with a valid certificate
+and refuse redirects.
+
+```json
+{
+  "schema_version": 1,
+  "component": "cli",
+  "os": "linux",
+  "arch": "amd64",
+  "version": "<version>",
+  "revision": "<40-or-64-character-source-revision>",
+  "sha256": "<lowercase-sha256>",
+  "bytes": 12345678,
+  "path": "/install/cli/linux/amd64"
+}
+```
+
+The Hub serves metadata only when its versioned artifact manifest matches the
+binary bytes on disk. Development or mismatched distributions fail closed.
+
+### GET /install/agent-update.sh
+
+Returns the preserving Linux-agent bootstrap script. The script accepts the Hub
+address and a short-lived, single-use ticket bound to an enrolled node and exact
+Hub artifact. The bootstrap command printed by `vey servers update NODE` runs
+the script over verified HTTPS with explicit `sudo`; the ticket is sent to the
+running agent and is never part of the downloaded script. This public download
+route does not grant update authority by itself.
+
+### Agent update endpoints
+
+All `/api/servers/{id}/agent-update` routes require a live interactive admin
+session. API tokens are rejected. Check, start, and recovery mutation are
+refused for installations that ever enrolled Enhanced or other governance
+controls, as well as for nodes outside the supported Linux systemd deployment.
+The enrolled node must already have a valid mTLS identity. The status route
+remains available for read-only inspection of an existing durable operation.
+The Hub chooses the exact artifact; clients cannot provide a URL or arbitrary
+version.
+
+#### GET /api/servers/{id}/agent-update
+
+Read-only capability and artifact check. The response includes the current
+agent capabilities when available, the Hub's target artifact, whether an
+update is available, whether a preserving bootstrap is required, and the latest
+operation when present. For agents that cannot report file/log quiescence, it
+also returns `bootstrap_idle_confirmation_required: true` and the exact current
+`connection_id`. Native activity covers file list/read/delete, upload, and log
+tail requests through actual completion. A request timeout or cancellation does
+not prove that its agent work ended. Returns a conflict or forbidden error when
+the node or installation is not eligible.
+
+#### POST /api/servers/{id}/agent-update
+
+Starts one update after rechecking the current Hub artifact and administrator
+authority. The body accepts the exact checked version and source revision. The
+manual preserving-bootstrap path additionally accepts an operator idle
+assertion bound to the connection ID from the preceding check. For an original
+agent whose version and revision linker stamps are both absent, it also requires
+the operator's established original version and exact installed-byte SHA-256;
+these assertions must be supplied together:
+
+Include both `bootstrap_original_*` fields below only for the unstamped-original
+path; omit both for the ordinary preserving bootstrap.
+
+```json
+{
+  "expected_version": "<version>",
+  "expected_revision": "<40-or-64-character-source-revision>",
+  "bootstrap_idle_confirmed": true,
+  "expected_connection_id": "<connection-id-from-check>",
+  "bootstrap_original_version": "<operator-established-original-version>",
+  "bootstrap_original_sha256": "<sha256-of-installed-agent>"
+}
+```
+
+For a supported agent, the Hub reserves the node for maintenance and dispatches
+the update. The Hub refuses while known or unconfirmed work is active and blocks
+new work once maintenance is reserved. For an older enrolled agent or one that
+cannot prove complete file/log quiescence, the operator must close file/log
+clients and sessions, allow work to finish, verify idle over direct SSH, and
+explicitly assert it. The Hub binds that assertion to the exact connection
+generation and still refuses known active work; it is not an automatic detector
+or a native quiescence override. The response then includes a node-bound,
+single-use bootstrap ticket with a 120-second expiry. The ticket is returned
+only in the start response; status responses never include it. For the
+unstamped-original path, the agent helper verifies the supported Linux
+package/platform, requires both linker-stamped identity fields to be absent,
+and checks the installed bytes against the asserted SHA-256 before replacement.
+It reports that assertion through the existing enrolled mTLS connection. The
+Hub binds the assertion to the authenticated actor and session, node, fresh
+connection, and one-use ticket, and requires the target release to be newer
+than the asserted original version. The CLI renders the preserving direct-SSH
+command with those same assertions. Do not log or reuse the ticket.
+
+#### GET /api/servers/{id}/agent-update/status?operation_id={id}
+
+Returns the latest durable update operation for the node when `operation_id` is
+omitted, or that exact operation when supplied. The status records success only
+after a fresh mTLS connection reports the exact target version, revision, and
+checksum and the agent durably confirms that result. An `unknown` legacy
+rollback state requires direct-SSH verification and explicit administrator
+acknowledgement; it is not reported as success.
+
+#### POST /api/servers/{id}/agent-update/recovery
+
+Records an administrator's attestation after direct SSH confirms the original
+binary and service. It requires an unknown operation, the exact recorded
+previous checksum, an idle node, and the expiry plus 190 seconds.
+
+```json
+{
+  "operation_id": "<operation-id>",
+  "verified_sha256": "<recorded-previous-sha256>"
+}
+```
+
+This endpoint records the human verification and releases the maintenance
+reservation. It does not remotely verify the agent binary.

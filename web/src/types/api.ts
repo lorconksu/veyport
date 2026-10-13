@@ -1,4 +1,9 @@
 export type Role = 'admin' | 'auditor' | 'viewer'
+export type SecurityRole = 'security-officer' | 'security-approver' | 'original-reader'
+export type AssignedRole = Role | SecurityRole
+export type Capability = 'nodes.read' | 'operations.admin' | 'audit.read' | 'terminal.execute'
+  | 'security.bootstrap' | 'security.read' | 'security.request' | 'security.approve'
+  | 'security.apply' | 'security.test' | 'audit.original.read'
 
 export type AccountStatus = 'active' | 'locked' | 'disabled' | 'dormant'
 
@@ -7,6 +12,9 @@ export interface User {
   username: string
   email: string
   role: Role
+  roles?: AssignedRole[]
+  capabilities?: Capability[]
+  person_id?: string
   auth_provider?: 'local' | 'ldap'
   terminal_access?: boolean
   totp_enabled: boolean
@@ -367,6 +375,7 @@ export interface HubConfig {
   lockout_duration_minutes?: number
   dormant_days?: number
   session_idle_minutes?: number
+  cli_session_idle_minutes?: number
   session_max_hours?: number
 }
 

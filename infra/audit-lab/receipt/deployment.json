@@ -1,0 +1,51 @@
+{
+  "schema_version": 1,
+  "verified_at": "2026-10-11T08:24:54.522120+00:00",
+  "endpoint": "https://10.10.1.60:8443",
+  "issuer": "https://10.10.1.60:8443",
+  "audience": "veyport-audit-lab",
+  "signing_key_id": "lab-receipt-20261011",
+  "signing_public_key_sha256": "cb248a263880556896d9d08749f8d2069adb537740445ae6bbcc6510cda0a818",
+  "ca_certificate_sha256": "ba0fa6c1bd8d70f48bad5a721d92979f87ae62a0a18d639d9ac0d4c8c66e934f",
+  "binaries": {
+    "veyport-audit-ingest": "af1f18ea805491bb0ab7832b7eb82b1dcba5d750c196695af4701d188b282b4d",
+    "veyport-audit-export": "4e68e05000f2084cbd88c891ebdcf7cd32583834a430d361814c3ebc6d2b370c"
+  },
+  "readiness": {
+    "ready": true,
+    "archive_ready": true,
+    "governance_ready": true,
+    "qualification_sha256": "b3cbbd7189920433d1c3c2fedff356b3ea1c2b74140520fde80437e1b5964808",
+    "governance_qualification_sha256": "baaa5cc2e09b7bd3af1ac981bf679afe1d77e5368af52192f3cd73f7952b107f",
+    "retention_seconds": 86400,
+    "governance_retention_seconds": 315360000
+  },
+  "authentication": "mTLS; separate ingest/admin/original-read/export-index principals; bearer disabled",
+  "receipt_identity": "veyport-receipt",
+  "redactor_identity": "veyport-redactor",
+  "checks": [
+    "mounted_luks_service_guard",
+    "exact_two_archive_qualification_pins",
+    "actual_readiness_each_archive",
+    "scoped_mtls_http401_cross_scope",
+    "export_cursor_prefix_http400",
+    "independent_os_credential_access_denied",
+    "parallel_bounded_authority_readiness",
+    "metadata_route_admin_only",
+    "atomic_binary_replacement_preserves_keys_and_config"
+  ],
+  "limitations": [
+    "Local tested feature build, not a published release artifact",
+    "One receipt guest; shared hypervisor administrator trust boundary",
+    "Manual LUKS unlock after reboot"
+  ],
+  "go_version": "1.26.9",
+  "vulnerability_preflight": {
+    "scanner": "grype0.110.0",
+    "database_built": "2026-10-10T06:30:01Z",
+    "matches_per_binary": 0,
+    "ignored_matches_per_binary": 0,
+    "scope": "Go receipt and export binaries; final release/container checks remain required"
+  },
+  "source_commit": "83ca30a7a012c51ed6f9b4ecc1170ae0144f0a41"
+}

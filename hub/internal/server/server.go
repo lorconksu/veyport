@@ -17,6 +17,7 @@ import (
 	"golang.org/x/crypto/ssh"
 
 	"github.com/wyiu/veyport/hub/internal/auth"
+	"github.com/wyiu/veyport/hub/internal/authorization"
 	"github.com/wyiu/veyport/hub/internal/connmgr"
 	"github.com/wyiu/veyport/hub/internal/grpcserver"
 	"github.com/wyiu/veyport/hub/internal/model"
@@ -34,33 +35,42 @@ var Version = "dev"
 // *grpcserver.Handler, but the interface prevents a direct import cycle and
 // keeps the test surface small.
 type ReEnrollReleaser interface {
-	ReleaseKEK(serverID, decidedBy string) error
+	ReleaseKEK(serverID, requestID, decidedBy string) error
+	DenyReEnroll(serverID, requestID, decidedBy string) error
 }
 
 type Server struct {
-	httpServer        *http.Server
-	listener          net.Listener
-	store             *store.Store
-	jwtSecret         string
-	storageKey        string
-	isDev             bool
-	frontendFS        *embed.FS
-	agentBinDir       string
-	grpcAddr          string
-	grpcExternalAddr  string
-	grpcCACertSHA256  string
-	connMgr           *connmgr.ConnManager
-	pending           *grpcserver.PendingRequests
-	logSessions       *grpcserver.LogSessions
-	terminalSessions  *grpcserver.TerminalSessions
-	reEnrollReleaser  ReEnrollReleaser
-	logTailMu         sync.Mutex
-	logTailSessions   map[string]int
-	totpCache         *auth.TOTPUsedCodes
-	tokenBlacklist    *auth.TokenBlacklist
-	notifier          *notify.Notifier
-	ldapAuthenticator LDAPAuthenticator
-	ldapDial          func(LDAPConfig) (LDAPConnection, error)
+	originalAccess            OriginalAccessConfig
+	originalRecovery          *originalRecovery
+	securityTransition        authorization.TransitionConfig
+	securityDestinationTester SecurityDestinationTester
+	securityAllowedHosts      []string
+	httpServer                *http.Server
+	listener                  net.Listener
+	store                     *store.Store
+	jwtSecret                 string
+	storageKey                string
+	isDev                     bool
+	frontendFS                *embed.FS
+	agentBinDir               string
+	distributionMu            sync.Mutex
+	distributionCache         map[string]distributionCacheEntry
+	grpcAddr                  string
+	grpcExternalAddr          string
+	grpcCACertSHA256          string
+	connMgr                   *connmgr.ConnManager
+	pending                   *grpcserver.PendingRequests
+	logSessions               *grpcserver.LogSessions
+	terminalSessions          *grpcserver.TerminalSessions
+	agentUpdates              *grpcserver.AgentUpdates
+	reEnrollReleaser          ReEnrollReleaser
+	logTailMu                 sync.Mutex
+	logTailSessions           map[string]int
+	totpCache                 *auth.TOTPUsedCodes
+	tokenBlacklist            *auth.TokenBlacklist
+	notifier                  *notify.Notifier
+	ldapAuthenticator         LDAPAuthenticator
+	ldapDial                  func(LDAPConfig) (LDAPConnection, error)
 	// SSH gateway material. userCA signs short-lived user certificates,
 	// sshHostKey is the gateway's stable host identity, and sshConfig is the
 	// effective gateway configuration. All three are nil/zero when the gateway
@@ -97,23 +107,28 @@ func (s *Server) now() time.Time {
 }
 
 type Config struct {
-	Addr              string
-	Store             *store.Store
-	JWTSecret         string
-	StorageKey        string
-	IsDev             bool
-	FrontendFS        *embed.FS
-	AgentBinDir       string
-	GRPCAddr          string
-	GRPCExternalAddr  string
-	GRPCCACertSHA256  string
-	ConnMgr           *connmgr.ConnManager
-	Pending           *grpcserver.PendingRequests
-	LogSessions       *grpcserver.LogSessions
-	TerminalSessions  *grpcserver.TerminalSessions
-	ReEnrollReleaser  ReEnrollReleaser
-	Notifier          *notify.Notifier
-	LDAPAuthenticator LDAPAuthenticator
+	OriginalAccess            OriginalAccessConfig
+	SecurityTransition        authorization.TransitionConfig
+	SecurityDestinationTester SecurityDestinationTester
+	SecurityAllowedHosts      []string
+	Addr                      string
+	Store                     *store.Store
+	JWTSecret                 string
+	StorageKey                string
+	IsDev                     bool
+	FrontendFS                *embed.FS
+	AgentBinDir               string
+	GRPCAddr                  string
+	GRPCExternalAddr          string
+	GRPCCACertSHA256          string
+	ConnMgr                   *connmgr.ConnManager
+	Pending                   *grpcserver.PendingRequests
+	LogSessions               *grpcserver.LogSessions
+	TerminalSessions          *grpcserver.TerminalSessions
+	AgentUpdates              *grpcserver.AgentUpdates
+	ReEnrollReleaser          ReEnrollReleaser
+	Notifier                  *notify.Notifier
+	LDAPAuthenticator         LDAPAuthenticator
 	// UserCA, SSHHostKey and SSHConfig wire the SSH gateway. Leave them unset
 	// to run the hub without SSH certificate issuance.
 	UserCA     *userca.UserCA
@@ -135,33 +150,45 @@ func New(cfg Config) *Server {
 	}
 
 	s := &Server{
-		listener:          cfg.Listener,
-		store:             cfg.Store,
-		jwtSecret:         cfg.JWTSecret,
-		storageKey:        storageKey,
-		isDev:             cfg.IsDev,
-		frontendFS:        cfg.FrontendFS,
-		agentBinDir:       cfg.AgentBinDir,
-		grpcAddr:          cfg.GRPCAddr,
-		grpcExternalAddr:  cfg.GRPCExternalAddr,
-		grpcCACertSHA256:  cfg.GRPCCACertSHA256,
-		connMgr:           cfg.ConnMgr,
-		pending:           cfg.Pending,
-		logSessions:       cfg.LogSessions,
-		terminalSessions:  cfg.TerminalSessions,
-		reEnrollReleaser:  cfg.ReEnrollReleaser,
-		logTailSessions:   make(map[string]int),
-		totpCache:         auth.NewTOTPUsedCodes(),
-		tokenBlacklist:    auth.NewTokenBlacklist(cfg.Store.DB()),
-		notifier:          cfg.Notifier,
-		ldapAuthenticator: cfg.LDAPAuthenticator,
-		userCA:            cfg.UserCA,
-		sshHostKey:        cfg.SSHHostKey,
-		sshConfig:         cfg.SSHConfig,
-		nowFn:             func() time.Time { return time.Now().UTC() },
+		originalAccess:            cfg.OriginalAccess,
+		securityTransition:        cfg.SecurityTransition,
+		securityDestinationTester: cfg.SecurityDestinationTester,
+		securityAllowedHosts:      append([]string(nil), cfg.SecurityAllowedHosts...),
+		listener:                  cfg.Listener,
+		store:                     cfg.Store,
+		jwtSecret:                 cfg.JWTSecret,
+		storageKey:                storageKey,
+		isDev:                     cfg.IsDev,
+		frontendFS:                cfg.FrontendFS,
+		agentBinDir:               cfg.AgentBinDir,
+		grpcAddr:                  cfg.GRPCAddr,
+		grpcExternalAddr:          cfg.GRPCExternalAddr,
+		grpcCACertSHA256:          cfg.GRPCCACertSHA256,
+		connMgr:                   cfg.ConnMgr,
+		pending:                   cfg.Pending,
+		logSessions:               cfg.LogSessions,
+		terminalSessions:          cfg.TerminalSessions,
+		agentUpdates:              cfg.AgentUpdates,
+		reEnrollReleaser:          cfg.ReEnrollReleaser,
+		logTailSessions:           make(map[string]int),
+		totpCache:                 auth.NewTOTPUsedCodes(),
+		tokenBlacklist:            auth.NewTokenBlacklist(cfg.Store.DB()),
+		notifier:                  cfg.Notifier,
+		ldapAuthenticator:         cfg.LDAPAuthenticator,
+		userCA:                    cfg.UserCA,
+		sshHostKey:                cfg.SSHHostKey,
+		sshConfig:                 cfg.SSHConfig,
+		nowFn:                     func() time.Time { return time.Now().UTC() },
 	}
 
+	s.securityTransition.ResolveSecret = s.resolveSecuritySecret
+	s.securityTransition.PrepareChange = s.prepareSecurityChange
 	s.installAuditObservers()
+	startupCtx, startupCancel := context.WithTimeout(context.Background(), 10*time.Second)
+	if err := authorization.New(s.store).Startup(startupCtx, s.securityTransition); err != nil {
+		_ = s.store.RequirePolicyRecovery()
+	}
+	startupCancel()
 
 	mux := s.routes()
 
@@ -176,6 +203,7 @@ func New(cfg Config) *Server {
 	}
 
 	s.startSessionPruner(sessionPruneInterval, sessionPruneRetention)
+	s.startOriginalRecovery()
 
 	return s
 }
@@ -228,6 +256,7 @@ func (s *Server) Start() error {
 }
 
 func (s *Server) Shutdown(ctx context.Context) error {
+	s.stopOriginalRecovery()
 	s.stopSessionPruner()
 	return s.httpServer.Shutdown(ctx)
 }

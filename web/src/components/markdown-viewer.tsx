@@ -100,10 +100,12 @@ const markdownComponents: Components = {
     try {
       const hljsLang = hljs.getLanguage(lang) ? lang : 'plaintext'
       const result = hljs.highlight(content, { language: hljsLang })
+      // Only sanitizeHljsHtml's DOMPurify span/class allowlist reaches this sink.
+      // Markdown and highlighted source text are never rendered as raw HTML.
       return (
         <code
           className="hljs"
-          dangerouslySetInnerHTML={{ __html: sanitizeHljsHtml(result.value) }}
+          dangerouslySetInnerHTML={{ /* nosemgrep: typescript.react.security.audit.react-dangerouslysetinnerhtml.react-dangerouslysetinnerhtml */ __html: sanitizeHljsHtml(result.value) }}
         />
       )
     } catch {

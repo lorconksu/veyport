@@ -2,6 +2,7 @@ package server
 
 import (
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"log"
 	"net/http"
@@ -12,6 +13,7 @@ import (
 	"github.com/wyiu/veyport/hub/internal/auth"
 	"github.com/wyiu/veyport/hub/internal/lockout"
 	"github.com/wyiu/veyport/hub/internal/model"
+	"github.com/wyiu/veyport/hub/internal/store"
 )
 
 const (
@@ -115,7 +117,7 @@ func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
 		IPAddress: &ip,
 	})
 
-	setupToken, err := auth.GenerateSetupToken(s.jwtSecret, user.ID, string(user.Role))
+	setupToken, err := auth.GenerateSetupToken(s.jwtSecret, user.ID, string(user.Role), user.TokenGeneration)
 	if err != nil {
 		respondError(w, http.StatusInternalServerError, errFailedToGenerateToken)
 		return
@@ -248,7 +250,7 @@ func (s *Server) recordLoginFailure(r *http.Request, userID *string, username st
 func (s *Server) respondAfterPrimaryLogin(w http.ResponseWriter, user *model.User) {
 	// If TOTP not set up yet, return setup token
 	if !user.TOTPEnabled {
-		setupToken, err := auth.GenerateSetupToken(s.jwtSecret, user.ID, string(user.Role))
+		setupToken, err := auth.GenerateSetupToken(s.jwtSecret, user.ID, string(user.Role), user.TokenGeneration)
 		if err != nil {
 			respondError(w, http.StatusInternalServerError, errFailedToGenerateToken)
 			return
@@ -262,7 +264,7 @@ func (s *Server) respondAfterPrimaryLogin(w http.ResponseWriter, user *model.Use
 	}
 
 	// TOTP is enabled — require TOTP code
-	totpToken, err := auth.GenerateTOTPToken(s.jwtSecret, user.ID, string(user.Role))
+	totpToken, err := auth.GenerateTOTPToken(s.jwtSecret, user.ID, string(user.Role), user.TokenGeneration)
 	if err != nil {
 		respondError(w, http.StatusInternalServerError, errFailedToGenerateToken)
 		return
@@ -292,6 +294,10 @@ func (s *Server) handleLoginTOTP(w http.ResponseWriter, r *http.Request) {
 		respondError(w, http.StatusUnauthorized, errUserNotFound)
 		return
 	}
+	if claims.TokenGeneration != user.TokenGeneration {
+		respondError(w, http.StatusUnauthorized, "password-stage credential was revoked")
+		return
+	}
 
 	// An account disabled or gone dormant between the two stages is refused
 	// here too: a token minted by the password stage must not outlive the
@@ -319,7 +325,7 @@ func (s *Server) handleLoginTOTP(w http.ResponseWriter, r *http.Request) {
 		totpSecret = &decrypted
 	}
 
-	if totpSecret == nil || !auth.ValidateTOTPWithReplay(s.totpCache, user.ID, *totpSecret, req.Code) {
+	if totpSecret == nil || !auth.ValidateTOTPWithReplayAt(s.totpCache, user.ID, *totpSecret, req.Code, s.now()) {
 		s.recordTOTPFailure(r, user)
 		respondError(w, http.StatusUnauthorized, "invalid TOTP code")
 		return
@@ -337,9 +343,7 @@ func (s *Server) handleLoginTOTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	accessToken, refreshToken, err := auth.GenerateSessionTokenPair(
-		s.jwtSecret, user.ID, string(user.Role), user.TokenGeneration, sess.ID,
-	)
+	accessToken, refreshToken, err := s.issueSessionTokens(r.Context(), user, sess.ID, "", s.now())
 	if err != nil {
 		respondError(w, http.StatusInternalServerError, errFailedToGenerateTokens)
 		return
@@ -354,6 +358,7 @@ func (s *Server) handleLoginTOTP(w http.ResponseWriter, r *http.Request) {
 	})
 
 	setAuthCookies(w, accessToken, refreshToken)
+	s.populateAuthority(user)
 	respondJSON(w, http.StatusOK, model.AuthResponse{
 		AccessToken:  accessToken,
 		RefreshToken: refreshToken,
@@ -409,25 +414,20 @@ func (s *Server) handleRefresh(w http.ResponseWriter, r *http.Request) {
 	// checks and counts as activity. A refresh token minted before this
 	// feature carries no session and is refused here, which is the one-time
 	// re-sign-in at upgrade (009 FR-002, FR-003, R10).
-	if sessionErr := s.sessionAccessError(claims); sessionErr != nil {
+	if sessionErr := s.checkSessionAccess(claims, false); sessionErr != nil {
 		respondError(w, http.StatusUnauthorized, sessionErr.Error())
 		return
 	}
 
-	// Increment token generation to prevent reuse of this refresh token
-	newGen, err := s.store.IncrementTokenGeneration(user.ID)
-	if err != nil {
-		respondError(w, http.StatusInternalServerError, "failed to rotate token generation")
-		return
-	}
-
 	// Use user.Role from DB, not claims.Role from the old token. The rotation
-	// stays inside the same session and never touches its absolute expiry
-	// (009 FR-002).
-	accessToken, refreshToken, err := auth.GenerateSessionTokenPair(
-		s.jwtSecret, user.ID, string(user.Role), newGen, claims.SessionID,
-	)
+	// spends only this session's refresh digest. Earlier access tokens and
+	// other sessions stay valid; explicit revocation still checks generation.
+	accessToken, refreshToken, err := s.issueSessionTokens(r.Context(), user, claims.SessionID, refreshTokenStr, s.now())
 	if err != nil {
+		if errors.Is(err, store.ErrSessionRefreshRejected) {
+			respondError(w, http.StatusUnauthorized, "invalid or expired refresh token")
+			return
+		}
 		respondError(w, http.StatusInternalServerError, errFailedToGenerateTokens)
 		return
 	}
@@ -482,6 +482,7 @@ func (s *Server) handleMe(w http.ResponseWriter, r *http.Request) {
 	// Status is derived rather than stored, so it is computed at the moment of
 	// the response (008 R7).
 	user.Status = string(s.accountStatus(user))
+	s.populateAuthority(user)
 	respondJSON(w, http.StatusOK, user)
 }
 
@@ -538,6 +539,10 @@ func (s *Server) handleTOTPSetup(w http.ResponseWriter, r *http.Request) {
 		respondError(w, http.StatusConflict, "TOTP is already enabled")
 		return
 	}
+	if err := s.checkSetupGeneration(r, user); err != nil {
+		securityError(w, err)
+		return
+	}
 
 	key, err := auth.GenerateTOTPSecret(user.Username, "Veyport")
 	if err != nil {
@@ -557,8 +562,8 @@ func (s *Server) handleTOTPSetup(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Store encrypted secret (not yet enabled)
-	if err := s.store.UpdateUserTOTP(userID, &encryptedSecret, false); err != nil {
-		respondError(w, http.StatusInternalServerError, "failed to store TOTP secret")
+	if err := s.store.UpdateUserTOTP(userID, &encryptedSecret, false, user.TokenGeneration); err != nil {
+		securityError(w, err)
 		return
 	}
 
@@ -590,6 +595,10 @@ func (s *Server) handleTOTPEnable(w http.ResponseWriter, r *http.Request) {
 		respondError(w, http.StatusNotFound, errUserNotFound)
 		return
 	}
+	if err := s.checkSetupGeneration(r, user); err != nil {
+		securityError(w, err)
+		return
+	}
 
 	if user.TOTPSecret == nil {
 		respondError(w, http.StatusBadRequest, "TOTP not set up — call /api/auth/totp/setup first")
@@ -602,7 +611,7 @@ func (s *Server) handleTOTPEnable(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if !auth.ValidateTOTPWithReplay(s.totpCache, userID, *totpSecretForValidation, req.Code) {
+	if !auth.ValidateTOTPWithReplayAt(s.totpCache, userID, *totpSecretForValidation, req.Code, s.now()) {
 		respondError(w, http.StatusUnauthorized, "invalid TOTP code")
 		return
 	}
@@ -620,8 +629,8 @@ func (s *Server) handleTOTPEnable(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := s.store.UpdateUserTOTP(userID, &encryptedSecret, true); err != nil {
-		respondError(w, http.StatusInternalServerError, "failed to enable TOTP")
+	if err := s.store.UpdateUserTOTP(userID, &encryptedSecret, true, user.TokenGeneration); err != nil {
+		securityError(w, err)
 		return
 	}
 	if err := s.store.MarkInitialSetupComplete(); err != nil {
@@ -649,6 +658,11 @@ func (s *Server) handleTOTPEnable(w http.ResponseWriter, r *http.Request) {
 
 	// A first sign-in completes here rather than at the code stage, so this is
 	// the other point that establishes a session (009 FR-001).
+	user, err = s.store.GetUserByID(userID)
+	if err != nil || !user.TOTPEnabled || user.MustChangePassword {
+		respondError(w, http.StatusUnauthorized, errUserNotFound)
+		return
+	}
 	sess, err := s.newSession(r, user)
 	if err != nil {
 		respondError(w, http.StatusInternalServerError, errFailedToCreateSession)
@@ -656,9 +670,7 @@ func (s *Server) handleTOTPEnable(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Generate full access tokens now that 2FA is enabled
-	accessToken, refreshToken, err := auth.GenerateSessionTokenPair(
-		s.jwtSecret, user.ID, string(user.Role), user.TokenGeneration, sess.ID,
-	)
+	accessToken, refreshToken, err := s.issueSessionTokens(r.Context(), user, sess.ID, "", s.now())
 	if err != nil {
 		respondError(w, http.StatusInternalServerError, errFailedToGenerateTokens)
 		return
@@ -668,6 +680,7 @@ func (s *Server) handleTOTPEnable(w http.ResponseWriter, r *http.Request) {
 	user, _ = s.store.GetUserByID(userID)
 
 	setAuthCookies(w, accessToken, refreshToken)
+	s.populateAuthority(user)
 	respondJSON(w, http.StatusOK, model.AuthResponse{
 		AccessToken:  accessToken,
 		RefreshToken: refreshToken,
@@ -716,7 +729,7 @@ func (s *Server) rotateTemporaryPasswordDuringTOTPEnable(r *http.Request, user *
 	if err != nil {
 		return fmt.Errorf("internal:%s", errFailedToHashPassword)
 	}
-	if err := s.store.UpdateUserPassword(user.ID, hash); err != nil {
+	if err := s.updateAuthenticatedPassword(r, user, hash); err != nil {
 		return fmt.Errorf("internal:failed to update password")
 	}
 	_ = s.store.AddPasswordHistory(user.ID, hash)
@@ -754,6 +767,10 @@ func (s *Server) handleChangePassword(w http.ResponseWriter, r *http.Request) {
 		respondError(w, http.StatusNotFound, errUserNotFound)
 		return
 	}
+	if err := s.securityService().GuardMutation(userID); err != nil && !user.MustChangePassword {
+		securityError(w, err)
+		return
+	}
 
 	if !auth.ComparePassword(user.PasswordHash, req.CurrentPassword) {
 		respondError(w, http.StatusUnauthorized, "invalid current password")
@@ -789,10 +806,11 @@ func (s *Server) handleChangePassword(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := s.store.UpdateUserPassword(userID, hash); err != nil {
-		respondError(w, http.StatusInternalServerError, "failed to update password")
+	if err := s.updateAuthenticatedPassword(r, user, hash); err != nil {
+		securityError(w, err)
 		return
 	}
+	s.endShellsByUser(userID, "Authentication credentials changed; sign in again.")
 	_ = s.store.AddPasswordHistory(userID, hash)
 	_ = s.store.TrimPasswordHistory(userID, settings.PasswordHistoryCount)
 
@@ -824,6 +842,32 @@ func (s *Server) handleChangePassword(w http.ResponseWriter, r *http.Request) {
 	respondJSON(w, http.StatusOK, map[string]string{"status": "password updated"})
 }
 
+func (s *Server) updateAuthenticatedPassword(r *http.Request, user *model.User, hash string) error {
+	protected, err := s.store.IsProtectedUser(user.ID)
+	if err != nil {
+		return err
+	}
+	if !protected {
+		return s.store.UpdateUserPassword(user.ID, hash)
+	}
+	if TokenTypeFromContext(r.Context()) == auth.TokenTypeAccess && SessionIDFromContext(r.Context()) == "" {
+		return store.ErrProtectedChange
+	}
+	generation, err := s.store.CompleteApprovedPasswordRecovery(user.ID, user.PasswordHash, user.SecurityRevision, hash, s.now())
+	if err == nil {
+		user.TokenGeneration = generation
+	}
+	return err
+}
+
+func (s *Server) checkSetupGeneration(r *http.Request, user *model.User) error {
+	claims, err := auth.ValidateToken(s.jwtSecret, readAccessToken(r))
+	if err != nil || claims.TokenType != auth.TokenTypeSetup || claims.Subject != user.ID || claims.TokenGeneration != user.TokenGeneration {
+		return store.ErrSecurityConflict
+	}
+	return nil
+}
+
 func (s *Server) handleTOTPDisable(w http.ResponseWriter, r *http.Request) {
 	var req model.TOTPDisableRequest
 	if err := decodeJSON(r, &req); err != nil {
@@ -831,6 +875,10 @@ func (s *Server) handleTOTPDisable(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if err := s.securityService().GuardMutation(req.UserID); err != nil {
+		securityError(w, err)
+		return
+	}
 	adminID := UserIDFromContext(r.Context())
 	if req.UserID == adminID {
 		respondError(w, http.StatusBadRequest, "cannot disable your own 2FA")
@@ -872,6 +920,7 @@ func (s *Server) handleTOTPDisable(w http.ResponseWriter, r *http.Request) {
 		respondError(w, http.StatusInternalServerError, "failed to disable TOTP")
 		return
 	}
+	s.endShellsByUser(req.UserID, "Authentication credentials changed; sign in again.")
 
 	// Admin-initiated TOTP removal is a security-sensitive auth-factor change;
 	// invalidate the target user's existing sessions and API tokens so any

@@ -25,7 +25,14 @@ func ValidateTOTPCode(secret, code string) bool {
 
 // ValidateTOTPWithReplay checks the code is valid AND has not been used before.
 func ValidateTOTPWithReplay(cache *TOTPUsedCodes, userID, secret, code string) bool {
-	if !totp.Validate(code, secret) {
+	return ValidateTOTPWithReplayAt(cache, userID, secret, code, time.Now())
+}
+
+// ValidateTOTPWithReplayAt uses the operation's clock for both time-bound MFA
+// and proof issuance. Production callers supply UTC wall time.
+func ValidateTOTPWithReplayAt(cache *TOTPUsedCodes, userID, secret, code string, now time.Time) bool {
+	valid, err := totp.ValidateCustom(code, secret, now, totp.ValidateOpts{Period: 30, Skew: 1, Digits: otp.DigitsSix, Algorithm: otp.AlgorithmSHA1})
+	if err != nil || !valid {
 		return false
 	}
 	if cache != nil {

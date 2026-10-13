@@ -1,0 +1,24 @@
+{
+  "archive_endpoint": "https://10.10.1.62:8333",
+  "archive_version": "4.48",
+  "bucket": "audit-governance",
+  "checks": [
+    "versioning",
+    "compliance_retention",
+    "sse_kms",
+    "exact_version_reads",
+    "conditional_create",
+    "writer_no_delete",
+    "writer_no_retention_reduction",
+    "acknowledged_write_process_crash",
+    "acknowledged_write_power_loss",
+    "encrypted_backup_restore",
+    "key_restore"
+  ],
+  "configuration_sha256": "3200ee5e273902509a9a66e7ab2922b793b02db43e2e1e83c55fbff0b0c8023b",
+  "default_retention_seconds": 315446400,
+  "kms_key_id": "audit-archive",
+  "report_sha256": "cd780162b9bab11672e61feb2eb6b91d7c14e88252a0b439e19f8976aedf9fb4",
+  "schema_version": 1,
+  "verified_at": "2026-10-11T06:33:44.839508Z"
+}

@@ -11,6 +11,9 @@ import (
 // agentBinaryPath is the path to the coverage-instrumented agent binary,
 // built once in TestMain and used by subprocess-based integration tests.
 var agentBinaryPath string
+var cliBinaryPath string
+
+const agentBinaryVersion = "2.0.50-prototype.1"
 
 // agentCovDir is the directory where the agent binary writes coverage data
 // (via the GOCOVERDIR env var). Converted to text format after tests complete.
@@ -31,7 +34,7 @@ func TestMain(m *testing.M) {
 
 	// Build from the agent directory (hub/internal/integration → repo root → agent)
 	agentDir := filepath.Join("..", "..", "..", "agent")
-	cmd := exec.Command("go", "build", "-cover", "-o", agentBinaryPath, "./cmd/veyport-agent/")
+	cmd := exec.Command("go", "build", "-cover", "-ldflags", "-X main.version="+agentBinaryVersion, "-o", agentBinaryPath, "./cmd/veyport-agent/")
 	cmd.Dir = agentDir
 	cmd.Env = append(os.Environ(), "CGO_ENABLED=0")
 	out, err := cmd.CombinedOutput()
@@ -39,6 +42,13 @@ func TestMain(m *testing.M) {
 		log.Fatalf("failed to build coverage-instrumented agent: %s: %v", string(out), err)
 	}
 	log.Printf("built coverage-instrumented agent at %s", agentBinaryPath)
+	cliBinaryPath = filepath.Join(tmpDir, "vey")
+	cliBuild := exec.Command("go", "build", "-o", cliBinaryPath, "./cmd/vey/")
+	cliBuild.Dir = filepath.Join("..", "..", "..", "cli")
+	cliBuild.Env = append(os.Environ(), "CGO_ENABLED=0")
+	if output, err := cliBuild.CombinedOutput(); err != nil {
+		log.Fatalf("build CLI integration binary: %s: %v", output, err)
+	}
 
 	// Run tests
 	code := m.Run()

@@ -243,16 +243,26 @@ func TestSessions_LogoutEndsSessionAndRefreshToken(t *testing.T) {
 // time (FR-002).
 func TestSessions_RefreshStaysInSession(t *testing.T) {
 	h := StartHarness(t)
-	adminToken := h.SetupAdmin(t)
+	setup := registerUser(t, h, sessionsAdminUser, "admin@test.com", "TestPassword123!")
+	secret := setupTOTP(t, h, setup)
+	adminToken, refreshToken := enableTOTP(t, h, secret, setup)
 	sid := sessionIDOf(t, h, adminToken)
 	before := sessionByID(t, h, sid)
+	generation := mustTokenGeneration(t, h)
 
-	_, refreshToken, err := auth.GenerateSessionTokenPair(
+	// Merely signing another JWT does not publish it as this session's current
+	// refresh token. Its rejection must leave the actually issued cookie usable.
+	_, unissuedRefresh, err := auth.GenerateSessionTokenPair(
 		h.JWTSecret, adminUserID(t, h), string(model.RoleAdmin),
-		mustTokenGeneration(t, h), sid,
+		generation, sid,
 	)
 	if err != nil {
 		t.Fatalf("mint a refresh token for the live session: %v", err)
+	}
+	assertResponse(t, h.HTTPPost(t, refreshPath, model.RefreshRequest{RefreshToken: unissuedRefresh}, ""),
+		"unissued signed refresh", http.StatusUnauthorized, "invalid or expired refresh token")
+	if rejected := sessionByID(t, h, sid); !rejected.LastSeenAt.Equal(before.LastSeenAt) {
+		t.Fatal("unissued refresh extended session activity")
 	}
 
 	resp := h.HTTPPost(t, refreshPath, model.RefreshRequest{RefreshToken: refreshToken}, "")
@@ -268,6 +278,9 @@ func TestSessions_RefreshStaysInSession(t *testing.T) {
 	after := sessionByID(t, h, sid)
 	if before.ExpiresAt == nil || after.ExpiresAt == nil || !after.ExpiresAt.Equal(*before.ExpiresAt) {
 		t.Fatalf("absolute expiry moved from %v to %v on refresh", before.ExpiresAt, after.ExpiresAt)
+	}
+	if got := mustTokenGeneration(t, h); got != generation {
+		t.Fatalf("routine refresh changed account revocation generation: got%d want%d", got, generation)
 	}
 }
 

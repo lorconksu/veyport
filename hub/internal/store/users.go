@@ -1,7 +1,9 @@
 package store
 
 import (
+	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -14,7 +16,7 @@ const configInitialSetupComplete = "initial_setup_completed"
 
 const userSelectColumns = `id, username, email, password_hash, role, auth_provider, external_id,
         ldap_dn, ldap_username, ldap_last_sync_at, terminal_access, totp_secret, totp_enabled,
-        token_generation, avatar, must_change_password, temp_password_expires_at,
+        token_generation, security_revision, avatar, must_change_password, temp_password_expires_at,
         failed_login_count, last_failed_login_at, last_login_at, locked_until,
         disabled_at, disabled_by, reactivated_at, dormancy_exempt, last_activity_at,
         created_at, updated_at`
@@ -142,22 +144,36 @@ func prepareLDAPUserUpdate(existing, u *model.User) error {
 }
 
 func (s *Store) updateLDAPUser(userID string, u *model.User) error {
-	_, err := s.db.Exec(
-		`UPDATE users
+	return s.withImmediateTx(func(ctx context.Context, conn *sql.Conn) error {
+		if err := guardSecurityPrincipal(ctx, conn, userID); err != nil {
+			var role model.Role
+			var external, ldapname string
+			var terminal bool
+			if e := conn.QueryRowContext(ctx, "SELECT role,external_id,ldap_username,terminal_access FROM users WHERE id=?", userID).Scan(&role, &external, &ldapname, &terminal); e != nil {
+				return e
+			}
+			if role != u.Role || external != u.ExternalID || ldapname != u.LDAPUsername || terminal != u.TerminalAccess {
+				return err
+			}
+		}
+
+		_, err := conn.ExecContext(ctx,
+			`UPDATE users
 				 SET username = ?, email = ?, role = ?, auth_provider = ?, external_id = ?,
 				     ldap_dn = ?, ldap_username = ?, ldap_last_sync_at = ?, terminal_access = ?,
 			     updated_at = datetime('now')
 			 WHERE id = ?`,
-		u.Username, u.Email, u.Role, model.AuthProviderLDAP, u.ExternalID,
-		u.LDAPDN, u.LDAPUsername, sqliteTimePtr(u.LDAPLastSyncAt), u.TerminalAccess,
-		userID,
-	)
-	if err != nil {
-		return fmt.Errorf("update ldap user: %w", err)
-	}
-	return nil
-}
+			u.Username, u.Email, u.Role, model.AuthProviderLDAP, u.ExternalID,
+			u.LDAPDN, u.LDAPUsername, sqliteTimePtr(u.LDAPLastSyncAt), u.TerminalAccess,
+			userID,
+		)
+		if err != nil {
+			return fmt.Errorf("update ldap user: %w", err)
+		}
+		return nil
 
+	})
+}
 func isUserNotFound(err error) bool {
 	return err != nil && strings.Contains(err.Error(), errUserNotFound)
 }
@@ -200,36 +216,92 @@ func (s *Store) MarkInitialSetupComplete() error {
 // DeleteIncompleteUsers removes users that registered but never finished
 // TOTP setup, so the initial setup flow can be retried.
 func (s *Store) DeleteIncompleteUsers() error {
-	// Delete audit logs first (FK without CASCADE)
-	_, err := s.db.Exec(`DELETE FROM audit_logs WHERE user_id IN
-		(SELECT id FROM users WHERE totp_enabled = 0)`)
-	if err != nil {
-		return fmt.Errorf("delete incomplete user audit logs: %w", err)
-	}
-	_, err = s.db.Exec("DELETE FROM users WHERE totp_enabled = 0")
-	if err != nil {
-		return fmt.Errorf("delete incomplete users: %w", err)
-	}
-	return nil
+	return s.withImmediateTx(func(ctx context.Context, conn *sql.Conn) error {
+		rows, err := conn.QueryContext(ctx, "SELECT id FROM users WHERE totp_enabled=0")
+		if err != nil {
+			return err
+		}
+		var candidates []string
+		for rows.Next() {
+			var id string
+			if err := rows.Scan(&id); err != nil {
+				rows.Close()
+				return err
+			}
+			candidates = append(candidates, id)
+		}
+		err = rows.Err()
+		rows.Close()
+		if err != nil {
+			return err
+		}
+		for _, id := range candidates {
+			if err := guardSecurityPrincipal(ctx, conn, id); err != nil {
+				if errors.Is(err, ErrProtectedChange) {
+					continue
+				}
+				return err
+			}
+			if _, err := conn.ExecContext(ctx, "DELETE FROM audit_logs WHERE user_id=?", id); err != nil {
+				return err
+			}
+			if _, err := conn.ExecContext(ctx, "DELETE FROM security_identity_links WHERE user_id=?", id); err != nil {
+				return err
+			}
+			if _, err := conn.ExecContext(ctx, "DELETE FROM users WHERE id=?", id); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
 }
 
-func (s *Store) UpdateUserTOTP(userID string, secret *string, enabled bool) error {
-	_, err := s.db.Exec(
-		"UPDATE users SET totp_secret = ?, totp_enabled = ?, updated_at = datetime('now') WHERE id = ?",
-		secret, enabled, userID,
-	)
-	if err != nil {
-		return fmt.Errorf("update totp: %w", err)
-	}
-	return nil
-}
+func (s *Store) UpdateUserTOTP(userID string, secret *string, enabled bool, setupGeneration ...int) error {
+	return s.securityUserWrite(userID, len(setupGeneration) == 1, func(ctx context.Context, conn *sql.Conn) error {
+		if len(setupGeneration) == 1 {
+			var current int
+			if err := conn.QueryRowContext(ctx, "SELECT token_generation FROM users WHERE id=?", userID).Scan(&current); err != nil {
+				return err
+			}
+			if current != setupGeneration[0] {
+				return ErrSecurityConflict
+			}
+		}
+		_, err := conn.ExecContext(ctx,
+			"UPDATE users SET totp_secret = ?, totp_enabled = ?, updated_at = datetime('now') WHERE id = ?",
+			secret, enabled, userID,
+		)
+		if err != nil {
+			return fmt.Errorf("update totp: %w", err)
+		}
+		if enabled {
+			result, deleteErr := conn.ExecContext(ctx, "DELETE FROM security_mfa_recoveries WHERE user_id=?", userID)
+			if deleteErr != nil {
+				return deleteErr
+			}
+			consumed, err := result.RowsAffected()
+			if err != nil {
+				return err
+			}
+			if consumed > 0 {
+				if _, err := conn.ExecContext(ctx, "UPDATE users SET token_generation=token_generation+1 WHERE id=?", userID); err != nil {
+					return err
+				}
+			}
+		}
+		return err
 
+	})
+}
 func (s *Store) DeleteUser(userID string) error {
 	tx, err := s.db.Begin()
 	if err != nil {
 		return fmt.Errorf("begin delete user tx: %w", err)
 	}
 	defer tx.Rollback()
+	if err := guardSecurityPrincipal(context.Background(), tx, userID); err != nil {
+		return err
+	}
 
 	// Nullify audit log references (belt-and-suspenders with ON DELETE SET NULL migration)
 	if _, err := tx.Exec("UPDATE audit_logs SET user_id = NULL WHERE user_id = ?", userID); err != nil {
@@ -240,6 +312,7 @@ func (s *Store) DeleteUser(userID string) error {
 	// deletes ourselves inside the transaction guarantees the audit/compliance
 	// pipeline never sees orphaned rows even if a pool connection regresses.
 	cleanupQueries := []string{
+		"DELETE FROM security_identity_links WHERE user_id = ?",
 		"DELETE FROM notification_preferences WHERE user_id = ?",
 		"DELETE FROM notification_log WHERE user_id = ?",
 		"DELETE FROM api_tokens WHERE user_id = ?",
@@ -274,26 +347,28 @@ func (s *Store) DeleteUser(userID string) error {
 // (a role change back to admin does not restore a previously cleared
 // exemption — an administrator must re-grant it explicitly).
 func (s *Store) UpdateUserRole(userID string, role model.Role) error {
-	result, err := s.db.Exec(
-		`UPDATE users
+	return s.securityUserWrite(userID, false, func(ctx context.Context, conn *sql.Conn) error {
+		result, err := conn.ExecContext(ctx,
+			`UPDATE users
 		 SET role = ?, dormancy_exempt = CASE WHEN ? = 'admin' THEN dormancy_exempt ELSE 0 END,
 		     updated_at = datetime('now')
 		 WHERE id = ?`,
-		role, role, userID,
-	)
-	if err != nil {
-		return fmt.Errorf("update role: %w", err)
-	}
-	rows, err := result.RowsAffected()
-	if err != nil {
-		return fmt.Errorf("update role rows: %w", err)
-	}
-	if rows == 0 {
-		return fmt.Errorf(errUserNotFound)
-	}
-	return nil
-}
+			role, role, userID,
+		)
+		if err != nil {
+			return fmt.Errorf("update role: %w", err)
+		}
+		rows, err := result.RowsAffected()
+		if err != nil {
+			return fmt.Errorf("update role rows: %w", err)
+		}
+		if rows == 0 {
+			return fmt.Errorf(errUserNotFound)
+		}
+		return nil
 
+	})
+}
 func (s *Store) UpdateUserAvatar(userID string, avatar *string) error {
 	_, err := s.db.Exec(
 		"UPDATE users SET avatar = ?, updated_at = datetime('now') WHERE id = ?",
@@ -325,31 +400,35 @@ func (s *Store) IncrementTokenGeneration(userID string) (int, error) {
 }
 
 func (s *Store) UpdateUserPassword(userID, passwordHash string) error {
-	_, err := s.db.Exec(
-		`UPDATE users
+	return s.securityUserWrite(userID, false, func(ctx context.Context, conn *sql.Conn) error {
+		_, err := conn.ExecContext(ctx,
+			`UPDATE users
 		 SET password_hash = ?, must_change_password = 0, temp_password_expires_at = NULL, updated_at = datetime('now')
 		 WHERE id = ?`,
-		passwordHash, userID,
-	)
-	if err != nil {
-		return fmt.Errorf("update password: %w", err)
-	}
-	return nil
-}
+			passwordHash, userID,
+		)
+		if err != nil {
+			return fmt.Errorf("update password: %w", err)
+		}
+		return nil
 
+	})
+}
 func (s *Store) SetTemporaryPasswordState(userID string, mustChange bool, expiresAt *time.Time) error {
-	_, err := s.db.Exec(
-		`UPDATE users
+	return s.securityUserWrite(userID, false, func(ctx context.Context, conn *sql.Conn) error {
+		_, err := conn.ExecContext(ctx,
+			`UPDATE users
 		 SET must_change_password = ?, temp_password_expires_at = ?, updated_at = datetime('now')
 		 WHERE id = ?`,
-		mustChange, sqliteTimePtr(expiresAt), userID,
-	)
-	if err != nil {
-		return fmt.Errorf("set temporary password state: %w", err)
-	}
-	return nil
-}
+			mustChange, sqliteTimePtr(expiresAt), userID,
+		)
+		if err != nil {
+			return fmt.Errorf("set temporary password state: %w", err)
+		}
+		return nil
 
+	})
+}
 func (s *Store) ListUsers() ([]model.User, error) {
 	rows, err := s.db.Query(
 		`SELECT ` + userSelectColumns + ` FROM users ORDER BY created_at ASC`,
@@ -390,7 +469,7 @@ func (s *Store) scanUser(row *sql.Row) (*model.User, error) {
 	var disabledAt, disabledBy, reactivatedAt, lastActivityAt sql.NullString
 	err := row.Scan(&u.ID, &u.Username, &u.Email, &u.PasswordHash, &u.Role,
 		&u.AuthProvider, &u.ExternalID, &u.LDAPDN, &u.LDAPUsername, &ldapLastSyncAt,
-		&u.TerminalAccess, &u.TOTPSecret, &u.TOTPEnabled, &u.TokenGeneration, &u.Avatar,
+		&u.TerminalAccess, &u.TOTPSecret, &u.TOTPEnabled, &u.TokenGeneration, &u.SecurityRevision, &u.Avatar,
 		&u.MustChangePassword, &tempPasswordExpiresAt,
 		&u.FailedLoginCount, &lastFailedLoginAt, &lastLoginAt, &lockedUntil,
 		&disabledAt, &disabledBy, &reactivatedAt, &u.DormancyExempt, &lastActivityAt,
@@ -420,7 +499,7 @@ func (s *Store) scanUserRow(rows *sql.Rows) (*model.User, error) {
 	var disabledAt, disabledBy, reactivatedAt, lastActivityAt sql.NullString
 	err := rows.Scan(&u.ID, &u.Username, &u.Email, &u.PasswordHash, &u.Role,
 		&u.AuthProvider, &u.ExternalID, &u.LDAPDN, &u.LDAPUsername, &ldapLastSyncAt,
-		&u.TerminalAccess, &u.TOTPSecret, &u.TOTPEnabled, &u.TokenGeneration, &u.Avatar,
+		&u.TerminalAccess, &u.TOTPSecret, &u.TOTPEnabled, &u.TokenGeneration, &u.SecurityRevision, &u.Avatar,
 		&u.MustChangePassword, &tempPasswordExpiresAt,
 		&u.FailedLoginCount, &lastFailedLoginAt, &lastLoginAt, &lockedUntil,
 		&disabledAt, &disabledBy, &reactivatedAt, &u.DormancyExempt, &lastActivityAt,

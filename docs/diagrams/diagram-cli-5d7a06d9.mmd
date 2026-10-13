@@ -3,4 +3,5 @@ flowchart LR
     B -- gRPC --> C[Agent on remote server]
     A -. "GET /install/cli/os/arch" .-> B
     A -- "ssh -p 2222 (cert auth)" --> D[Hub SSH Gateway]
+    A -- "ssh node -- command (no PTY)" --> D
     D -- gRPC --> C

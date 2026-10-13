@@ -1,6 +1,7 @@
 package sshgw
 
 import (
+	"context"
 	"fmt"
 	"io"
 	"log"
@@ -13,6 +14,7 @@ import (
 
 	"github.com/wyiu/veyport/hub/internal/grpcserver"
 	"github.com/wyiu/veyport/hub/internal/model"
+	"github.com/wyiu/veyport/hub/internal/server"
 	pb "github.com/wyiu/veyport/proto/veyport/v1"
 )
 
@@ -86,14 +88,20 @@ type exitInfo struct {
 func (s *Server) bridge(ch ssh.Channel, p bridgeParams) {
 	sessionID := uuid.NewString()
 
-	events, created := s.cfg.Terminals.Register(p.serverID, sessionID, p.userID, p.executionUser,
-		grpcserver.WithKind(grpcserver.TerminalKindSSH))
-	if !created {
-		s.refuseBridge(ch, p, sessionID, "terminal session could not be registered")
+	events, executionUser, err := s.cfg.Terminals.RegisterInteractive(s.cfg.Store, s.cfg.ConnMgr, p.serverID, sessionID, p.userID, func() (string, error) {
+		if err := s.securityService().GuardInteractive(p.userID, p.serverID); err != nil {
+			return "", err
+		}
+		return server.AuthorizeTerminalExecution(s.cfg.Store, p.userID, p.serverID)
+	}, grpcserver.WithKind(grpcserver.TerminalKindSSH))
+	if err != nil {
+		s.refuseBridge(ch, p, sessionID, err.Error())
 		return
 	}
+	p.executionUser = executionUser
 
 	if err := s.openAgentTerminal(sessionID, p); err != nil {
+		s.cfg.Terminals.CloseInteractive(p.serverID, sessionID)
 		s.cfg.Terminals.Remove(p.serverID, sessionID)
 		s.refuseBridge(ch, p, sessionID, err.Error())
 		return
@@ -101,8 +109,9 @@ func (s *Server) bridge(ch ssh.Channel, p bridgeParams) {
 
 	// Flip streaming on so the unattached-session reaper cannot claim it. The
 	// returned info carries the same channel Register handed back.
-	_, exists, attached := s.cfg.Terminals.AttachStream(p.serverID, sessionID, p.userID)
-	if !exists || !attached {
+	info, exists, attached := s.cfg.Terminals.AttachStream(p.serverID, sessionID, p.userID)
+	if !exists || !attached || info.Closed {
+		s.cfg.Terminals.CloseInteractive(p.serverID, sessionID)
 		s.cfg.Terminals.Remove(p.serverID, sessionID)
 		s.refuseBridge(ch, p, sessionID, "terminal session could not be attached")
 		return
@@ -130,7 +139,13 @@ func (s *Server) openAgentTerminal(sessionID string, p bridgeParams) error {
 	ackCh := s.cfg.Pending.Register(p.serverID, sessionID)
 	defer s.cfg.Pending.Remove(p.serverID, sessionID)
 
-	err := s.cfg.ConnMgr.SendToAgent(p.serverID, &pb.HubMessage{
+	ctx, cancel := context.WithTimeout(context.Background(), s.openTimeout())
+	defer cancel()
+	info, exists := s.cfg.Terminals.Get(p.serverID, sessionID)
+	if !exists || info.Closed {
+		return grpcserver.ErrInteractiveSessionClosed
+	}
+	err := s.cfg.Terminals.SendInteractive(ctx, p.serverID, sessionID, &pb.HubMessage{
 		Payload: &pb.HubMessage_TerminalOpenRequest{
 			TerminalOpenRequest: &pb.TerminalOpenRequest{
 				SessionId: sessionID,
@@ -157,6 +172,12 @@ func (s *Server) openAgentTerminal(sessionID string, p bridgeParams) error {
 			return fmt.Errorf("the agent refused the terminal: %s", ack.Error)
 		}
 		return nil
+	case <-info.AgentDone:
+		return grpcserver.ErrInteractiveSessionClosed
+	case <-info.Done:
+		return grpcserver.ErrInteractiveSessionClosed
+	case <-p.clientGone:
+		return fmt.Errorf("SSH client disconnected")
 	case <-timer.C:
 		return fmt.Errorf("the agent on %q timed out opening the terminal", p.serverName)
 	}
@@ -223,12 +244,15 @@ func (s *Server) forwardClientInput(ch ssh.Channel, sessionID string, p bridgePa
 		if n > 0 {
 			data := make([]byte, n)
 			copy(data, buf[:n])
-			sendErr := s.cfg.ConnMgr.SendToAgent(p.serverID, &pb.HubMessage{
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			sendErr := s.cfg.Terminals.SendInteractive(ctx, p.serverID, sessionID, &pb.HubMessage{
 				Payload: &pb.HubMessage_TerminalInput{
 					TerminalInput: &pb.TerminalInput{SessionId: sessionID, Data: data},
 				},
 			})
+			cancel()
 			if sendErr != nil {
+				s.cfg.Terminals.EndOne(p.serverID, sessionID, 1, sendErr.Error())
 				return
 			}
 		}
@@ -242,7 +266,9 @@ func (s *Server) forwardClientInput(ch ssh.Channel, sessionID string, p bridgePa
 }
 
 func (s *Server) sendResize(sessionID string, p bridgeParams, size windowSize) {
-	err := s.cfg.ConnMgr.SendToAgent(p.serverID, &pb.HubMessage{
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	err := s.cfg.Terminals.SendInteractive(ctx, p.serverID, sessionID, &pb.HubMessage{
 		Payload: &pb.HubMessage_TerminalResize{
 			TerminalResize: &pb.TerminalResize{SessionId: sessionID, Cols: size.cols, Rows: size.rows},
 		},
@@ -256,11 +282,16 @@ func (s *Server) sendResize(sessionID string, p bridgeParams, size windowSize) {
 // TerminalClose send is suppressed when the agent already reported the exit,
 // mirroring the web terminal's closeTerminalSession.
 func (s *Server) teardown(ch ssh.Channel, p bridgeParams, sessionID string, exit exitInfo) {
+	info, exists := s.cfg.Terminals.Get(p.serverID, sessionID)
+	handledClose := false
+	if exists && (!info.Closed || exit.forced) {
+		handledClose = s.cfg.Terminals.CloseInteractive(p.serverID, sessionID)
+	}
 	alreadyClosed, removed := s.cfg.Terminals.RemoveIfHubInitiated(p.serverID, sessionID)
 	// A forced close closes the registry entry before the relay ever sees the
 	// exit, so alreadyClosed says nothing about the agent there: its shell is
 	// still running and has to be told to stop.
-	if removed && (!alreadyClosed || exit.forced) {
+	if removed && !handledClose && (!alreadyClosed || exit.forced) {
 		err := s.cfg.ConnMgr.SendToAgent(p.serverID, &pb.HubMessage{
 			Payload: &pb.HubMessage_TerminalClose{
 				TerminalClose: &pb.TerminalClose{SessionId: sessionID},

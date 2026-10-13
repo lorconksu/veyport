@@ -336,7 +336,7 @@ func TestTouchInterval_ScalesWithIdleLimit(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			got := touchInterval(lockout.Policy{SessionIdle: tc.idle})
+			got := touchInterval(lockout.Policy{SessionIdle: tc.idle}, model.SessionKindWeb)
 			if got != tc.want {
 				t.Fatalf("touchInterval(%s) = %s, want %s", tc.idle, got, tc.want)
 			}

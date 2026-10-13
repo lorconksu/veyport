@@ -1,6 +1,7 @@
 package grpcserver
 
 import (
+	"context"
 	"crypto/ecdsa"
 	"crypto/rand"
 	"crypto/sha256"
@@ -36,6 +37,8 @@ type Handler struct {
 	pending     *PendingRequests
 	logSessions *LogSessions
 	terminals   *TerminalSessions
+	executions  *ExecutionSessions
+	updates     *AgentUpdates
 	hbCoalescer *HeartbeatCoalescer
 	caCert      *x509.Certificate
 	caKey       *ecdsa.PrivateKey
@@ -76,7 +79,7 @@ func (h *Handler) Connect(stream pb.AgentService_ConnectServer) error {
 	}
 
 	serverID := handshake.serverID
-	h.connMgr.Register(serverID, stream)
+	connection := h.connMgr.Register(serverID, stream)
 
 	// Use stored IP (set during handshake with agent-reported IP) for logging
 	agentIP := h.peerAddr(stream)
@@ -86,8 +89,32 @@ func (h *Handler) Connect(stream pb.AgentService_ConnectServer) error {
 	h.onAgentConnected(serverID, agentIP)
 	defer h.onAgentDisconnected(serverID, stream)
 
+	incoming := make(chan controlReceive, 1)
+	go func() {
+		for {
+			msg, err := stream.Recv()
+			select {
+			case incoming <- controlReceive{msg, err}:
+			case <-connection.Done():
+				return
+			case <-stream.Context().Done():
+				return
+			}
+			if err != nil {
+				return
+			}
+		}
+	}()
 	for {
-		msg, err := stream.Recv()
+		var received controlReceive
+		select {
+		case received = <-incoming:
+		case <-connection.Done():
+			return nil
+		case <-stream.Context().Done():
+			return stream.Context().Err()
+		}
+		msg, err := received.msg, received.err
 		if err == io.EOF {
 			log.Printf("agent stream closed (EOF): %s", serverID)
 			return nil
@@ -96,11 +123,25 @@ func (h *Handler) Connect(stream pb.AgentService_ConnectServer) error {
 			log.Printf("agent stream error: %s — %v", serverID, err)
 			return err
 		}
-		if err := h.routeAgentMessage(serverID, stream, msg); err != nil {
+		routeResult := make(chan error, 1)
+		go func() { routeResult <- h.routeAgentMessage(serverID, stream, msg) }()
+		select {
+		case err = <-routeResult:
+		case <-connection.Done():
+			return nil
+		case <-stream.Context().Done():
+			return stream.Context().Err()
+		}
+		if err != nil {
 			log.Printf("agent message route error: %s — %v", serverID, err)
 			return err
 		}
 	}
+}
+
+type controlReceive struct {
+	msg *pb.AgentMessage
+	err error
 }
 
 // verifyCertCN checks that the mTLS client certificate CN matches the server ID.
@@ -126,6 +167,13 @@ func (h *Handler) verifyCertCN(stream pb.AgentService_ConnectServer, serverID st
 	if certCN != serverID {
 		return fmt.Errorf("cert CN %q does not match server ID %q", certCN, serverID)
 	}
+	if requireCert {
+		cert := tlsInfo.State.PeerCertificates[0]
+		now := time.Now()
+		if len(tlsInfo.State.VerifiedChains) == 0 || len(tlsInfo.State.VerifiedChains[0]) == 0 || !cert.Equal(tlsInfo.State.VerifiedChains[0][0]) || now.Before(cert.NotBefore) || !now.Before(cert.NotAfter) {
+			return fmt.Errorf("agent %s requires a verified, current client certificate", serverID)
+		}
+	}
 	return nil
 }
 
@@ -142,6 +190,9 @@ func (h *Handler) peerAddr(stream pb.AgentService_ConnectServer) string {
 
 // onAgentConnected logs the audit event and sends the online notification.
 func (h *Handler) onAgentConnected(serverID, peerAddr string) {
+	// Registration happens after handshake status writes. A previous stream's
+	// delayed disconnect may have written offline between those two steps.
+	_ = h.store.UpdateServerStatus(serverID, "online")
 	h.store.LogAudit(model.AuditEntry{
 		Action:    model.AuditServerConnected,
 		Target:    &serverID,
@@ -161,13 +212,32 @@ func (h *Handler) onAgentConnected(serverID, peerAddr string) {
 
 // onAgentDisconnected unregisters the connection, flushes heartbeats, and logs the disconnect event.
 func (h *Handler) onAgentDisconnected(serverID string, stream pb.AgentService_ConnectServer) {
+	if h.updates != nil {
+		h.updates.EndConnection(serverID, stream)
+	}
+	if h.executions != nil {
+		h.executions.EndConnection(serverID, stream, "agent disconnected")
+	}
+	var endTerminals func()
+	if h.terminals != nil {
+		endTerminals = h.terminals.prepareEndAll(serverID, -1, "agent disconnected")
+	}
 	if !h.connMgr.UnregisterIfCurrent(serverID, stream) {
 		return
+	}
+	if endTerminals != nil {
+		defer endTerminals()
 	}
 	if h.hbCoalescer != nil {
 		h.hbCoalescer.Flush(serverID)
 	}
 	_ = h.store.UpdateServerStatus(serverID, "offline")
+	if executionConnectionOpen(h.connMgr.GetConn(serverID)) {
+		// A replacement already registered while the offline write waited. Its
+		// live connection also drives execution readiness and CLI discovery.
+		_ = h.store.UpdateServerStatus(serverID, "online")
+		return
+	}
 	h.store.LogAudit(model.AuditEntry{
 		Action:    model.AuditServerDisconnected,
 		Target:    &serverID,
@@ -180,9 +250,6 @@ func (h *Handler) onAgentDisconnected(serverID string, stream pb.AgentService_Co
 			"server_id":   serverID,
 			"timestamp":   time.Now().UTC().Format(model.NotifyTimestampFormat),
 		})
-	}
-	if h.terminals != nil {
-		h.terminals.EndAll(serverID, -1, "agent disconnected")
 	}
 	log.Printf("agent disconnected: %s", serverID)
 }
@@ -319,31 +386,20 @@ func preferredAgentIP(reportedIP, peerIP string) string {
 	return peerIP
 }
 
-// performReEnrollHandshake handles a re-enrollment request that arrives as the
-// first message on a bootstrap (no client cert) Connect stream. It delegates to
-// handleReEnrollRequest which blocks waiting for admin approval.
-//
-// If handleReEnrollRequest sent ReEnrollApproved and the proof is now expected,
-// this returns bootstrapOnly=false so Connect() enters the message loop under
-// the victim's serverID — allowing handleReEnrollProof to receive the proof.
-//
-// On ALL early-exit paths (unknown/non-enrolled server, DB error, approval
-// timeout, context cancellation, or send failure), this returns bootstrapOnly=true
-// so Connect() returns immediately WITHOUT calling connMgr.Register or
-// onAgentConnected, preventing an unauthenticated caller from hijacking a
-// legitimate agent's stream slot.
+// Re-enrollment stays in the bootstrap exchange through proof and certificate
+// delivery. The agent must reconnect with its verified certificate before the
+// stream can enter the normal agent registry or route any other messages.
 func (h *Handler) performReEnrollHandshake(stream pb.AgentService_ConnectServer, req *pb.ReEnrollRequest) (*handshakeResult, error) {
 	approvalSent, err := h.handleReEnrollRequest(stream, req)
 	if err != nil {
 		return nil, err
 	}
-	if !approvalSent {
-		// Early exit: stream is already closed or denied; do not register in connMgr.
-		return &handshakeResult{bootstrapOnly: true}, nil
+	if approvalSent {
+		if err := h.receiveReEnrollProof(stream, req.ServerId); err != nil {
+			return nil, err
+		}
 	}
-	// Approval was sent; enter the message loop so the proof can be received and
-	// handleReEnrollProof can issue the certificate.
-	return &handshakeResult{serverID: req.ServerId, bootstrapOnly: false, requireClientCert: false}, nil
+	return &handshakeResult{bootstrapOnly: true}, nil
 }
 
 func (h *Handler) performHeartbeatHandshake(stream pb.AgentService_ConnectServer, hb *pb.Heartbeat, peerIP string) (*handshakeResult, error) {
@@ -375,34 +431,92 @@ func (h *Handler) routeAgentMessage(serverID string, stream pb.AgentService_Conn
 	case *pb.AgentMessage_Heartbeat:
 		return h.handleStreamHeartbeat(serverID, stream)
 	case *pb.AgentMessage_FileListResponse:
+		h.connMgr.CompleteResponse(serverID, stream, p.FileListResponse)
+		if current := h.connMgr.GetConn(serverID); current == nil || current.Stream != stream {
+			return nil
+		}
 		h.deliverPending(serverID, p.FileListResponse.RequestId, p.FileListResponse)
 	case *pb.AgentMessage_FileReadResponse:
+		h.connMgr.CompleteResponse(serverID, stream, p.FileReadResponse)
+		if current := h.connMgr.GetConn(serverID); current == nil || current.Stream != stream {
+			return nil
+		}
 		h.deliverPending(serverID, p.FileReadResponse.RequestId, p.FileReadResponse)
 	case *pb.AgentMessage_LogStreamChunk:
-		h.deliverLogChunk(serverID, p.LogStreamChunk.RequestId, p.LogStreamChunk.Data)
+		if current := h.connMgr.GetConn(serverID); current == nil || current.Stream != stream {
+			return nil
+		}
+		if len(p.LogStreamChunk.Data) > 0 {
+			h.deliverLogChunk(serverID, p.LogStreamChunk.RequestId, p.LogStreamChunk.Data)
+		}
+		if p.LogStreamChunk.Done {
+			h.connMgr.CompleteResponse(serverID, stream, p.LogStreamChunk)
+			if p.LogStreamChunk.Error != "" && string(p.LogStreamChunk.Data) != "error: "+p.LogStreamChunk.Error {
+				h.deliverLogChunk(serverID, p.LogStreamChunk.RequestId, []byte("error: "+p.LogStreamChunk.Error))
+			}
+			if h.logSessions != nil {
+				h.logSessions.Remove(serverID, p.LogStreamChunk.RequestId)
+			}
+		}
 	case *pb.AgentMessage_FileUploadAck:
+		h.connMgr.CompleteResponse(serverID, stream, p.FileUploadAck)
+		if current := h.connMgr.GetConn(serverID); current == nil || current.Stream != stream {
+			return nil
+		}
 		h.deliverPending(serverID, p.FileUploadAck.RequestId, p.FileUploadAck)
 	case *pb.AgentMessage_FileDeleteResponse:
+		h.connMgr.CompleteResponse(serverID, stream, p.FileDeleteResponse)
+		if current := h.connMgr.GetConn(serverID); current == nil || current.Stream != stream {
+			return nil
+		}
 		h.deliverPending(serverID, p.FileDeleteResponse.RequestId, p.FileDeleteResponse)
 	case *pb.AgentMessage_UnregisterAck:
 		h.deliverPending(serverID, p.UnregisterAck.RequestId, p.UnregisterAck)
 	case *pb.AgentMessage_CertRenewRequest:
 		h.handleCertRenewal(serverID, stream, p.CertRenewRequest)
-	case *pb.AgentMessage_ReenrollRequest:
-		// Mid-stream re-enroll requests (from an already-registered agent) are
-		// handled here. The approvalSent bool is ignored because the stream is
-		// already registered in connMgr; the proof will arrive as the next message
-		// in this same loop via AgentMessage_ReenrollProof.
-		_, err := h.handleReEnrollRequest(stream, p.ReenrollRequest)
-		return err
-	case *pb.AgentMessage_ReenrollProof:
-		return h.handleReEnrollProof(stream, serverID, p.ReenrollProof)
+	case *pb.AgentMessage_ReenrollRequest, *pb.AgentMessage_ReenrollProof:
+		return status.Error(codes.FailedPrecondition, "re-enrollment requires a separate bootstrap stream")
 	case *pb.AgentMessage_TerminalOpenAck:
 		h.deliverPending(serverID, p.TerminalOpenAck.SessionId, p.TerminalOpenAck)
 	case *pb.AgentMessage_TerminalData:
 		h.deliverTerminalData(serverID, p.TerminalData.SessionId, p.TerminalData.Data)
 	case *pb.AgentMessage_TerminalExit:
 		h.deliverTerminalExit(serverID, p.TerminalExit.SessionId, p.TerminalExit.ExitCode, p.TerminalExit.Error)
+	case *pb.AgentMessage_ExecutionCapabilities:
+		if h.executions != nil {
+			if node, err := h.executionNode(stream.Context()); err == nil && node == serverID {
+				h.executions.SetCapabilities(serverID, stream, p.ExecutionCapabilities)
+			}
+		}
+	case *pb.AgentMessage_ExecutionPrepared:
+		if h.executions != nil {
+			prepared := p.ExecutionPrepared
+			if !h.executions.DeliverPrepared(serverID, stream, prepared) && prepared != nil && prepared.Binding != nil && prepared.Binding.NodeId == serverID && prepared.Binding.ExecutionId == prepared.ExecutionId && !h.executions.hasExecution(serverID, prepared.ExecutionId) {
+				ctx, cancel := context.WithTimeout(stream.Context(), 2*time.Second)
+				_ = h.connMgr.SendToAgentContext(ctx, serverID, &pb.HubMessage{Payload: &pb.HubMessage_ExecutionCancel{ExecutionCancel: &pb.ExecutionCancel{Binding: prepared.Binding, Reason: "submission no longer active"}}})
+				cancel()
+			}
+		}
+	case *pb.AgentMessage_ExecutionStatus:
+		// Status is reconciliation metadata, never authority to retry Start.
+	case *pb.AgentMessage_UpdateCapabilities:
+		if h.updates != nil {
+			if node, err := h.executionNode(stream.Context()); err == nil && node == serverID {
+				if err = h.updates.ObserveCapabilities(serverID, stream, p.UpdateCapabilities); err != nil {
+					log.Printf("update capability rejected for %s: %v", serverID, err)
+					return err
+				}
+			}
+		}
+	case *pb.AgentMessage_UpdateStatus:
+		if h.updates != nil {
+			if node, err := h.executionNode(stream.Context()); err == nil && node == serverID {
+				if err = h.updates.ObserveStatus(serverID, stream, p.UpdateStatus); err != nil {
+					log.Printf("update status rejected for %s: %v", serverID, err)
+					return err
+				}
+			}
+		}
 	default:
 		log.Printf("unhandled message type from %s: %T", serverID, p)
 	}
@@ -551,20 +665,42 @@ func (h *Handler) handleHeartbeat(serverID string) error {
 // handleCertRenewal processes a certificate renewal request from an agent.
 // It signs the provided CSR with the CA and returns the new client certificate.
 func (h *Handler) handleCertRenewal(serverID string, stream pb.AgentService_ConnectServer, req *pb.CertRenewRequest) {
+	conn := h.connMgr.GetConn(serverID)
 	sendCertResponse := func(resp *pb.CertRenewResponse) {
-		conn := h.connMgr.GetConn(serverID)
-		if conn == nil {
+		if conn == nil || conn.Stream != stream {
 			return
 		}
-		conn.SendMu.Lock()
-		_ = stream.Send(&pb.HubMessage{
+		ctx, cancel := context.WithTimeout(stream.Context(), reEnrollProofTimeout)
+		defer cancel()
+		_ = h.connMgr.SendToConnectionChecked(ctx, conn, &pb.HubMessage{
 			Payload: &pb.HubMessage_CertRenewResponse{
 				CertRenewResponse: resp,
 			},
+		}, func() error {
+			if h.connMgr.GetConn(serverID) != conn {
+				return fmt.Errorf("agent connection changed")
+			}
+			return nil
 		})
-		conn.SendMu.Unlock()
 	}
 
+	// Renewal is independently authenticated even when called through a route.
+	// Approval of a bootstrap re-enrollment is never a renewal credential.
+	if conn == nil || conn.Stream != stream {
+		return
+	}
+	if err := h.verifyCertCN(stream, serverID, true); err != nil {
+		sendCertResponse(&pb.CertRenewResponse{Error: "certificate renewal requires an authenticated agent"})
+		return
+	}
+	srv, err := h.store.GetServerByID(serverID)
+	if err != nil || srv.RegistrationToken != nil {
+		sendCertResponse(&pb.CertRenewResponse{Error: "certificate renewal requires an enrolled agent"})
+		return
+	}
+	if req == nil || h.connMgr.GetConn(serverID) != conn {
+		return
+	}
 	if h.caCert == nil || h.caKey == nil {
 		sendCertResponse(&pb.CertRenewResponse{Error: "CA not configured"})
 		return

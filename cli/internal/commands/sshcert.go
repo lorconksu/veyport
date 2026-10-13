@@ -115,7 +115,7 @@ func RunSSHCert(ctx *Context) int {
 	// interactive sessions only.
 	if actx.Mode() == auth.ModeAPIToken {
 		return fail(cmdutil.NewAuthError(fmt.Errorf(
-			"vey ssh-cert requires an interactive session, but the active credential for %s is an API token; run: vey login --hub %s",
+			"vey ssh-cert requires an interactive session, but the active credential for %s is an API token; run: vey --hub %s login",
 			hubURL, hubURL)))
 	}
 
@@ -205,7 +205,7 @@ func issueSSHCertificate(bg context.Context, actx *auth.AuthContext, hubURL, pub
 	})
 	if err != nil && cmdutil.Code(err) == cmdutil.ExitForbidden {
 		return sshCertResponse{}, cmdutil.NewAuthError(fmt.Errorf(
-			"%s; run: vey login --hub %s", err, hubURL))
+			"%s; run: vey --hub %s login", err, hubURL))
 	}
 	return cert, err
 }

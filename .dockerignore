@@ -12,4 +12,5 @@ scripts/
 *.swp
 .DS_Store
 node_modules
+**/node_modules
 hub/web/dist

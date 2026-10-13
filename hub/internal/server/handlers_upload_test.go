@@ -16,15 +16,14 @@ import (
 
 // TestHandleUploadFile_NoFile verifies that uploading without a file field returns 400.
 func TestHandleUploadFile_NoFile(t *testing.T) {
-	s := testServer(t)
-	token := registerAndGetAdminToken(t, s)
+	s, token, serverID := testServerWithAgent(t)
 
 	// Send a multipart form without any file field
 	body := &bytes.Buffer{}
 	writer := multipart.NewWriter(body)
 	writer.Close()
 
-	req := httptest.NewRequest("POST", testS1Upload, body)
+	req := httptest.NewRequest("POST", "/api/servers/"+serverID+"/upload", body)
 	req.Header.Set("Authorization", testBearerPrefix+token)
 	req.Header.Set(testContentType, writer.FormDataContentType())
 	rec := httptest.NewRecorder()

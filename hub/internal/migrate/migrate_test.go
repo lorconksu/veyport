@@ -49,14 +49,20 @@ func TestRunMigrations_Idempotent(t *testing.T) {
 	if err := migrate.Run(db); err != nil {
 		t.Fatalf("first run: %v", err)
 	}
+	var firstCount int
+	if err := db.QueryRow("SELECT COUNT(*) FROM _migrations").Scan(&firstCount); err != nil || firstCount == 0 {
+		t.Fatalf("first migration history: count=%d err=%v", firstCount, err)
+	}
 	if err := migrate.Run(db); err != nil {
 		t.Fatalf("second run should be idempotent: %v", err)
 	}
 
 	var count int
-	db.QueryRow("SELECT COUNT(*) FROM _migrations").Scan(&count)
-	if count != 23 {
-		t.Fatalf("expected 23 migrations, got %d", count)
+	if err := db.QueryRow("SELECT COUNT(*) FROM _migrations").Scan(&count); err != nil {
+		t.Fatal(err)
+	}
+	if count != firstCount {
+		t.Fatalf("idempotent migration changed history: first=%d second=%d", firstCount, count)
 	}
 }
 

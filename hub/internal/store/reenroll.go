@@ -2,10 +2,49 @@ package store
 
 import (
 	"database/sql"
+	"errors"
 	"fmt"
 
 	"github.com/wyiu/veyport/hub/internal/model"
 )
+
+// ErrReEnrollNotPending identifies a stale or already decided request.
+var ErrReEnrollNotPending = errors.New("re-enrollment request is no longer pending")
+
+// CreateCurrentReEnrollRequest atomically expires earlier requests for this
+// server and records the replacement. Request IDs remain the decision boundary.
+func (s *Store) CreateCurrentReEnrollRequest(r *model.ReEnrollRequest) error {
+	tx, err := s.db.Begin()
+	if err != nil {
+		return fmt.Errorf("begin re-enroll request: %w", err)
+	}
+	defer tx.Rollback()
+	if _, err = tx.Exec(`UPDATE reenroll_requests SET status = 'expired' WHERE server_id = ? AND status = 'pending'`, r.ServerID); err != nil {
+		return fmt.Errorf("expire replaced re-enroll requests: %w", err)
+	}
+	if _, err = tx.Exec(`INSERT INTO reenroll_requests (id, server_id, requested_at, ip_address, fingerprint, status, anomaly_flags, decided_by)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?)`, r.ID, r.ServerID, r.RequestedAt, r.IPAddress, r.Fingerprint, r.Status, r.AnomalyFlags, r.DecidedBy); err != nil {
+		return fmt.Errorf("create current re-enroll request: %w", err)
+	}
+	return tx.Commit()
+}
+
+// DecidePendingReEnroll changes only the exact, still-pending request. A late
+// completion must never overwrite denial, expiry, or a replacement's decision.
+func (s *Store) DecidePendingReEnroll(serverID, requestID, status, decidedBy string) error {
+	result, err := s.db.Exec(`UPDATE reenroll_requests SET status = ?, decided_by = ? WHERE id = ? AND server_id = ? AND status = 'pending'`, status, decidedBy, requestID, serverID)
+	if err != nil {
+		return fmt.Errorf("decide pending re-enroll: %w", err)
+	}
+	rows, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("read re-enroll decision result: %w", err)
+	}
+	if rows != 1 {
+		return ErrReEnrollNotPending
+	}
+	return nil
+}
 
 // SetNodeCrypto stores the node public key, encrypted KEK, and enrollment
 // fingerprint for the given server.

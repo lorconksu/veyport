@@ -491,6 +491,16 @@ func (f *fixture) waitForAudit(action string) model.AuditEntry {
 	return model.AuditEntry{}
 }
 
+func (f *fixture) waitForSessionAttached(sessionID string) {
+	f.t.Helper()
+	// Registration precedes the open acknowledgement. The opened audit event
+	// is emitted only after the bridge receives that ack and attaches its stream.
+	entry := f.waitForAudit(model.AuditSSHSessionOpened)
+	if entry.Detail == nil || !strings.Contains(*entry.Detail, sessionIDDetailPrefix+sessionID) {
+		f.t.Fatal("opened audit event does not identify the attached session")
+	}
+}
+
 // ---------------------------------------------------------------------------
 // generic waiters
 // ---------------------------------------------------------------------------
@@ -538,6 +548,9 @@ func assertNoGoroutineLeak(t *testing.T, base int) {
 // the resolved execution user, and waits for the ack.
 func TestBridgeOpenRequestCarriesExecutionUser(t *testing.T) {
 	f := newFixture(t, nil)
+	if _, err := f.store.DB().Exec("UPDATE users SET auth_provider='ldap',ldap_username='ldapalice' WHERE id=?", testUserID); err != nil {
+		t.Fatal(err)
+	}
 	f.connectAgent()
 
 	ch := newFakeChannel()
@@ -570,10 +583,7 @@ func TestBridgeAgentDataReachesClient(t *testing.T) {
 	done, _ := f.startBridge(ch, nil)
 	sessionID := f.openSessionID()
 
-	waitFor(t, "session attach", func() bool {
-		info, ok := f.terminals.Get(testServerID, sessionID)
-		return ok && !info.Closed
-	})
+	f.waitForSessionAttached(sessionID)
 	if !f.terminals.DeliverData(testServerID, sessionID, []byte("hello from agent")) {
 		t.Fatal("DeliverData() dropped the payload")
 	}
@@ -641,10 +651,7 @@ func TestBridgeAgentExitSendsExitStatus(t *testing.T) {
 	ch := newFakeChannel()
 	done, _ := f.startBridge(ch, nil)
 	sessionID := f.openSessionID()
-	waitFor(t, "session attach", func() bool {
-		_, ok := f.terminals.Get(testServerID, sessionID)
-		return ok
-	})
+	f.waitForSessionAttached(sessionID)
 
 	if !f.terminals.End(testServerID, sessionID, 3, "") {
 		t.Fatal("End() did not close the terminal session")
@@ -672,10 +679,7 @@ func TestBridgeAgentDisconnectClosesClient(t *testing.T) {
 	ch := newFakeChannel()
 	done, _ := f.startBridge(ch, nil)
 	sessionID := f.openSessionID()
-	waitFor(t, "session attach", func() bool {
-		_, ok := f.terminals.Get(testServerID, sessionID)
-		return ok
-	})
+	f.waitForSessionAttached(sessionID)
 
 	// This is exactly what grpcserver.Handler does when an agent stream dies.
 	f.terminals.EndAll(testServerID, -1, "agent disconnected")
@@ -789,10 +793,7 @@ func TestBridgeClientDisconnectTearsDownSession(t *testing.T) {
 	ch := newFakeChannel()
 	done, _ := f.startBridge(ch, nil)
 	sessionID := f.openSessionID()
-	waitFor(t, "session attach", func() bool {
-		_, ok := f.terminals.Get(testServerID, sessionID)
-		return ok
-	})
+	f.waitForSessionAttached(sessionID)
 
 	f.disconnect(ch)
 	waitForDone(t, done, "bridge teardown after client disconnect")
@@ -815,10 +816,7 @@ func TestBridgeAgentExitSuppressesRedundantClose(t *testing.T) {
 	ch := newFakeChannel()
 	done, _ := f.startBridge(ch, nil)
 	sessionID := f.openSessionID()
-	waitFor(t, "session attach", func() bool {
-		_, ok := f.terminals.Get(testServerID, sessionID)
-		return ok
-	})
+	f.waitForSessionAttached(sessionID)
 
 	f.terminals.End(testServerID, sessionID, 0, "")
 	waitForDone(t, done, "bridge teardown after agent exit")
@@ -839,10 +837,7 @@ func TestBridgeNoGoroutineLeak(t *testing.T) {
 	ch := newFakeChannel()
 	done, _ := f.startBridge(ch, nil)
 	sessionID := f.openSessionID()
-	waitFor(t, "session attach", func() bool {
-		_, ok := f.terminals.Get(testServerID, sessionID)
-		return ok
-	})
+	f.waitForSessionAttached(sessionID)
 	ch.clientWrite(t, "echo hi\r")
 	f.agent.waitForMessage(t, "TerminalInput", func(m *pb.HubMessage) bool {
 		return m.GetTerminalInput() != nil

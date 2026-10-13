@@ -16,15 +16,17 @@ import (
 
 // mockReEnrollReleaser is a test double for ReEnrollReleaser.
 type mockReEnrollReleaser struct {
-	called   bool
-	serverID string
-	adminID  string
-	err      error // error to return from ReleaseKEK
+	called    bool
+	serverID  string
+	adminID   string
+	requestID string
+	err       error // error to return from ReleaseKEK
 }
 
-func (m *mockReEnrollReleaser) ReleaseKEK(serverID, decidedBy string) error {
+func (m *mockReEnrollReleaser) ReleaseKEK(serverID, requestID, decidedBy string) error {
 	m.called = true
 	m.serverID = serverID
+	m.requestID = requestID
 	m.adminID = decidedBy
 	return m.err
 }
@@ -154,6 +156,9 @@ func TestReEnrollApprove_CorrectTOTP_ReachesReleaseKEK(t *testing.T) {
 	// What matters is that ReleaseKEK was reached.
 	if !mock.called {
 		t.Fatalf("want ReleaseKEK to be called, got status %d: %s", rec.Code, rec.Body.String())
+	}
+	if mock.requestID != "re-req-2" {
+		t.Fatalf("request ID dropped: %q", mock.requestID)
 	}
 	if mock.serverID != "srv-reenroll-2" {
 		t.Fatalf("ReleaseKEK called with wrong serverID: %q", mock.serverID)
@@ -609,4 +614,9 @@ func TestReEnrollApprove_Success(t *testing.T) {
 	if total < 1 {
 		t.Fatalf("expected a re-enroll approved audit entry, got total=%d", total)
 	}
+}
+
+func (m *mockReEnrollReleaser) DenyReEnroll(serverID, requestID, decidedBy string) error {
+	m.called, m.serverID, m.requestID, m.adminID = true, serverID, requestID, decidedBy
+	return m.err
 }

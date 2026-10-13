@@ -11,223 +11,36 @@ permissions:
   actions: write
 
 jobs:
-  test:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v6
-      - uses: actions/setup-go@v6
-        with:
-          go-version-file: hub/go.mod
-          cache-dependency-path: |
-            hub/go.sum
-            agent/go.sum
-      - name: Create frontend embed stub
-        run: mkdir -p hub/web/dist && touch hub/web/dist/index.html
-      - name: Hub tests
-        run: cd hub && go test ./internal/...
-      - name: Agent tests
-        run: cd agent && go test ./...
-
-  build-and-push:
-    needs: test
+  identity:
     runs-on: ubuntu-latest
     outputs:
-      version: ${{ steps.meta.outputs.version }}
+      version: ${{ steps.identity.outputs.version }}
     steps:
-      - uses: actions/checkout@v6
-
-      - name: Log in to Docker Hub
-        uses: docker/login-action@v4
-        with:
-          username: ${{ secrets.DOCKERHUB_USERNAME }}
-          password: ${{ secrets.DOCKERHUB_TOKEN }}
-
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v4
-
-      - name: Docker meta
-        id: meta
-        uses: docker/metadata-action@v6
-        with:
-          images: yiucloud/veyport
-          tags: |
-            type=semver,pattern={{version}}
-            type=semver,pattern={{major}}.{{minor}}
-            type=raw,value=latest
-
-      - name: Build and push
-        uses: docker/build-push-action@v7
-        env:
-          DOCKER_BUILD_SUMMARY: false
-          DOCKER_BUILD_RECORD_UPLOAD: false
-        with:
-          context: .
-          pull: true
-          push: true
-          tags: ${{ steps.meta.outputs.tags }}
-          labels: ${{ steps.meta.outputs.labels }}
-          build-args: |
-            VERSION=${{ steps.meta.outputs.version }}
-          sbom: true
-          provenance: mode=max,version=v0.2
-
-  scan-container:
-    needs: build-and-push
-    runs-on: ubuntu-latest
-    env:
-      IMAGE_TAG: ${{ needs.build-and-push.outputs.version }}
-    steps:
-      - uses: actions/checkout@v6
-
-      - name: Log in to Docker Hub
-        uses: docker/login-action@v4
-        with:
-          username: ${{ secrets.DOCKERHUB_USERNAME }}
-          password: ${{ secrets.DOCKERHUB_TOKEN }}
-
-      - name: Docker Scout CVE scan
-        id: scout
-        continue-on-error: true
-        uses: docker/scout-action@v1.20.3
-        with:
-          command: cves
-          image: yiucloud/veyport:${{ env.IMAGE_TAG }}
-          summary: true
-          write-comment: false
-
-      # Scout's API occasionally returns transient 403s; one retry clears them.
-      - name: Docker Scout CVE scan (retry)
-        if: steps.scout.outcome == 'failure'
-        uses: docker/scout-action@v1.20.3
-        with:
-          command: cves
-          image: yiucloud/veyport:${{ env.IMAGE_TAG }}
-          summary: true
-          write-comment: false
-
-      - name: Install Grype
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+      - name: Require exact stable release tag
+        id: identity
         run: |
-          curl -sSfL https://raw.githubusercontent.com/anchore/grype/main/install.sh | \
-            sh -s -- -b /usr/local/bin v0.110.0
+          set -euo pipefail
+          version="${GITHUB_REF_NAME#v}"
+          python3 scripts/release/metadata.py --version "$version" --tag "$GITHUB_REF_NAME" --revision "$GITHUB_SHA" --ref "$GITHUB_REF"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
 
-      - name: Grype container scan
-        run: |
-          grype "yiucloud/veyport:${IMAGE_TAG}" -o json > grype-results.json || true
-          grype "yiucloud/veyport:${IMAGE_TAG}" -o table > grype-results.txt || true
-          python3 - <<'PY'
-          import json
-          import os
-          from pathlib import Path
+  required-ci:
+    needs: identity
+    uses: ./.github/workflows/ci.yml
+    secrets:
+      DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
+      DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
+      SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+      GITLEAKS_LICENSE: ${{ secrets.GITLEAKS_LICENSE }}
 
-          summary_path = Path(os.environ["GITHUB_STEP_SUMMARY"])
-          results = json.loads(Path("grype-results.json").read_text())
-          matches = results.get("matches", [])
-          high_or_critical = [
-              m for m in matches
-              if m.get("vulnerability", {}).get("severity") in {"High", "Critical"}
-          ]
-
-          lines = [
-              "### Grype Container Scan",
-              f"Total findings: **{len(matches)}**",
-              f"High/Critical findings: **{len(high_or_critical)}**",
-              "",
-          ]
-
-          if high_or_critical:
-              lines.extend([
-                  "| Package | Installed | Vulnerability | Severity |",
-                  "| --- | --- | --- | --- |",
-              ])
-              for match in high_or_critical[:10]:
-                  artifact = match.get("artifact", {})
-                  vuln = match.get("vulnerability", {})
-                  lines.append(
-                      f"| {artifact.get('name', '')} | {artifact.get('version', '')} | "
-                      f"{vuln.get('id', '')} | {vuln.get('severity', '')} |"
-                  )
-          else:
-              lines.append("No high or critical findings detected by Grype.")
-
-          summary_path.write_text("\\n".join(lines) + "\\n")
-          PY
-
-      - name: Upload Grype artifacts
-        uses: actions/upload-artifact@v7
-        with:
-          name: grype-results
-          path: |
-            grype-results.json
-            grype-results.txt
-
-      - name: Install Syft
-        run: |
-          curl -sSfL https://raw.githubusercontent.com/anchore/syft/main/install.sh | \
-            sh -s -- -b /usr/local/bin v1.42.3
-
-      - name: Generate SBOM with Syft
-        run: syft scan "yiucloud/veyport:${IMAGE_TAG}" -o spdx-json=sbom.spdx.json
-
-      - name: Upload SBOM
-        uses: actions/upload-artifact@v7
-        with:
-          name: sbom
-          path: sbom.spdx.json
-
-  malware-scan:
-    needs: build-and-push
-    runs-on: ubuntu-latest
-    env:
-      IMAGE_TAG: ${{ needs.build-and-push.outputs.version }}
-    steps:
-      - name: Log in to Docker Hub
-        uses: docker/login-action@v4
-        with:
-          username: ${{ secrets.DOCKERHUB_USERNAME }}
-          password: ${{ secrets.DOCKERHUB_TOKEN }}
-
-      - name: Pull image
-        run: docker pull "yiucloud/veyport:$IMAGE_TAG"
-
-      - name: Export image filesystem
-        run: |
-          docker create --name veyport-scan "yiucloud/veyport:$IMAGE_TAG"
-          docker export veyport-scan -o image-fs.tar
-          docker rm veyport-scan
-
-      - name: Install ClamAV
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y clamav
-          sudo systemctl stop clamav-freshclam 2>/dev/null || true
-          sudo freshclam
-
-      - name: Run ClamAV scan
-        run: clamscan --infected --recursive image-fs.tar
-
-  create-release:
-    needs: build-and-push
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v6
-        with:
-          fetch-depth: 0
-
-      - name: Generate release notes
-        id: notes
-        run: |
-          PREV_TAG=$(git tag --sort=-v:refname | grep -v "^$GITHUB_REF_NAME$" | head -1)
-          if [ -n "$PREV_TAG" ]; then
-            echo "prev_tag=$PREV_TAG" >> "$GITHUB_OUTPUT"
-          fi
-
-      - name: Create GitHub Release
-        env:
-          GH_TOKEN: ${{ github.token }}
-          PREV_TAG: ${{ steps.notes.outputs.prev_tag }}
-        run: |
-          if [ -n "$PREV_TAG" ]; then
-            gh release create "$GITHUB_REF_NAME" --generate-notes --notes-start-tag "$PREV_TAG"
-          else
-            gh release create "$GITHUB_REF_NAME" --generate-notes
-          fi
+  delivery:
+    needs: [identity, required-ci]
+    uses: ./.github/workflows/delivery.yml
+    with:
+      version: ${{ needs.identity.outputs.version }}
+      tag: ${{ github.ref_name }}
+      prototype: false
+    secrets:
+      DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
+      DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}

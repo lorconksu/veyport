@@ -349,8 +349,8 @@ func TestSSHCert_APITokenMode_RefusedBeforeAnyRequest(t *testing.T) {
 	if stdout.Len() != 0 {
 		t.Errorf("stdout = %q, want empty on the refusal path", stdout.String())
 	}
-	if !strings.Contains(stderr.String(), "vey login") {
-		t.Errorf("stderr = %q, want guidance to run vey login", stderr.String())
+	if !strings.Contains(stderr.String(), "vey --hub "+hub.URL()+" login") {
+		t.Errorf("stderr = %q, want correctly ordered login guidance", stderr.String())
 	}
 }
 
@@ -384,6 +384,9 @@ func TestSSHCert_InteractiveRequired_ExitAuth(t *testing.T) {
 	}
 	if !strings.Contains(stderr.String(), "interactive login required") {
 		t.Errorf("stderr = %q, want the hub's refusal message surfaced", stderr.String())
+	}
+	if !strings.Contains(stderr.String(), "vey --hub "+hub.URL()+" login") {
+		t.Errorf("stderr = %q, want correctly ordered login guidance", stderr.String())
 	}
 	if stdout.Len() != 0 {
 		t.Errorf("stdout = %q, want empty on an error path", stdout.String())

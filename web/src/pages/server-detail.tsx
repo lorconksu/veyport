@@ -37,6 +37,7 @@ import { formatFileSize, isMarkdownFile, sortFileNodes } from '@/lib/file-viewer
 import { createLogLineAssembler } from '@/lib/log-stream'
 import { statusDot } from '@/lib/server-utils'
 import { useAuth } from '@/hooks/use-auth'
+import { hasCapability } from '@/lib/auth'
 import { OfflineTerminalState, ServerTerminal } from '@/components/server-terminal'
 import { ReEnrollApproval } from '@/components/reenroll-approval'
 import { usePendingReEnroll } from '@/hooks/use-reenroll'
@@ -1008,11 +1009,12 @@ function FileViewerContent({
 // HighlightedCodeBlock renders pre-sanitized hljs HTML.
 // highlight.js escapes all user text and only produces <span class="hljs-..."> wrappers.
 // sanitizeHljsHtml() strips any non-span tags as a defense-in-depth measure.
+// The chain is covered by lib/__tests__/file-viewer.test.ts canary assertions.
 function HighlightedCodeBlock({ html }: Readonly<{ html: string }>) {
   // NOTE: html here is sanitized output from sanitizeHljsHtml() — safe to render.
   return (
     <pre className="p-4 text-sm font-mono leading-relaxed overflow-x-auto">
-      <code className="hljs" dangerouslySetInnerHTML={{ __html: html }} />
+      <code className="hljs" dangerouslySetInnerHTML={{ /* nosemgrep: typescript.react.security.audit.react-dangerouslysetinnerhtml.react-dangerouslysetinnerhtml */ __html: html }} />
     </pre>
   )
 }
@@ -1544,8 +1546,8 @@ function FileWorkspaceContent(props: Readonly<ServerWorkspacePanelProps>) {
 export function ServerDetailPage() {
   const { id: serverId } = useParams<{ id: string }>()
   const { user } = useAuth()
-  const isAdmin = user?.role === 'admin'
-  const canUseTerminal = isAdmin || user?.terminal_access === true
+  const isAdmin = hasCapability(user, 'operations.admin')
+  const canUseTerminal = hasCapability(user, 'terminal.execute')
 
   // File tree state
   const [treeState, setTreeState] = useState<Record<string, TreeNodeState>>({})

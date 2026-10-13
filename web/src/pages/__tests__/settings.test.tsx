@@ -128,6 +128,20 @@ describe('SettingsPage', () => {
     expect(screen.queryByRole('button', { name: 'Notifications' })).not.toBeInTheDocument()
   })
 
+  it.each([
+    { role: 'admin', roles: ['admin'], capabilities: [] },
+    { role: 'viewer', roles: ['viewer', 'security-officer'], capabilities: ['security.read', 'security.request'] },
+  ])('keeps operational tabs and calls denied without operations.admin ($role)', authority => {
+    mockUseAuth.mockReturnValue({
+      user: { ...mockUsers[0], ...authority }, login: vi.fn(),
+    })
+    renderPage('/settings?tab=users')
+    expect(screen.queryByRole('button', { name: 'Users' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Directory' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Notifications' })).not.toBeInTheDocument()
+    expect(mockApiFetch).not.toHaveBeenCalledWith('/users')
+  })
+
   it('shows avatar section with username initial', () => {
     renderPage()
     expect(screen.getAllByText('A').length).toBeGreaterThan(0) // First letter of 'admin'

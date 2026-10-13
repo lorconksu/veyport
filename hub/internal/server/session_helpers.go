@@ -83,11 +83,12 @@ const (
 //
 // An idle limit of zero means idle expiry is switched off, so nothing depends
 // on the stamp's freshness and the cheapest throttle applies.
-func touchInterval(p lockout.Policy) time.Duration {
-	if p.SessionIdle <= 0 {
+func touchInterval(p lockout.Policy, kind string) time.Duration {
+	idle := session.IdleTimeout(kind, p)
+	if idle <= 0 {
 		return maxTouchInterval
 	}
-	if scaled := p.SessionIdle / touchIntervalFraction; scaled < maxTouchInterval {
+	if scaled := idle / touchIntervalFraction; scaled < maxTouchInterval {
 		return scaled
 	}
 	return maxTouchInterval
@@ -203,6 +204,13 @@ func (e *sessionAccessError) Error() string { return e.Msg }
 // establish that the session is live, and a session check that fails open
 // would be no check at all.
 func (s *Server) sessionAccessError(claims *auth.Claims) error {
+	return s.checkSessionAccess(claims, true)
+}
+
+// A refresh checks liveness before spending its private digest, but only a
+// successful durable rotation records activity. A spent token cannot keep an
+// otherwise idle session alive by replaying the refresh endpoint.
+func (s *Server) checkSessionAccess(claims *auth.Claims, touch bool) error {
 	if claims.SessionID == "" {
 		return &sessionAccessError{Msg: session.MsgExpired}
 	}
@@ -222,8 +230,10 @@ func (s *Server) sessionAccessError(claims *auth.Claims) error {
 	case session.VerdictOK:
 		// Throttled inside the store, so this costs at most one cheap guarded
 		// UPDATE per session per touchInterval however fast requests arrive.
-		if touchErr := s.store.TouchSession(sess.ID, now, touchInterval(policy)); touchErr != nil {
-			log.Printf("warning: failed to touch session %s: %v", sess.ID, touchErr)
+		if touch {
+			if touchErr := s.store.TouchSession(sess.ID, now, touchInterval(policy, sess.Kind)); touchErr != nil {
+				log.Printf("warning: failed to touch session %s: %v", sess.ID, touchErr)
+			}
 		}
 		return nil
 	case session.VerdictEnded:

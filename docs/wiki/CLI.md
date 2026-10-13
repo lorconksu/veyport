@@ -1,11 +1,11 @@
 # CLI (`vey`)
 
 > **TL;DR**
-> - **What:** `vey` is a standalone command-line client for the Veyport Hub REST API — sign in, browse the fleet, read files and tail logs, export audit history, all scriptable
-> - **Who:** Operators who want fleet visibility from a terminal, and automation/scripts that need non-interactive access
-> - **Why:** Everything the web UI shows for servers, files, logs, and audit is also reachable as a scriptable command, with stable exit codes and `--json` output
+> - **What:** `vey` is a standalone command-line client for Hub API operations and native SSH access, including prototype no-PTY command passthrough
+> - **Who:** Operators and scripts using eligible API commands; command passthrough requires an operator-issued SSH certificate
+> - **Why:** Fleet, file, log, and audit operations have scriptable CLI commands; command passthrough is documented separately because it requires an operator-issued SSH certificate
 > - **Where:** One command from your own Hub — `curl -fsSL https://<your-hub>/install/cli.sh | sh` (also under **Install CLI** on the dashboard); binaries are at `/install/cli/{os}/{arch}` for manual installs
-> - **How:** Interactive sign-in (`vey login`) for humans, or an API token via `VEYPORT_TOKEN` for scripts — both talk to the Hub over the same Bearer-authenticated REST API described in [[API Reference]]
+> - **How:** Use interactive sign-in (`vey login`) for operator workflows. API tokens support eligible Hub API commands, but cannot obtain an SSH certificate for command passthrough.
 
 ---
 
@@ -14,13 +14,16 @@
 1. [Overview](#overview)
 2. [Connect to a server](#connect-to-a-server)
 3. [Install](#install)
-4. [Authentication](#authentication)
-5. [Configuration](#configuration)
-6. [Session awareness](#session-awareness)
-7. [Command Reference](#command-reference)
-8. [Exit Codes](#exit-codes)
-9. [TLS](#tls)
-10. [Scripting Notes](#scripting-notes)
+4. [Update the CLI](#update-the-cli)
+5. [Authentication](#authentication)
+6. [Configuration](#configuration)
+7. [Session awareness](#session-awareness)
+8. [Command Reference](#command-reference)
+9. [Exit Codes](#exit-codes)
+10. [TLS](#tls)
+11. [Scripting Notes](#scripting-notes)
+12. [Command passthrough](#command-passthrough)
+13. [Automation guide](#automation-guide)
 
 ---
 
@@ -28,9 +31,17 @@
 
 `vey` is a Go binary that talks to the same Hub REST API the web dashboard uses (`Authorization: Bearer <token>`, JSON bodies, `Cache-Control: no-store`). There is no cookie handling and no CSRF token — Bearer requests bypass CSRF the same way a CLI-created API token does. Every request carries `User-Agent: vey/<version>`, which is how the hub tells an interactive `vey login` session apart from a browser when it records a server-side session (see [Session awareness](#session-awareness), below).
 
-`vey` currently covers fleet visibility, remote file/log access, audit export, and — as of the SSH gateway feature — native interactive shell access via `vey ssh-cert` / `vey ssh`. There is still no REST-driven `vey terminal` command mirroring the browser's SSE-based terminal stream; use the web dashboard's terminal (see [[Server Detail]]) for that specific flow, or `vey ssh` for a real terminal from your own machine (see [[SSH Gateway]]).
+`vey` covers fleet visibility, remote file/log access, audit export, native
+interactive SSH, and (in the published command-passthrough prototype) no-PTY
+command passthrough and protected security administration. There is still no
+REST-driven `vey terminal` command mirroring the browser's SSE-based terminal
+stream; use the web dashboard's terminal (see [[Server Detail]]) for that
+specific flow, or `vey ssh` for a terminal from your own machine (see
+[[SSH Gateway]]).
 
 ![Overview diagram](../screenshots/diagram-cli-5d7a06d9.png)
+
+![Command execution and evidence diagram](../screenshots/diagram-command-execution-011.png)
 
 ## Connect to a server
 
@@ -45,23 +56,67 @@ vey ssh web01
 ```
 
 Replace `web01` with the server's unique name or ID. Login saves the Hub address, so
-subsequent commands can omit `--hub`. SSH requires an interactive login and your
-machine's native `ssh` client; API tokens cannot obtain an SSH certificate.
+subsequent commands can omit `--hub`. Obtaining an SSH certificate requires
+interactive login, and the operator machine needs a native `ssh` client. A
+script can use an already-issued certificate as delegated operator access.
 
 Some released builds, including **2.0.43**, omit `ssh-cert` and `ssh` from
 `vey --help` even though both commands are available. Run them directly as shown
 above. Re-run `vey ssh-cert` if the stored certificate expires. See [[SSH Gateway]]
 for gateway configuration and connection troubleshooting.
 
+### Command passthrough
+
+The feature-branch command mode submits exactly one opaque command after `--`:
+
+```bash
+vey ssh web01 -- 'uname -a'
+# Standard profile only: Enhanced rejects arbitrary nonempty stdin.
+printf 'hello\n' | vey ssh web01 -- 'cat'
+```
+
+The client invokes OpenSSH directly and does not run the command in a local
+shell. Command mode has no PTY. With no redirected input, stdin is EOF. Standard
+mode streams redirected stdin. Enhanced mode requires empty stdin except for the
+exact forms `bash -s`, `/bin/bash -s`, `sh -s`, and `/bin/sh -s`, which accept a
+complete finite script before preparation and launch. Script arguments and mixed
+script/data stdin are not supported. The script cap is 16 MiB and its submission
+deadline is 120 seconds.
+
+Stdout, stderr, and remote exit results remain separate. Exit 255 can represent
+either a remote result or an SSH transport failure; commands are not automatically
+retried after uncertain outcomes. Remote output is not part of the command
+evidence. The published command-passthrough prototype is Hub
+`2.0.50-prototype.9` / tag `prototype-ssh-passthrough.9`, with CLI and agent
+prototype 9 artifacts. Older CLI prototype 6 builds are also compatible with
+the Hub. These are prototype builds, not a stable or main-branch release. Check current
+publication and qualification on the [release page](https://github.com/lorconksu/veyport/releases)
+and verify target agent support. See [[CLI Automation]] for practical scripting
+patterns and limits.
+
 ## Install
 
-The quickest path is the Hub-served install script — one command on Linux and macOS (it detects your platform, verifies the checksum, and installs to `/usr/local/bin`, falling back to `~/.local/bin` when it can't write there):
+The quickest path is the Hub-served install script — one command on Linux and macOS (it detects your platform, verifies the checksum, and installs to `/usr/local/bin/vey`):
 
 ```bash
 curl -fsSL https://hub.example.com/install/cli.sh | sh
 ```
 
-Re-running the same command upgrades an existing install in place. The same one-liner is available in the web UI under **Install CLI** on the dashboard.
+If your account cannot write to `/usr/local/bin`, rerun the installer with `sudo`:
+
+```bash
+curl -fsSL https://hub.example.com/install/cli.sh | sudo sh
+```
+
+The installer stops with instructions if it cannot install there. A different copy earlier in `PATH` can still be selected by the bare `vey` command, so check resolution after installing:
+
+```bash
+type -a vey          # Bash/Zsh: list every copy found on PATH
+command -v vey       # show the copy the shell will run
+/usr/local/bin/vey --version
+```
+
+If `command -v` points to another copy, put `/usr/local/bin` earlier in `PATH`, remove the stale copy if appropriate, and refresh the shell's command cache (`hash -r` in Bash, `rehash` in Zsh, or start a new shell). The same one-liner is available in the web UI under **Install CLI** on the dashboard.
 
 ### Manual install (verify by hand)
 
@@ -106,7 +161,46 @@ chmod +x vey && ./vey --version
 | macOS Intel | `darwin` | `amd64` |
 | macOS Apple Silicon | `darwin` | `arm64` |
 
-Move the verified binary onto your `PATH` (e.g. `sudo mv vey /usr/local/bin/vey`). There is no auto-update mechanism — re-run the install to pick up a newer build.
+Move the verified binary onto your `PATH` (e.g. `sudo mv vey /usr/local/bin/vey`). Current builds can update in place with `vey update`; see [Update the CLI](#update-the-cli). If the installed build predates that command, use the Hub's **Install CLI** command once to install a build that includes it.
+
+## Update the CLI
+
+The installed CLI can check for and install a newer verified build from its
+configured Hub:
+
+```bash
+vey update --check
+vey update
+```
+
+`--check` reads the Hub's public distribution metadata only. It does not need a
+login, download the executable, or change local files. Hub selection follows the
+normal precedence (`--hub`, `VEYPORT_HUB`, then the configured default). Updates
+require HTTPS with a valid certificate and refuse redirects. Only a newer,
+comparable release is installed; the command does not downgrade. Development,
+dirty, or unrecognized build identities cannot be updated in place.
+
+Updates are supported on Linux and macOS for amd64 and arm64. The command only
+replaces `/usr/local/bin/vey`, and refuses an alternate executable path, unsafe
+ownership or permissions, or a mismatch between the running CLI and that file.
+It never elevates itself. If replacement needs root permission, rerun the exact
+command shown in the error, for example:
+
+```bash
+sudo /usr/local/bin/vey --hub 'https://hub.example.com' update
+```
+
+The updater verifies the Hub manifest and downloaded binary before an atomic
+replacement. It keeps configuration and credentials untouched and retains the
+previous executable in the private `.vey-update-*` directory under
+`/usr/local/bin`. If the new binary fails its post-install checks, the updater
+restores the previous executable automatically. If restoration itself fails,
+the error gives the retained backup path for recovery. A successful update is
+used by the next `/usr/local/bin/vey` invocation; no shell reload is needed.
+
+If the Hub has no approved metadata for the running CLI platform, update fails
+closed. See [[Deployment]] for enrolled-agent updates and the one-time bootstrap
+for older agents.
 
 ## Authentication
 
@@ -129,9 +223,11 @@ Re-running `vey login` replaces the stored session for that hub. `vey logout` in
 
 Nothing ever prompts when stdin is not a TTY — a non-interactive `vey login` fails fast with API-token guidance instead of hanging.
 
-### API tokens (scripts and automation)
+### API tokens (eligible Hub API commands)
 
-For CI, cron jobs, or any non-interactive use, use an API token instead of a stored session. An admin creates one on the Hub host:
+For supported Hub API commands that do not require an interactive operator
+session, an API token can be used instead of a stored session. An admin creates
+one on the Hub host:
 
 ```bash
 # Docker deployment
@@ -146,12 +242,18 @@ Then set it for `vey` to pick up:
 
 ```bash
 export VEYPORT_TOKEN=adt_...
-vey --hub https://hub.example.com servers list --json | jq '.total'
+vey --json --hub https://hub.example.com servers list | jq '.total'
 ```
 
 `VEYPORT_TOKEN` always wins over a stored interactive session, even if one exists — this lets scripts run alongside your own logged-in shell without interference. A token can also be set per-hub in the config file (see below); the environment variable still takes precedence over that. A value that doesn't start with `adt_` is rejected locally as a usage error (exit 2) before any request is sent, so a mistyped secret never reaches the network.
 
-Token-holding credentials satisfy every route `vey` uses — none of them are interactive-only. (Interactive-only routes, like the web terminal, reject API tokens; `vey` doesn't call any of those today.)
+An API token cannot obtain an SSH certificate. `vey ssh-cert` requires an
+interactive login, and command passthrough depends on an operator certificate.
+The token can still authenticate eligible REST operations such as server
+resolution; it does not replace the certificate or establish its operator
+identity. Treat command automation as delegated use of an already authenticated
+operator profile, not as unattended service-account access. See
+[[CLI Automation]] for the supported workflow and recovery guidance.
 
 ## Configuration
 
@@ -199,17 +301,23 @@ Global flags precede the subcommand; each subcommand's own flags follow it (e.g.
 
 As of feature 009, every completed `vey login` creates a server-side session on the hub, exactly
 like a browser sign-in - it shows up in the admin's Sessions panel and the user's own "Your
-sessions" list (see [[Settings]]), it is subject to the hub's idle and absolute session limits
-(see [[Logging In]]), and it can be ended by an administrator or by the user themselves without
-touching any other session.
+sessions" list (see [[Settings]]), it is subject to the hub's CLI idle limit (default 45 minutes)
+and shared 12-hour absolute session limit (see [[Logging In]]), and it can be ended by an
+administrator or by the user themselves without touching any other session.
 
-- **How the hub tells CLI sessions apart:** every `vey` request carries `User-Agent:
-  vey/<version>`, which the hub records as session kind `cli` (anything else is recorded as
-  `web`).
+- **How the hub tells CLI sessions apart:** during sign-in, `vey` sends `User-Agent:
+  vey/<version>`, which the Hub records as the session kind `cli` (anything else is recorded as
+  `web`). The saved kind determines the idle policy for that session.
+- **Running SSH commands:** idle expiry ends the authenticated CLI session for later requests,
+  but does not cancel an SSH command already running. Command authorization and explicit account
+  or access revocation remain separate.
 - **`vey status`** now also reports when the current session expires and when it goes idle (see
   below).
 - **`vey logout`** now genuinely ends the server-side session, not just the locally-stored
   credentials - see [Command Reference](#command-reference).
+- **Refresh is session-scoped:** the Hub atomically rotates the current session's refresh token.
+  Other sessions and still-valid access tokens are unaffected; logout, expiry, account or security
+  changes, and explicit revocation continue to end the sessions they apply to.
 - **A session ended or timed out elsewhere** (an administrator's action, "Sign out other
   sessions" from a browser, or the idle/absolute limit) is indistinguishable from any other
   authentication failure to `vey`: the next command exits with the authentication-failure status
@@ -222,6 +330,72 @@ touching any other session.
 ## Command Reference
 
 This section transcribes the command contract in `specs/004-cli-connector/contracts/cli-commands.md`.
+
+### `vey update [--check]`
+
+Checks the configured Hub's public CLI distribution metadata and, unless
+`--check` is supplied, installs a verified newer build at `/usr/local/bin/vey`.
+No login is needed. It supports Linux and macOS amd64/arm64, requires HTTPS with
+a valid certificate, follows no redirects, and never downgrades. The updater
+preserves CLI configuration and credentials and retains the previous executable
+for recovery. See [Update the CLI](#update-the-cli) for path, permission, and
+rollback behavior.
+
+### `vey servers update <node>`
+
+Checks and updates an enrolled Linux systemd agent from the exact artifact
+served by the configured Hub. `vey update` continues to update this local CLI.
+Agent updates require a live interactive administrator session; API tokens are
+refused. The node must have a valid mTLS enrollment, use the root-owned
+`/usr/local/bin/veyport-agent` service, and belong to a Standard installation
+that has never enrolled Enhanced or other governance controls. The updater
+tracks file list/read/delete, upload, log-tail, PTY, and execution work through
+their full lifetimes. New work is blocked while maintenance is reserved. A
+cancelled request, CLI timeout, or disconnected caller does not prove remote
+work has finished. See [[Deployment]] for the preserving bootstrap, operation
+status, and recovery steps.
+
+Supported forms are:
+
+```text
+vey servers update <node> [--check]
+vey servers update <node> --bootstrap-idle-confirmed
+vey servers update <node> --bootstrap-idle-confirmed \
+  --bootstrap-original-version <version> --bootstrap-original-sha256 <hash>
+vey servers update <node> --status [--operation <id>]
+vey servers update <node> --acknowledge-recovery <id> --verified-sha256 <hash>
+```
+
+`--check` is read-only. An apply waits up to 150 seconds for a fresh mTLS
+connection to report the exact target version, revision, and checksum and for
+the agent to durably confirm the result. If the result is unknown or the wait
+ends before confirmation, inspect the durable operation with `--status` before
+retrying. Recovery acknowledgement requires
+direct SSH verification of the original binary and service, the exact expected
+hash, and the cooldown printed by the CLI. It records the administrator's
+attestation; it does not claim remote binary verification.
+
+For a one-time preserving upgrade of an older enrolled binary whose version
+and revision linker stamps are both absent, close all clients and agent work,
+verify the node is idle over direct SSH, and establish the original version
+from trusted deployment records. Measure the exact installed bytes on the
+node with `sudo sha256sum /usr/local/bin/veyport-agent`, then pass both
+`--bootstrap-original-version` and `--bootstrap-original-sha256` together with
+`--bootstrap-idle-confirmed`. The version must not be guessed from an arbitrary
+unstamped executable. The helper rejects this path for a stamped binary and
+requires a matching installed-byte digest; the Hub requires the target release
+to be newer than the asserted original. The Hub binds the assertions to the
+authenticated actor/session, node, fresh connection, and one-use ticket. The
+CLI prints the direct-SSH script command carrying those same assertions; run
+that exact command.
+
+Printing the command does not mean the remote installation succeeded. After
+running it, inspect `vey servers update <node> --status` until the operation is
+`succeeded`, then verify the node over Veyport SSH:
+
+```bash
+vey ssh <node> -- 'hostname; id; uname -s'
+```
 
 ### `vey login`
 
@@ -273,17 +447,80 @@ Streams the Hub's audit export to stdout unmodified; `--json` is a documented no
 
 ### `vey ssh-cert`
 
-Provisions or refreshes your SSH credential for the SSH gateway. Generates (or reuses) a local ed25519 keypair, fetches the gateway's host key for pinning, requests a signed short-lived certificate (`POST /api/ssh/certificates`) for your own username, and stores the result with the same at-rest protection as your login session. Requires an interactive `vey login` session — an API-token credential is refused with exit 3 before any request is sent (SSH access is an operator capability, not a script capability). Idempotent: re-running keeps the keypair and just refreshes the certificate. `--json`: `{principal, expires_at, host_key_fingerprint, gateway_port}`. Rate-limited server-side to 10 issuances/minute (`429` → exit 7). Full details: [[SSH Gateway]].
+Provisions or refreshes your SSH credential for the SSH gateway. Generates (or reuses) a local ed25519 keypair, fetches the gateway's host key for pinning, requests a signed short-lived certificate (`POST /api/ssh/certificates`) for your own username, and stores the result with the same at-rest protection as your login session. Requires an interactive `vey login` session — an API-token credential is refused with exit 3 before any request is sent. The certificate can then be delegated to scripts; it is an operator credential and is not issued to an API-token service identity. Idempotent: re-running keeps the keypair and just refreshes the certificate. `--json`: `{principal, expires_at, host_key_fingerprint, gateway_port}`. Rate-limited server-side to 10 issuances/minute (`429` → exit 7). Full details: [[SSH Gateway]].
 
 ### `vey ssh <server>`
 
-Opens a native interactive SSH session to a fleet server through the Hub's SSH gateway. `<server>` resolves the same way as `vey servers get` (unique name/ID → connect; ambiguous → exit 2 listing candidates; unknown → exit 5). Checks for a valid, unexpired certificate up front (missing/expired → guidance to run `vey ssh-cert`, exit 3), pre-configures host verification from the cached gateway fingerprint (no blind trust-on-first-use), and execs your machine's own `ssh` client — it never edits `~/.ssh/config`. Exits with whatever status code the underlying `ssh` process returns. v1 is an interactive shell only: no `exec`, no `scp`/`sftp`, no port/agent forwarding, no Windows support. Full details, the manual `ssh` equivalent, and the `user+server` addressing scheme: [[SSH Gateway]].
+Opens a native interactive SSH session to a fleet server through the Hub's SSH gateway. `<server>` resolves the same way as `vey servers get` (unique name/ID → connect; ambiguous → exit 2 listing candidates; unknown → exit 5). Checks for a valid, unexpired certificate up front (missing/expired → guidance to run `vey ssh-cert`, exit 3), fetches the current gateway public key over the Hub API, and pins host verification to that key in a temporary file. It compares the key's fingerprint with the value cached by `vey ssh-cert` and warns if it changed. The saved fingerprint detects rotation; it does not supply the pinned key. `vey` execs your machine's own `ssh` client and never edits `~/.ssh/config`. Exits with whatever status code the underlying `ssh` process returns. For the prototype command form, see the next entry. `scp`/`sftp`, forwarding, and Windows clients are not supported. Full details and the `user+server` addressing scheme: [[SSH Gateway]].
+
+### `vey ssh <server> -- '<command>'`
+
+Runs exactly one command string without a PTY. OpenSSH BatchMode is used;
+terminal stdin is EOF unless redirected. Standard mode forwards redirected stdin.
+Enhanced mode permits stdin only for the exact four shell script forms shown
+above, and collects the full script before launch. The CLI preserves stdout and
+stderr separately and propagates the remote result without automatic retries.
+The operator's human-issued SSH certificate is required; an API token alone
+cannot obtain one. Scripts using an existing certificate are delegated
+operator access.
+
+In Standard mode, preparation, admission, and execution transport failures
+report a diagnostic on stderr and a nonzero exit status to a responsive client.
+Enhanced mode provides this response after complete input collection; cancellation
+during collection may instead close the channel. Once finalization begins for an
+accepted execution, final SSH response delivery and relay cleanup have a deadline of at most two
+seconds; if the SSH client stops accepting the response, the Hub closes the
+connection. Treat a lost connection as an uncertain remote outcome and inspect
+the execution before retrying. Existing command-capable agents can use the Hub
+fix without an agent upgrade.
+
+### `vey security`
+
+Feature-branch prototype commands:
+
+```text
+vey security request --change FILE|- --reason TEXT --expected-version N [--totp-file FILE|-]
+vey security list [--limit N] [--offset N]
+vey security status [CHANGE_ID]
+vey security approve CHANGE_ID --digest SHA256 [--totp-file FILE|-]
+vey security apply CHANGE_ID --digest SHA256 [--totp-file FILE|-]
+vey security reconcile CHANGE_ID
+vey security secret --kind destination|password [--value-file FILE|-]
+```
+
+`status` without an ID returns policy, readiness, and live capabilities; with an
+ID it returns that exact request, digest, expiry, and votes. `list` is bounded to
+one page (limit 1–100). A request file contains one typed change, not a wrapper;
+every request needs a reason and positive expected policy version. Inspect the
+exact preview and digest before step-up or approval. The baseline is one requester
+and two independent approvers tied to distinct verified people. Admin status does
+not grant security authority.
+
+Mutation requires the selected stored interactive CLI session and fresh
+action-bound TOTP. API tokens cannot perform step-up or protected mutations. Clear
+`VEYPORT_TOKEN` and configured token overrides to select the session. Proofs stay
+in memory. Secret values are write-only, uploaded separately, and represented in
+changes only by immutable references; do not put them in change files, reasons,
+or shell history. See [[Settings]] and [[API Reference]].
 
 ### Not yet supported
 
-A REST-driven `vey terminal` command mirroring the browser's SSE-based terminal stream (superseded in practice by `vey ssh`, above), creating/listing/revoking API tokens from the CLI, and any admin mutation (creating/deleting users or servers) are out of scope for this version of `vey`. Use the web dashboard or `veyport admin ...` on the Hub host for those.
+A REST-driven `vey terminal` command mirroring the browser's SSE-based terminal stream, `scp`/`sftp`, port forwarding, arbitrary Enhanced stdin, script arguments, and general user/server administration commands are not included. Command evidence covers the submitted command or complete supported script, not all internal shell instructions, dynamically fetched programs, child process actions, or remote output. This is not a sandbox or full host process telemetry.
+
+## Automation guide
+
+See [[CLI Automation]] for the command passthrough workflow, paging and agent
+version discovery, stdin rules, output capture, authentication boundaries, and
+safe handling of uncertain command outcomes.
 
 ## Exit Codes
+
+The table describes errors generated by `vey` before remote execution and
+responses from Hub API commands. Once SSH has started, the returned value may
+be the remote process exit status; those values overlap with native SSH
+failures. In particular, `255` can mean a remote result or an SSH connection
+failure. Do not classify a remote outcome from the numeric code alone; see
+[[CLI Automation]].
 
 | Code | Meaning |
 |---|---|
@@ -296,7 +533,9 @@ A REST-driven `vey terminal` command mirroring the browser's SSE-based terminal 
 | `6` | Connectivity failure (dial/TLS/timeout, or a stream that dropped unexpectedly) |
 | `7` | Rate-limited (`429`) — `vey` never auto-retries into a limiter |
 
-Exit codes are stable and intended for scripting: distinguish "re-authenticate" (3) from "you don't have access" (4) from "try again later" (7).
+For Hub API and CLI preflight errors, codes are stable and intended for
+scripting: distinguish "re-authenticate" (3) from "you don't have access" (4)
+from "try again later" (7).
 
 A `423` response from the Hub during `vey login` (the account is temporarily locked after too
 many failed attempts) maps to exit code `3`, with the Hub's message printed verbatim to stderr,
@@ -307,8 +546,8 @@ disabled — contact an administrator` or `account dormant — contact an admini
 to exit code `3`, message printed verbatim - these are authentication failures, not permission
 refusals, even though the Hub uses status `403` rather than `401` for them. Any other `403` keeps
 exit code `4`. If your account is disabled while `vey` already holds a session, `vey status`
-reports `Reachable: false` with exit code `3`, the same as any other revoked session - see [[API
-Reference]] for the enforcement matrix behind this.
+reports `Reachable: false` with exit code `3`, the same as any other revoked session - see
+[[API Reference]] for the enforcement matrix behind this.
 
 As of feature 009, a session-related `401` also maps to exit code `3`, with the hub's message
 printed verbatim to stderr: `session expired — sign in again` (idle timeout, absolute session
@@ -325,9 +564,8 @@ If your Hub uses a certificate from a private/internal CA, install that CA into 
 
 ## Scripting Notes
 
-- **`--json` everywhere.** Every command supports `--json` for machine-readable output. With `--json`, stdout is exactly one JSON document per command (or JSON-lines for streaming commands like `logs tail`) — never mixed with human-readable text.
-- **stdout/stderr discipline.** stdout carries payload only. Diagnostics, warnings, and progress notices (rate-limit backoff notes, dropped-log-line warnings, the one-time keyring-fallback warning) always go to stderr, in both human and `--json` mode. This means you can safely pipe stdout (`vey files cat ... | grep ...`, `vey audit export > audit.ndjson`) without stderr noise leaking into the data.
-- **JSON error shape.** In `--json` mode, a failing command writes `{"error": "...", "code": <exit-code>}` to stderr as a single JSON document and exits with the matching code — check `$?` rather than trying to parse stdout on failure.
+- **Global `--json`.** Put this flag before the command, for example `vey --json servers list`. Commands that render structured payloads emit JSON; streaming commands such as `logs tail` use JSON Lines. Raw streams such as `ssh`, `files cat`, and `audit export` remain raw bytes. `servers list` also prints its total count as plain text on stderr.
+- **stdout/stderr discipline.** stdout carries command payloads; stderr carries diagnostics, warnings, progress, and errors. Some startup, usage, and dispatch errors remain plain text even with `--json`; command-level errors from the shared printer use `{"error": "...", "code": N}` on stderr. Capture both streams and check the process exit code rather than assuming every stream is JSON.
 - **No TTY, no prompts.** No `vey` command ever prompts when stdin is not a TTY. `vey login` under a non-interactive stdin fails immediately with exit 3 and points at API-token setup instead of hanging a script.
 - **Secrets are never echoed.** Passwords, TOTP codes, refresh tokens, and API tokens are never written to stdout, stderr, or `--json` output. `vey status` shows only a token's `adt_xxxx…` prefix, never the full value.
 

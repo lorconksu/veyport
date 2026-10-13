@@ -849,6 +849,7 @@ func TestTOTPDisable_InvalidatesTargetCredentials(t *testing.T) {
 	if err := json.NewDecoder(meRec.Body).Decode(&viewerUser); err != nil {
 		t.Fatalf("decode viewer: %v", err)
 	}
+	events := executionForCredentialRevocationTest(t, s, viewerUser.ID)
 
 	// Give the target user an API token so we can confirm it is revoked.
 	_, tokenHash, tokenPrefix, err := auth.GenerateAPIToken()
@@ -888,6 +889,7 @@ func TestTOTPDisable_InvalidatesTargetCredentials(t *testing.T) {
 	if disableRec.Code != http.StatusOK {
 		t.Fatalf(testExpected200Body, disableRec.Code, disableRec.Body.String())
 	}
+	requireCredentialRevokedExecution(t, events)
 
 	after, err := s.store.GetUserByID(viewerUser.ID)
 	if err != nil {

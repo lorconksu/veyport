@@ -2,7 +2,12 @@
 
 Veyport is a web-based control panel for managing your servers. Instead of opening separate SSH sessions for each machine, you can see all your servers in one place, check their status at a glance, tail logs, browse files, transfer files, and open governed terminal sessions from your browser.
 
-Everything you do in Veyport is tracked. There is a permanent record of who logged in, who added or removed servers, and who changed account settings. This makes Veyport suitable for teams where accountability matters.
+Veyport keeps local audit metadata for supported account, server, and workflow
+actions. Local metadata follows the Hub's configured retention and is not a
+permanent external evidence store. The optional Enhanced profile preserves
+covered command intent and selected originals through a separate receipt and
+encrypted archive path; that evidence is limited to the submitted command or
+complete supported script, not all remote process activity.
 
 ![Fleet Dashboard](screenshots/dashboard-veyport.png)
 
@@ -14,15 +19,30 @@ Everything you do in Veyport is tracked. There is a permanent record of who logg
 - Provides a file tree browser to navigate the remote filesystem from your browser
 - Streams live log tailing with grep filtering directly in the browser
 - Opens browser-based terminal sessions for admins and authorized LDAP users
+- Provides no-PTY command passthrough with `vey ssh <node> -- '<command>'` in the published CLI prototype ([[CLI Automation]])
 - Supports drag-and-drop file transfers via the Dropzone uploader
-- Records every action in an immutable audit log
+- Records local audit metadata for supported account, server, file, terminal, and governance actions
 - Requires two-factor authentication for every account - no exceptions
 - Supports multiple user accounts with Admin, Auditor, and Viewer roles
 - Signs users in against an existing LDAP directory (FreeIPA, OpenLDAP, Active Directory) with group-based role mapping, configured from the Settings &rarr; Directory tab
 - Sends email notifications for key events (server status changes, file uploads, user actions) via configurable SMTP
 - Secures agent-to-hub communication with mutual TLS (mTLS) for certificate-based authentication
 - Enforces sensitive path blocklists to prevent agents from exposing restricted filesystem paths
-- Audits terminal open and close events alongside file, login, and server-management activity
+- Records terminal open and close events alongside file, login, and server-management activity
+
+Standard mode keeps these local audit features standalone. Enhanced command
+evidence is an opt-in prototype with external receipt/archive requirements and
+separate operational limits; it is not enabled by installing Veyport alone. See
+[[CLI]], [[CLI Automation]], [[SSH Gateway]], [[Audit Logs]], and
+[[Architecture]] for the feature boundary and prototype identity. The currently
+published command-passthrough prototype is Hub `2.0.50-prototype.9` / tag
+`prototype-ssh-passthrough.9`, with CLI and agent prototype 9 artifacts. Older
+CLI prototype 6 builds are also compatible with the Hub. These prototype
+builds are not a stable
+or main-branch release. Check current publication and qualification on the
+[release page](https://github.com/lorconksu/veyport/releases), then use
+compatible builds and verify target agent support. See [[CLI Automation]] for
+safe scripted use.
 
 ---
 

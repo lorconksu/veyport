@@ -21,6 +21,55 @@ const (
 	_ = protoimpl.EnforceVersion(protoimpl.MaxVersion - 20)
 )
 
+type ExecutionOutput int32
+
+const (
+	ExecutionOutput_EXECUTION_OUTPUT_UNSPECIFIED ExecutionOutput = 0
+	ExecutionOutput_EXECUTION_OUTPUT_STDOUT      ExecutionOutput = 1
+	ExecutionOutput_EXECUTION_OUTPUT_STDERR      ExecutionOutput = 2
+)
+
+// Enum value maps for ExecutionOutput.
+var (
+	ExecutionOutput_name = map[int32]string{
+		0: "EXECUTION_OUTPUT_UNSPECIFIED",
+		1: "EXECUTION_OUTPUT_STDOUT",
+		2: "EXECUTION_OUTPUT_STDERR",
+	}
+	ExecutionOutput_value = map[string]int32{
+		"EXECUTION_OUTPUT_UNSPECIFIED": 0,
+		"EXECUTION_OUTPUT_STDOUT":      1,
+		"EXECUTION_OUTPUT_STDERR":      2,
+	}
+)
+
+func (x ExecutionOutput) Enum() *ExecutionOutput {
+	p := new(ExecutionOutput)
+	*p = x
+	return p
+}
+
+func (x ExecutionOutput) String() string {
+	return protoimpl.X.EnumStringOf(x.Descriptor(), protoreflect.EnumNumber(x))
+}
+
+func (ExecutionOutput) Descriptor() protoreflect.EnumDescriptor {
+	return file_proto_veyport_v1_agent_proto_enumTypes[0].Descriptor()
+}
+
+func (ExecutionOutput) Type() protoreflect.EnumType {
+	return &file_proto_veyport_v1_agent_proto_enumTypes[0]
+}
+
+func (x ExecutionOutput) Number() protoreflect.EnumNumber {
+	return protoreflect.EnumNumber(x)
+}
+
+// Deprecated: Use ExecutionOutput.Descriptor instead.
+func (ExecutionOutput) EnumDescriptor() ([]byte, []int) {
+	return file_proto_veyport_v1_agent_proto_rawDescGZIP(), []int{0}
+}
+
 // Messages from Agent → Hub
 type AgentMessage struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
@@ -40,6 +89,11 @@ type AgentMessage struct {
 	//	*AgentMessage_TerminalExit
 	//	*AgentMessage_ReenrollRequest
 	//	*AgentMessage_ReenrollProof
+	//	*AgentMessage_ExecutionCapabilities
+	//	*AgentMessage_ExecutionPrepared
+	//	*AgentMessage_ExecutionStatus
+	//	*AgentMessage_UpdateCapabilities
+	//	*AgentMessage_UpdateStatus
 	Payload       isAgentMessage_Payload `protobuf_oneof:"payload"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -208,6 +262,51 @@ func (x *AgentMessage) GetReenrollProof() *ReEnrollProof {
 	return nil
 }
 
+func (x *AgentMessage) GetExecutionCapabilities() *ExecutionCapabilities {
+	if x != nil {
+		if x, ok := x.Payload.(*AgentMessage_ExecutionCapabilities); ok {
+			return x.ExecutionCapabilities
+		}
+	}
+	return nil
+}
+
+func (x *AgentMessage) GetExecutionPrepared() *ExecutionPrepared {
+	if x != nil {
+		if x, ok := x.Payload.(*AgentMessage_ExecutionPrepared); ok {
+			return x.ExecutionPrepared
+		}
+	}
+	return nil
+}
+
+func (x *AgentMessage) GetExecutionStatus() *ExecutionStatus {
+	if x != nil {
+		if x, ok := x.Payload.(*AgentMessage_ExecutionStatus); ok {
+			return x.ExecutionStatus
+		}
+	}
+	return nil
+}
+
+func (x *AgentMessage) GetUpdateCapabilities() *UpdateCapabilities {
+	if x != nil {
+		if x, ok := x.Payload.(*AgentMessage_UpdateCapabilities); ok {
+			return x.UpdateCapabilities
+		}
+	}
+	return nil
+}
+
+func (x *AgentMessage) GetUpdateStatus() *AgentUpdateStatus {
+	if x != nil {
+		if x, ok := x.Payload.(*AgentMessage_UpdateStatus); ok {
+			return x.UpdateStatus
+		}
+	}
+	return nil
+}
+
 type isAgentMessage_Payload interface {
 	isAgentMessage_Payload()
 }
@@ -269,6 +368,26 @@ type AgentMessage_ReenrollProof struct {
 	ReenrollProof *ReEnrollProof `protobuf:"bytes,22,opt,name=reenroll_proof,json=reenrollProof,proto3,oneof"`
 }
 
+type AgentMessage_ExecutionCapabilities struct {
+	ExecutionCapabilities *ExecutionCapabilities `protobuf:"bytes,30,opt,name=execution_capabilities,json=executionCapabilities,proto3,oneof"`
+}
+
+type AgentMessage_ExecutionPrepared struct {
+	ExecutionPrepared *ExecutionPrepared `protobuf:"bytes,31,opt,name=execution_prepared,json=executionPrepared,proto3,oneof"`
+}
+
+type AgentMessage_ExecutionStatus struct {
+	ExecutionStatus *ExecutionStatus `protobuf:"bytes,32,opt,name=execution_status,json=executionStatus,proto3,oneof"`
+}
+
+type AgentMessage_UpdateCapabilities struct {
+	UpdateCapabilities *UpdateCapabilities `protobuf:"bytes,40,opt,name=update_capabilities,json=updateCapabilities,proto3,oneof"`
+}
+
+type AgentMessage_UpdateStatus struct {
+	UpdateStatus *AgentUpdateStatus `protobuf:"bytes,41,opt,name=update_status,json=updateStatus,proto3,oneof"`
+}
+
 func (*AgentMessage_Heartbeat) isAgentMessage_Payload() {}
 
 func (*AgentMessage_Register) isAgentMessage_Payload() {}
@@ -297,6 +416,16 @@ func (*AgentMessage_ReenrollRequest) isAgentMessage_Payload() {}
 
 func (*AgentMessage_ReenrollProof) isAgentMessage_Payload() {}
 
+func (*AgentMessage_ExecutionCapabilities) isAgentMessage_Payload() {}
+
+func (*AgentMessage_ExecutionPrepared) isAgentMessage_Payload() {}
+
+func (*AgentMessage_ExecutionStatus) isAgentMessage_Payload() {}
+
+func (*AgentMessage_UpdateCapabilities) isAgentMessage_Payload() {}
+
+func (*AgentMessage_UpdateStatus) isAgentMessage_Payload() {}
+
 // Messages from Hub → Agent
 type HubMessage struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
@@ -318,6 +447,13 @@ type HubMessage struct {
 	//	*HubMessage_TerminalClose
 	//	*HubMessage_ReenrollApproved
 	//	*HubMessage_ReenrollDenied
+	//	*HubMessage_FileUploadAbort
+	//	*HubMessage_ExecutionPrepare
+	//	*HubMessage_ExecutionAttach
+	//	*HubMessage_ExecutionCancel
+	//	*HubMessage_ExecutionStatusRequest
+	//	*HubMessage_AgentUpdateRequest
+	//	*HubMessage_UpdateConfirmation
 	Payload       isHubMessage_Payload `protobuf_oneof:"payload"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -504,6 +640,69 @@ func (x *HubMessage) GetReenrollDenied() *ReEnrollDenied {
 	return nil
 }
 
+func (x *HubMessage) GetFileUploadAbort() *FileUploadAbort {
+	if x != nil {
+		if x, ok := x.Payload.(*HubMessage_FileUploadAbort); ok {
+			return x.FileUploadAbort
+		}
+	}
+	return nil
+}
+
+func (x *HubMessage) GetExecutionPrepare() *ExecutionPrepare {
+	if x != nil {
+		if x, ok := x.Payload.(*HubMessage_ExecutionPrepare); ok {
+			return x.ExecutionPrepare
+		}
+	}
+	return nil
+}
+
+func (x *HubMessage) GetExecutionAttach() *ExecutionAttachRequest {
+	if x != nil {
+		if x, ok := x.Payload.(*HubMessage_ExecutionAttach); ok {
+			return x.ExecutionAttach
+		}
+	}
+	return nil
+}
+
+func (x *HubMessage) GetExecutionCancel() *ExecutionCancel {
+	if x != nil {
+		if x, ok := x.Payload.(*HubMessage_ExecutionCancel); ok {
+			return x.ExecutionCancel
+		}
+	}
+	return nil
+}
+
+func (x *HubMessage) GetExecutionStatusRequest() *ExecutionStatusRequest {
+	if x != nil {
+		if x, ok := x.Payload.(*HubMessage_ExecutionStatusRequest); ok {
+			return x.ExecutionStatusRequest
+		}
+	}
+	return nil
+}
+
+func (x *HubMessage) GetAgentUpdateRequest() *AgentUpdateRequest {
+	if x != nil {
+		if x, ok := x.Payload.(*HubMessage_AgentUpdateRequest); ok {
+			return x.AgentUpdateRequest
+		}
+	}
+	return nil
+}
+
+func (x *HubMessage) GetUpdateConfirmation() *UpdateConfirmation {
+	if x != nil {
+		if x, ok := x.Payload.(*HubMessage_UpdateConfirmation); ok {
+			return x.UpdateConfirmation
+		}
+	}
+	return nil
+}
+
 type isHubMessage_Payload interface {
 	isHubMessage_Payload()
 }
@@ -573,6 +772,34 @@ type HubMessage_ReenrollDenied struct {
 	ReenrollDenied *ReEnrollDenied `protobuf:"bytes,23,opt,name=reenroll_denied,json=reenrollDenied,proto3,oneof"`
 }
 
+type HubMessage_FileUploadAbort struct {
+	FileUploadAbort *FileUploadAbort `protobuf:"bytes,24,opt,name=file_upload_abort,json=fileUploadAbort,proto3,oneof"`
+}
+
+type HubMessage_ExecutionPrepare struct {
+	ExecutionPrepare *ExecutionPrepare `protobuf:"bytes,30,opt,name=execution_prepare,json=executionPrepare,proto3,oneof"`
+}
+
+type HubMessage_ExecutionAttach struct {
+	ExecutionAttach *ExecutionAttachRequest `protobuf:"bytes,31,opt,name=execution_attach,json=executionAttach,proto3,oneof"`
+}
+
+type HubMessage_ExecutionCancel struct {
+	ExecutionCancel *ExecutionCancel `protobuf:"bytes,32,opt,name=execution_cancel,json=executionCancel,proto3,oneof"`
+}
+
+type HubMessage_ExecutionStatusRequest struct {
+	ExecutionStatusRequest *ExecutionStatusRequest `protobuf:"bytes,33,opt,name=execution_status_request,json=executionStatusRequest,proto3,oneof"`
+}
+
+type HubMessage_AgentUpdateRequest struct {
+	AgentUpdateRequest *AgentUpdateRequest `protobuf:"bytes,40,opt,name=agent_update_request,json=agentUpdateRequest,proto3,oneof"`
+}
+
+type HubMessage_UpdateConfirmation struct {
+	UpdateConfirmation *UpdateConfirmation `protobuf:"bytes,41,opt,name=update_confirmation,json=updateConfirmation,proto3,oneof"`
+}
+
 func (*HubMessage_HeartbeatAck) isHubMessage_Payload() {}
 
 func (*HubMessage_RegisterAck) isHubMessage_Payload() {}
@@ -604,6 +831,20 @@ func (*HubMessage_TerminalClose) isHubMessage_Payload() {}
 func (*HubMessage_ReenrollApproved) isHubMessage_Payload() {}
 
 func (*HubMessage_ReenrollDenied) isHubMessage_Payload() {}
+
+func (*HubMessage_FileUploadAbort) isHubMessage_Payload() {}
+
+func (*HubMessage_ExecutionPrepare) isHubMessage_Payload() {}
+
+func (*HubMessage_ExecutionAttach) isHubMessage_Payload() {}
+
+func (*HubMessage_ExecutionCancel) isHubMessage_Payload() {}
+
+func (*HubMessage_ExecutionStatusRequest) isHubMessage_Payload() {}
+
+func (*HubMessage_AgentUpdateRequest) isHubMessage_Payload() {}
+
+func (*HubMessage_UpdateConfirmation) isHubMessage_Payload() {}
 
 type Heartbeat struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
@@ -718,18 +959,19 @@ func (x *HeartbeatAck) GetTimestamp() int64 {
 }
 
 type RegisterAgent struct {
-	state               protoimpl.MessageState `protogen:"open.v1"`
-	Token               string                 `protobuf:"bytes,1,opt,name=token,proto3" json:"token,omitempty"`
-	Hostname            string                 `protobuf:"bytes,2,opt,name=hostname,proto3" json:"hostname,omitempty"`
-	IpAddress           string                 `protobuf:"bytes,3,opt,name=ip_address,json=ipAddress,proto3" json:"ip_address,omitempty"`
-	Os                  string                 `protobuf:"bytes,4,opt,name=os,proto3" json:"os,omitempty"`
-	AgentVersion        string                 `protobuf:"bytes,5,opt,name=agent_version,json=agentVersion,proto3" json:"agent_version,omitempty"`
-	Csr                 []byte                 `protobuf:"bytes,6,opt,name=csr,proto3" json:"csr,omitempty"`
-	NodePubkey          []byte                 `protobuf:"bytes,7,opt,name=node_pubkey,json=nodePubkey,proto3" json:"node_pubkey,omitempty"`
-	EnrollFingerprint   string                 `protobuf:"bytes,8,opt,name=enroll_fingerprint,json=enrollFingerprint,proto3" json:"enroll_fingerprint,omitempty"`
-	NodeTransportPubkey []byte                 `protobuf:"bytes,9,opt,name=node_transport_pubkey,json=nodeTransportPubkey,proto3" json:"node_transport_pubkey,omitempty"`
-	unknownFields       protoimpl.UnknownFields
-	sizeCache           protoimpl.SizeCache
+	state                 protoimpl.MessageState `protogen:"open.v1"`
+	Token                 string                 `protobuf:"bytes,1,opt,name=token,proto3" json:"token,omitempty"`
+	Hostname              string                 `protobuf:"bytes,2,opt,name=hostname,proto3" json:"hostname,omitempty"`
+	IpAddress             string                 `protobuf:"bytes,3,opt,name=ip_address,json=ipAddress,proto3" json:"ip_address,omitempty"`
+	Os                    string                 `protobuf:"bytes,4,opt,name=os,proto3" json:"os,omitempty"`
+	AgentVersion          string                 `protobuf:"bytes,5,opt,name=agent_version,json=agentVersion,proto3" json:"agent_version,omitempty"`
+	Csr                   []byte                 `protobuf:"bytes,6,opt,name=csr,proto3" json:"csr,omitempty"`
+	NodePubkey            []byte                 `protobuf:"bytes,7,opt,name=node_pubkey,json=nodePubkey,proto3" json:"node_pubkey,omitempty"`
+	EnrollFingerprint     string                 `protobuf:"bytes,8,opt,name=enroll_fingerprint,json=enrollFingerprint,proto3" json:"enroll_fingerprint,omitempty"`
+	NodeTransportPubkey   []byte                 `protobuf:"bytes,9,opt,name=node_transport_pubkey,json=nodeTransportPubkey,proto3" json:"node_transport_pubkey,omitempty"`
+	ExecutionCapabilities *ExecutionCapabilities `protobuf:"bytes,10,opt,name=execution_capabilities,json=executionCapabilities,proto3" json:"execution_capabilities,omitempty"`
+	unknownFields         protoimpl.UnknownFields
+	sizeCache             protoimpl.SizeCache
 }
 
 func (x *RegisterAgent) Reset() {
@@ -821,6 +1063,13 @@ func (x *RegisterAgent) GetEnrollFingerprint() string {
 func (x *RegisterAgent) GetNodeTransportPubkey() []byte {
 	if x != nil {
 		return x.NodeTransportPubkey
+	}
+	return nil
+}
+
+func (x *RegisterAgent) GetExecutionCapabilities() *ExecutionCapabilities {
+	if x != nil {
+		return x.ExecutionCapabilities
 	}
 	return nil
 }
@@ -1380,10 +1629,13 @@ func (x *LogStreamRequest) GetGrep() string {
 }
 
 type LogStreamChunk struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	RequestId     string                 `protobuf:"bytes,1,opt,name=request_id,json=requestId,proto3" json:"request_id,omitempty"`
-	Data          []byte                 `protobuf:"bytes,2,opt,name=data,proto3" json:"data,omitempty"`
-	Offset        int64                  `protobuf:"varint,3,opt,name=offset,proto3" json:"offset,omitempty"`
+	state     protoimpl.MessageState `protogen:"open.v1"`
+	RequestId string                 `protobuf:"bytes,1,opt,name=request_id,json=requestId,proto3" json:"request_id,omitempty"`
+	Data      []byte                 `protobuf:"bytes,2,opt,name=data,proto3" json:"data,omitempty"`
+	Offset    int64                  `protobuf:"varint,3,opt,name=offset,proto3" json:"offset,omitempty"`
+	// Terminal completion follows actual tail-worker exit and file closure.
+	Done          bool   `protobuf:"varint,4,opt,name=done,proto3" json:"done,omitempty"`
+	Error         string `protobuf:"bytes,5,opt,name=error,proto3" json:"error,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -1437,6 +1689,20 @@ func (x *LogStreamChunk) GetOffset() int64 {
 		return x.Offset
 	}
 	return 0
+}
+
+func (x *LogStreamChunk) GetDone() bool {
+	if x != nil {
+		return x.Done
+	}
+	return false
+}
+
+func (x *LogStreamChunk) GetError() string {
+	if x != nil {
+		return x.Error
+	}
+	return ""
 }
 
 type LogStreamStop struct {
@@ -1612,6 +1878,51 @@ func (x *FileUploadAck) GetError() string {
 	return ""
 }
 
+// Cancel one partial upload without committing it. FileUploadAck follows cleanup.
+type FileUploadAbort struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	RequestId     string                 `protobuf:"bytes,1,opt,name=request_id,json=requestId,proto3" json:"request_id,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *FileUploadAbort) Reset() {
+	*x = FileUploadAbort{}
+	mi := &file_proto_veyport_v1_agent_proto_msgTypes[17]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *FileUploadAbort) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*FileUploadAbort) ProtoMessage() {}
+
+func (x *FileUploadAbort) ProtoReflect() protoreflect.Message {
+	mi := &file_proto_veyport_v1_agent_proto_msgTypes[17]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use FileUploadAbort.ProtoReflect.Descriptor instead.
+func (*FileUploadAbort) Descriptor() ([]byte, []int) {
+	return file_proto_veyport_v1_agent_proto_rawDescGZIP(), []int{17}
+}
+
+func (x *FileUploadAbort) GetRequestId() string {
+	if x != nil {
+		return x.RequestId
+	}
+	return ""
+}
+
 // File deletion (dropzone)
 type FileDeleteRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
@@ -1623,7 +1934,7 @@ type FileDeleteRequest struct {
 
 func (x *FileDeleteRequest) Reset() {
 	*x = FileDeleteRequest{}
-	mi := &file_proto_veyport_v1_agent_proto_msgTypes[17]
+	mi := &file_proto_veyport_v1_agent_proto_msgTypes[18]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1635,7 +1946,7 @@ func (x *FileDeleteRequest) String() string {
 func (*FileDeleteRequest) ProtoMessage() {}
 
 func (x *FileDeleteRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_veyport_v1_agent_proto_msgTypes[17]
+	mi := &file_proto_veyport_v1_agent_proto_msgTypes[18]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1648,7 +1959,7 @@ func (x *FileDeleteRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use FileDeleteRequest.ProtoReflect.Descriptor instead.
 func (*FileDeleteRequest) Descriptor() ([]byte, []int) {
-	return file_proto_veyport_v1_agent_proto_rawDescGZIP(), []int{17}
+	return file_proto_veyport_v1_agent_proto_rawDescGZIP(), []int{18}
 }
 
 func (x *FileDeleteRequest) GetRequestId() string {
@@ -1676,7 +1987,7 @@ type FileDeleteResponse struct {
 
 func (x *FileDeleteResponse) Reset() {
 	*x = FileDeleteResponse{}
-	mi := &file_proto_veyport_v1_agent_proto_msgTypes[18]
+	mi := &file_proto_veyport_v1_agent_proto_msgTypes[19]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1688,7 +1999,7 @@ func (x *FileDeleteResponse) String() string {
 func (*FileDeleteResponse) ProtoMessage() {}
 
 func (x *FileDeleteResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_veyport_v1_agent_proto_msgTypes[18]
+	mi := &file_proto_veyport_v1_agent_proto_msgTypes[19]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1701,7 +2012,7 @@ func (x *FileDeleteResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use FileDeleteResponse.ProtoReflect.Descriptor instead.
 func (*FileDeleteResponse) Descriptor() ([]byte, []int) {
-	return file_proto_veyport_v1_agent_proto_rawDescGZIP(), []int{18}
+	return file_proto_veyport_v1_agent_proto_rawDescGZIP(), []int{19}
 }
 
 func (x *FileDeleteResponse) GetRequestId() string {
@@ -1735,7 +2046,7 @@ type UnregisterRequest struct {
 
 func (x *UnregisterRequest) Reset() {
 	*x = UnregisterRequest{}
-	mi := &file_proto_veyport_v1_agent_proto_msgTypes[19]
+	mi := &file_proto_veyport_v1_agent_proto_msgTypes[20]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1747,7 +2058,7 @@ func (x *UnregisterRequest) String() string {
 func (*UnregisterRequest) ProtoMessage() {}
 
 func (x *UnregisterRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_veyport_v1_agent_proto_msgTypes[19]
+	mi := &file_proto_veyport_v1_agent_proto_msgTypes[20]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1760,7 +2071,7 @@ func (x *UnregisterRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use UnregisterRequest.ProtoReflect.Descriptor instead.
 func (*UnregisterRequest) Descriptor() ([]byte, []int) {
-	return file_proto_veyport_v1_agent_proto_rawDescGZIP(), []int{19}
+	return file_proto_veyport_v1_agent_proto_rawDescGZIP(), []int{20}
 }
 
 func (x *UnregisterRequest) GetRequestId() string {
@@ -1781,7 +2092,7 @@ type UnregisterAck struct {
 
 func (x *UnregisterAck) Reset() {
 	*x = UnregisterAck{}
-	mi := &file_proto_veyport_v1_agent_proto_msgTypes[20]
+	mi := &file_proto_veyport_v1_agent_proto_msgTypes[21]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1793,7 +2104,7 @@ func (x *UnregisterAck) String() string {
 func (*UnregisterAck) ProtoMessage() {}
 
 func (x *UnregisterAck) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_veyport_v1_agent_proto_msgTypes[20]
+	mi := &file_proto_veyport_v1_agent_proto_msgTypes[21]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1806,7 +2117,7 @@ func (x *UnregisterAck) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use UnregisterAck.ProtoReflect.Descriptor instead.
 func (*UnregisterAck) Descriptor() ([]byte, []int) {
-	return file_proto_veyport_v1_agent_proto_rawDescGZIP(), []int{20}
+	return file_proto_veyport_v1_agent_proto_rawDescGZIP(), []int{21}
 }
 
 func (x *UnregisterAck) GetRequestId() string {
@@ -1840,7 +2151,7 @@ type CertRenewRequest struct {
 
 func (x *CertRenewRequest) Reset() {
 	*x = CertRenewRequest{}
-	mi := &file_proto_veyport_v1_agent_proto_msgTypes[21]
+	mi := &file_proto_veyport_v1_agent_proto_msgTypes[22]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1852,7 +2163,7 @@ func (x *CertRenewRequest) String() string {
 func (*CertRenewRequest) ProtoMessage() {}
 
 func (x *CertRenewRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_veyport_v1_agent_proto_msgTypes[21]
+	mi := &file_proto_veyport_v1_agent_proto_msgTypes[22]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1865,7 +2176,7 @@ func (x *CertRenewRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CertRenewRequest.ProtoReflect.Descriptor instead.
 func (*CertRenewRequest) Descriptor() ([]byte, []int) {
-	return file_proto_veyport_v1_agent_proto_rawDescGZIP(), []int{21}
+	return file_proto_veyport_v1_agent_proto_rawDescGZIP(), []int{22}
 }
 
 func (x *CertRenewRequest) GetCsr() []byte {
@@ -1886,7 +2197,7 @@ type CertRenewResponse struct {
 
 func (x *CertRenewResponse) Reset() {
 	*x = CertRenewResponse{}
-	mi := &file_proto_veyport_v1_agent_proto_msgTypes[22]
+	mi := &file_proto_veyport_v1_agent_proto_msgTypes[23]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1898,7 +2209,7 @@ func (x *CertRenewResponse) String() string {
 func (*CertRenewResponse) ProtoMessage() {}
 
 func (x *CertRenewResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_veyport_v1_agent_proto_msgTypes[22]
+	mi := &file_proto_veyport_v1_agent_proto_msgTypes[23]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1911,7 +2222,7 @@ func (x *CertRenewResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CertRenewResponse.ProtoReflect.Descriptor instead.
 func (*CertRenewResponse) Descriptor() ([]byte, []int) {
-	return file_proto_veyport_v1_agent_proto_rawDescGZIP(), []int{22}
+	return file_proto_veyport_v1_agent_proto_rawDescGZIP(), []int{23}
 }
 
 func (x *CertRenewResponse) GetClientCert() []byte {
@@ -1949,7 +2260,7 @@ type TerminalOpenRequest struct {
 
 func (x *TerminalOpenRequest) Reset() {
 	*x = TerminalOpenRequest{}
-	mi := &file_proto_veyport_v1_agent_proto_msgTypes[23]
+	mi := &file_proto_veyport_v1_agent_proto_msgTypes[24]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1961,7 +2272,7 @@ func (x *TerminalOpenRequest) String() string {
 func (*TerminalOpenRequest) ProtoMessage() {}
 
 func (x *TerminalOpenRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_veyport_v1_agent_proto_msgTypes[23]
+	mi := &file_proto_veyport_v1_agent_proto_msgTypes[24]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1974,7 +2285,7 @@ func (x *TerminalOpenRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use TerminalOpenRequest.ProtoReflect.Descriptor instead.
 func (*TerminalOpenRequest) Descriptor() ([]byte, []int) {
-	return file_proto_veyport_v1_agent_proto_rawDescGZIP(), []int{23}
+	return file_proto_veyport_v1_agent_proto_rawDescGZIP(), []int{24}
 }
 
 func (x *TerminalOpenRequest) GetSessionId() string {
@@ -2023,7 +2334,7 @@ type TerminalOpenAck struct {
 
 func (x *TerminalOpenAck) Reset() {
 	*x = TerminalOpenAck{}
-	mi := &file_proto_veyport_v1_agent_proto_msgTypes[24]
+	mi := &file_proto_veyport_v1_agent_proto_msgTypes[25]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2035,7 +2346,7 @@ func (x *TerminalOpenAck) String() string {
 func (*TerminalOpenAck) ProtoMessage() {}
 
 func (x *TerminalOpenAck) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_veyport_v1_agent_proto_msgTypes[24]
+	mi := &file_proto_veyport_v1_agent_proto_msgTypes[25]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2048,7 +2359,7 @@ func (x *TerminalOpenAck) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use TerminalOpenAck.ProtoReflect.Descriptor instead.
 func (*TerminalOpenAck) Descriptor() ([]byte, []int) {
-	return file_proto_veyport_v1_agent_proto_rawDescGZIP(), []int{24}
+	return file_proto_veyport_v1_agent_proto_rawDescGZIP(), []int{25}
 }
 
 func (x *TerminalOpenAck) GetSessionId() string {
@@ -2082,7 +2393,7 @@ type TerminalInput struct {
 
 func (x *TerminalInput) Reset() {
 	*x = TerminalInput{}
-	mi := &file_proto_veyport_v1_agent_proto_msgTypes[25]
+	mi := &file_proto_veyport_v1_agent_proto_msgTypes[26]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2094,7 +2405,7 @@ func (x *TerminalInput) String() string {
 func (*TerminalInput) ProtoMessage() {}
 
 func (x *TerminalInput) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_veyport_v1_agent_proto_msgTypes[25]
+	mi := &file_proto_veyport_v1_agent_proto_msgTypes[26]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2107,7 +2418,7 @@ func (x *TerminalInput) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use TerminalInput.ProtoReflect.Descriptor instead.
 func (*TerminalInput) Descriptor() ([]byte, []int) {
-	return file_proto_veyport_v1_agent_proto_rawDescGZIP(), []int{25}
+	return file_proto_veyport_v1_agent_proto_rawDescGZIP(), []int{26}
 }
 
 func (x *TerminalInput) GetSessionId() string {
@@ -2135,7 +2446,7 @@ type TerminalResize struct {
 
 func (x *TerminalResize) Reset() {
 	*x = TerminalResize{}
-	mi := &file_proto_veyport_v1_agent_proto_msgTypes[26]
+	mi := &file_proto_veyport_v1_agent_proto_msgTypes[27]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2147,7 +2458,7 @@ func (x *TerminalResize) String() string {
 func (*TerminalResize) ProtoMessage() {}
 
 func (x *TerminalResize) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_veyport_v1_agent_proto_msgTypes[26]
+	mi := &file_proto_veyport_v1_agent_proto_msgTypes[27]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2160,7 +2471,7 @@ func (x *TerminalResize) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use TerminalResize.ProtoReflect.Descriptor instead.
 func (*TerminalResize) Descriptor() ([]byte, []int) {
-	return file_proto_veyport_v1_agent_proto_rawDescGZIP(), []int{26}
+	return file_proto_veyport_v1_agent_proto_rawDescGZIP(), []int{27}
 }
 
 func (x *TerminalResize) GetSessionId() string {
@@ -2194,7 +2505,7 @@ type TerminalData struct {
 
 func (x *TerminalData) Reset() {
 	*x = TerminalData{}
-	mi := &file_proto_veyport_v1_agent_proto_msgTypes[27]
+	mi := &file_proto_veyport_v1_agent_proto_msgTypes[28]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2206,7 +2517,7 @@ func (x *TerminalData) String() string {
 func (*TerminalData) ProtoMessage() {}
 
 func (x *TerminalData) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_veyport_v1_agent_proto_msgTypes[27]
+	mi := &file_proto_veyport_v1_agent_proto_msgTypes[28]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2219,7 +2530,7 @@ func (x *TerminalData) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use TerminalData.ProtoReflect.Descriptor instead.
 func (*TerminalData) Descriptor() ([]byte, []int) {
-	return file_proto_veyport_v1_agent_proto_rawDescGZIP(), []int{27}
+	return file_proto_veyport_v1_agent_proto_rawDescGZIP(), []int{28}
 }
 
 func (x *TerminalData) GetSessionId() string {
@@ -2247,7 +2558,7 @@ type TerminalExit struct {
 
 func (x *TerminalExit) Reset() {
 	*x = TerminalExit{}
-	mi := &file_proto_veyport_v1_agent_proto_msgTypes[28]
+	mi := &file_proto_veyport_v1_agent_proto_msgTypes[29]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2259,7 +2570,7 @@ func (x *TerminalExit) String() string {
 func (*TerminalExit) ProtoMessage() {}
 
 func (x *TerminalExit) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_veyport_v1_agent_proto_msgTypes[28]
+	mi := &file_proto_veyport_v1_agent_proto_msgTypes[29]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2272,7 +2583,7 @@ func (x *TerminalExit) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use TerminalExit.ProtoReflect.Descriptor instead.
 func (*TerminalExit) Descriptor() ([]byte, []int) {
-	return file_proto_veyport_v1_agent_proto_rawDescGZIP(), []int{28}
+	return file_proto_veyport_v1_agent_proto_rawDescGZIP(), []int{29}
 }
 
 func (x *TerminalExit) GetSessionId() string {
@@ -2305,7 +2616,7 @@ type TerminalClose struct {
 
 func (x *TerminalClose) Reset() {
 	*x = TerminalClose{}
-	mi := &file_proto_veyport_v1_agent_proto_msgTypes[29]
+	mi := &file_proto_veyport_v1_agent_proto_msgTypes[30]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2317,7 +2628,7 @@ func (x *TerminalClose) String() string {
 func (*TerminalClose) ProtoMessage() {}
 
 func (x *TerminalClose) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_veyport_v1_agent_proto_msgTypes[29]
+	mi := &file_proto_veyport_v1_agent_proto_msgTypes[30]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2330,7 +2641,7 @@ func (x *TerminalClose) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use TerminalClose.ProtoReflect.Descriptor instead.
 func (*TerminalClose) Descriptor() ([]byte, []int) {
-	return file_proto_veyport_v1_agent_proto_rawDescGZIP(), []int{29}
+	return file_proto_veyport_v1_agent_proto_rawDescGZIP(), []int{30}
 }
 
 func (x *TerminalClose) GetSessionId() string {
@@ -2352,7 +2663,7 @@ type ReEnrollRequest struct {
 
 func (x *ReEnrollRequest) Reset() {
 	*x = ReEnrollRequest{}
-	mi := &file_proto_veyport_v1_agent_proto_msgTypes[30]
+	mi := &file_proto_veyport_v1_agent_proto_msgTypes[31]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2364,7 +2675,7 @@ func (x *ReEnrollRequest) String() string {
 func (*ReEnrollRequest) ProtoMessage() {}
 
 func (x *ReEnrollRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_veyport_v1_agent_proto_msgTypes[30]
+	mi := &file_proto_veyport_v1_agent_proto_msgTypes[31]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2377,7 +2688,7 @@ func (x *ReEnrollRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ReEnrollRequest.ProtoReflect.Descriptor instead.
 func (*ReEnrollRequest) Descriptor() ([]byte, []int) {
-	return file_proto_veyport_v1_agent_proto_rawDescGZIP(), []int{30}
+	return file_proto_veyport_v1_agent_proto_rawDescGZIP(), []int{31}
 }
 
 func (x *ReEnrollRequest) GetServerId() string {
@@ -2412,7 +2723,7 @@ type ReEnrollApproved struct {
 
 func (x *ReEnrollApproved) Reset() {
 	*x = ReEnrollApproved{}
-	mi := &file_proto_veyport_v1_agent_proto_msgTypes[31]
+	mi := &file_proto_veyport_v1_agent_proto_msgTypes[32]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2424,7 +2735,7 @@ func (x *ReEnrollApproved) String() string {
 func (*ReEnrollApproved) ProtoMessage() {}
 
 func (x *ReEnrollApproved) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_veyport_v1_agent_proto_msgTypes[31]
+	mi := &file_proto_veyport_v1_agent_proto_msgTypes[32]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2437,7 +2748,7 @@ func (x *ReEnrollApproved) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ReEnrollApproved.ProtoReflect.Descriptor instead.
 func (*ReEnrollApproved) Descriptor() ([]byte, []int) {
-	return file_proto_veyport_v1_agent_proto_rawDescGZIP(), []int{31}
+	return file_proto_veyport_v1_agent_proto_rawDescGZIP(), []int{32}
 }
 
 func (x *ReEnrollApproved) GetEphemeralPub() []byte {
@@ -2470,7 +2781,7 @@ type ReEnrollProof struct {
 
 func (x *ReEnrollProof) Reset() {
 	*x = ReEnrollProof{}
-	mi := &file_proto_veyport_v1_agent_proto_msgTypes[32]
+	mi := &file_proto_veyport_v1_agent_proto_msgTypes[33]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2482,7 +2793,7 @@ func (x *ReEnrollProof) String() string {
 func (*ReEnrollProof) ProtoMessage() {}
 
 func (x *ReEnrollProof) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_veyport_v1_agent_proto_msgTypes[32]
+	mi := &file_proto_veyport_v1_agent_proto_msgTypes[33]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2495,7 +2806,7 @@ func (x *ReEnrollProof) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ReEnrollProof.ProtoReflect.Descriptor instead.
 func (*ReEnrollProof) Descriptor() ([]byte, []int) {
-	return file_proto_veyport_v1_agent_proto_rawDescGZIP(), []int{32}
+	return file_proto_veyport_v1_agent_proto_rawDescGZIP(), []int{33}
 }
 
 func (x *ReEnrollProof) GetSignature() []byte {
@@ -2514,7 +2825,7 @@ type ReEnrollDenied struct {
 
 func (x *ReEnrollDenied) Reset() {
 	*x = ReEnrollDenied{}
-	mi := &file_proto_veyport_v1_agent_proto_msgTypes[33]
+	mi := &file_proto_veyport_v1_agent_proto_msgTypes[34]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2526,7 +2837,7 @@ func (x *ReEnrollDenied) String() string {
 func (*ReEnrollDenied) ProtoMessage() {}
 
 func (x *ReEnrollDenied) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_veyport_v1_agent_proto_msgTypes[33]
+	mi := &file_proto_veyport_v1_agent_proto_msgTypes[34]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2539,7 +2850,7 @@ func (x *ReEnrollDenied) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ReEnrollDenied.ProtoReflect.Descriptor instead.
 func (*ReEnrollDenied) Descriptor() ([]byte, []int) {
-	return file_proto_veyport_v1_agent_proto_rawDescGZIP(), []int{33}
+	return file_proto_veyport_v1_agent_proto_rawDescGZIP(), []int{34}
 }
 
 func (x *ReEnrollDenied) GetReason() string {
@@ -2549,12 +2860,2253 @@ func (x *ReEnrollDenied) GetReason() string {
 	return ""
 }
 
+// v1 bounds: 32KiB command, 64KiB data frame, 2MiB application buffers,
+// 8 shared terminal/exec slots per node, 60s preparation, 60min runtime,
+// 5s TERM grace, 60s blocked-delivery deadline (quiet commands have no timeout).
+type ExecutionCapabilities struct {
+	state           protoimpl.MessageState `protogen:"open.v1"`
+	ProtocolVersion uint32                 `protobuf:"varint,1,opt,name=protocol_version,json=protocolVersion,proto3" json:"protocol_version,omitempty"`
+	StandardExec    bool                   `protobuf:"varint,2,opt,name=standard_exec,json=standardExec,proto3" json:"standard_exec,omitempty"`
+	ProtectedScript bool                   `protobuf:"varint,3,opt,name=protected_script,json=protectedScript,proto3" json:"protected_script,omitempty"`
+	BootId          string                 `protobuf:"bytes,4,opt,name=boot_id,json=bootId,proto3" json:"boot_id,omitempty"`
+	unknownFields   protoimpl.UnknownFields
+	sizeCache       protoimpl.SizeCache
+}
+
+func (x *ExecutionCapabilities) Reset() {
+	*x = ExecutionCapabilities{}
+	mi := &file_proto_veyport_v1_agent_proto_msgTypes[35]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ExecutionCapabilities) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ExecutionCapabilities) ProtoMessage() {}
+
+func (x *ExecutionCapabilities) ProtoReflect() protoreflect.Message {
+	mi := &file_proto_veyport_v1_agent_proto_msgTypes[35]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ExecutionCapabilities.ProtoReflect.Descriptor instead.
+func (*ExecutionCapabilities) Descriptor() ([]byte, []int) {
+	return file_proto_veyport_v1_agent_proto_rawDescGZIP(), []int{35}
+}
+
+func (x *ExecutionCapabilities) GetProtocolVersion() uint32 {
+	if x != nil {
+		return x.ProtocolVersion
+	}
+	return 0
+}
+
+func (x *ExecutionCapabilities) GetStandardExec() bool {
+	if x != nil {
+		return x.StandardExec
+	}
+	return false
+}
+
+func (x *ExecutionCapabilities) GetProtectedScript() bool {
+	if x != nil {
+		return x.ProtectedScript
+	}
+	return false
+}
+
+func (x *ExecutionCapabilities) GetBootId() string {
+	if x != nil {
+		return x.BootId
+	}
+	return ""
+}
+
+type ExecutionLimits struct {
+	state                  protoimpl.MessageState `protogen:"open.v1"`
+	MaxFrameBytes          uint32                 `protobuf:"varint,1,opt,name=max_frame_bytes,json=maxFrameBytes,proto3" json:"max_frame_bytes,omitempty"`
+	MaxBufferBytes         uint32                 `protobuf:"varint,2,opt,name=max_buffer_bytes,json=maxBufferBytes,proto3" json:"max_buffer_bytes,omitempty"`
+	RuntimeSeconds         uint32                 `protobuf:"varint,3,opt,name=runtime_seconds,json=runtimeSeconds,proto3" json:"runtime_seconds,omitempty"`
+	TermGraceSeconds       uint32                 `protobuf:"varint,4,opt,name=term_grace_seconds,json=termGraceSeconds,proto3" json:"term_grace_seconds,omitempty"`
+	BlockedConsumerSeconds uint32                 `protobuf:"varint,5,opt,name=blocked_consumer_seconds,json=blockedConsumerSeconds,proto3" json:"blocked_consumer_seconds,omitempty"`
+	unknownFields          protoimpl.UnknownFields
+	sizeCache              protoimpl.SizeCache
+}
+
+func (x *ExecutionLimits) Reset() {
+	*x = ExecutionLimits{}
+	mi := &file_proto_veyport_v1_agent_proto_msgTypes[36]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ExecutionLimits) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ExecutionLimits) ProtoMessage() {}
+
+func (x *ExecutionLimits) ProtoReflect() protoreflect.Message {
+	mi := &file_proto_veyport_v1_agent_proto_msgTypes[36]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ExecutionLimits.ProtoReflect.Descriptor instead.
+func (*ExecutionLimits) Descriptor() ([]byte, []int) {
+	return file_proto_veyport_v1_agent_proto_rawDescGZIP(), []int{36}
+}
+
+func (x *ExecutionLimits) GetMaxFrameBytes() uint32 {
+	if x != nil {
+		return x.MaxFrameBytes
+	}
+	return 0
+}
+
+func (x *ExecutionLimits) GetMaxBufferBytes() uint32 {
+	if x != nil {
+		return x.MaxBufferBytes
+	}
+	return 0
+}
+
+func (x *ExecutionLimits) GetRuntimeSeconds() uint32 {
+	if x != nil {
+		return x.RuntimeSeconds
+	}
+	return 0
+}
+
+func (x *ExecutionLimits) GetTermGraceSeconds() uint32 {
+	if x != nil {
+		return x.TermGraceSeconds
+	}
+	return 0
+}
+
+func (x *ExecutionLimits) GetBlockedConsumerSeconds() uint32 {
+	if x != nil {
+		return x.BlockedConsumerSeconds
+	}
+	return 0
+}
+
+type ExecutionBinding struct {
+	state            protoimpl.MessageState `protogen:"open.v1"`
+	ExecutionId      string                 `protobuf:"bytes,1,opt,name=execution_id,json=executionId,proto3" json:"execution_id,omitempty"`
+	NodeId           string                 `protobuf:"bytes,2,opt,name=node_id,json=nodeId,proto3" json:"node_id,omitempty"`
+	PreparationId    string                 `protobuf:"bytes,3,opt,name=preparation_id,json=preparationId,proto3" json:"preparation_id,omitempty"`
+	BootId           string                 `protobuf:"bytes,4,opt,name=boot_id,json=bootId,proto3" json:"boot_id,omitempty"`
+	ExpiresUnixMilli int64                  `protobuf:"varint,5,opt,name=expires_unix_milli,json=expiresUnixMilli,proto3" json:"expires_unix_milli,omitempty"`
+	unknownFields    protoimpl.UnknownFields
+	sizeCache        protoimpl.SizeCache
+}
+
+func (x *ExecutionBinding) Reset() {
+	*x = ExecutionBinding{}
+	mi := &file_proto_veyport_v1_agent_proto_msgTypes[37]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ExecutionBinding) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ExecutionBinding) ProtoMessage() {}
+
+func (x *ExecutionBinding) ProtoReflect() protoreflect.Message {
+	mi := &file_proto_veyport_v1_agent_proto_msgTypes[37]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ExecutionBinding.ProtoReflect.Descriptor instead.
+func (*ExecutionBinding) Descriptor() ([]byte, []int) {
+	return file_proto_veyport_v1_agent_proto_rawDescGZIP(), []int{37}
+}
+
+func (x *ExecutionBinding) GetExecutionId() string {
+	if x != nil {
+		return x.ExecutionId
+	}
+	return ""
+}
+
+func (x *ExecutionBinding) GetNodeId() string {
+	if x != nil {
+		return x.NodeId
+	}
+	return ""
+}
+
+func (x *ExecutionBinding) GetPreparationId() string {
+	if x != nil {
+		return x.PreparationId
+	}
+	return ""
+}
+
+func (x *ExecutionBinding) GetBootId() string {
+	if x != nil {
+		return x.BootId
+	}
+	return ""
+}
+
+func (x *ExecutionBinding) GetExpiresUnixMilli() int64 {
+	if x != nil {
+		return x.ExpiresUnixMilli
+	}
+	return 0
+}
+
+type ExecutionIdentity struct {
+	state          protoimpl.MessageState `protogen:"open.v1"`
+	Username       string                 `protobuf:"bytes,1,opt,name=username,proto3" json:"username,omitempty"`
+	Uid            uint32                 `protobuf:"varint,2,opt,name=uid,proto3" json:"uid,omitempty"`
+	Gid            uint32                 `protobuf:"varint,3,opt,name=gid,proto3" json:"gid,omitempty"`
+	Groups         []uint32               `protobuf:"varint,4,rep,packed,name=groups,proto3" json:"groups,omitempty"`
+	GroupsSha256   []byte                 `protobuf:"bytes,5,opt,name=groups_sha256,json=groupsSha256,proto3" json:"groups_sha256,omitempty"`
+	Home           string                 `protobuf:"bytes,6,opt,name=home,proto3" json:"home,omitempty"`
+	Shell          string                 `protobuf:"bytes,7,opt,name=shell,proto3" json:"shell,omitempty"`
+	Cwd            string                 `protobuf:"bytes,8,opt,name=cwd,proto3" json:"cwd,omitempty"`
+	IdentitySha256 []byte                 `protobuf:"bytes,9,opt,name=identity_sha256,json=identitySha256,proto3" json:"identity_sha256,omitempty"`
+	unknownFields  protoimpl.UnknownFields
+	sizeCache      protoimpl.SizeCache
+}
+
+func (x *ExecutionIdentity) Reset() {
+	*x = ExecutionIdentity{}
+	mi := &file_proto_veyport_v1_agent_proto_msgTypes[38]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ExecutionIdentity) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ExecutionIdentity) ProtoMessage() {}
+
+func (x *ExecutionIdentity) ProtoReflect() protoreflect.Message {
+	mi := &file_proto_veyport_v1_agent_proto_msgTypes[38]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ExecutionIdentity.ProtoReflect.Descriptor instead.
+func (*ExecutionIdentity) Descriptor() ([]byte, []int) {
+	return file_proto_veyport_v1_agent_proto_rawDescGZIP(), []int{38}
+}
+
+func (x *ExecutionIdentity) GetUsername() string {
+	if x != nil {
+		return x.Username
+	}
+	return ""
+}
+
+func (x *ExecutionIdentity) GetUid() uint32 {
+	if x != nil {
+		return x.Uid
+	}
+	return 0
+}
+
+func (x *ExecutionIdentity) GetGid() uint32 {
+	if x != nil {
+		return x.Gid
+	}
+	return 0
+}
+
+func (x *ExecutionIdentity) GetGroups() []uint32 {
+	if x != nil {
+		return x.Groups
+	}
+	return nil
+}
+
+func (x *ExecutionIdentity) GetGroupsSha256() []byte {
+	if x != nil {
+		return x.GroupsSha256
+	}
+	return nil
+}
+
+func (x *ExecutionIdentity) GetHome() string {
+	if x != nil {
+		return x.Home
+	}
+	return ""
+}
+
+func (x *ExecutionIdentity) GetShell() string {
+	if x != nil {
+		return x.Shell
+	}
+	return ""
+}
+
+func (x *ExecutionIdentity) GetCwd() string {
+	if x != nil {
+		return x.Cwd
+	}
+	return ""
+}
+
+func (x *ExecutionIdentity) GetIdentitySha256() []byte {
+	if x != nil {
+		return x.IdentitySha256
+	}
+	return nil
+}
+
+type ExecutionPrepare struct {
+	state       protoimpl.MessageState `protogen:"open.v1"`
+	ExecutionId string                 `protobuf:"bytes,1,opt,name=execution_id,json=executionId,proto3" json:"execution_id,omitempty"`
+	NodeId      string                 `protobuf:"bytes,2,opt,name=node_id,json=nodeId,proto3" json:"node_id,omitempty"`
+	RunAsUser   string                 `protobuf:"bytes,3,opt,name=run_as_user,json=runAsUser,proto3" json:"run_as_user,omitempty"`
+	Command     string                 `protobuf:"bytes,4,opt,name=command,proto3" json:"command,omitempty"`
+	Cwd         string                 `protobuf:"bytes,5,opt,name=cwd,proto3" json:"cwd,omitempty"`
+	Limits      *ExecutionLimits       `protobuf:"bytes,6,opt,name=limits,proto3" json:"limits,omitempty"`
+	// Reserved for enhanced admission; unsupported until capability is advertised.
+	Enhanced      bool   `protobuf:"varint,7,opt,name=enhanced,proto3" json:"enhanced,omitempty"`
+	ScriptSha256  []byte `protobuf:"bytes,8,opt,name=script_sha256,json=scriptSha256,proto3" json:"script_sha256,omitempty"`
+	ScriptLength  uint64 `protobuf:"varint,9,opt,name=script_length,json=scriptLength,proto3" json:"script_length,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ExecutionPrepare) Reset() {
+	*x = ExecutionPrepare{}
+	mi := &file_proto_veyport_v1_agent_proto_msgTypes[39]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ExecutionPrepare) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ExecutionPrepare) ProtoMessage() {}
+
+func (x *ExecutionPrepare) ProtoReflect() protoreflect.Message {
+	mi := &file_proto_veyport_v1_agent_proto_msgTypes[39]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ExecutionPrepare.ProtoReflect.Descriptor instead.
+func (*ExecutionPrepare) Descriptor() ([]byte, []int) {
+	return file_proto_veyport_v1_agent_proto_rawDescGZIP(), []int{39}
+}
+
+func (x *ExecutionPrepare) GetExecutionId() string {
+	if x != nil {
+		return x.ExecutionId
+	}
+	return ""
+}
+
+func (x *ExecutionPrepare) GetNodeId() string {
+	if x != nil {
+		return x.NodeId
+	}
+	return ""
+}
+
+func (x *ExecutionPrepare) GetRunAsUser() string {
+	if x != nil {
+		return x.RunAsUser
+	}
+	return ""
+}
+
+func (x *ExecutionPrepare) GetCommand() string {
+	if x != nil {
+		return x.Command
+	}
+	return ""
+}
+
+func (x *ExecutionPrepare) GetCwd() string {
+	if x != nil {
+		return x.Cwd
+	}
+	return ""
+}
+
+func (x *ExecutionPrepare) GetLimits() *ExecutionLimits {
+	if x != nil {
+		return x.Limits
+	}
+	return nil
+}
+
+func (x *ExecutionPrepare) GetEnhanced() bool {
+	if x != nil {
+		return x.Enhanced
+	}
+	return false
+}
+
+func (x *ExecutionPrepare) GetScriptSha256() []byte {
+	if x != nil {
+		return x.ScriptSha256
+	}
+	return nil
+}
+
+func (x *ExecutionPrepare) GetScriptLength() uint64 {
+	if x != nil {
+		return x.ScriptLength
+	}
+	return 0
+}
+
+type ExecutionPrepared struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	ExecutionId   string                 `protobuf:"bytes,1,opt,name=execution_id,json=executionId,proto3" json:"execution_id,omitempty"`
+	Binding       *ExecutionBinding      `protobuf:"bytes,2,opt,name=binding,proto3" json:"binding,omitempty"`
+	Identity      *ExecutionIdentity     `protobuf:"bytes,3,opt,name=identity,proto3" json:"identity,omitempty"`
+	CommandSha256 []byte                 `protobuf:"bytes,4,opt,name=command_sha256,json=commandSha256,proto3" json:"command_sha256,omitempty"`
+	Limits        *ExecutionLimits       `protobuf:"bytes,5,opt,name=limits,proto3" json:"limits,omitempty"`
+	Error         string                 `protobuf:"bytes,6,opt,name=error,proto3" json:"error,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ExecutionPrepared) Reset() {
+	*x = ExecutionPrepared{}
+	mi := &file_proto_veyport_v1_agent_proto_msgTypes[40]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ExecutionPrepared) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ExecutionPrepared) ProtoMessage() {}
+
+func (x *ExecutionPrepared) ProtoReflect() protoreflect.Message {
+	mi := &file_proto_veyport_v1_agent_proto_msgTypes[40]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ExecutionPrepared.ProtoReflect.Descriptor instead.
+func (*ExecutionPrepared) Descriptor() ([]byte, []int) {
+	return file_proto_veyport_v1_agent_proto_rawDescGZIP(), []int{40}
+}
+
+func (x *ExecutionPrepared) GetExecutionId() string {
+	if x != nil {
+		return x.ExecutionId
+	}
+	return ""
+}
+
+func (x *ExecutionPrepared) GetBinding() *ExecutionBinding {
+	if x != nil {
+		return x.Binding
+	}
+	return nil
+}
+
+func (x *ExecutionPrepared) GetIdentity() *ExecutionIdentity {
+	if x != nil {
+		return x.Identity
+	}
+	return nil
+}
+
+func (x *ExecutionPrepared) GetCommandSha256() []byte {
+	if x != nil {
+		return x.CommandSha256
+	}
+	return nil
+}
+
+func (x *ExecutionPrepared) GetLimits() *ExecutionLimits {
+	if x != nil {
+		return x.Limits
+	}
+	return nil
+}
+
+func (x *ExecutionPrepared) GetError() string {
+	if x != nil {
+		return x.Error
+	}
+	return ""
+}
+
+type ExecutionAttachRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Binding       *ExecutionBinding      `protobuf:"bytes,1,opt,name=binding,proto3" json:"binding,omitempty"`
+	Ticket        []byte                 `protobuf:"bytes,2,opt,name=ticket,proto3" json:"ticket,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ExecutionAttachRequest) Reset() {
+	*x = ExecutionAttachRequest{}
+	mi := &file_proto_veyport_v1_agent_proto_msgTypes[41]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ExecutionAttachRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ExecutionAttachRequest) ProtoMessage() {}
+
+func (x *ExecutionAttachRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_proto_veyport_v1_agent_proto_msgTypes[41]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ExecutionAttachRequest.ProtoReflect.Descriptor instead.
+func (*ExecutionAttachRequest) Descriptor() ([]byte, []int) {
+	return file_proto_veyport_v1_agent_proto_rawDescGZIP(), []int{41}
+}
+
+func (x *ExecutionAttachRequest) GetBinding() *ExecutionBinding {
+	if x != nil {
+		return x.Binding
+	}
+	return nil
+}
+
+func (x *ExecutionAttachRequest) GetTicket() []byte {
+	if x != nil {
+		return x.Ticket
+	}
+	return nil
+}
+
+type ExecutionCancel struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Binding       *ExecutionBinding      `protobuf:"bytes,1,opt,name=binding,proto3" json:"binding,omitempty"`
+	Reason        string                 `protobuf:"bytes,2,opt,name=reason,proto3" json:"reason,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ExecutionCancel) Reset() {
+	*x = ExecutionCancel{}
+	mi := &file_proto_veyport_v1_agent_proto_msgTypes[42]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ExecutionCancel) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ExecutionCancel) ProtoMessage() {}
+
+func (x *ExecutionCancel) ProtoReflect() protoreflect.Message {
+	mi := &file_proto_veyport_v1_agent_proto_msgTypes[42]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ExecutionCancel.ProtoReflect.Descriptor instead.
+func (*ExecutionCancel) Descriptor() ([]byte, []int) {
+	return file_proto_veyport_v1_agent_proto_rawDescGZIP(), []int{42}
+}
+
+func (x *ExecutionCancel) GetBinding() *ExecutionBinding {
+	if x != nil {
+		return x.Binding
+	}
+	return nil
+}
+
+func (x *ExecutionCancel) GetReason() string {
+	if x != nil {
+		return x.Reason
+	}
+	return ""
+}
+
+type ExecutionStatusRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	ExecutionId   string                 `protobuf:"bytes,1,opt,name=execution_id,json=executionId,proto3" json:"execution_id,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ExecutionStatusRequest) Reset() {
+	*x = ExecutionStatusRequest{}
+	mi := &file_proto_veyport_v1_agent_proto_msgTypes[43]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ExecutionStatusRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ExecutionStatusRequest) ProtoMessage() {}
+
+func (x *ExecutionStatusRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_proto_veyport_v1_agent_proto_msgTypes[43]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ExecutionStatusRequest.ProtoReflect.Descriptor instead.
+func (*ExecutionStatusRequest) Descriptor() ([]byte, []int) {
+	return file_proto_veyport_v1_agent_proto_rawDescGZIP(), []int{43}
+}
+
+func (x *ExecutionStatusRequest) GetExecutionId() string {
+	if x != nil {
+		return x.ExecutionId
+	}
+	return ""
+}
+
+type ExecutionStatus struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	ExecutionId   string                 `protobuf:"bytes,1,opt,name=execution_id,json=executionId,proto3" json:"execution_id,omitempty"`
+	Binding       *ExecutionBinding      `protobuf:"bytes,2,opt,name=binding,proto3" json:"binding,omitempty"`
+	State         string                 `protobuf:"bytes,3,opt,name=state,proto3" json:"state,omitempty"`
+	Reason        string                 `protobuf:"bytes,4,opt,name=reason,proto3" json:"reason,omitempty"`
+	Result        *ExecutionResult       `protobuf:"bytes,5,opt,name=result,proto3" json:"result,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ExecutionStatus) Reset() {
+	*x = ExecutionStatus{}
+	mi := &file_proto_veyport_v1_agent_proto_msgTypes[44]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ExecutionStatus) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ExecutionStatus) ProtoMessage() {}
+
+func (x *ExecutionStatus) ProtoReflect() protoreflect.Message {
+	mi := &file_proto_veyport_v1_agent_proto_msgTypes[44]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ExecutionStatus.ProtoReflect.Descriptor instead.
+func (*ExecutionStatus) Descriptor() ([]byte, []int) {
+	return file_proto_veyport_v1_agent_proto_rawDescGZIP(), []int{44}
+}
+
+func (x *ExecutionStatus) GetExecutionId() string {
+	if x != nil {
+		return x.ExecutionId
+	}
+	return ""
+}
+
+func (x *ExecutionStatus) GetBinding() *ExecutionBinding {
+	if x != nil {
+		return x.Binding
+	}
+	return nil
+}
+
+func (x *ExecutionStatus) GetState() string {
+	if x != nil {
+		return x.State
+	}
+	return ""
+}
+
+func (x *ExecutionStatus) GetReason() string {
+	if x != nil {
+		return x.Reason
+	}
+	return ""
+}
+
+func (x *ExecutionStatus) GetResult() *ExecutionResult {
+	if x != nil {
+		return x.Result
+	}
+	return nil
+}
+
+type ExecutionAgentMessage struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// Types that are valid to be assigned to Payload:
+	//
+	//	*ExecutionAgentMessage_Attach
+	//	*ExecutionAgentMessage_Started
+	//	*ExecutionAgentMessage_StartFailed
+	//	*ExecutionAgentMessage_Stdout
+	//	*ExecutionAgentMessage_Stderr
+	//	*ExecutionAgentMessage_OutputEof
+	//	*ExecutionAgentMessage_Result
+	//	*ExecutionAgentMessage_Status
+	Payload       isExecutionAgentMessage_Payload `protobuf_oneof:"payload"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ExecutionAgentMessage) Reset() {
+	*x = ExecutionAgentMessage{}
+	mi := &file_proto_veyport_v1_agent_proto_msgTypes[45]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ExecutionAgentMessage) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ExecutionAgentMessage) ProtoMessage() {}
+
+func (x *ExecutionAgentMessage) ProtoReflect() protoreflect.Message {
+	mi := &file_proto_veyport_v1_agent_proto_msgTypes[45]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ExecutionAgentMessage.ProtoReflect.Descriptor instead.
+func (*ExecutionAgentMessage) Descriptor() ([]byte, []int) {
+	return file_proto_veyport_v1_agent_proto_rawDescGZIP(), []int{45}
+}
+
+func (x *ExecutionAgentMessage) GetPayload() isExecutionAgentMessage_Payload {
+	if x != nil {
+		return x.Payload
+	}
+	return nil
+}
+
+func (x *ExecutionAgentMessage) GetAttach() *ExecutionAttachRequest {
+	if x != nil {
+		if x, ok := x.Payload.(*ExecutionAgentMessage_Attach); ok {
+			return x.Attach
+		}
+	}
+	return nil
+}
+
+func (x *ExecutionAgentMessage) GetStarted() *ExecutionStarted {
+	if x != nil {
+		if x, ok := x.Payload.(*ExecutionAgentMessage_Started); ok {
+			return x.Started
+		}
+	}
+	return nil
+}
+
+func (x *ExecutionAgentMessage) GetStartFailed() *ExecutionStartFailed {
+	if x != nil {
+		if x, ok := x.Payload.(*ExecutionAgentMessage_StartFailed); ok {
+			return x.StartFailed
+		}
+	}
+	return nil
+}
+
+func (x *ExecutionAgentMessage) GetStdout() *ExecutionData {
+	if x != nil {
+		if x, ok := x.Payload.(*ExecutionAgentMessage_Stdout); ok {
+			return x.Stdout
+		}
+	}
+	return nil
+}
+
+func (x *ExecutionAgentMessage) GetStderr() *ExecutionData {
+	if x != nil {
+		if x, ok := x.Payload.(*ExecutionAgentMessage_Stderr); ok {
+			return x.Stderr
+		}
+	}
+	return nil
+}
+
+func (x *ExecutionAgentMessage) GetOutputEof() *ExecutionOutputEOF {
+	if x != nil {
+		if x, ok := x.Payload.(*ExecutionAgentMessage_OutputEof); ok {
+			return x.OutputEof
+		}
+	}
+	return nil
+}
+
+func (x *ExecutionAgentMessage) GetResult() *ExecutionResult {
+	if x != nil {
+		if x, ok := x.Payload.(*ExecutionAgentMessage_Result); ok {
+			return x.Result
+		}
+	}
+	return nil
+}
+
+func (x *ExecutionAgentMessage) GetStatus() *ExecutionStatus {
+	if x != nil {
+		if x, ok := x.Payload.(*ExecutionAgentMessage_Status); ok {
+			return x.Status
+		}
+	}
+	return nil
+}
+
+type isExecutionAgentMessage_Payload interface {
+	isExecutionAgentMessage_Payload()
+}
+
+type ExecutionAgentMessage_Attach struct {
+	Attach *ExecutionAttachRequest `protobuf:"bytes,1,opt,name=attach,proto3,oneof"`
+}
+
+type ExecutionAgentMessage_Started struct {
+	Started *ExecutionStarted `protobuf:"bytes,2,opt,name=started,proto3,oneof"`
+}
+
+type ExecutionAgentMessage_StartFailed struct {
+	StartFailed *ExecutionStartFailed `protobuf:"bytes,3,opt,name=start_failed,json=startFailed,proto3,oneof"`
+}
+
+type ExecutionAgentMessage_Stdout struct {
+	Stdout *ExecutionData `protobuf:"bytes,4,opt,name=stdout,proto3,oneof"`
+}
+
+type ExecutionAgentMessage_Stderr struct {
+	Stderr *ExecutionData `protobuf:"bytes,5,opt,name=stderr,proto3,oneof"`
+}
+
+type ExecutionAgentMessage_OutputEof struct {
+	OutputEof *ExecutionOutputEOF `protobuf:"bytes,6,opt,name=output_eof,json=outputEof,proto3,oneof"`
+}
+
+type ExecutionAgentMessage_Result struct {
+	Result *ExecutionResult `protobuf:"bytes,7,opt,name=result,proto3,oneof"`
+}
+
+type ExecutionAgentMessage_Status struct {
+	Status *ExecutionStatus `protobuf:"bytes,8,opt,name=status,proto3,oneof"`
+}
+
+func (*ExecutionAgentMessage_Attach) isExecutionAgentMessage_Payload() {}
+
+func (*ExecutionAgentMessage_Started) isExecutionAgentMessage_Payload() {}
+
+func (*ExecutionAgentMessage_StartFailed) isExecutionAgentMessage_Payload() {}
+
+func (*ExecutionAgentMessage_Stdout) isExecutionAgentMessage_Payload() {}
+
+func (*ExecutionAgentMessage_Stderr) isExecutionAgentMessage_Payload() {}
+
+func (*ExecutionAgentMessage_OutputEof) isExecutionAgentMessage_Payload() {}
+
+func (*ExecutionAgentMessage_Result) isExecutionAgentMessage_Payload() {}
+
+func (*ExecutionAgentMessage_Status) isExecutionAgentMessage_Payload() {}
+
+type ExecutionHubMessage struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// Types that are valid to be assigned to Payload:
+	//
+	//	*ExecutionHubMessage_Attached
+	//	*ExecutionHubMessage_Start
+	//	*ExecutionHubMessage_Input
+	//	*ExecutionHubMessage_InputEof
+	//	*ExecutionHubMessage_ScriptChunk
+	//	*ExecutionHubMessage_ScriptEof
+	//	*ExecutionHubMessage_Cancel
+	Payload       isExecutionHubMessage_Payload `protobuf_oneof:"payload"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ExecutionHubMessage) Reset() {
+	*x = ExecutionHubMessage{}
+	mi := &file_proto_veyport_v1_agent_proto_msgTypes[46]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ExecutionHubMessage) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ExecutionHubMessage) ProtoMessage() {}
+
+func (x *ExecutionHubMessage) ProtoReflect() protoreflect.Message {
+	mi := &file_proto_veyport_v1_agent_proto_msgTypes[46]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ExecutionHubMessage.ProtoReflect.Descriptor instead.
+func (*ExecutionHubMessage) Descriptor() ([]byte, []int) {
+	return file_proto_veyport_v1_agent_proto_rawDescGZIP(), []int{46}
+}
+
+func (x *ExecutionHubMessage) GetPayload() isExecutionHubMessage_Payload {
+	if x != nil {
+		return x.Payload
+	}
+	return nil
+}
+
+func (x *ExecutionHubMessage) GetAttached() *ExecutionAttached {
+	if x != nil {
+		if x, ok := x.Payload.(*ExecutionHubMessage_Attached); ok {
+			return x.Attached
+		}
+	}
+	return nil
+}
+
+func (x *ExecutionHubMessage) GetStart() *ExecutionStart {
+	if x != nil {
+		if x, ok := x.Payload.(*ExecutionHubMessage_Start); ok {
+			return x.Start
+		}
+	}
+	return nil
+}
+
+func (x *ExecutionHubMessage) GetInput() *ExecutionData {
+	if x != nil {
+		if x, ok := x.Payload.(*ExecutionHubMessage_Input); ok {
+			return x.Input
+		}
+	}
+	return nil
+}
+
+func (x *ExecutionHubMessage) GetInputEof() *ExecutionInputEOF {
+	if x != nil {
+		if x, ok := x.Payload.(*ExecutionHubMessage_InputEof); ok {
+			return x.InputEof
+		}
+	}
+	return nil
+}
+
+func (x *ExecutionHubMessage) GetScriptChunk() *ExecutionScriptChunk {
+	if x != nil {
+		if x, ok := x.Payload.(*ExecutionHubMessage_ScriptChunk); ok {
+			return x.ScriptChunk
+		}
+	}
+	return nil
+}
+
+func (x *ExecutionHubMessage) GetScriptEof() *ExecutionScriptEOF {
+	if x != nil {
+		if x, ok := x.Payload.(*ExecutionHubMessage_ScriptEof); ok {
+			return x.ScriptEof
+		}
+	}
+	return nil
+}
+
+func (x *ExecutionHubMessage) GetCancel() *ExecutionCancel {
+	if x != nil {
+		if x, ok := x.Payload.(*ExecutionHubMessage_Cancel); ok {
+			return x.Cancel
+		}
+	}
+	return nil
+}
+
+type isExecutionHubMessage_Payload interface {
+	isExecutionHubMessage_Payload()
+}
+
+type ExecutionHubMessage_Attached struct {
+	Attached *ExecutionAttached `protobuf:"bytes,1,opt,name=attached,proto3,oneof"`
+}
+
+type ExecutionHubMessage_Start struct {
+	Start *ExecutionStart `protobuf:"bytes,2,opt,name=start,proto3,oneof"`
+}
+
+type ExecutionHubMessage_Input struct {
+	Input *ExecutionData `protobuf:"bytes,3,opt,name=input,proto3,oneof"`
+}
+
+type ExecutionHubMessage_InputEof struct {
+	InputEof *ExecutionInputEOF `protobuf:"bytes,4,opt,name=input_eof,json=inputEof,proto3,oneof"`
+}
+
+type ExecutionHubMessage_ScriptChunk struct {
+	ScriptChunk *ExecutionScriptChunk `protobuf:"bytes,5,opt,name=script_chunk,json=scriptChunk,proto3,oneof"`
+}
+
+type ExecutionHubMessage_ScriptEof struct {
+	ScriptEof *ExecutionScriptEOF `protobuf:"bytes,6,opt,name=script_eof,json=scriptEof,proto3,oneof"`
+}
+
+type ExecutionHubMessage_Cancel struct {
+	Cancel *ExecutionCancel `protobuf:"bytes,7,opt,name=cancel,proto3,oneof"`
+}
+
+func (*ExecutionHubMessage_Attached) isExecutionHubMessage_Payload() {}
+
+func (*ExecutionHubMessage_Start) isExecutionHubMessage_Payload() {}
+
+func (*ExecutionHubMessage_Input) isExecutionHubMessage_Payload() {}
+
+func (*ExecutionHubMessage_InputEof) isExecutionHubMessage_Payload() {}
+
+func (*ExecutionHubMessage_ScriptChunk) isExecutionHubMessage_Payload() {}
+
+func (*ExecutionHubMessage_ScriptEof) isExecutionHubMessage_Payload() {}
+
+func (*ExecutionHubMessage_Cancel) isExecutionHubMessage_Payload() {}
+
+type ExecutionAttached struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Binding       *ExecutionBinding      `protobuf:"bytes,1,opt,name=binding,proto3" json:"binding,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ExecutionAttached) Reset() {
+	*x = ExecutionAttached{}
+	mi := &file_proto_veyport_v1_agent_proto_msgTypes[47]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ExecutionAttached) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ExecutionAttached) ProtoMessage() {}
+
+func (x *ExecutionAttached) ProtoReflect() protoreflect.Message {
+	mi := &file_proto_veyport_v1_agent_proto_msgTypes[47]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ExecutionAttached.ProtoReflect.Descriptor instead.
+func (*ExecutionAttached) Descriptor() ([]byte, []int) {
+	return file_proto_veyport_v1_agent_proto_rawDescGZIP(), []int{47}
+}
+
+func (x *ExecutionAttached) GetBinding() *ExecutionBinding {
+	if x != nil {
+		return x.Binding
+	}
+	return nil
+}
+
+type ExecutionStart struct {
+	state            protoimpl.MessageState `protogen:"open.v1"`
+	Binding          *ExecutionBinding      `protobuf:"bytes,1,opt,name=binding,proto3" json:"binding,omitempty"`
+	CommandSha256    []byte                 `protobuf:"bytes,2,opt,name=command_sha256,json=commandSha256,proto3" json:"command_sha256,omitempty"`
+	IdentitySha256   []byte                 `protobuf:"bytes,3,opt,name=identity_sha256,json=identitySha256,proto3" json:"identity_sha256,omitempty"`
+	Limits           *ExecutionLimits       `protobuf:"bytes,4,opt,name=limits,proto3" json:"limits,omitempty"`
+	PolicyVersion    string                 `protobuf:"bytes,5,opt,name=policy_version,json=policyVersion,proto3" json:"policy_version,omitempty"`
+	AdmissionReceipt []byte                 `protobuf:"bytes,6,opt,name=admission_receipt,json=admissionReceipt,proto3" json:"admission_receipt,omitempty"`
+	// Enhanced-only expiry copied from hub-verified receipt claims. The agent
+	// trusts its enrolled mTLS hub and checks this authority immediately before
+	// spawn; it does not independently verify the archive signature.
+	AdmissionExpiresUnixMilli int64 `protobuf:"varint,7,opt,name=admission_expires_unix_milli,json=admissionExpiresUnixMilli,proto3" json:"admission_expires_unix_milli,omitempty"`
+	unknownFields             protoimpl.UnknownFields
+	sizeCache                 protoimpl.SizeCache
+}
+
+func (x *ExecutionStart) Reset() {
+	*x = ExecutionStart{}
+	mi := &file_proto_veyport_v1_agent_proto_msgTypes[48]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ExecutionStart) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ExecutionStart) ProtoMessage() {}
+
+func (x *ExecutionStart) ProtoReflect() protoreflect.Message {
+	mi := &file_proto_veyport_v1_agent_proto_msgTypes[48]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ExecutionStart.ProtoReflect.Descriptor instead.
+func (*ExecutionStart) Descriptor() ([]byte, []int) {
+	return file_proto_veyport_v1_agent_proto_rawDescGZIP(), []int{48}
+}
+
+func (x *ExecutionStart) GetBinding() *ExecutionBinding {
+	if x != nil {
+		return x.Binding
+	}
+	return nil
+}
+
+func (x *ExecutionStart) GetCommandSha256() []byte {
+	if x != nil {
+		return x.CommandSha256
+	}
+	return nil
+}
+
+func (x *ExecutionStart) GetIdentitySha256() []byte {
+	if x != nil {
+		return x.IdentitySha256
+	}
+	return nil
+}
+
+func (x *ExecutionStart) GetLimits() *ExecutionLimits {
+	if x != nil {
+		return x.Limits
+	}
+	return nil
+}
+
+func (x *ExecutionStart) GetPolicyVersion() string {
+	if x != nil {
+		return x.PolicyVersion
+	}
+	return ""
+}
+
+func (x *ExecutionStart) GetAdmissionReceipt() []byte {
+	if x != nil {
+		return x.AdmissionReceipt
+	}
+	return nil
+}
+
+func (x *ExecutionStart) GetAdmissionExpiresUnixMilli() int64 {
+	if x != nil {
+		return x.AdmissionExpiresUnixMilli
+	}
+	return 0
+}
+
+type ExecutionStarted struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Binding       *ExecutionBinding      `protobuf:"bytes,1,opt,name=binding,proto3" json:"binding,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ExecutionStarted) Reset() {
+	*x = ExecutionStarted{}
+	mi := &file_proto_veyport_v1_agent_proto_msgTypes[49]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ExecutionStarted) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ExecutionStarted) ProtoMessage() {}
+
+func (x *ExecutionStarted) ProtoReflect() protoreflect.Message {
+	mi := &file_proto_veyport_v1_agent_proto_msgTypes[49]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ExecutionStarted.ProtoReflect.Descriptor instead.
+func (*ExecutionStarted) Descriptor() ([]byte, []int) {
+	return file_proto_veyport_v1_agent_proto_rawDescGZIP(), []int{49}
+}
+
+func (x *ExecutionStarted) GetBinding() *ExecutionBinding {
+	if x != nil {
+		return x.Binding
+	}
+	return nil
+}
+
+type ExecutionStartFailed struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Binding       *ExecutionBinding      `protobuf:"bytes,1,opt,name=binding,proto3" json:"binding,omitempty"`
+	State         string                 `protobuf:"bytes,2,opt,name=state,proto3" json:"state,omitempty"`
+	Reason        string                 `protobuf:"bytes,3,opt,name=reason,proto3" json:"reason,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ExecutionStartFailed) Reset() {
+	*x = ExecutionStartFailed{}
+	mi := &file_proto_veyport_v1_agent_proto_msgTypes[50]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ExecutionStartFailed) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ExecutionStartFailed) ProtoMessage() {}
+
+func (x *ExecutionStartFailed) ProtoReflect() protoreflect.Message {
+	mi := &file_proto_veyport_v1_agent_proto_msgTypes[50]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ExecutionStartFailed.ProtoReflect.Descriptor instead.
+func (*ExecutionStartFailed) Descriptor() ([]byte, []int) {
+	return file_proto_veyport_v1_agent_proto_rawDescGZIP(), []int{50}
+}
+
+func (x *ExecutionStartFailed) GetBinding() *ExecutionBinding {
+	if x != nil {
+		return x.Binding
+	}
+	return nil
+}
+
+func (x *ExecutionStartFailed) GetState() string {
+	if x != nil {
+		return x.State
+	}
+	return ""
+}
+
+func (x *ExecutionStartFailed) GetReason() string {
+	if x != nil {
+		return x.Reason
+	}
+	return ""
+}
+
+// Sequences begin at 0 independently for each stdin/stdout/stderr stream.
+type ExecutionData struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Sequence      uint64                 `protobuf:"varint,1,opt,name=sequence,proto3" json:"sequence,omitempty"`
+	Data          []byte                 `protobuf:"bytes,2,opt,name=data,proto3" json:"data,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ExecutionData) Reset() {
+	*x = ExecutionData{}
+	mi := &file_proto_veyport_v1_agent_proto_msgTypes[51]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ExecutionData) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ExecutionData) ProtoMessage() {}
+
+func (x *ExecutionData) ProtoReflect() protoreflect.Message {
+	mi := &file_proto_veyport_v1_agent_proto_msgTypes[51]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ExecutionData.ProtoReflect.Descriptor instead.
+func (*ExecutionData) Descriptor() ([]byte, []int) {
+	return file_proto_veyport_v1_agent_proto_rawDescGZIP(), []int{51}
+}
+
+func (x *ExecutionData) GetSequence() uint64 {
+	if x != nil {
+		return x.Sequence
+	}
+	return 0
+}
+
+func (x *ExecutionData) GetData() []byte {
+	if x != nil {
+		return x.Data
+	}
+	return nil
+}
+
+type ExecutionInputEOF struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Sequence      uint64                 `protobuf:"varint,1,opt,name=sequence,proto3" json:"sequence,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ExecutionInputEOF) Reset() {
+	*x = ExecutionInputEOF{}
+	mi := &file_proto_veyport_v1_agent_proto_msgTypes[52]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ExecutionInputEOF) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ExecutionInputEOF) ProtoMessage() {}
+
+func (x *ExecutionInputEOF) ProtoReflect() protoreflect.Message {
+	mi := &file_proto_veyport_v1_agent_proto_msgTypes[52]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ExecutionInputEOF.ProtoReflect.Descriptor instead.
+func (*ExecutionInputEOF) Descriptor() ([]byte, []int) {
+	return file_proto_veyport_v1_agent_proto_rawDescGZIP(), []int{52}
+}
+
+func (x *ExecutionInputEOF) GetSequence() uint64 {
+	if x != nil {
+		return x.Sequence
+	}
+	return 0
+}
+
+type ExecutionOutputEOF struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Output        ExecutionOutput        `protobuf:"varint,1,opt,name=output,proto3,enum=veyport.v1.ExecutionOutput" json:"output,omitempty"`
+	Sequence      uint64                 `protobuf:"varint,2,opt,name=sequence,proto3" json:"sequence,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ExecutionOutputEOF) Reset() {
+	*x = ExecutionOutputEOF{}
+	mi := &file_proto_veyport_v1_agent_proto_msgTypes[53]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ExecutionOutputEOF) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ExecutionOutputEOF) ProtoMessage() {}
+
+func (x *ExecutionOutputEOF) ProtoReflect() protoreflect.Message {
+	mi := &file_proto_veyport_v1_agent_proto_msgTypes[53]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ExecutionOutputEOF.ProtoReflect.Descriptor instead.
+func (*ExecutionOutputEOF) Descriptor() ([]byte, []int) {
+	return file_proto_veyport_v1_agent_proto_rawDescGZIP(), []int{53}
+}
+
+func (x *ExecutionOutputEOF) GetOutput() ExecutionOutput {
+	if x != nil {
+		return x.Output
+	}
+	return ExecutionOutput_EXECUTION_OUTPUT_UNSPECIFIED
+}
+
+func (x *ExecutionOutputEOF) GetSequence() uint64 {
+	if x != nil {
+		return x.Sequence
+	}
+	return 0
+}
+
+type ExecutionScriptChunk struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Offset        uint64                 `protobuf:"varint,1,opt,name=offset,proto3" json:"offset,omitempty"`
+	Data          []byte                 `protobuf:"bytes,2,opt,name=data,proto3" json:"data,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ExecutionScriptChunk) Reset() {
+	*x = ExecutionScriptChunk{}
+	mi := &file_proto_veyport_v1_agent_proto_msgTypes[54]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ExecutionScriptChunk) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ExecutionScriptChunk) ProtoMessage() {}
+
+func (x *ExecutionScriptChunk) ProtoReflect() protoreflect.Message {
+	mi := &file_proto_veyport_v1_agent_proto_msgTypes[54]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ExecutionScriptChunk.ProtoReflect.Descriptor instead.
+func (*ExecutionScriptChunk) Descriptor() ([]byte, []int) {
+	return file_proto_veyport_v1_agent_proto_rawDescGZIP(), []int{54}
+}
+
+func (x *ExecutionScriptChunk) GetOffset() uint64 {
+	if x != nil {
+		return x.Offset
+	}
+	return 0
+}
+
+func (x *ExecutionScriptChunk) GetData() []byte {
+	if x != nil {
+		return x.Data
+	}
+	return nil
+}
+
+type ExecutionScriptEOF struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Length        uint64                 `protobuf:"varint,1,opt,name=length,proto3" json:"length,omitempty"`
+	Sha256        []byte                 `protobuf:"bytes,2,opt,name=sha256,proto3" json:"sha256,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ExecutionScriptEOF) Reset() {
+	*x = ExecutionScriptEOF{}
+	mi := &file_proto_veyport_v1_agent_proto_msgTypes[55]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ExecutionScriptEOF) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ExecutionScriptEOF) ProtoMessage() {}
+
+func (x *ExecutionScriptEOF) ProtoReflect() protoreflect.Message {
+	mi := &file_proto_veyport_v1_agent_proto_msgTypes[55]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ExecutionScriptEOF.ProtoReflect.Descriptor instead.
+func (*ExecutionScriptEOF) Descriptor() ([]byte, []int) {
+	return file_proto_veyport_v1_agent_proto_rawDescGZIP(), []int{55}
+}
+
+func (x *ExecutionScriptEOF) GetLength() uint64 {
+	if x != nil {
+		return x.Length
+	}
+	return 0
+}
+
+func (x *ExecutionScriptEOF) GetSha256() []byte {
+	if x != nil {
+		return x.Sha256
+	}
+	return nil
+}
+
+type ExecutionResult struct {
+	state          protoimpl.MessageState `protogen:"open.v1"`
+	Binding        *ExecutionBinding      `protobuf:"bytes,1,opt,name=binding,proto3" json:"binding,omitempty"`
+	State          string                 `protobuf:"bytes,2,opt,name=state,proto3" json:"state,omitempty"`
+	ExitCode       int32                  `protobuf:"varint,3,opt,name=exit_code,json=exitCode,proto3" json:"exit_code,omitempty"`
+	Signal         string                 `protobuf:"bytes,4,opt,name=signal,proto3" json:"signal,omitempty"`
+	Reason         string                 `protobuf:"bytes,5,opt,name=reason,proto3" json:"reason,omitempty"`
+	StdoutComplete bool                   `protobuf:"varint,6,opt,name=stdout_complete,json=stdoutComplete,proto3" json:"stdout_complete,omitempty"`
+	StderrComplete bool                   `protobuf:"varint,7,opt,name=stderr_complete,json=stderrComplete,proto3" json:"stderr_complete,omitempty"`
+	unknownFields  protoimpl.UnknownFields
+	sizeCache      protoimpl.SizeCache
+}
+
+func (x *ExecutionResult) Reset() {
+	*x = ExecutionResult{}
+	mi := &file_proto_veyport_v1_agent_proto_msgTypes[56]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ExecutionResult) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ExecutionResult) ProtoMessage() {}
+
+func (x *ExecutionResult) ProtoReflect() protoreflect.Message {
+	mi := &file_proto_veyport_v1_agent_proto_msgTypes[56]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ExecutionResult.ProtoReflect.Descriptor instead.
+func (*ExecutionResult) Descriptor() ([]byte, []int) {
+	return file_proto_veyport_v1_agent_proto_rawDescGZIP(), []int{56}
+}
+
+func (x *ExecutionResult) GetBinding() *ExecutionBinding {
+	if x != nil {
+		return x.Binding
+	}
+	return nil
+}
+
+func (x *ExecutionResult) GetState() string {
+	if x != nil {
+		return x.State
+	}
+	return ""
+}
+
+func (x *ExecutionResult) GetExitCode() int32 {
+	if x != nil {
+		return x.ExitCode
+	}
+	return 0
+}
+
+func (x *ExecutionResult) GetSignal() string {
+	if x != nil {
+		return x.Signal
+	}
+	return ""
+}
+
+func (x *ExecutionResult) GetReason() string {
+	if x != nil {
+		return x.Reason
+	}
+	return ""
+}
+
+func (x *ExecutionResult) GetStdoutComplete() bool {
+	if x != nil {
+		return x.StdoutComplete
+	}
+	return false
+}
+
+func (x *ExecutionResult) GetStderrComplete() bool {
+	if x != nil {
+		return x.StderrComplete
+	}
+	return false
+}
+
+// Update v1 supports only the canonical root-owned Linux/systemd installation.
+// Capabilities describe the running executable, not its historical registration.
+type UpdateCapabilities struct {
+	state           protoimpl.MessageState `protogen:"open.v1"`
+	ProtocolVersion uint32                 `protobuf:"varint,1,opt,name=protocol_version,json=protocolVersion,proto3" json:"protocol_version,omitempty"`
+	Os              string                 `protobuf:"bytes,2,opt,name=os,proto3" json:"os,omitempty"`
+	Arch            string                 `protobuf:"bytes,3,opt,name=arch,proto3" json:"arch,omitempty"`
+	Version         string                 `protobuf:"bytes,4,opt,name=version,proto3" json:"version,omitempty"`
+	Revision        string                 `protobuf:"bytes,5,opt,name=revision,proto3" json:"revision,omitempty"`
+	Sha256          string                 `protobuf:"bytes,6,opt,name=sha256,proto3" json:"sha256,omitempty"`
+	BootId          string                 `protobuf:"bytes,7,opt,name=boot_id,json=bootId,proto3" json:"boot_id,omitempty"`
+	Supported       bool                   `protobuf:"varint,8,opt,name=supported,proto3" json:"supported,omitempty"`
+	Reason          string                 `protobuf:"bytes,9,opt,name=reason,proto3" json:"reason,omitempty"`
+	// Version1 counts complete file/upload/log lifetimes in the maintenance budget.
+	ActivityQuiescenceVersion uint32 `protobuf:"varint,10,opt,name=activity_quiescence_version,json=activityQuiescenceVersion,proto3" json:"activity_quiescence_version,omitempty"`
+	ActiveActivities          uint32 `protobuf:"varint,11,opt,name=active_activities,json=activeActivities,proto3" json:"active_activities,omitempty"`
+	unknownFields             protoimpl.UnknownFields
+	sizeCache                 protoimpl.SizeCache
+}
+
+func (x *UpdateCapabilities) Reset() {
+	*x = UpdateCapabilities{}
+	mi := &file_proto_veyport_v1_agent_proto_msgTypes[57]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *UpdateCapabilities) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*UpdateCapabilities) ProtoMessage() {}
+
+func (x *UpdateCapabilities) ProtoReflect() protoreflect.Message {
+	mi := &file_proto_veyport_v1_agent_proto_msgTypes[57]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use UpdateCapabilities.ProtoReflect.Descriptor instead.
+func (*UpdateCapabilities) Descriptor() ([]byte, []int) {
+	return file_proto_veyport_v1_agent_proto_rawDescGZIP(), []int{57}
+}
+
+func (x *UpdateCapabilities) GetProtocolVersion() uint32 {
+	if x != nil {
+		return x.ProtocolVersion
+	}
+	return 0
+}
+
+func (x *UpdateCapabilities) GetOs() string {
+	if x != nil {
+		return x.Os
+	}
+	return ""
+}
+
+func (x *UpdateCapabilities) GetArch() string {
+	if x != nil {
+		return x.Arch
+	}
+	return ""
+}
+
+func (x *UpdateCapabilities) GetVersion() string {
+	if x != nil {
+		return x.Version
+	}
+	return ""
+}
+
+func (x *UpdateCapabilities) GetRevision() string {
+	if x != nil {
+		return x.Revision
+	}
+	return ""
+}
+
+func (x *UpdateCapabilities) GetSha256() string {
+	if x != nil {
+		return x.Sha256
+	}
+	return ""
+}
+
+func (x *UpdateCapabilities) GetBootId() string {
+	if x != nil {
+		return x.BootId
+	}
+	return ""
+}
+
+func (x *UpdateCapabilities) GetSupported() bool {
+	if x != nil {
+		return x.Supported
+	}
+	return false
+}
+
+func (x *UpdateCapabilities) GetReason() string {
+	if x != nil {
+		return x.Reason
+	}
+	return ""
+}
+
+func (x *UpdateCapabilities) GetActivityQuiescenceVersion() uint32 {
+	if x != nil {
+		return x.ActivityQuiescenceVersion
+	}
+	return 0
+}
+
+func (x *UpdateCapabilities) GetActiveActivities() uint32 {
+	if x != nil {
+		return x.ActiveActivities
+	}
+	return 0
+}
+
+type AgentUpdateRequest struct {
+	state            protoimpl.MessageState `protogen:"open.v1"`
+	OperationId      string                 `protobuf:"bytes,1,opt,name=operation_id,json=operationId,proto3" json:"operation_id,omitempty"`
+	Version          string                 `protobuf:"bytes,2,opt,name=version,proto3" json:"version,omitempty"`
+	Revision         string                 `protobuf:"bytes,3,opt,name=revision,proto3" json:"revision,omitempty"`
+	Sha256           string                 `protobuf:"bytes,4,opt,name=sha256,proto3" json:"sha256,omitempty"`
+	Bytes            int64                  `protobuf:"varint,5,opt,name=bytes,proto3" json:"bytes,omitempty"`
+	ExpiresUnixMilli int64                  `protobuf:"varint,6,opt,name=expires_unix_milli,json=expiresUnixMilli,proto3" json:"expires_unix_milli,omitempty"`
+	unknownFields    protoimpl.UnknownFields
+	sizeCache        protoimpl.SizeCache
+}
+
+func (x *AgentUpdateRequest) Reset() {
+	*x = AgentUpdateRequest{}
+	mi := &file_proto_veyport_v1_agent_proto_msgTypes[58]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *AgentUpdateRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*AgentUpdateRequest) ProtoMessage() {}
+
+func (x *AgentUpdateRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_proto_veyport_v1_agent_proto_msgTypes[58]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use AgentUpdateRequest.ProtoReflect.Descriptor instead.
+func (*AgentUpdateRequest) Descriptor() ([]byte, []int) {
+	return file_proto_veyport_v1_agent_proto_rawDescGZIP(), []int{58}
+}
+
+func (x *AgentUpdateRequest) GetOperationId() string {
+	if x != nil {
+		return x.OperationId
+	}
+	return ""
+}
+
+func (x *AgentUpdateRequest) GetVersion() string {
+	if x != nil {
+		return x.Version
+	}
+	return ""
+}
+
+func (x *AgentUpdateRequest) GetRevision() string {
+	if x != nil {
+		return x.Revision
+	}
+	return ""
+}
+
+func (x *AgentUpdateRequest) GetSha256() string {
+	if x != nil {
+		return x.Sha256
+	}
+	return ""
+}
+
+func (x *AgentUpdateRequest) GetBytes() int64 {
+	if x != nil {
+		return x.Bytes
+	}
+	return 0
+}
+
+func (x *AgentUpdateRequest) GetExpiresUnixMilli() int64 {
+	if x != nil {
+		return x.ExpiresUnixMilli
+	}
+	return 0
+}
+
+type AgentUpdateStatus struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	OperationId   string                 `protobuf:"bytes,1,opt,name=operation_id,json=operationId,proto3" json:"operation_id,omitempty"`
+	State         string                 `protobuf:"bytes,2,opt,name=state,proto3" json:"state,omitempty"`
+	Reason        string                 `protobuf:"bytes,3,opt,name=reason,proto3" json:"reason,omitempty"`
+	Version       string                 `protobuf:"bytes,4,opt,name=version,proto3" json:"version,omitempty"`
+	Revision      string                 `protobuf:"bytes,5,opt,name=revision,proto3" json:"revision,omitempty"`
+	Sha256        string                 `protobuf:"bytes,6,opt,name=sha256,proto3" json:"sha256,omitempty"`
+	BootId        string                 `protobuf:"bytes,7,opt,name=boot_id,json=bootId,proto3" json:"boot_id,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *AgentUpdateStatus) Reset() {
+	*x = AgentUpdateStatus{}
+	mi := &file_proto_veyport_v1_agent_proto_msgTypes[59]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *AgentUpdateStatus) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*AgentUpdateStatus) ProtoMessage() {}
+
+func (x *AgentUpdateStatus) ProtoReflect() protoreflect.Message {
+	mi := &file_proto_veyport_v1_agent_proto_msgTypes[59]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use AgentUpdateStatus.ProtoReflect.Descriptor instead.
+func (*AgentUpdateStatus) Descriptor() ([]byte, []int) {
+	return file_proto_veyport_v1_agent_proto_rawDescGZIP(), []int{59}
+}
+
+func (x *AgentUpdateStatus) GetOperationId() string {
+	if x != nil {
+		return x.OperationId
+	}
+	return ""
+}
+
+func (x *AgentUpdateStatus) GetState() string {
+	if x != nil {
+		return x.State
+	}
+	return ""
+}
+
+func (x *AgentUpdateStatus) GetReason() string {
+	if x != nil {
+		return x.Reason
+	}
+	return ""
+}
+
+func (x *AgentUpdateStatus) GetVersion() string {
+	if x != nil {
+		return x.Version
+	}
+	return ""
+}
+
+func (x *AgentUpdateStatus) GetRevision() string {
+	if x != nil {
+		return x.Revision
+	}
+	return ""
+}
+
+func (x *AgentUpdateStatus) GetSha256() string {
+	if x != nil {
+		return x.Sha256
+	}
+	return ""
+}
+
+func (x *AgentUpdateStatus) GetBootId() string {
+	if x != nil {
+		return x.BootId
+	}
+	return ""
+}
+
+type UpdateConfirmation struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	OperationId   string                 `protobuf:"bytes,1,opt,name=operation_id,json=operationId,proto3" json:"operation_id,omitempty"`
+	State         string                 `protobuf:"bytes,2,opt,name=state,proto3" json:"state,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *UpdateConfirmation) Reset() {
+	*x = UpdateConfirmation{}
+	mi := &file_proto_veyport_v1_agent_proto_msgTypes[60]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *UpdateConfirmation) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*UpdateConfirmation) ProtoMessage() {}
+
+func (x *UpdateConfirmation) ProtoReflect() protoreflect.Message {
+	mi := &file_proto_veyport_v1_agent_proto_msgTypes[60]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use UpdateConfirmation.ProtoReflect.Descriptor instead.
+func (*UpdateConfirmation) Descriptor() ([]byte, []int) {
+	return file_proto_veyport_v1_agent_proto_rawDescGZIP(), []int{60}
+}
+
+func (x *UpdateConfirmation) GetOperationId() string {
+	if x != nil {
+		return x.OperationId
+	}
+	return ""
+}
+
+func (x *UpdateConfirmation) GetState() string {
+	if x != nil {
+		return x.State
+	}
+	return ""
+}
+
+type UpdateArtifactRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	OperationId   string                 `protobuf:"bytes,1,opt,name=operation_id,json=operationId,proto3" json:"operation_id,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *UpdateArtifactRequest) Reset() {
+	*x = UpdateArtifactRequest{}
+	mi := &file_proto_veyport_v1_agent_proto_msgTypes[61]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *UpdateArtifactRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*UpdateArtifactRequest) ProtoMessage() {}
+
+func (x *UpdateArtifactRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_proto_veyport_v1_agent_proto_msgTypes[61]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use UpdateArtifactRequest.ProtoReflect.Descriptor instead.
+func (*UpdateArtifactRequest) Descriptor() ([]byte, []int) {
+	return file_proto_veyport_v1_agent_proto_rawDescGZIP(), []int{61}
+}
+
+func (x *UpdateArtifactRequest) GetOperationId() string {
+	if x != nil {
+		return x.OperationId
+	}
+	return ""
+}
+
+type UpdateArtifactChunk struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Offset        int64                  `protobuf:"varint,1,opt,name=offset,proto3" json:"offset,omitempty"`
+	Data          []byte                 `protobuf:"bytes,2,opt,name=data,proto3" json:"data,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *UpdateArtifactChunk) Reset() {
+	*x = UpdateArtifactChunk{}
+	mi := &file_proto_veyport_v1_agent_proto_msgTypes[62]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *UpdateArtifactChunk) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*UpdateArtifactChunk) ProtoMessage() {}
+
+func (x *UpdateArtifactChunk) ProtoReflect() protoreflect.Message {
+	mi := &file_proto_veyport_v1_agent_proto_msgTypes[62]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use UpdateArtifactChunk.ProtoReflect.Descriptor instead.
+func (*UpdateArtifactChunk) Descriptor() ([]byte, []int) {
+	return file_proto_veyport_v1_agent_proto_rawDescGZIP(), []int{62}
+}
+
+func (x *UpdateArtifactChunk) GetOffset() int64 {
+	if x != nil {
+		return x.Offset
+	}
+	return 0
+}
+
+func (x *UpdateArtifactChunk) GetData() []byte {
+	if x != nil {
+		return x.Data
+	}
+	return nil
+}
+
+type UpdateAuthorization struct {
+	state            protoimpl.MessageState `protogen:"open.v1"`
+	OperationId      string                 `protobuf:"bytes,1,opt,name=operation_id,json=operationId,proto3" json:"operation_id,omitempty"`
+	ExpiresUnixMilli int64                  `protobuf:"varint,2,opt,name=expires_unix_milli,json=expiresUnixMilli,proto3" json:"expires_unix_milli,omitempty"`
+	unknownFields    protoimpl.UnknownFields
+	sizeCache        protoimpl.SizeCache
+}
+
+func (x *UpdateAuthorization) Reset() {
+	*x = UpdateAuthorization{}
+	mi := &file_proto_veyport_v1_agent_proto_msgTypes[63]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *UpdateAuthorization) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*UpdateAuthorization) ProtoMessage() {}
+
+func (x *UpdateAuthorization) ProtoReflect() protoreflect.Message {
+	mi := &file_proto_veyport_v1_agent_proto_msgTypes[63]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use UpdateAuthorization.ProtoReflect.Descriptor instead.
+func (*UpdateAuthorization) Descriptor() ([]byte, []int) {
+	return file_proto_veyport_v1_agent_proto_rawDescGZIP(), []int{63}
+}
+
+func (x *UpdateAuthorization) GetOperationId() string {
+	if x != nil {
+		return x.OperationId
+	}
+	return ""
+}
+
+func (x *UpdateAuthorization) GetExpiresUnixMilli() int64 {
+	if x != nil {
+		return x.ExpiresUnixMilli
+	}
+	return 0
+}
+
+type UpdateBootstrapRequest struct {
+	state        protoimpl.MessageState `protogen:"open.v1"`
+	Ticket       string                 `protobuf:"bytes,1,opt,name=ticket,proto3" json:"ticket,omitempty"`
+	Capabilities *UpdateCapabilities    `protobuf:"bytes,2,opt,name=capabilities,proto3" json:"capabilities,omitempty"`
+	// True only after the helper verified an exact unstamped original against an
+	// operator assertion. The Hub requires the same assertion bound to the ticket.
+	OriginalIdentityAsserted bool `protobuf:"varint,3,opt,name=original_identity_asserted,json=originalIdentityAsserted,proto3" json:"original_identity_asserted,omitempty"`
+	unknownFields            protoimpl.UnknownFields
+	sizeCache                protoimpl.SizeCache
+}
+
+func (x *UpdateBootstrapRequest) Reset() {
+	*x = UpdateBootstrapRequest{}
+	mi := &file_proto_veyport_v1_agent_proto_msgTypes[64]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *UpdateBootstrapRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*UpdateBootstrapRequest) ProtoMessage() {}
+
+func (x *UpdateBootstrapRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_proto_veyport_v1_agent_proto_msgTypes[64]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use UpdateBootstrapRequest.ProtoReflect.Descriptor instead.
+func (*UpdateBootstrapRequest) Descriptor() ([]byte, []int) {
+	return file_proto_veyport_v1_agent_proto_rawDescGZIP(), []int{64}
+}
+
+func (x *UpdateBootstrapRequest) GetTicket() string {
+	if x != nil {
+		return x.Ticket
+	}
+	return ""
+}
+
+func (x *UpdateBootstrapRequest) GetCapabilities() *UpdateCapabilities {
+	if x != nil {
+		return x.Capabilities
+	}
+	return nil
+}
+
+func (x *UpdateBootstrapRequest) GetOriginalIdentityAsserted() bool {
+	if x != nil {
+		return x.OriginalIdentityAsserted
+	}
+	return false
+}
+
 var File_proto_veyport_v1_agent_proto protoreflect.FileDescriptor
 
 const file_proto_veyport_v1_agent_proto_rawDesc = "" +
 	"\n" +
 	"\x1cproto/veyport/v1/agent.proto\x12\n" +
-	"veyport.v1\"\xf3\a\n" +
+	"veyport.v1\"\x82\v\n" +
 	"\fAgentMessage\x125\n" +
 	"\theartbeat\x18\x01 \x01(\v2\x15.veyport.v1.HeartbeatH\x00R\theartbeat\x127\n" +
 	"\bregister\x18\x02 \x01(\v2\x19.veyport.v1.RegisterAgentH\x00R\bregister\x12L\n" +
@@ -2570,8 +5122,13 @@ const file_proto_veyport_v1_agent_proto_rawDesc = "" +
 	"\rterminal_data\x18\x13 \x01(\v2\x18.veyport.v1.TerminalDataH\x00R\fterminalData\x12?\n" +
 	"\rterminal_exit\x18\x14 \x01(\v2\x18.veyport.v1.TerminalExitH\x00R\fterminalExit\x12H\n" +
 	"\x10reenroll_request\x18\x15 \x01(\v2\x1b.veyport.v1.ReEnrollRequestH\x00R\x0freenrollRequest\x12B\n" +
-	"\x0ereenroll_proof\x18\x16 \x01(\v2\x19.veyport.v1.ReEnrollProofH\x00R\rreenrollProofB\t\n" +
-	"\apayload\"\xbc\t\n" +
+	"\x0ereenroll_proof\x18\x16 \x01(\v2\x19.veyport.v1.ReEnrollProofH\x00R\rreenrollProof\x12Z\n" +
+	"\x16execution_capabilities\x18\x1e \x01(\v2!.veyport.v1.ExecutionCapabilitiesH\x00R\x15executionCapabilities\x12N\n" +
+	"\x12execution_prepared\x18\x1f \x01(\v2\x1d.veyport.v1.ExecutionPreparedH\x00R\x11executionPrepared\x12H\n" +
+	"\x10execution_status\x18  \x01(\v2\x1b.veyport.v1.ExecutionStatusH\x00R\x0fexecutionStatus\x12Q\n" +
+	"\x13update_capabilities\x18( \x01(\v2\x1e.veyport.v1.UpdateCapabilitiesH\x00R\x12updateCapabilities\x12D\n" +
+	"\rupdate_status\x18) \x01(\v2\x1d.veyport.v1.AgentUpdateStatusH\x00R\fupdateStatusB\t\n" +
+	"\apayload\"\xf6\r\n" +
 	"\n" +
 	"HubMessage\x12?\n" +
 	"\rheartbeat_ack\x18\x01 \x01(\v2\x18.veyport.v1.HeartbeatAckH\x00R\fheartbeatAck\x12<\n" +
@@ -2590,7 +5147,14 @@ const file_proto_veyport_v1_agent_proto_rawDesc = "" +
 	"\x0fterminal_resize\x18\x14 \x01(\v2\x1a.veyport.v1.TerminalResizeH\x00R\x0eterminalResize\x12B\n" +
 	"\x0eterminal_close\x18\x15 \x01(\v2\x19.veyport.v1.TerminalCloseH\x00R\rterminalClose\x12K\n" +
 	"\x11reenroll_approved\x18\x16 \x01(\v2\x1c.veyport.v1.ReEnrollApprovedH\x00R\x10reenrollApproved\x12E\n" +
-	"\x0freenroll_denied\x18\x17 \x01(\v2\x1a.veyport.v1.ReEnrollDeniedH\x00R\x0ereenrollDeniedB\t\n" +
+	"\x0freenroll_denied\x18\x17 \x01(\v2\x1a.veyport.v1.ReEnrollDeniedH\x00R\x0ereenrollDenied\x12I\n" +
+	"\x11file_upload_abort\x18\x18 \x01(\v2\x1b.veyport.v1.FileUploadAbortH\x00R\x0ffileUploadAbort\x12K\n" +
+	"\x11execution_prepare\x18\x1e \x01(\v2\x1c.veyport.v1.ExecutionPrepareH\x00R\x10executionPrepare\x12O\n" +
+	"\x10execution_attach\x18\x1f \x01(\v2\".veyport.v1.ExecutionAttachRequestH\x00R\x0fexecutionAttach\x12H\n" +
+	"\x10execution_cancel\x18  \x01(\v2\x1b.veyport.v1.ExecutionCancelH\x00R\x0fexecutionCancel\x12^\n" +
+	"\x18execution_status_request\x18! \x01(\v2\".veyport.v1.ExecutionStatusRequestH\x00R\x16executionStatusRequest\x12R\n" +
+	"\x14agent_update_request\x18( \x01(\v2\x1e.veyport.v1.AgentUpdateRequestH\x00R\x12agentUpdateRequest\x12Q\n" +
+	"\x13update_confirmation\x18) \x01(\v2\x1e.veyport.v1.UpdateConfirmationH\x00R\x12updateConfirmationB\t\n" +
 	"\apayload\"\x9e\x01\n" +
 	"\tHeartbeat\x12\x1b\n" +
 	"\tserver_id\x18\x01 \x01(\tR\bserverId\x12\x1c\n" +
@@ -2600,7 +5164,7 @@ const file_proto_veyport_v1_agent_proto_rawDesc = "" +
 	"\n" +
 	"ip_address\x18\x04 \x01(\tR\tipAddress\",\n" +
 	"\fHeartbeatAck\x12\x1c\n" +
-	"\ttimestamp\x18\x01 \x01(\x03R\ttimestamp\"\xab\x02\n" +
+	"\ttimestamp\x18\x01 \x01(\x03R\ttimestamp\"\x85\x03\n" +
 	"\rRegisterAgent\x12\x14\n" +
 	"\x05token\x18\x01 \x01(\tR\x05token\x12\x1a\n" +
 	"\bhostname\x18\x02 \x01(\tR\bhostname\x12\x1d\n" +
@@ -2612,7 +5176,9 @@ const file_proto_veyport_v1_agent_proto_rawDesc = "" +
 	"\vnode_pubkey\x18\a \x01(\fR\n" +
 	"nodePubkey\x12-\n" +
 	"\x12enroll_fingerprint\x18\b \x01(\tR\x11enrollFingerprint\x122\n" +
-	"\x15node_transport_pubkey\x18\t \x01(\fR\x13nodeTransportPubkey\"\xaf\x01\n" +
+	"\x15node_transport_pubkey\x18\t \x01(\fR\x13nodeTransportPubkey\x12X\n" +
+	"\x16execution_capabilities\x18\n" +
+	" \x01(\v2!.veyport.v1.ExecutionCapabilitiesR\x15executionCapabilities\"\xaf\x01\n" +
 	"\vRegisterAck\x12\x18\n" +
 	"\asuccess\x18\x01 \x01(\bR\asuccess\x12\x1b\n" +
 	"\tserver_id\x18\x02 \x01(\tR\bserverId\x12\x14\n" +
@@ -2662,12 +5228,14 @@ const file_proto_veyport_v1_agent_proto_rawDesc = "" +
 	"request_id\x18\x01 \x01(\tR\trequestId\x12\x12\n" +
 	"\x04path\x18\x02 \x01(\tR\x04path\x12\x16\n" +
 	"\x06offset\x18\x03 \x01(\x03R\x06offset\x12\x12\n" +
-	"\x04grep\x18\x04 \x01(\tR\x04grep\"[\n" +
+	"\x04grep\x18\x04 \x01(\tR\x04grep\"\x85\x01\n" +
 	"\x0eLogStreamChunk\x12\x1d\n" +
 	"\n" +
 	"request_id\x18\x01 \x01(\tR\trequestId\x12\x12\n" +
 	"\x04data\x18\x02 \x01(\fR\x04data\x12\x16\n" +
-	"\x06offset\x18\x03 \x01(\x03R\x06offset\".\n" +
+	"\x06offset\x18\x03 \x01(\x03R\x06offset\x12\x12\n" +
+	"\x04done\x18\x04 \x01(\bR\x04done\x12\x14\n" +
+	"\x05error\x18\x05 \x01(\tR\x05error\".\n" +
 	"\rLogStreamStop\x12\x1d\n" +
 	"\n" +
 	"request_id\x18\x01 \x01(\tR\trequestId\"x\n" +
@@ -2681,7 +5249,10 @@ const file_proto_veyport_v1_agent_proto_rawDesc = "" +
 	"\n" +
 	"request_id\x18\x01 \x01(\tR\trequestId\x12\x18\n" +
 	"\asuccess\x18\x02 \x01(\bR\asuccess\x12\x14\n" +
-	"\x05error\x18\x03 \x01(\tR\x05error\"F\n" +
+	"\x05error\x18\x03 \x01(\tR\x05error\"0\n" +
+	"\x0fFileUploadAbort\x12\x1d\n" +
+	"\n" +
+	"request_id\x18\x01 \x01(\tR\trequestId\"F\n" +
 	"\x11FileDeleteRequest\x12\x1d\n" +
 	"\n" +
 	"request_id\x18\x01 \x01(\tR\trequestId\x12\x12\n" +
@@ -2750,9 +5321,177 @@ const file_proto_veyport_v1_agent_proto_rawDesc = "" +
 	"\rReEnrollProof\x12\x1c\n" +
 	"\tsignature\x18\x01 \x01(\fR\tsignature\"(\n" +
 	"\x0eReEnrollDenied\x12\x16\n" +
-	"\x06reason\x18\x01 \x01(\tR\x06reason2O\n" +
+	"\x06reason\x18\x01 \x01(\tR\x06reason\"\xab\x01\n" +
+	"\x15ExecutionCapabilities\x12)\n" +
+	"\x10protocol_version\x18\x01 \x01(\rR\x0fprotocolVersion\x12#\n" +
+	"\rstandard_exec\x18\x02 \x01(\bR\fstandardExec\x12)\n" +
+	"\x10protected_script\x18\x03 \x01(\bR\x0fprotectedScript\x12\x17\n" +
+	"\aboot_id\x18\x04 \x01(\tR\x06bootId\"\xf4\x01\n" +
+	"\x0fExecutionLimits\x12&\n" +
+	"\x0fmax_frame_bytes\x18\x01 \x01(\rR\rmaxFrameBytes\x12(\n" +
+	"\x10max_buffer_bytes\x18\x02 \x01(\rR\x0emaxBufferBytes\x12'\n" +
+	"\x0fruntime_seconds\x18\x03 \x01(\rR\x0eruntimeSeconds\x12,\n" +
+	"\x12term_grace_seconds\x18\x04 \x01(\rR\x10termGraceSeconds\x128\n" +
+	"\x18blocked_consumer_seconds\x18\x05 \x01(\rR\x16blockedConsumerSeconds\"\xbc\x01\n" +
+	"\x10ExecutionBinding\x12!\n" +
+	"\fexecution_id\x18\x01 \x01(\tR\vexecutionId\x12\x17\n" +
+	"\anode_id\x18\x02 \x01(\tR\x06nodeId\x12%\n" +
+	"\x0epreparation_id\x18\x03 \x01(\tR\rpreparationId\x12\x17\n" +
+	"\aboot_id\x18\x04 \x01(\tR\x06bootId\x12,\n" +
+	"\x12expires_unix_milli\x18\x05 \x01(\x03R\x10expiresUnixMilli\"\xf5\x01\n" +
+	"\x11ExecutionIdentity\x12\x1a\n" +
+	"\busername\x18\x01 \x01(\tR\busername\x12\x10\n" +
+	"\x03uid\x18\x02 \x01(\rR\x03uid\x12\x10\n" +
+	"\x03gid\x18\x03 \x01(\rR\x03gid\x12\x16\n" +
+	"\x06groups\x18\x04 \x03(\rR\x06groups\x12#\n" +
+	"\rgroups_sha256\x18\x05 \x01(\fR\fgroupsSha256\x12\x12\n" +
+	"\x04home\x18\x06 \x01(\tR\x04home\x12\x14\n" +
+	"\x05shell\x18\a \x01(\tR\x05shell\x12\x10\n" +
+	"\x03cwd\x18\b \x01(\tR\x03cwd\x12'\n" +
+	"\x0fidentity_sha256\x18\t \x01(\fR\x0eidentitySha256\"\xb5\x02\n" +
+	"\x10ExecutionPrepare\x12!\n" +
+	"\fexecution_id\x18\x01 \x01(\tR\vexecutionId\x12\x17\n" +
+	"\anode_id\x18\x02 \x01(\tR\x06nodeId\x12\x1e\n" +
+	"\vrun_as_user\x18\x03 \x01(\tR\trunAsUser\x12\x18\n" +
+	"\acommand\x18\x04 \x01(\tR\acommand\x12\x10\n" +
+	"\x03cwd\x18\x05 \x01(\tR\x03cwd\x123\n" +
+	"\x06limits\x18\x06 \x01(\v2\x1b.veyport.v1.ExecutionLimitsR\x06limits\x12\x1a\n" +
+	"\benhanced\x18\a \x01(\bR\benhanced\x12#\n" +
+	"\rscript_sha256\x18\b \x01(\fR\fscriptSha256\x12#\n" +
+	"\rscript_length\x18\t \x01(\x04R\fscriptLength\"\x9b\x02\n" +
+	"\x11ExecutionPrepared\x12!\n" +
+	"\fexecution_id\x18\x01 \x01(\tR\vexecutionId\x126\n" +
+	"\abinding\x18\x02 \x01(\v2\x1c.veyport.v1.ExecutionBindingR\abinding\x129\n" +
+	"\bidentity\x18\x03 \x01(\v2\x1d.veyport.v1.ExecutionIdentityR\bidentity\x12%\n" +
+	"\x0ecommand_sha256\x18\x04 \x01(\fR\rcommandSha256\x123\n" +
+	"\x06limits\x18\x05 \x01(\v2\x1b.veyport.v1.ExecutionLimitsR\x06limits\x12\x14\n" +
+	"\x05error\x18\x06 \x01(\tR\x05error\"h\n" +
+	"\x16ExecutionAttachRequest\x126\n" +
+	"\abinding\x18\x01 \x01(\v2\x1c.veyport.v1.ExecutionBindingR\abinding\x12\x16\n" +
+	"\x06ticket\x18\x02 \x01(\fR\x06ticket\"a\n" +
+	"\x0fExecutionCancel\x126\n" +
+	"\abinding\x18\x01 \x01(\v2\x1c.veyport.v1.ExecutionBindingR\abinding\x12\x16\n" +
+	"\x06reason\x18\x02 \x01(\tR\x06reason\";\n" +
+	"\x16ExecutionStatusRequest\x12!\n" +
+	"\fexecution_id\x18\x01 \x01(\tR\vexecutionId\"\xcf\x01\n" +
+	"\x0fExecutionStatus\x12!\n" +
+	"\fexecution_id\x18\x01 \x01(\tR\vexecutionId\x126\n" +
+	"\abinding\x18\x02 \x01(\v2\x1c.veyport.v1.ExecutionBindingR\abinding\x12\x14\n" +
+	"\x05state\x18\x03 \x01(\tR\x05state\x12\x16\n" +
+	"\x06reason\x18\x04 \x01(\tR\x06reason\x123\n" +
+	"\x06result\x18\x05 \x01(\v2\x1b.veyport.v1.ExecutionResultR\x06result\"\xfa\x03\n" +
+	"\x15ExecutionAgentMessage\x12<\n" +
+	"\x06attach\x18\x01 \x01(\v2\".veyport.v1.ExecutionAttachRequestH\x00R\x06attach\x128\n" +
+	"\astarted\x18\x02 \x01(\v2\x1c.veyport.v1.ExecutionStartedH\x00R\astarted\x12E\n" +
+	"\fstart_failed\x18\x03 \x01(\v2 .veyport.v1.ExecutionStartFailedH\x00R\vstartFailed\x123\n" +
+	"\x06stdout\x18\x04 \x01(\v2\x19.veyport.v1.ExecutionDataH\x00R\x06stdout\x123\n" +
+	"\x06stderr\x18\x05 \x01(\v2\x19.veyport.v1.ExecutionDataH\x00R\x06stderr\x12?\n" +
+	"\n" +
+	"output_eof\x18\x06 \x01(\v2\x1e.veyport.v1.ExecutionOutputEOFH\x00R\toutputEof\x125\n" +
+	"\x06result\x18\a \x01(\v2\x1b.veyport.v1.ExecutionResultH\x00R\x06result\x125\n" +
+	"\x06status\x18\b \x01(\v2\x1b.veyport.v1.ExecutionStatusH\x00R\x06statusB\t\n" +
+	"\apayload\"\xc1\x03\n" +
+	"\x13ExecutionHubMessage\x12;\n" +
+	"\battached\x18\x01 \x01(\v2\x1d.veyport.v1.ExecutionAttachedH\x00R\battached\x122\n" +
+	"\x05start\x18\x02 \x01(\v2\x1a.veyport.v1.ExecutionStartH\x00R\x05start\x121\n" +
+	"\x05input\x18\x03 \x01(\v2\x19.veyport.v1.ExecutionDataH\x00R\x05input\x12<\n" +
+	"\tinput_eof\x18\x04 \x01(\v2\x1d.veyport.v1.ExecutionInputEOFH\x00R\binputEof\x12E\n" +
+	"\fscript_chunk\x18\x05 \x01(\v2 .veyport.v1.ExecutionScriptChunkH\x00R\vscriptChunk\x12?\n" +
+	"\n" +
+	"script_eof\x18\x06 \x01(\v2\x1e.veyport.v1.ExecutionScriptEOFH\x00R\tscriptEof\x125\n" +
+	"\x06cancel\x18\a \x01(\v2\x1b.veyport.v1.ExecutionCancelH\x00R\x06cancelB\t\n" +
+	"\apayload\"K\n" +
+	"\x11ExecutionAttached\x126\n" +
+	"\abinding\x18\x01 \x01(\v2\x1c.veyport.v1.ExecutionBindingR\abinding\"\xe2\x02\n" +
+	"\x0eExecutionStart\x126\n" +
+	"\abinding\x18\x01 \x01(\v2\x1c.veyport.v1.ExecutionBindingR\abinding\x12%\n" +
+	"\x0ecommand_sha256\x18\x02 \x01(\fR\rcommandSha256\x12'\n" +
+	"\x0fidentity_sha256\x18\x03 \x01(\fR\x0eidentitySha256\x123\n" +
+	"\x06limits\x18\x04 \x01(\v2\x1b.veyport.v1.ExecutionLimitsR\x06limits\x12%\n" +
+	"\x0epolicy_version\x18\x05 \x01(\tR\rpolicyVersion\x12+\n" +
+	"\x11admission_receipt\x18\x06 \x01(\fR\x10admissionReceipt\x12?\n" +
+	"\x1cadmission_expires_unix_milli\x18\a \x01(\x03R\x19admissionExpiresUnixMilli\"J\n" +
+	"\x10ExecutionStarted\x126\n" +
+	"\abinding\x18\x01 \x01(\v2\x1c.veyport.v1.ExecutionBindingR\abinding\"|\n" +
+	"\x14ExecutionStartFailed\x126\n" +
+	"\abinding\x18\x01 \x01(\v2\x1c.veyport.v1.ExecutionBindingR\abinding\x12\x14\n" +
+	"\x05state\x18\x02 \x01(\tR\x05state\x12\x16\n" +
+	"\x06reason\x18\x03 \x01(\tR\x06reason\"?\n" +
+	"\rExecutionData\x12\x1a\n" +
+	"\bsequence\x18\x01 \x01(\x04R\bsequence\x12\x12\n" +
+	"\x04data\x18\x02 \x01(\fR\x04data\"/\n" +
+	"\x11ExecutionInputEOF\x12\x1a\n" +
+	"\bsequence\x18\x01 \x01(\x04R\bsequence\"e\n" +
+	"\x12ExecutionOutputEOF\x123\n" +
+	"\x06output\x18\x01 \x01(\x0e2\x1b.veyport.v1.ExecutionOutputR\x06output\x12\x1a\n" +
+	"\bsequence\x18\x02 \x01(\x04R\bsequence\"B\n" +
+	"\x14ExecutionScriptChunk\x12\x16\n" +
+	"\x06offset\x18\x01 \x01(\x04R\x06offset\x12\x12\n" +
+	"\x04data\x18\x02 \x01(\fR\x04data\"D\n" +
+	"\x12ExecutionScriptEOF\x12\x16\n" +
+	"\x06length\x18\x01 \x01(\x04R\x06length\x12\x16\n" +
+	"\x06sha256\x18\x02 \x01(\fR\x06sha256\"\xfe\x01\n" +
+	"\x0fExecutionResult\x126\n" +
+	"\abinding\x18\x01 \x01(\v2\x1c.veyport.v1.ExecutionBindingR\abinding\x12\x14\n" +
+	"\x05state\x18\x02 \x01(\tR\x05state\x12\x1b\n" +
+	"\texit_code\x18\x03 \x01(\x05R\bexitCode\x12\x16\n" +
+	"\x06signal\x18\x04 \x01(\tR\x06signal\x12\x16\n" +
+	"\x06reason\x18\x05 \x01(\tR\x06reason\x12'\n" +
+	"\x0fstdout_complete\x18\x06 \x01(\bR\x0estdoutComplete\x12'\n" +
+	"\x0fstderr_complete\x18\a \x01(\bR\x0estderrComplete\"\xed\x02\n" +
+	"\x12UpdateCapabilities\x12)\n" +
+	"\x10protocol_version\x18\x01 \x01(\rR\x0fprotocolVersion\x12\x0e\n" +
+	"\x02os\x18\x02 \x01(\tR\x02os\x12\x12\n" +
+	"\x04arch\x18\x03 \x01(\tR\x04arch\x12\x18\n" +
+	"\aversion\x18\x04 \x01(\tR\aversion\x12\x1a\n" +
+	"\brevision\x18\x05 \x01(\tR\brevision\x12\x16\n" +
+	"\x06sha256\x18\x06 \x01(\tR\x06sha256\x12\x17\n" +
+	"\aboot_id\x18\a \x01(\tR\x06bootId\x12\x1c\n" +
+	"\tsupported\x18\b \x01(\bR\tsupported\x12\x16\n" +
+	"\x06reason\x18\t \x01(\tR\x06reason\x12>\n" +
+	"\x1bactivity_quiescence_version\x18\n" +
+	" \x01(\rR\x19activityQuiescenceVersion\x12+\n" +
+	"\x11active_activities\x18\v \x01(\rR\x10activeActivities\"\xc9\x01\n" +
+	"\x12AgentUpdateRequest\x12!\n" +
+	"\foperation_id\x18\x01 \x01(\tR\voperationId\x12\x18\n" +
+	"\aversion\x18\x02 \x01(\tR\aversion\x12\x1a\n" +
+	"\brevision\x18\x03 \x01(\tR\brevision\x12\x16\n" +
+	"\x06sha256\x18\x04 \x01(\tR\x06sha256\x12\x14\n" +
+	"\x05bytes\x18\x05 \x01(\x03R\x05bytes\x12,\n" +
+	"\x12expires_unix_milli\x18\x06 \x01(\x03R\x10expiresUnixMilli\"\xcb\x01\n" +
+	"\x11AgentUpdateStatus\x12!\n" +
+	"\foperation_id\x18\x01 \x01(\tR\voperationId\x12\x14\n" +
+	"\x05state\x18\x02 \x01(\tR\x05state\x12\x16\n" +
+	"\x06reason\x18\x03 \x01(\tR\x06reason\x12\x18\n" +
+	"\aversion\x18\x04 \x01(\tR\aversion\x12\x1a\n" +
+	"\brevision\x18\x05 \x01(\tR\brevision\x12\x16\n" +
+	"\x06sha256\x18\x06 \x01(\tR\x06sha256\x12\x17\n" +
+	"\aboot_id\x18\a \x01(\tR\x06bootId\"M\n" +
+	"\x12UpdateConfirmation\x12!\n" +
+	"\foperation_id\x18\x01 \x01(\tR\voperationId\x12\x14\n" +
+	"\x05state\x18\x02 \x01(\tR\x05state\":\n" +
+	"\x15UpdateArtifactRequest\x12!\n" +
+	"\foperation_id\x18\x01 \x01(\tR\voperationId\"A\n" +
+	"\x13UpdateArtifactChunk\x12\x16\n" +
+	"\x06offset\x18\x01 \x01(\x03R\x06offset\x12\x12\n" +
+	"\x04data\x18\x02 \x01(\fR\x04data\"f\n" +
+	"\x13UpdateAuthorization\x12!\n" +
+	"\foperation_id\x18\x01 \x01(\tR\voperationId\x12,\n" +
+	"\x12expires_unix_milli\x18\x02 \x01(\x03R\x10expiresUnixMilli\"\xb2\x01\n" +
+	"\x16UpdateBootstrapRequest\x12\x16\n" +
+	"\x06ticket\x18\x01 \x01(\tR\x06ticket\x12B\n" +
+	"\fcapabilities\x18\x02 \x01(\v2\x1e.veyport.v1.UpdateCapabilitiesR\fcapabilities\x12<\n" +
+	"\x1aoriginal_identity_asserted\x18\x03 \x01(\bR\x18originalIdentityAsserted*m\n" +
+	"\x0fExecutionOutput\x12 \n" +
+	"\x1cEXECUTION_OUTPUT_UNSPECIFIED\x10\x00\x12\x1b\n" +
+	"\x17EXECUTION_OUTPUT_STDOUT\x10\x01\x12\x1b\n" +
+	"\x17EXECUTION_OUTPUT_STDERR\x10\x022\xa8\x03\n" +
 	"\fAgentService\x12?\n" +
-	"\aConnect\x12\x18.veyport.v1.AgentMessage\x1a\x16.veyport.v1.HubMessage(\x010\x01B*Z(github.com/wyiu/veyport/proto/veyport/v1b\x06proto3"
+	"\aConnect\x12\x18.veyport.v1.AgentMessage\x1a\x16.veyport.v1.HubMessage(\x010\x01\x12Q\n" +
+	"\aExecute\x12!.veyport.v1.ExecutionAgentMessage\x1a\x1f.veyport.v1.ExecutionHubMessage(\x010\x01\x12V\n" +
+	"\x0eDownloadUpdate\x12!.veyport.v1.UpdateArtifactRequest\x1a\x1f.veyport.v1.UpdateArtifactChunk0\x01\x12U\n" +
+	"\x0fAuthorizeUpdate\x12!.veyport.v1.UpdateArtifactRequest\x1a\x1f.veyport.v1.UpdateAuthorization\x12U\n" +
+	"\x0fBootstrapUpdate\x12\".veyport.v1.UpdateBootstrapRequest\x1a\x1e.veyport.v1.AgentUpdateRequestB*Z(github.com/wyiu/veyport/proto/veyport/v1b\x06proto3"
 
 var (
 	file_proto_veyport_v1_agent_proto_rawDescOnce sync.Once
@@ -2766,83 +5505,168 @@ func file_proto_veyport_v1_agent_proto_rawDescGZIP() []byte {
 	return file_proto_veyport_v1_agent_proto_rawDescData
 }
 
-var file_proto_veyport_v1_agent_proto_msgTypes = make([]protoimpl.MessageInfo, 34)
+var file_proto_veyport_v1_agent_proto_enumTypes = make([]protoimpl.EnumInfo, 1)
+var file_proto_veyport_v1_agent_proto_msgTypes = make([]protoimpl.MessageInfo, 65)
 var file_proto_veyport_v1_agent_proto_goTypes = []any{
-	(*AgentMessage)(nil),        // 0: veyport.v1.AgentMessage
-	(*HubMessage)(nil),          // 1: veyport.v1.HubMessage
-	(*Heartbeat)(nil),           // 2: veyport.v1.Heartbeat
-	(*HeartbeatAck)(nil),        // 3: veyport.v1.HeartbeatAck
-	(*RegisterAgent)(nil),       // 4: veyport.v1.RegisterAgent
-	(*RegisterAck)(nil),         // 5: veyport.v1.RegisterAck
-	(*SystemInfo)(nil),          // 6: veyport.v1.SystemInfo
-	(*FileListRequest)(nil),     // 7: veyport.v1.FileListRequest
-	(*FileListResponse)(nil),    // 8: veyport.v1.FileListResponse
-	(*FileNode)(nil),            // 9: veyport.v1.FileNode
-	(*FileReadRequest)(nil),     // 10: veyport.v1.FileReadRequest
-	(*FileReadResponse)(nil),    // 11: veyport.v1.FileReadResponse
-	(*LogStreamRequest)(nil),    // 12: veyport.v1.LogStreamRequest
-	(*LogStreamChunk)(nil),      // 13: veyport.v1.LogStreamChunk
-	(*LogStreamStop)(nil),       // 14: veyport.v1.LogStreamStop
-	(*FileUploadRequest)(nil),   // 15: veyport.v1.FileUploadRequest
-	(*FileUploadAck)(nil),       // 16: veyport.v1.FileUploadAck
-	(*FileDeleteRequest)(nil),   // 17: veyport.v1.FileDeleteRequest
-	(*FileDeleteResponse)(nil),  // 18: veyport.v1.FileDeleteResponse
-	(*UnregisterRequest)(nil),   // 19: veyport.v1.UnregisterRequest
-	(*UnregisterAck)(nil),       // 20: veyport.v1.UnregisterAck
-	(*CertRenewRequest)(nil),    // 21: veyport.v1.CertRenewRequest
-	(*CertRenewResponse)(nil),   // 22: veyport.v1.CertRenewResponse
-	(*TerminalOpenRequest)(nil), // 23: veyport.v1.TerminalOpenRequest
-	(*TerminalOpenAck)(nil),     // 24: veyport.v1.TerminalOpenAck
-	(*TerminalInput)(nil),       // 25: veyport.v1.TerminalInput
-	(*TerminalResize)(nil),      // 26: veyport.v1.TerminalResize
-	(*TerminalData)(nil),        // 27: veyport.v1.TerminalData
-	(*TerminalExit)(nil),        // 28: veyport.v1.TerminalExit
-	(*TerminalClose)(nil),       // 29: veyport.v1.TerminalClose
-	(*ReEnrollRequest)(nil),     // 30: veyport.v1.ReEnrollRequest
-	(*ReEnrollApproved)(nil),    // 31: veyport.v1.ReEnrollApproved
-	(*ReEnrollProof)(nil),       // 32: veyport.v1.ReEnrollProof
-	(*ReEnrollDenied)(nil),      // 33: veyport.v1.ReEnrollDenied
+	(ExecutionOutput)(0),           // 0: veyport.v1.ExecutionOutput
+	(*AgentMessage)(nil),           // 1: veyport.v1.AgentMessage
+	(*HubMessage)(nil),             // 2: veyport.v1.HubMessage
+	(*Heartbeat)(nil),              // 3: veyport.v1.Heartbeat
+	(*HeartbeatAck)(nil),           // 4: veyport.v1.HeartbeatAck
+	(*RegisterAgent)(nil),          // 5: veyport.v1.RegisterAgent
+	(*RegisterAck)(nil),            // 6: veyport.v1.RegisterAck
+	(*SystemInfo)(nil),             // 7: veyport.v1.SystemInfo
+	(*FileListRequest)(nil),        // 8: veyport.v1.FileListRequest
+	(*FileListResponse)(nil),       // 9: veyport.v1.FileListResponse
+	(*FileNode)(nil),               // 10: veyport.v1.FileNode
+	(*FileReadRequest)(nil),        // 11: veyport.v1.FileReadRequest
+	(*FileReadResponse)(nil),       // 12: veyport.v1.FileReadResponse
+	(*LogStreamRequest)(nil),       // 13: veyport.v1.LogStreamRequest
+	(*LogStreamChunk)(nil),         // 14: veyport.v1.LogStreamChunk
+	(*LogStreamStop)(nil),          // 15: veyport.v1.LogStreamStop
+	(*FileUploadRequest)(nil),      // 16: veyport.v1.FileUploadRequest
+	(*FileUploadAck)(nil),          // 17: veyport.v1.FileUploadAck
+	(*FileUploadAbort)(nil),        // 18: veyport.v1.FileUploadAbort
+	(*FileDeleteRequest)(nil),      // 19: veyport.v1.FileDeleteRequest
+	(*FileDeleteResponse)(nil),     // 20: veyport.v1.FileDeleteResponse
+	(*UnregisterRequest)(nil),      // 21: veyport.v1.UnregisterRequest
+	(*UnregisterAck)(nil),          // 22: veyport.v1.UnregisterAck
+	(*CertRenewRequest)(nil),       // 23: veyport.v1.CertRenewRequest
+	(*CertRenewResponse)(nil),      // 24: veyport.v1.CertRenewResponse
+	(*TerminalOpenRequest)(nil),    // 25: veyport.v1.TerminalOpenRequest
+	(*TerminalOpenAck)(nil),        // 26: veyport.v1.TerminalOpenAck
+	(*TerminalInput)(nil),          // 27: veyport.v1.TerminalInput
+	(*TerminalResize)(nil),         // 28: veyport.v1.TerminalResize
+	(*TerminalData)(nil),           // 29: veyport.v1.TerminalData
+	(*TerminalExit)(nil),           // 30: veyport.v1.TerminalExit
+	(*TerminalClose)(nil),          // 31: veyport.v1.TerminalClose
+	(*ReEnrollRequest)(nil),        // 32: veyport.v1.ReEnrollRequest
+	(*ReEnrollApproved)(nil),       // 33: veyport.v1.ReEnrollApproved
+	(*ReEnrollProof)(nil),          // 34: veyport.v1.ReEnrollProof
+	(*ReEnrollDenied)(nil),         // 35: veyport.v1.ReEnrollDenied
+	(*ExecutionCapabilities)(nil),  // 36: veyport.v1.ExecutionCapabilities
+	(*ExecutionLimits)(nil),        // 37: veyport.v1.ExecutionLimits
+	(*ExecutionBinding)(nil),       // 38: veyport.v1.ExecutionBinding
+	(*ExecutionIdentity)(nil),      // 39: veyport.v1.ExecutionIdentity
+	(*ExecutionPrepare)(nil),       // 40: veyport.v1.ExecutionPrepare
+	(*ExecutionPrepared)(nil),      // 41: veyport.v1.ExecutionPrepared
+	(*ExecutionAttachRequest)(nil), // 42: veyport.v1.ExecutionAttachRequest
+	(*ExecutionCancel)(nil),        // 43: veyport.v1.ExecutionCancel
+	(*ExecutionStatusRequest)(nil), // 44: veyport.v1.ExecutionStatusRequest
+	(*ExecutionStatus)(nil),        // 45: veyport.v1.ExecutionStatus
+	(*ExecutionAgentMessage)(nil),  // 46: veyport.v1.ExecutionAgentMessage
+	(*ExecutionHubMessage)(nil),    // 47: veyport.v1.ExecutionHubMessage
+	(*ExecutionAttached)(nil),      // 48: veyport.v1.ExecutionAttached
+	(*ExecutionStart)(nil),         // 49: veyport.v1.ExecutionStart
+	(*ExecutionStarted)(nil),       // 50: veyport.v1.ExecutionStarted
+	(*ExecutionStartFailed)(nil),   // 51: veyport.v1.ExecutionStartFailed
+	(*ExecutionData)(nil),          // 52: veyport.v1.ExecutionData
+	(*ExecutionInputEOF)(nil),      // 53: veyport.v1.ExecutionInputEOF
+	(*ExecutionOutputEOF)(nil),     // 54: veyport.v1.ExecutionOutputEOF
+	(*ExecutionScriptChunk)(nil),   // 55: veyport.v1.ExecutionScriptChunk
+	(*ExecutionScriptEOF)(nil),     // 56: veyport.v1.ExecutionScriptEOF
+	(*ExecutionResult)(nil),        // 57: veyport.v1.ExecutionResult
+	(*UpdateCapabilities)(nil),     // 58: veyport.v1.UpdateCapabilities
+	(*AgentUpdateRequest)(nil),     // 59: veyport.v1.AgentUpdateRequest
+	(*AgentUpdateStatus)(nil),      // 60: veyport.v1.AgentUpdateStatus
+	(*UpdateConfirmation)(nil),     // 61: veyport.v1.UpdateConfirmation
+	(*UpdateArtifactRequest)(nil),  // 62: veyport.v1.UpdateArtifactRequest
+	(*UpdateArtifactChunk)(nil),    // 63: veyport.v1.UpdateArtifactChunk
+	(*UpdateAuthorization)(nil),    // 64: veyport.v1.UpdateAuthorization
+	(*UpdateBootstrapRequest)(nil), // 65: veyport.v1.UpdateBootstrapRequest
 }
 var file_proto_veyport_v1_agent_proto_depIdxs = []int32{
-	2,  // 0: veyport.v1.AgentMessage.heartbeat:type_name -> veyport.v1.Heartbeat
-	4,  // 1: veyport.v1.AgentMessage.register:type_name -> veyport.v1.RegisterAgent
-	8,  // 2: veyport.v1.AgentMessage.file_list_response:type_name -> veyport.v1.FileListResponse
-	13, // 3: veyport.v1.AgentMessage.log_stream_chunk:type_name -> veyport.v1.LogStreamChunk
-	16, // 4: veyport.v1.AgentMessage.file_upload_ack:type_name -> veyport.v1.FileUploadAck
-	11, // 5: veyport.v1.AgentMessage.file_read_response:type_name -> veyport.v1.FileReadResponse
-	18, // 6: veyport.v1.AgentMessage.file_delete_response:type_name -> veyport.v1.FileDeleteResponse
-	20, // 7: veyport.v1.AgentMessage.unregister_ack:type_name -> veyport.v1.UnregisterAck
-	21, // 8: veyport.v1.AgentMessage.cert_renew_request:type_name -> veyport.v1.CertRenewRequest
-	24, // 9: veyport.v1.AgentMessage.terminal_open_ack:type_name -> veyport.v1.TerminalOpenAck
-	27, // 10: veyport.v1.AgentMessage.terminal_data:type_name -> veyport.v1.TerminalData
-	28, // 11: veyport.v1.AgentMessage.terminal_exit:type_name -> veyport.v1.TerminalExit
-	30, // 12: veyport.v1.AgentMessage.reenroll_request:type_name -> veyport.v1.ReEnrollRequest
-	32, // 13: veyport.v1.AgentMessage.reenroll_proof:type_name -> veyport.v1.ReEnrollProof
-	3,  // 14: veyport.v1.HubMessage.heartbeat_ack:type_name -> veyport.v1.HeartbeatAck
-	5,  // 15: veyport.v1.HubMessage.register_ack:type_name -> veyport.v1.RegisterAck
-	7,  // 16: veyport.v1.HubMessage.file_list_request:type_name -> veyport.v1.FileListRequest
-	12, // 17: veyport.v1.HubMessage.log_stream_request:type_name -> veyport.v1.LogStreamRequest
-	15, // 18: veyport.v1.HubMessage.file_upload_request:type_name -> veyport.v1.FileUploadRequest
-	10, // 19: veyport.v1.HubMessage.file_read_request:type_name -> veyport.v1.FileReadRequest
-	14, // 20: veyport.v1.HubMessage.log_stream_stop:type_name -> veyport.v1.LogStreamStop
-	17, // 21: veyport.v1.HubMessage.file_delete_request:type_name -> veyport.v1.FileDeleteRequest
-	19, // 22: veyport.v1.HubMessage.unregister_request:type_name -> veyport.v1.UnregisterRequest
-	22, // 23: veyport.v1.HubMessage.cert_renew_response:type_name -> veyport.v1.CertRenewResponse
-	23, // 24: veyport.v1.HubMessage.terminal_open_request:type_name -> veyport.v1.TerminalOpenRequest
-	25, // 25: veyport.v1.HubMessage.terminal_input:type_name -> veyport.v1.TerminalInput
-	26, // 26: veyport.v1.HubMessage.terminal_resize:type_name -> veyport.v1.TerminalResize
-	29, // 27: veyport.v1.HubMessage.terminal_close:type_name -> veyport.v1.TerminalClose
-	31, // 28: veyport.v1.HubMessage.reenroll_approved:type_name -> veyport.v1.ReEnrollApproved
-	33, // 29: veyport.v1.HubMessage.reenroll_denied:type_name -> veyport.v1.ReEnrollDenied
-	6,  // 30: veyport.v1.Heartbeat.system_info:type_name -> veyport.v1.SystemInfo
-	9,  // 31: veyport.v1.FileListResponse.files:type_name -> veyport.v1.FileNode
-	0,  // 32: veyport.v1.AgentService.Connect:input_type -> veyport.v1.AgentMessage
-	1,  // 33: veyport.v1.AgentService.Connect:output_type -> veyport.v1.HubMessage
-	33, // [33:34] is the sub-list for method output_type
-	32, // [32:33] is the sub-list for method input_type
-	32, // [32:32] is the sub-list for extension type_name
-	32, // [32:32] is the sub-list for extension extendee
-	0,  // [0:32] is the sub-list for field type_name
+	3,  // 0: veyport.v1.AgentMessage.heartbeat:type_name -> veyport.v1.Heartbeat
+	5,  // 1: veyport.v1.AgentMessage.register:type_name -> veyport.v1.RegisterAgent
+	9,  // 2: veyport.v1.AgentMessage.file_list_response:type_name -> veyport.v1.FileListResponse
+	14, // 3: veyport.v1.AgentMessage.log_stream_chunk:type_name -> veyport.v1.LogStreamChunk
+	17, // 4: veyport.v1.AgentMessage.file_upload_ack:type_name -> veyport.v1.FileUploadAck
+	12, // 5: veyport.v1.AgentMessage.file_read_response:type_name -> veyport.v1.FileReadResponse
+	20, // 6: veyport.v1.AgentMessage.file_delete_response:type_name -> veyport.v1.FileDeleteResponse
+	22, // 7: veyport.v1.AgentMessage.unregister_ack:type_name -> veyport.v1.UnregisterAck
+	23, // 8: veyport.v1.AgentMessage.cert_renew_request:type_name -> veyport.v1.CertRenewRequest
+	26, // 9: veyport.v1.AgentMessage.terminal_open_ack:type_name -> veyport.v1.TerminalOpenAck
+	29, // 10: veyport.v1.AgentMessage.terminal_data:type_name -> veyport.v1.TerminalData
+	30, // 11: veyport.v1.AgentMessage.terminal_exit:type_name -> veyport.v1.TerminalExit
+	32, // 12: veyport.v1.AgentMessage.reenroll_request:type_name -> veyport.v1.ReEnrollRequest
+	34, // 13: veyport.v1.AgentMessage.reenroll_proof:type_name -> veyport.v1.ReEnrollProof
+	36, // 14: veyport.v1.AgentMessage.execution_capabilities:type_name -> veyport.v1.ExecutionCapabilities
+	41, // 15: veyport.v1.AgentMessage.execution_prepared:type_name -> veyport.v1.ExecutionPrepared
+	45, // 16: veyport.v1.AgentMessage.execution_status:type_name -> veyport.v1.ExecutionStatus
+	58, // 17: veyport.v1.AgentMessage.update_capabilities:type_name -> veyport.v1.UpdateCapabilities
+	60, // 18: veyport.v1.AgentMessage.update_status:type_name -> veyport.v1.AgentUpdateStatus
+	4,  // 19: veyport.v1.HubMessage.heartbeat_ack:type_name -> veyport.v1.HeartbeatAck
+	6,  // 20: veyport.v1.HubMessage.register_ack:type_name -> veyport.v1.RegisterAck
+	8,  // 21: veyport.v1.HubMessage.file_list_request:type_name -> veyport.v1.FileListRequest
+	13, // 22: veyport.v1.HubMessage.log_stream_request:type_name -> veyport.v1.LogStreamRequest
+	16, // 23: veyport.v1.HubMessage.file_upload_request:type_name -> veyport.v1.FileUploadRequest
+	11, // 24: veyport.v1.HubMessage.file_read_request:type_name -> veyport.v1.FileReadRequest
+	15, // 25: veyport.v1.HubMessage.log_stream_stop:type_name -> veyport.v1.LogStreamStop
+	19, // 26: veyport.v1.HubMessage.file_delete_request:type_name -> veyport.v1.FileDeleteRequest
+	21, // 27: veyport.v1.HubMessage.unregister_request:type_name -> veyport.v1.UnregisterRequest
+	24, // 28: veyport.v1.HubMessage.cert_renew_response:type_name -> veyport.v1.CertRenewResponse
+	25, // 29: veyport.v1.HubMessage.terminal_open_request:type_name -> veyport.v1.TerminalOpenRequest
+	27, // 30: veyport.v1.HubMessage.terminal_input:type_name -> veyport.v1.TerminalInput
+	28, // 31: veyport.v1.HubMessage.terminal_resize:type_name -> veyport.v1.TerminalResize
+	31, // 32: veyport.v1.HubMessage.terminal_close:type_name -> veyport.v1.TerminalClose
+	33, // 33: veyport.v1.HubMessage.reenroll_approved:type_name -> veyport.v1.ReEnrollApproved
+	35, // 34: veyport.v1.HubMessage.reenroll_denied:type_name -> veyport.v1.ReEnrollDenied
+	18, // 35: veyport.v1.HubMessage.file_upload_abort:type_name -> veyport.v1.FileUploadAbort
+	40, // 36: veyport.v1.HubMessage.execution_prepare:type_name -> veyport.v1.ExecutionPrepare
+	42, // 37: veyport.v1.HubMessage.execution_attach:type_name -> veyport.v1.ExecutionAttachRequest
+	43, // 38: veyport.v1.HubMessage.execution_cancel:type_name -> veyport.v1.ExecutionCancel
+	44, // 39: veyport.v1.HubMessage.execution_status_request:type_name -> veyport.v1.ExecutionStatusRequest
+	59, // 40: veyport.v1.HubMessage.agent_update_request:type_name -> veyport.v1.AgentUpdateRequest
+	61, // 41: veyport.v1.HubMessage.update_confirmation:type_name -> veyport.v1.UpdateConfirmation
+	7,  // 42: veyport.v1.Heartbeat.system_info:type_name -> veyport.v1.SystemInfo
+	36, // 43: veyport.v1.RegisterAgent.execution_capabilities:type_name -> veyport.v1.ExecutionCapabilities
+	10, // 44: veyport.v1.FileListResponse.files:type_name -> veyport.v1.FileNode
+	37, // 45: veyport.v1.ExecutionPrepare.limits:type_name -> veyport.v1.ExecutionLimits
+	38, // 46: veyport.v1.ExecutionPrepared.binding:type_name -> veyport.v1.ExecutionBinding
+	39, // 47: veyport.v1.ExecutionPrepared.identity:type_name -> veyport.v1.ExecutionIdentity
+	37, // 48: veyport.v1.ExecutionPrepared.limits:type_name -> veyport.v1.ExecutionLimits
+	38, // 49: veyport.v1.ExecutionAttachRequest.binding:type_name -> veyport.v1.ExecutionBinding
+	38, // 50: veyport.v1.ExecutionCancel.binding:type_name -> veyport.v1.ExecutionBinding
+	38, // 51: veyport.v1.ExecutionStatus.binding:type_name -> veyport.v1.ExecutionBinding
+	57, // 52: veyport.v1.ExecutionStatus.result:type_name -> veyport.v1.ExecutionResult
+	42, // 53: veyport.v1.ExecutionAgentMessage.attach:type_name -> veyport.v1.ExecutionAttachRequest
+	50, // 54: veyport.v1.ExecutionAgentMessage.started:type_name -> veyport.v1.ExecutionStarted
+	51, // 55: veyport.v1.ExecutionAgentMessage.start_failed:type_name -> veyport.v1.ExecutionStartFailed
+	52, // 56: veyport.v1.ExecutionAgentMessage.stdout:type_name -> veyport.v1.ExecutionData
+	52, // 57: veyport.v1.ExecutionAgentMessage.stderr:type_name -> veyport.v1.ExecutionData
+	54, // 58: veyport.v1.ExecutionAgentMessage.output_eof:type_name -> veyport.v1.ExecutionOutputEOF
+	57, // 59: veyport.v1.ExecutionAgentMessage.result:type_name -> veyport.v1.ExecutionResult
+	45, // 60: veyport.v1.ExecutionAgentMessage.status:type_name -> veyport.v1.ExecutionStatus
+	48, // 61: veyport.v1.ExecutionHubMessage.attached:type_name -> veyport.v1.ExecutionAttached
+	49, // 62: veyport.v1.ExecutionHubMessage.start:type_name -> veyport.v1.ExecutionStart
+	52, // 63: veyport.v1.ExecutionHubMessage.input:type_name -> veyport.v1.ExecutionData
+	53, // 64: veyport.v1.ExecutionHubMessage.input_eof:type_name -> veyport.v1.ExecutionInputEOF
+	55, // 65: veyport.v1.ExecutionHubMessage.script_chunk:type_name -> veyport.v1.ExecutionScriptChunk
+	56, // 66: veyport.v1.ExecutionHubMessage.script_eof:type_name -> veyport.v1.ExecutionScriptEOF
+	43, // 67: veyport.v1.ExecutionHubMessage.cancel:type_name -> veyport.v1.ExecutionCancel
+	38, // 68: veyport.v1.ExecutionAttached.binding:type_name -> veyport.v1.ExecutionBinding
+	38, // 69: veyport.v1.ExecutionStart.binding:type_name -> veyport.v1.ExecutionBinding
+	37, // 70: veyport.v1.ExecutionStart.limits:type_name -> veyport.v1.ExecutionLimits
+	38, // 71: veyport.v1.ExecutionStarted.binding:type_name -> veyport.v1.ExecutionBinding
+	38, // 72: veyport.v1.ExecutionStartFailed.binding:type_name -> veyport.v1.ExecutionBinding
+	0,  // 73: veyport.v1.ExecutionOutputEOF.output:type_name -> veyport.v1.ExecutionOutput
+	38, // 74: veyport.v1.ExecutionResult.binding:type_name -> veyport.v1.ExecutionBinding
+	58, // 75: veyport.v1.UpdateBootstrapRequest.capabilities:type_name -> veyport.v1.UpdateCapabilities
+	1,  // 76: veyport.v1.AgentService.Connect:input_type -> veyport.v1.AgentMessage
+	46, // 77: veyport.v1.AgentService.Execute:input_type -> veyport.v1.ExecutionAgentMessage
+	62, // 78: veyport.v1.AgentService.DownloadUpdate:input_type -> veyport.v1.UpdateArtifactRequest
+	62, // 79: veyport.v1.AgentService.AuthorizeUpdate:input_type -> veyport.v1.UpdateArtifactRequest
+	65, // 80: veyport.v1.AgentService.BootstrapUpdate:input_type -> veyport.v1.UpdateBootstrapRequest
+	2,  // 81: veyport.v1.AgentService.Connect:output_type -> veyport.v1.HubMessage
+	47, // 82: veyport.v1.AgentService.Execute:output_type -> veyport.v1.ExecutionHubMessage
+	63, // 83: veyport.v1.AgentService.DownloadUpdate:output_type -> veyport.v1.UpdateArtifactChunk
+	64, // 84: veyport.v1.AgentService.AuthorizeUpdate:output_type -> veyport.v1.UpdateAuthorization
+	59, // 85: veyport.v1.AgentService.BootstrapUpdate:output_type -> veyport.v1.AgentUpdateRequest
+	81, // [81:86] is the sub-list for method output_type
+	76, // [76:81] is the sub-list for method input_type
+	76, // [76:76] is the sub-list for extension type_name
+	76, // [76:76] is the sub-list for extension extendee
+	0,  // [0:76] is the sub-list for field type_name
 }
 
 func init() { file_proto_veyport_v1_agent_proto_init() }
@@ -2865,6 +5689,11 @@ func file_proto_veyport_v1_agent_proto_init() {
 		(*AgentMessage_TerminalExit)(nil),
 		(*AgentMessage_ReenrollRequest)(nil),
 		(*AgentMessage_ReenrollProof)(nil),
+		(*AgentMessage_ExecutionCapabilities)(nil),
+		(*AgentMessage_ExecutionPrepared)(nil),
+		(*AgentMessage_ExecutionStatus)(nil),
+		(*AgentMessage_UpdateCapabilities)(nil),
+		(*AgentMessage_UpdateStatus)(nil),
 	}
 	file_proto_veyport_v1_agent_proto_msgTypes[1].OneofWrappers = []any{
 		(*HubMessage_HeartbeatAck)(nil),
@@ -2883,19 +5712,46 @@ func file_proto_veyport_v1_agent_proto_init() {
 		(*HubMessage_TerminalClose)(nil),
 		(*HubMessage_ReenrollApproved)(nil),
 		(*HubMessage_ReenrollDenied)(nil),
+		(*HubMessage_FileUploadAbort)(nil),
+		(*HubMessage_ExecutionPrepare)(nil),
+		(*HubMessage_ExecutionAttach)(nil),
+		(*HubMessage_ExecutionCancel)(nil),
+		(*HubMessage_ExecutionStatusRequest)(nil),
+		(*HubMessage_AgentUpdateRequest)(nil),
+		(*HubMessage_UpdateConfirmation)(nil),
+	}
+	file_proto_veyport_v1_agent_proto_msgTypes[45].OneofWrappers = []any{
+		(*ExecutionAgentMessage_Attach)(nil),
+		(*ExecutionAgentMessage_Started)(nil),
+		(*ExecutionAgentMessage_StartFailed)(nil),
+		(*ExecutionAgentMessage_Stdout)(nil),
+		(*ExecutionAgentMessage_Stderr)(nil),
+		(*ExecutionAgentMessage_OutputEof)(nil),
+		(*ExecutionAgentMessage_Result)(nil),
+		(*ExecutionAgentMessage_Status)(nil),
+	}
+	file_proto_veyport_v1_agent_proto_msgTypes[46].OneofWrappers = []any{
+		(*ExecutionHubMessage_Attached)(nil),
+		(*ExecutionHubMessage_Start)(nil),
+		(*ExecutionHubMessage_Input)(nil),
+		(*ExecutionHubMessage_InputEof)(nil),
+		(*ExecutionHubMessage_ScriptChunk)(nil),
+		(*ExecutionHubMessage_ScriptEof)(nil),
+		(*ExecutionHubMessage_Cancel)(nil),
 	}
 	type x struct{}
 	out := protoimpl.TypeBuilder{
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_proto_veyport_v1_agent_proto_rawDesc), len(file_proto_veyport_v1_agent_proto_rawDesc)),
-			NumEnums:      0,
-			NumMessages:   34,
+			NumEnums:      1,
+			NumMessages:   65,
 			NumExtensions: 0,
 			NumServices:   1,
 		},
 		GoTypes:           file_proto_veyport_v1_agent_proto_goTypes,
 		DependencyIndexes: file_proto_veyport_v1_agent_proto_depIdxs,
+		EnumInfos:         file_proto_veyport_v1_agent_proto_enumTypes,
 		MessageInfos:      file_proto_veyport_v1_agent_proto_msgTypes,
 	}.Build()
 	File_proto_veyport_v1_agent_proto = out.File

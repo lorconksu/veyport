@@ -1,0 +1,63 @@
+{
+  "qualification": "passed: configuration-specific synthetic guest-fault and authenticated restore matrix; see digest-pinned qualification records",
+  "seaweedfs": {
+    "version": "4.48",
+    "source": "https://github.com/seaweedfs/seaweedfs/releases/tag/4.48",
+    "artifact": "linux_amd64_full.tar.gz",
+    "sha256": "3b290cd9621ab939c1c4292679520d7b3007376f24719adac47d6b311cb74bce",
+    "metadata": "PostgreSQL 16; fsync=on, synchronous_commit=on, full_page_writes=on",
+    "data": "filer fs.configure -locationPrefix=/buckets/ -fsync=true -volumeGrowthCount=1 -apply; required and persisted before qualification",
+    "filesystem": "REQUIRED ext4 mounted sync,nodev,nosuid; all archive services reject missing sync mount. Required because released volume writes fsync DAT but do not fsync IDX.",
+    "management": "127.0.0.1 only",
+    "s3_endpoint": "https://10.10.1.62:8333",
+    "kms_cache": false,
+    "source_commit": "530be3e37337488ecc34d58441e0bc476e121c93",
+    "writer_policy": "Attached IAM exact S3 actions; explicit deny DeleteObject/DeleteObjectVersion/PutObjectRetention/PutObjectLegalHold; bucket default COMPLIANCE 2 days (application minimum 24 hours), governance 3651 days (application minimum 3650 days), verified exact version deadline",
+    "os_identity": "veyport-seaweed; empty Linux capability set"
+  },
+  "openbao": {
+    "version": "2.7.1",
+    "source": "https://github.com/openbao/openbao/releases/tag/v2.7.1",
+    "artifact": "openbao_2.7.1_linux_amd64.tar.gz",
+    "sha256": "0e2f1ce10d124e03112b50dd2fbec6b78003783253bc3a91587938f39d1e2243",
+    "storage": "raft on encrypted service volume",
+    "endpoint": "https://10.10.1.63:8200",
+    "transit_key": "audit-archive",
+    "os_identity": "veyport-openbao; empty Linux capability set"
+  },
+  "retention": {
+    "synthetic_original_hours": 24,
+    "search_days": 7,
+    "synthetic_governance_days": 3650,
+    "backend_original_days": 2,
+    "backend_governance_days": 3651
+  },
+  "limitations": [
+    "Single storage VM",
+    "Single key VM",
+    "Shared Proxmox administrator trust boundary",
+    "Synthetic lab; no regulatory certification",
+    "LUKS manual controller unlock required after reboot"
+  ],
+  "buckets": {
+    "audit-originals": {
+      "purpose": "execution and original_read records; synthetic originals",
+      "default_retention": {
+        "mode": "COMPLIANCE",
+        "days": 2
+      },
+      "promised_minimum_seconds": 86400,
+      "setting_note": "Prototype backend retention margin for observed whole-second defaults; application minimum remains 24 hours"
+    },
+    "audit-governance": {
+      "purpose": "Small synthetic policy.* envelopes/manifests/anchor indexes and idempotency metadata (event/type/hash/manifestref); no raw payloads",
+      "default_retention": {
+        "mode": "COMPLIANCE",
+        "days": 3651
+      },
+      "setting_note": "Prototype implementation setting for synthetic policy continuity; not a regulatory default",
+      "cleanup": "New COMPLIANCE versions expire 3651 days after PUT; original pre-margin synthetic versions preserve their 3650-day deadlines. S3 cannot delete retained versions before expiry. Small metadata only.",
+      "promised_minimum_seconds": 315360000
+    }
+  }
+}

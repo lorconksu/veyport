@@ -1,0 +1,29 @@
+sequenceDiagram
+    participant CLI as vey CLI
+    participant Hub as Hub command broker
+    participant Authority as External receipt authority
+    participant Archive as Encrypted archive
+    participant Exporter as Redactor exporter
+    participant Agent as Enrolled agent
+    participant ELK as Optional ELK
+    CLI->>Hub: Submit one opaque command; no PTY
+    Hub->>Agent: Live authorization and prepare identity
+    Agent-->>Hub: Prepared OS identity and limits
+    alt Standard profile
+        Hub->>Agent: Dispatch without external audit dependency
+    else Enhanced profile
+        Hub->>Authority: Preserve exact intent and attachment
+        Authority->>Archive: Store exact encrypted immutable version
+        Archive-->>Authority: Durability and version confirmed
+        Authority-->>Hub: Signed receipt
+        Hub->>Agent: Dispatch only after receipt verification
+    end
+    Agent-->>Hub: Separate ordered stdout and stderr streams
+    Hub-->>CLI: Relay stdout and stderr unchanged
+    Agent-->>Hub: Exit result or explicit uncertain outcome
+    Hub-->>CLI: Relay final process result
+    opt Enhanced asynchronous projection
+        Exporter->>Archive: Read exact immutable archived versions
+        Exporter->>ELK: Index redacted searchable projection only
+    end
+    Note over CLI,Agent: No automatic retry; remote output is not archived

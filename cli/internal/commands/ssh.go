@@ -1,6 +1,6 @@
 package commands
 
-// `vey ssh <server>` — open an interactive SSH session to a fleet server via
+// `vey ssh <server> [-- '<command>']` — connect to a fleet server via
 // the gateway (specs/005-ssh-gateway/contracts/cli-commands.md `vey ssh`,
 // contracts/ssh-gateway.md "Addressing the target server", data-model.md
 // "Stored SSH material").
@@ -21,7 +21,7 @@ package commands
 // ssh is assertable in a test without a temp directory or a real hub.
 // execSSH is a package-level var precisely so a test can replace the actual
 // process exec with a recorder: this command must never spawn a real ssh
-// process during `go test`.
+// connection during `go test`.
 
 import (
 	"context"
@@ -32,11 +32,14 @@ import (
 	"net/url"
 	"os"
 	"os/exec"
+	"os/signal"
 	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
+	"syscall"
 	"time"
+	"unicode/utf8"
 
 	"github.com/wyiu/veyport/cli/internal/api"
 	"github.com/wyiu/veyport/cli/internal/auth"
@@ -48,36 +51,31 @@ import (
 // run time (see runSSHClient) — vey never ships or pins its own copy.
 const sshClientBinary = "ssh"
 
-// sshRunner executes the ssh client described by binary/argv, with argv's
-// last element always the destination and stdin/stdout/stderr wired to the
-// operator's own terminal streams. exitCode is the ssh client's own exit
-// status (propagated verbatim, including non-zero); err is non-nil only when
-// the client could not even be started (binary not found, exec failure) —
-// that is a vey-side failure, distinct from anything ssh itself reported.
-type sshRunner func(binary string, argv []string, stdin io.Reader, stdout, stderr io.Writer) (exitCode int, err error)
+// sshRunner executes the ssh client directly with the destination followed by
+// an optional command string and independently wired stdin/stdout/stderr.
+// exitCode is the ssh client's own exit status, propagated verbatim. err
+// reports local start or I/O failures and cancellation before an exit status
+// is available, distinct from anything ssh itself reported.
+type sshRunner func(ctx context.Context, binary string, argv []string, stdin io.Reader, stdout, stderr io.Writer) (exitCode int, err error)
 
 // execSSH is the one seam this command uses to reach the outside world for
 // the actual connection. Production wires it to runSSHClient; tests replace
 // it with a recorder so argv can be asserted without ever spawning ssh.
 var execSSH sshRunner = runSSHClient
 
-// sshStdinIsTTY reports whether vey's own stdin is an interactive terminal.
-// `vey ssh` provides an interactive shell and nothing else (contracts/
-// cli-commands.md "Out of scope: ... v1 is interactive shell only"), so a
-// non-TTY stdin (piped input, a CI runner, cron) is refused up front rather
-// than handed to ssh, which would otherwise sit there negotiating a PTY it
-// can never get. A package-level var so tests can force both branches
-// without depending on the test runner's own stdin, which is never a TTY.
+// sshStdinIsTTY reports whether stdin is an interactive terminal. Interactive
+// shells require a TTY; command mode gives terminal stdin EOF and passes
+// redirected input through. Tests can force either branch.
 var sshStdinIsTTY = func() bool { return cmdutil.IsTTY(os.Stdin) }
 
-// RunSSH implements `vey ssh <server>`.
+// RunSSH implements `vey ssh <server> [-- '<command>']`.
 func RunSSH(ctx *Context) int {
 	fail := func(err error) int {
 		ctx.Printer.Error(err)
 		return cmdutil.Code(err)
 	}
 
-	ref, err := parseSSHArgs(ctx.Args)
+	request, err := parseSSHArgs(ctx.Args)
 	if err != nil {
 		return fail(err)
 	}
@@ -106,7 +104,15 @@ func RunSSH(ctx *Context) int {
 	}
 
 	bg := context.Background()
-	server, err := resolveSSHServer(bg, actx, ref)
+	if request.command != "" {
+		// Register before any temporary material is written. On cancellation,
+		// the native runner waits for its child before this function returns
+		// through the credential cleanup defer. Interactive behavior is unchanged.
+		var stop context.CancelFunc
+		bg, stop = signal.NotifyContext(bg, os.Interrupt, syscall.SIGTERM, syscall.SIGHUP)
+		defer stop()
+	}
+	server, err := resolveSSHServer(bg, actx, request.server)
 	if err != nil {
 		return fail(err)
 	}
@@ -143,22 +149,25 @@ func RunSSH(ctx *Context) int {
 		username:       username,
 		server:         server.Name,
 		gatewayHost:    gatewayHost,
+		command:        request.command,
 	})
 	if err != nil {
 		return fail(cmdutil.NewCodedError(cmdutil.ExitError, err))
 	}
 
-	// This local/environment check runs last, right before exec: every
-	// earlier failure (bad cert, bad server ref, unreachable hub) is a
-	// legitimate result to report even from a non-interactive caller (e.g. a
-	// script probing `vey ssh` for its exit code), so only the moment vey is
-	// about to hand control to an interactive ssh session is gated on a TTY.
-	if !sshStdinIsTTY() {
+	// Keep preflight errors available to scripts probing the interactive mode.
+	// Command mode must never wait for input from the operator's terminal.
+	var stdin io.Reader = os.Stdin
+	if sshStdinIsTTY() {
+		if request.command != "" {
+			stdin = nil // os/exec supplies the null device: immediate EOF.
+		}
+	} else if request.command == "" {
 		return fail(cmdutil.NewCodedError(cmdutil.ExitError, errors.New(
-			"vey ssh requires an interactive terminal (stdin is not a TTY); it opens an interactive shell only")))
+			"vey ssh requires an interactive terminal (stdin is not a TTY); use: vey ssh <server> -- '<command>'")))
 	}
 
-	code, err := execSSH(sshClientBinary, argv, os.Stdin, os.Stdout, os.Stderr)
+	code, err := execSSH(bg, sshClientBinary, argv, stdin, os.Stdout, os.Stderr)
 	if err != nil {
 		// A local failure to even start the client (missing binary, exec
 		// failure) is a vey-side environment problem, not a hub connectivity
@@ -170,19 +179,55 @@ func RunSSH(ctx *Context) int {
 	return code
 }
 
-// parseSSHArgs enforces `vey ssh <server>`'s surface: exactly one positional
-// argument, no flags (out-of-scope options like -L/-R have no CLI surface at
-// all per contracts/cli-commands.md "Out of scope").
-func parseSSHArgs(args []string) (string, error) {
+const maxSSHCommandBytes = 32 * 1024
+
+type sshArguments struct {
+	server  string
+	command string // Empty only for an interactive shell.
+}
+
+// parseSSHArgs accepts a node and, optionally, exactly one opaque command
+// argument after --. Neither splitting nor trimming changes the remote program.
+func parseSSHArgs(args []string) (sshArguments, error) {
+	usageError := func() (sshArguments, error) {
+		return sshArguments{}, cmdutil.NewUsageError(errors.New("usage: vey ssh <server> [-- '<command>']"))
+	}
+	if len(args) > 0 && args[0] == "--" {
+		return usageError() // The command delimiter must follow a node.
+	}
 	fs := flag.NewFlagSet("ssh", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
 	if err := fs.Parse(args); err != nil {
-		return "", cmdutil.NewUsageError(err)
+		return sshArguments{}, cmdutil.NewUsageError(err)
 	}
-	if fs.NArg() != 1 || strings.TrimSpace(fs.Arg(0)) == "" {
-		return "", cmdutil.NewUsageError(errors.New("usage: vey ssh <server>"))
+	if fs.NArg() == 0 || strings.TrimSpace(fs.Arg(0)) == "" {
+		return usageError()
 	}
-	return fs.Arg(0), nil
+	request := sshArguments{server: fs.Arg(0)}
+	if fs.NArg() == 1 {
+		return request, nil
+	}
+	if fs.NArg() != 3 || fs.Arg(1) != "--" {
+		return usageError()
+	}
+	request.command = fs.Arg(2)
+	if err := validateSSHCommand(request.command); err != nil {
+		return sshArguments{}, cmdutil.NewUsageError(err)
+	}
+	return request, nil
+}
+
+func validateSSHCommand(command string) error {
+	if strings.TrimSpace(command) == "" {
+		return errors.New("ssh command must not be empty")
+	}
+	if len(command) > maxSSHCommandBytes {
+		return errors.New("ssh command exceeds the 32 KiB limit")
+	}
+	if !utf8.ValidString(command) || strings.ContainsRune(command, '\x00') {
+		return errors.New("ssh command must be valid UTF-8 without NUL bytes")
+	}
+	return nil
 }
 
 // loadSSHCredential returns the stored SSH material for hubURL, or a
@@ -360,6 +405,8 @@ type sshInvocation struct {
 	server string
 	// gatewayHost is the SSH destination host (gatewayHostFromHub).
 	gatewayHost string
+	// command is an opaque remote shell program; empty requests a shell.
+	command string
 }
 
 // buildSSHArgs is the pure heart of this command: given an already-resolved
@@ -389,7 +436,7 @@ func buildSSHArgs(in sshInvocation) ([]string, error) {
 		return nil, fmt.Errorf("ssh: veyport username %q contains '+', which the user+server addressing scheme cannot encode; use the web terminal instead", in.username)
 	}
 
-	return []string{
+	argv := []string{
 		// -F /dev/null: ignore the user's (and system's) ssh config. vey
 		// fully specifies this connection, and config-supplied IdentityFile
 		// entries survive IdentitiesOnly=yes — they count as "explicit" — so
@@ -411,8 +458,22 @@ func buildSSHArgs(in sshInvocation) ([]string, error) {
 		"-o", "UserKnownHostsFile=" + in.knownHostsFile,
 		"-o", "StrictHostKeyChecking=yes",
 		"-o", "IdentitiesOnly=yes",
-		fmt.Sprintf("%s+%s@%s", in.username, in.server, in.gatewayHost),
-	}, nil
+	}
+	if in.command != "" {
+		if err := validateSSHCommand(in.command); err != nil {
+			return nil, err
+		}
+		argv = append(argv, "-T",
+			"-o", "RequestTTY=no",
+			"-o", "BatchMode=yes",
+			"-o", "PasswordAuthentication=no",
+			"-o", "KbdInteractiveAuthentication=no")
+	}
+	argv = append(argv, fmt.Sprintf("%s+%s@%s", in.username, in.server, in.gatewayHost))
+	if in.command != "" {
+		argv = append(argv, in.command)
+	}
+	return argv, nil
 }
 
 // sshCredentialFiles are the on-disk paths of the temp credential material
@@ -469,17 +530,22 @@ func ensureTrailingNewline(s string) string {
 
 // runSSHClient is execSSH's production implementation: resolve the client on
 // PATH, run it with argv wired to the operator's own terminal streams, and
-// translate the outcome. err is non-nil only when the process could not be
-// started at all (e.g. ssh missing from PATH); once it is running, any exit
-// — including a non-zero one — comes back as (exitCode, nil), which is the
-// propagation `vey ssh`'s contract row promises.
-func runSSHClient(binary string, argv []string, stdin io.Reader, stdout, stderr io.Writer) (int, error) {
+// translate the outcome. An available native exit status always comes back
+// as (exitCode, nil), including nonzero exits. Other local failures, including
+// cancellation before starting the child, return an error.
+func runSSHClient(ctx context.Context, binary string, argv []string, stdin io.Reader, stdout, stderr io.Writer) (int, error) {
 	path, err := exec.LookPath(binary)
 	if err != nil {
 		return 0, fmt.Errorf("%s not found on PATH: %w", binary, err)
 	}
 
-	cmd := exec.Command(path, argv...)
+	cmd := exec.CommandContext(ctx, path, argv...)
+	if ctx.Done() != nil {
+		// Let OpenSSH close the channel first; if it does not terminate, the
+		// bounded WaitDelay kills it. Wait reaps the child before temp cleanup.
+		cmd.Cancel = func() error { return cmd.Process.Signal(syscall.SIGTERM) }
+		cmd.WaitDelay = 5 * time.Second
+	}
 	cmd.Stdin, cmd.Stdout, cmd.Stderr = stdin, stdout, stderr
 	if err := cmd.Run(); err != nil {
 		var exitErr *exec.ExitError

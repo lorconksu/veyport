@@ -57,7 +57,7 @@ func TestHandleCertRenewal(t *testing.T) {
 
 	// Create and register server
 	st.CreateServer(&model.Server{ID: testServerIDCert, Name: "cert-test", Status: "online", Labels: "{}"})
-	stream := &mockStream{}
+	stream := streamWithPeerCert(testServerIDCert)
 	h.connMgr.Register(testServerIDCert, stream)
 
 	// Generate a CSR
@@ -113,7 +113,7 @@ func TestHandleCertRenewal_NoCA(t *testing.T) {
 	h.caKey = nil
 
 	st.CreateServer(&model.Server{ID: testServerIDNoCA, Name: "noca-test", Status: "online", Labels: "{}"})
-	stream := &mockStream{}
+	stream := streamWithPeerCert(testServerIDNoCA)
 	h.connMgr.Register(testServerIDNoCA, stream)
 
 	clientKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
@@ -153,7 +153,7 @@ func TestHandleCertRenewal_InvalidCSR(t *testing.T) {
 	h.caKey = caKey
 
 	st.CreateServer(&model.Server{ID: testServerIDBadCSR, Name: "badcsr-test", Status: "online", Labels: "{}"})
-	stream := &mockStream{}
+	stream := streamWithPeerCert(testServerIDBadCSR)
 	h.connMgr.Register(testServerIDBadCSR, stream)
 
 	req := &pb.CertRenewRequest{Csr: []byte("not-a-valid-csr")}
@@ -182,7 +182,7 @@ func TestRouteAgentMessage_CertRenewRequest(t *testing.T) {
 	h.caKey = caKey
 
 	st.CreateServer(&model.Server{ID: testServerIDRouteCert, Name: "route-cert", Status: "online", Labels: "{}"})
-	stream := &mockStream{}
+	stream := streamWithPeerCert(testServerIDRouteCert)
 	h.connMgr.Register(testServerIDRouteCert, stream)
 
 	// Generate a valid CSR

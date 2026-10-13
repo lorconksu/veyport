@@ -6,7 +6,7 @@
 |---|---|
 | **What** | Native `ssh` access to fleet servers, terminated at the Hub instead of connecting straight to each node |
 | **Who** | Operators who already have `vey` (see [[CLI]]) and want a real terminal (full-screen editors, `htop`, window resize) instead of the browser terminal |
-| **Why** | The Hub stays on the data path for every byte, so SSH sessions get the same audit trail, live authorization, and zero-agent-change guarantee as the web terminal — without requiring per-node SSH keys or `sshd` reachability |
+| **Why** | The Hub brokers SSH access and checks live authorization; enrolled agents provide the execution stream, without requiring per-node SSH keys or `sshd` reachability |
 | **Where** | A dedicated TCP port on the Hub (default `:2222`), separate from the HTTP/gRPC ports |
 | **How** | `vey ssh-cert` to obtain a short-lived certificate, then `vey ssh <server>` (or a manually-constructed `ssh` command) to connect |
 
@@ -19,26 +19,37 @@
 3. [Enrollment: `vey ssh-cert`](#enrollment-vey-ssh-cert)
 4. [Connecting: `vey ssh <server>`](#connecting-vey-ssh-server)
    - [Which OS account runs the shell?](#which-os-account-runs-the-shell)
-5. [The manual `ssh` form and the `user+server` login name](#the-manual-ssh-form-and-the-userserver-login-name)
-6. [Host-key pinning](#host-key-pinning)
-7. [Certificate lifetime and re-issuance](#certificate-lifetime-and-re-issuance)
-8. [Not supported in this release](#not-supported-in-this-release)
-9. [Exit codes](#exit-codes)
-10. [Sessions and administrator termination](#sessions-and-administrator-termination)
-11. [Troubleshooting](#troubleshooting)
-12. [Hub configuration](#hub-configuration)
+5. [No-PTY command mode](#no-pty-command-mode)
+6. [The manual `ssh` form and the `user+server` login name](#the-manual-ssh-form-and-the-userserver-login-name)
+7. [Host-key pinning](#host-key-pinning)
+8. [Certificate lifetime and re-issuance](#certificate-lifetime-and-re-issuance)
+9. [Not supported](#not-supported)
+10. [Exit codes](#exit-codes)
+11. [Sessions and administrator termination](#sessions-and-administrator-termination)
+12. [Troubleshooting](#troubleshooting)
+13. [Hub configuration](#hub-configuration)
 
 ---
 
 ## Overview
 
-Veyport's SSH gateway lets an operator run `ssh` directly against a fleet server, using their real terminal instead of the browser-based [[Server Detail]] terminal. The critical design choice is that the gateway is **hub-terminated**: your SSH client talks to the Hub, not to the target server. The Hub authenticates you, re-checks your authorization against live state, and then bridges your session to the target over the same hub↔agent gRPC terminal channel the web terminal already uses.
+Veyport's SSH gateway lets an operator connect to a fleet server through the Hub instead of connecting to the node's own SSH daemon. Interactive `vey ssh <server>` opens a PTY; the feature-branch command form `vey ssh <server> -- '<command>'` submits one command without a PTY. The Hub authenticates the request, rechecks live authorization, prepares the target OS identity, and brokers execution over the enrolled agent's outbound gRPC stream.
 
 That means:
 
-- Every SSH session is observable and audited exactly like a web terminal session — the Hub never becomes a blind relay.
-- No new capability is added to the agent. The gateway is entirely a Hub-side feature; it reuses the agent's existing terminal protocol.
-- Authorization (who may open a shell on which server, and as which OS user) is decided by the same rule the web terminal uses, evaluated fresh on every connection — not cached in the certificate.
+- The Hub is on the execution path and records command lifecycle metadata. Under Enhanced, a command starts only after its intent is preserved by the external receipt authority and encrypted archive.
+- Interactive PTY and no-PTY execution use separate protocol paths; command streams have bounded buffering and explicit results.
+- Authorization and target identity are checked live. A valid SSH certificate does not grant terminal or command authority by itself.
+
+The currently published command-passthrough prototype 9 includes Hub, CLI,
+and agent artifacts. CLI prototype 6 is also compatible with the prototype 9
+Hub. These prototype builds are not a stable or main-branch release. Check
+current publication and qualification on the [release page](https://github.com/lorconksu/veyport/releases)
+and verify target agent support. This publication information is not new
+runtime qualification evidence. See [[CLI Automation]] for script examples
+and outcome handling.
+Standard command execution has no external audit-service dependency. Enhanced
+is opt-in and requires a qualified external receipt/archive configuration.
 
 ![Overview diagram](../screenshots/diagram-ssh-gateway-d1757e51.png)
 
@@ -71,7 +82,7 @@ This provisions or refreshes your SSH credential:
 | **`--json` shape** | `{principal, expires_at, host_key_fingerprint, gateway_port}` |
 | **Idempotent** | Yes — re-running refreshes the certificate and keeps the keypair |
 
-**Why interactive-only?** SSH access is an operator capability, not something a script holding a long-lived API token should be able to reach for. The Hub enforces this server-side (`interactiveOnly` middleware); `vey ssh-cert` additionally refuses before making a request, so a misconfigured automation script fails fast and locally instead of hitting a rate limit or leaving a refusal in the audit log.
+**Why interactive-only?** Certificate issuance requires an operator's interactive login. The Hub enforces this server-side (`interactiveOnly` middleware); `vey ssh-cert` also refuses API-token credentials before making a request. Once issued, a certificate may be used by a delegated script. It remains the operator's credential, and an API token alone cannot obtain or renew it. See [[CLI Automation]] for the supported workflow and its limits.
 
 ```bash
 $ vey --hub https://hub.example.com ssh-cert
@@ -90,11 +101,54 @@ vey --hub https://hub.example.com ssh web01
 
 1. Checks that you have a stored, unexpired certificate; if not, it explains and points you to `vey ssh-cert`.
 2. Resolves `<server>` the same way `vey servers get` does — a unique name or ID; an ambiguous name lists the candidates; an unknown server is a clean not-found error.
-3. Builds a temporary host-verification file from the cached gateway fingerprint (no blind trust-on-first-use prompt).
+3. Fetches the gateway's current public host key over the authenticated Hub API and builds a temporary host-verification file from that key. The fingerprint saved by `vey ssh-cert` is used to warn if it changed; it is not the source of the pinned key.
 4. Execs your operator's actual `ssh` binary with the certificate, the resolved `user+server` login name, and pinned host verification — it never edits your `~/.ssh/config`.
 5. Propagates the `ssh` client's exit status back to your shell.
 
 You get a full interactive PTY: full-screen editors, pagers, `htop`, and window resizing all work, because the Hub relays raw terminal bytes and `window-change` events end-to-end over the same channel the web terminal uses.
+
+## No-PTY command mode
+
+```bash
+vey ssh web01 -- 'uname -a'
+# Standard profile only: Enhanced rejects arbitrary nonempty stdin.
+printf 'hello\n' | vey ssh web01 -- 'cat'
+```
+
+Everything after `--` must be exactly one command-string argument. The CLI invokes
+OpenSSH directly; it does not execute the command through a local shell or join
+multiple arguments. It disables PTY allocation and interactive authentication.
+Without redirected input, stdin is EOF. Standard mode streams redirected stdin.
+
+In Enhanced mode the hub collects all stdin before preparation and admission.
+Only exact `bash -s`, `/bin/bash -s`, `sh -s`, or `/bin/sh -s` forms accept
+nonempty stdin. The whole script is limited to 16 MiB and 120 seconds, and is
+verified before any process starts. Other Enhanced commands must receive empty
+stdin. Script arguments and mixed script/data input are not supported. Standard
+accepts arbitrary streamed stdin.
+
+Stdout and stderr are separate binary-safe streams; their individual order is
+preserved, with no promised total ordering between the two. Remote exit status is
+propagated through SSH. Exit 255 can overlap a remote exit with a native SSH
+failure. Do not automatically retry after a connection loss or uncertain result.
+In Standard mode, preparation, admission, and execution transport failures return
+a diagnostic on stderr and a nonzero status to a responsive client. Enhanced
+mode provides this response after complete input collection; cancellation during
+collection may instead close the channel. Once finalization begins for an
+accepted execution, final SSH response delivery and relay cleanup have a deadline
+of at most two seconds. The
+Hub closes the SSH connection if response delivery stalls; this also ends other
+channels sharing that connection.
+Browser refresh does not cancel a command. Cancellation and live authority
+revocation are checked by the Hub's execution lifecycle, including immediately
+before `Start` is sent; they cannot recall a start already sent or guarantee
+that a process already starting has stopped. Remote output is not archived as
+command evidence.
+
+Enhanced evidence covers the exact submitted command or complete supported
+script, not every internal shell instruction, downloaded program, child-process
+action, or remote output. Command execution is not a sandbox and does not provide
+full host process telemetry.
 
 ## Which OS account runs the shell?
 
@@ -145,10 +199,10 @@ curl -H "Authorization: Bearer <token>" https://hub.example.com/api/ssh/host-key
 or read it back from your last `vey ssh-cert` run:
 
 ```bash
-vey --hub https://hub.example.com ssh-cert --json | jq -r .host_key_fingerprint
+vey --json --hub https://hub.example.com ssh-cert | jq -r .host_key_fingerprint
 ```
 
-`vey ssh-cert` caches this fingerprint and `vey ssh` uses it to pre-configure host verification, so you are never prompted with a blind trust-on-first-use ("the authenticity of host ... can't be established") prompt the way a fresh manual `ssh` connection normally would be. If you connect manually, pass the fingerprint to your client's own pinning mechanism (for example a scoped `known_hosts` entry) instead of accepting on trust.
+`vey ssh-cert` caches this fingerprint. Each `vey ssh` connection fetches the current public host key over the Hub API and pins native SSH to that returned key in a temporary known-hosts file; it compares the key's fingerprint with the saved value and warns if it changed. The saved fingerprint detects rotation but does not supply the pinned key. This avoids a blind trust-on-first-use prompt. If you connect manually, verify the fingerprint through a trusted channel and pin it in your client's own `known_hosts` instead of accepting on trust.
 
 ## Certificate lifetime and re-issuance
 
@@ -159,17 +213,21 @@ Certificates are short-lived — **~12 hours by default**, tunable per hub (see 
 - A certificate expiring **mid-session does not drop that session**; only new connection attempts are re-checked against the certificate's validity, which matches standard SSH behavior.
 - Re-run `vey ssh-cert` any time to refresh — it keeps your existing keypair and simply asks the Hub for a new certificate. There's no reason not to re-run it liberally; it's cheap and rate-limited generously (10/min).
 
-## Not supported in this release
+## Not supported
 
-The gateway is an **interactive shell only** in v1. The following are refused cleanly at the SSH protocol level, with an explanatory message, and without disturbing any other concurrent session on the same connection:
+The gateway does not provide these features:
 
 | Capability | Behavior |
 |---|---|
-| Remote command execution (`ssh host cmd`) | Refused — `exec` channel requests are rejected |
 | `scp` / `sftp` | Refused — the `subsystem` channel request is rejected |
 | Port forwarding (`-L` / `-R` / dynamic `-D`) | Refused — forwarding channel/global requests are rejected |
 | SSH agent forwarding (`-A`) | Refused — `auth-agent-req` is rejected |
 | Windows clients | Not tested or supported — use the web terminal instead |
+
+Command mode accepts one SSH exec request per channel. PTY requests, arbitrary
+environment variables, subsystems, forwarding, duplicate commands, and malformed
+or oversized requests are refused. This is not a general-purpose remote SSH
+server.
 
 If you need any of these, use the existing [[Server Detail]] file browser/log tailer for file access, or the browser terminal for anything the interactive shell can't cover.
 
@@ -180,10 +238,11 @@ If you need any of these, use the existing [[Server Detail]] file browser/log ta
 | Code | Meaning for SSH commands |
 |---|---|
 | `0` | Success |
+| `1` | Local `ssh` client could not start, or a local I/O/process error occurred |
 | `2` | Usage error, or an ambiguous server name for `vey ssh <server>` |
-| `3` | Auth failure — API-token mode, no/expired stored certificate, or the Hub's interactive-only refusal |
+| `3` | Auth failure — no/expired stored certificate or a Hub authentication refusal |
 | `5` | Unknown server for `vey ssh <server>` |
-| `6` | Connectivity failure reaching the Hub or the gateway port |
+| `6` | Connectivity failure during Hub API preflight; a gateway connection failure is returned by native SSH (often `255`) |
 | `7` | Rate-limited (`429`) on certificate issuance |
 | *(varies)* | `vey ssh` propagates whatever exit status your native `ssh` client returns once a session is actually open |
 
@@ -207,10 +266,10 @@ veyport: session ended by an administrator
 exit status `1`. This is audited as `ssh.session_closed` with detail `reason=forced` - see
 [[Audit Logs]].
 
-**Shells are not subject to the idle or absolute session timers** that apply to web and CLI
-sessions (see [[Logging In]]). A long-running shell is bounded only by its certificate's ~12-hour
-lifetime (above) and by explicit termination as described here - it does not go idle on its own
-and does not expire at a fixed wall-clock time the way a web session does.
+**Open shells are not subject to the idle or absolute session timers** that apply to web and CLI
+sessions (see [[Logging In]]). Certificate expiry limits new SSH connections; it does not end an
+already-open shell. Shells remain subject to live account/access revocation and explicit
+termination as described here. No web or CLI idle timer closes an open SSH shell.
 
 ## Troubleshooting
 

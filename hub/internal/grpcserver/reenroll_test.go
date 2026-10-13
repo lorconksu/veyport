@@ -85,7 +85,7 @@ func TestReEnrollRegistry_RegisterLookupClear(t *testing.T) {
 	h, _ := testHandler(t)
 	h.reEnrollSessions = make(map[string]*reEnrollSession)
 
-	sess := h.registerReEnroll("srv-x", []byte("csr"), "fp1")
+	sess := registerReEnrollForTest(t, h, "srv-x", []byte("csr"), "fp1")
 	if sess == nil {
 		t.Fatal("expected non-nil session")
 	}
@@ -226,7 +226,7 @@ func TestHandleReEnrollProof_NoSession(t *testing.T) {
 	stream := &mockStream{ctx: context.Background()}
 	proof := &pb.ReEnrollProof{Signature: []byte("bad-sig")}
 
-	err := h.handleReEnrollProof(stream, "srv-no-session", proof)
+	err := handleReEnrollProofForTest(t, h, stream, "srv-no-session", proof)
 	if err != nil {
 		t.Fatalf("expected nil error, got: %v", err)
 	}
@@ -247,14 +247,14 @@ func TestHandleReEnrollProof_InvalidPubKey(t *testing.T) {
 	}
 
 	// Register a session for this server.
-	sess := h.registerReEnroll("srv-badpub", testRegistrationCSR(t), "fp-x")
+	sess := registerReEnrollForTest(t, h, "srv-badpub", testRegistrationCSR(t), "fp-x")
 	sess.requestID = "re-badpub-1"
 	sess.challenge = make([]byte, 32)
 
 	stream := &mockStream{ctx: context.Background()}
 	proof := &pb.ReEnrollProof{Signature: []byte("sig")}
 
-	err := h.handleReEnrollProof(stream, "srv-badpub", proof)
+	err := handleReEnrollProofForTest(t, h, stream, "srv-badpub", proof)
 	if err != nil {
 		t.Fatalf("expected nil error, got: %v", err)
 	}
@@ -288,7 +288,7 @@ func TestHandleReEnrollProof_SignatureVerifyFails(t *testing.T) {
 	}
 
 	// Register session with a non-nil challenge.
-	sess := h.registerReEnroll("srv-badsig", testRegistrationCSR(t), "fp-x")
+	sess := registerReEnrollForTest(t, h, "srv-badsig", testRegistrationCSR(t), "fp-x")
 	sess.requestID = "re-badsig-1"
 	challenge := make([]byte, 32)
 	sess.challenge = challenge
@@ -297,7 +297,7 @@ func TestHandleReEnrollProof_SignatureVerifyFails(t *testing.T) {
 	// Pass a wrong signature — verification must fail.
 	proof := &pb.ReEnrollProof{Signature: []byte("wrong-signature-bytes")}
 
-	err = h.handleReEnrollProof(stream, "srv-badsig", proof)
+	err = handleReEnrollProofForTest(t, h, stream, "srv-badsig", proof)
 	if err != nil {
 		t.Fatalf("expected nil error, got: %v", err)
 	}
@@ -339,7 +339,7 @@ func TestHandleReEnrollProof_CertIssuanceFails(t *testing.T) {
 		t.Fatalf("random challenge: %v", err)
 	}
 
-	sess := h.registerReEnroll("srv-noca", testRegistrationCSR(t), "fp-x")
+	sess := registerReEnrollForTest(t, h, "srv-noca", testRegistrationCSR(t), "fp-x")
 	sess.requestID = "re-noca-1"
 	sess.challenge = challenge
 	sess.decidedBy = "admin-1"
@@ -350,7 +350,7 @@ func TestHandleReEnrollProof_CertIssuanceFails(t *testing.T) {
 	stream := &mockStream{ctx: context.Background()}
 	proof := &pb.ReEnrollProof{Signature: sig}
 
-	err = h.handleReEnrollProof(stream, "srv-noca", proof)
+	err = handleReEnrollProofForTest(t, h, stream, "srv-noca", proof)
 	if err != nil {
 		t.Fatalf("expected nil error, got: %v", err)
 	}
@@ -384,7 +384,7 @@ func TestHandleReEnrollProof_CertIssuanceFails(t *testing.T) {
 func TestReleaseKEK_NoSession(t *testing.T) {
 	h, _ := testHandler(t)
 
-	err := h.ReleaseKEK("srv-no-session", "admin-1")
+	err := h.ReleaseKEK("srv-no-session", reEnrollRequestIDForTest(h, "srv-no-session"), "admin-1")
 	if err == nil {
 		t.Fatal("expected error when no session exists")
 	}
@@ -405,9 +405,9 @@ func TestReleaseKEK_StorageKeyNotSet(t *testing.T) {
 	}
 
 	// Register a live session.
-	_ = h.registerReEnroll("srv-nostorage", testRegistrationCSR(t), "fp-x")
+	_ = registerReEnrollForTest(t, h, "srv-nostorage", testRegistrationCSR(t), "fp-x")
 
-	err := h.ReleaseKEK("srv-nostorage", "admin-1")
+	err := h.ReleaseKEK("srv-nostorage", reEnrollRequestIDForTest(h, "srv-nostorage"), "admin-1")
 	if err == nil {
 		t.Fatal("expected error when storageKey is not set")
 	}
@@ -434,9 +434,9 @@ func TestReleaseKEK_NoTransportPub(t *testing.T) {
 	}
 	// Do NOT call SetNodeTransportPub — it stays NULL.
 
-	_ = h.registerReEnroll("srv-notransport", testRegistrationCSR(t), "fp-x")
+	_ = registerReEnrollForTest(t, h, "srv-notransport", testRegistrationCSR(t), "fp-x")
 
-	err = h.ReleaseKEK("srv-notransport", "admin-1")
+	err = h.ReleaseKEK("srv-notransport", reEnrollRequestIDForTest(h, "srv-notransport"), "admin-1")
 	if err == nil {
 		t.Fatal("expected error when no transport pubkey is set")
 	}
@@ -466,9 +466,9 @@ func TestReleaseKEK_BadTransportPub(t *testing.T) {
 		t.Fatalf("SetNodeTransportPub: %v", err)
 	}
 
-	_ = h.registerReEnroll("srv-badtransport", testRegistrationCSR(t), "fp-x")
+	_ = registerReEnrollForTest(t, h, "srv-badtransport", testRegistrationCSR(t), "fp-x")
 
-	err = h.ReleaseKEK("srv-badtransport", "admin-1")
+	err = h.ReleaseKEK("srv-badtransport", reEnrollRequestIDForTest(h, "srv-badtransport"), "admin-1")
 	if err == nil {
 		t.Fatal("expected error for bad base64 transport pub")
 	}
@@ -512,7 +512,7 @@ func TestReleaseKEK_ResultError(t *testing.T) {
 		t.Fatalf("SetNodeTransportPub: %v", err)
 	}
 
-	sess := h.registerReEnroll("srv-result-err", testRegistrationCSR(t), "fp-x")
+	sess := registerReEnrollForTest(t, h, "srv-result-err", testRegistrationCSR(t), "fp-x")
 
 	// Goroutine: receive from sess.approve (ReleaseKEK sends to it), then post an error on sess.result.
 	go func() {
@@ -520,7 +520,7 @@ func TestReleaseKEK_ResultError(t *testing.T) {
 		sess.result <- errors.New("proof verification failed")
 	}()
 
-	releaseErr := h.ReleaseKEK("srv-result-err", "admin-1")
+	releaseErr := h.ReleaseKEK("srv-result-err", reEnrollRequestIDForTest(h, "srv-result-err"), "admin-1")
 	if releaseErr == nil {
 		t.Fatal("expected error from ReleaseKEK when proof fails")
 	}
@@ -563,7 +563,7 @@ func TestHandleReEnrollProof_Success(t *testing.T) {
 		t.Fatalf("random challenge: %v", err)
 	}
 
-	sess := h.registerReEnroll("srv-proof-ok", testRegistrationCSR(t), "fp-x")
+	sess := registerReEnrollForTest(t, h, "srv-proof-ok", testRegistrationCSR(t), "fp-x")
 	sess.requestID = "re-proof-ok-1"
 	sess.challenge = challenge
 	sess.decidedBy = "admin-9"
@@ -572,7 +572,7 @@ func TestHandleReEnrollProof_Success(t *testing.T) {
 	stream := &mockStream{ctx: context.Background()}
 	proof := &pb.ReEnrollProof{Signature: sig}
 
-	if err := h.handleReEnrollProof(stream, "srv-proof-ok", proof); err != nil {
+	if err := handleReEnrollProofForTest(t, h, stream, "srv-proof-ok", proof); err != nil {
 		t.Fatalf("expected nil error on proof success, got: %v", err)
 	}
 
@@ -627,14 +627,14 @@ func TestHandleReEnrollProof_NoNodeCrypto(t *testing.T) {
 	seedServer(t, h, "srv-no-crypto")
 	// Intentionally do NOT call SetNodeCrypto — pubkey stays empty.
 
-	sess := h.registerReEnroll("srv-no-crypto", testRegistrationCSR(t), "fp-x")
+	sess := registerReEnrollForTest(t, h, "srv-no-crypto", testRegistrationCSR(t), "fp-x")
 	sess.requestID = "re-no-crypto-1"
 	sess.challenge = make([]byte, 32)
 
 	stream := &mockStream{ctx: context.Background()}
 	proof := &pb.ReEnrollProof{Signature: []byte("sig")}
 
-	if err := h.handleReEnrollProof(stream, "srv-no-crypto", proof); err != nil {
+	if err := handleReEnrollProofForTest(t, h, stream, "srv-no-crypto", proof); err != nil {
 		t.Fatalf("expected nil error, got: %v", err)
 	}
 	if len(stream.sent) == 0 || stream.sent[0].GetReenrollDenied() == nil {

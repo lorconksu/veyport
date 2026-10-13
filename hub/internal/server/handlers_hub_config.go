@@ -16,6 +16,7 @@ type hubConfigResponse struct {
 	LockoutDurationMinutes int     `json:"lockout_duration_minutes"`
 	DormantDays            int     `json:"dormant_days"`
 	SessionIdleMinutes     int     `json:"session_idle_minutes"`
+	CLISessionIdleMinutes  int     `json:"cli_session_idle_minutes"`
 	SessionMaxHours        int     `json:"session_max_hours"`
 }
 
@@ -26,6 +27,7 @@ type hubConfigRequest struct {
 	LockoutDurationMinutes *int    `json:"lockout_duration_minutes"`
 	DormantDays            *int    `json:"dormant_days"`
 	SessionIdleMinutes     *int    `json:"session_idle_minutes"`
+	CLISessionIdleMinutes  *int    `json:"cli_session_idle_minutes"`
 	SessionMaxHours        *int    `json:"session_max_hours"`
 }
 
@@ -50,6 +52,7 @@ func (s *Server) handleGetHubConfig(w http.ResponseWriter, r *http.Request) {
 	cfg.LockoutDurationMinutes = int(policy.Duration.Minutes())
 	cfg.DormantDays = policy.DormantDays
 	cfg.SessionIdleMinutes = int(policy.SessionIdle.Minutes())
+	cfg.CLISessionIdleMinutes = int(policy.CLISessionIdle.Minutes())
 	cfg.SessionMaxHours = int(policy.SessionMax.Hours())
 
 	respondJSON(w, http.StatusOK, cfg)
@@ -75,6 +78,7 @@ func lockoutConfigFields(req *hubConfigRequest) []lockoutConfigField {
 		{req.LockoutDurationMinutes, lockout.KeyDurationMinutes, "lockout_duration_minutes must be a non-negative integer"},
 		{req.DormantDays, lockout.KeyDormantDays, "dormant_days must be a non-negative integer"},
 		{req.SessionIdleMinutes, lockout.KeySessionIdleMinutes, "session_idle_minutes must be a non-negative integer"},
+		{req.CLISessionIdleMinutes, lockout.KeyCLISessionIdleMinutes, "cli_session_idle_minutes must be a non-negative integer"},
 		{req.SessionMaxHours, lockout.KeySessionMaxHours, "session_max_hours must be a non-negative integer"},
 	}
 }
@@ -100,6 +104,10 @@ func (s *Server) handleUpdateHubConfig(w http.ResponseWriter, r *http.Request) {
 			respondError(w, http.StatusBadRequest, f.negativeMsg)
 			return
 		}
+	}
+	if req.CLISessionIdleMinutes != nil && int64(*req.CLISessionIdleMinutes) > lockout.MaxCLISessionIdleMinutes {
+		respondError(w, http.StatusBadRequest, "cli_session_idle_minutes exceeds the maximum supported duration")
+		return
 	}
 
 	if req.GRPCExternalAddr != nil {

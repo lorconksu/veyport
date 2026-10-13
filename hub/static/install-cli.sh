@@ -7,9 +7,10 @@ set -eu
 # Unlike the agent installer (install.sh), this script takes no arguments:
 # the hub renders its own base URL into the one-liner via text/template, and
 # there is no token to pass — the CLI authenticates later via `vey login`
-# (specs/006-cli-install-script/proposal.md). It is also deliberately not
-# `curl | sudo sh`: the CLI does not need root, so a user-level install is
-# the default and sudo is only offered, never assumed.
+# (specs/006-cli-install-script/proposal.md). The install destination is always
+# /usr/local/bin. If that directory requires sudo, an interactive caller can
+# authorize it; a piped caller must rerun explicitly with sudo. The installer
+# never selects another destination or automatically elevates a piped caller.
 #
 # POSIX sh only (this is piped to `sh`, which may be dash on Debian/Ubuntu):
 # no bashisms, no arrays, no [[ ]], no `local`.
@@ -85,14 +86,31 @@ echo "    checksum OK."
 
 chmod +x "${WORK_DIR}/vey"
 
-# --- Detect an existing install (for the upgrade message) ---
+# --- Detect the existing PATH command (for accurate installation reporting) ---
+OLD_PATH=""
 OLD_VERSION=""
 if command -v vey >/dev/null 2>&1; then
-  OLD_VERSION=$(vey --version 2>/dev/null || true)
+  OLD_PATH=$(command -v vey)
+  OLD_VERSION=$("$OLD_PATH" --version 2>/dev/null || true)
 fi
 
-# --- Install: prefer /usr/local/bin, offer sudo, else fall back to user bin ---
+# Printed commands must remain valid POSIX syntax for paths containing spaces
+# or apostrophes. This only formats instructions; it never edits shell profiles.
+quote_for_sh() {
+  printf "'"
+  printf '%s' "$1" | sed "s/'/'\\\\''/g"
+  printf "'"
+}
+
+# --- Install only in /usr/local/bin; refuse when permission is unavailable ---
 INSTALL_DIR="/usr/local/bin"
+
+sudo_required() {
+  printf 'ERROR: %s is not writable; installation there requires sudo.\n' "$INSTALL_DIR" >&2
+  echo "Rerun the installer explicitly with sudo:" >&2
+  printf '    curl -fsSL %s | sudo sh\n' "$(quote_for_sh "${BASE_URL}/install/cli.sh")" >&2
+  exit 1
+}
 
 if [ -w "$INSTALL_DIR" ]; then
   install -m 0755 "${WORK_DIR}/vey" "${INSTALL_DIR}/vey"
@@ -101,38 +119,47 @@ elif command -v sudo >/dev/null 2>&1 && [ -t 0 ]; then
   if sudo install -m 0755 "${WORK_DIR}/vey" "${INSTALL_DIR}/vey"; then
     :
   else
-    echo "==> sudo install failed; falling back to \$HOME/.local/bin"
-    INSTALL_DIR="${HOME}/.local/bin"
-    mkdir -p "$INSTALL_DIR"
-    install -m 0755 "${WORK_DIR}/vey" "${INSTALL_DIR}/vey"
+    echo "ERROR: sudo install failed; installation stopped." >&2
+    sudo_required
   fi
 else
-  INSTALL_DIR="${HOME}/.local/bin"
-  mkdir -p "$INSTALL_DIR"
-  install -m 0755 "${WORK_DIR}/vey" "${INSTALL_DIR}/vey"
+  sudo_required
 fi
 
+# Report the absolute installed destination.
+INSTALL_DIR=$(CDPATH= cd -P "$INSTALL_DIR" && pwd -P)
 INSTALLED_PATH="${INSTALL_DIR}/vey"
-
-case ":${PATH}:" in
-  *":${INSTALL_DIR}:"*) ;;
-  *)
-    echo ""
-    echo "NOTE: ${INSTALL_DIR} is not on your PATH. Add this to your shell profile:"
-    echo "    export PATH=\"${INSTALL_DIR}:\$PATH\""
-    ;;
-esac
 
 # `vey --version` prints "vey vX.Y.Z-..."; use its output verbatim rather
 # than prefixing another "vey" (T-verify finding: "Installed vey vey ...").
 NEW_VERSION=$("$INSTALLED_PATH" --version 2>/dev/null || echo "vey (version unknown)")
 
 echo ""
-if [ -n "$OLD_VERSION" ]; then
+if [ "$OLD_PATH" = "$INSTALLED_PATH" ] && [ -n "$OLD_VERSION" ]; then
   echo "==> Upgraded: ${OLD_VERSION} -> ${NEW_VERSION}"
 else
   echo "==> Installed ${NEW_VERSION}"
 fi
+printf '    Installed at: %s\n' "$INSTALLED_PATH"
+
+# Installing into a directory already on PATH does not make it the first
+# match. Refresh this child shell's lookup, then report the command it selects.
+# A parent shell may also have an alias, function or cached command of its own.
+hash -r 2>/dev/null || true
+PATH_VEY=$(command -v vey 2>/dev/null || true)
+if [ "$PATH_VEY" != "$INSTALLED_PATH" ]; then
+  echo ""
+  if [ -n "$PATH_VEY" ]; then
+    PATH_VERSION=$("$PATH_VEY" --version 2>/dev/null || echo "version unknown")
+    printf 'NOTE: PATH resolves vey to %s (%s).\n' "$PATH_VEY" "$PATH_VERSION"
+  else
+    printf 'NOTE: %s is not on your PATH.\n' "$INSTALL_DIR"
+  fi
+  echo "Use the installed path below, or select it in your current shell:"
+  printf '    export PATH=%s:"$PATH"\n' "$(quote_for_sh "$INSTALL_DIR")"
+  echo "    hash -r"
+fi
+echo "If your shell still selects another vey, check its aliases/functions and run hash -r."
 echo ""
 echo "Next step:"
-echo "    vey --hub ${BASE_URL} login"
+printf '    %s --hub %s login\n' "$(quote_for_sh "$INSTALLED_PATH")" "$(quote_for_sh "$BASE_URL")"

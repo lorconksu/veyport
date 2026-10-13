@@ -10,3 +10,6 @@ var InstallScript []byte
 
 //go:embed static/install-cli.sh
 var InstallCLIScript []byte
+
+//go:embed static/agent-update.sh
+var AgentUpdateScript []byte
