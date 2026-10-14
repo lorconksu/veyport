@@ -144,7 +144,7 @@ async function injectAuth(page: Page, targetPath = '/') {
   const expires = Math.floor(Date.now() / 1000)
   await page.context().addCookies([
     {
-      name: 'veyport_access',
+      name: '__Host-veyport_access',
       value: authTokens!.access_token,
       domain: 'localhost',
       path: '/',
@@ -154,17 +154,17 @@ async function injectAuth(page: Page, targetPath = '/') {
       sameSite: 'Strict',
     },
     {
-      name: 'veyport_refresh',
+      name: '__Host-veyport_refresh',
       value: authTokens!.refresh_token,
       domain: 'localhost',
-      path: '/api/auth/refresh',
+      path: '/',
       expires: expires + 604800,
       httpOnly: true,
       secure: false,
       sameSite: 'Strict',
     },
     {
-      name: 'veyport_csrf',
+      name: '__Host-veyport_csrf',
       value: 'screenshots-csrf',
       domain: 'localhost',
       path: '/',

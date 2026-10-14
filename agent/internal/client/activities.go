@@ -30,6 +30,7 @@ type activitySession struct {
 	tails             map[string]context.CancelFunc
 	detach            func()
 	capabilityTimeout time.Duration
+	applications      *applicationTransport
 }
 
 func newActivitySession(ctx context.Context, c *Client, send chan<- *pb.AgentMessage, controlCancels ...context.CancelFunc) *activitySession {

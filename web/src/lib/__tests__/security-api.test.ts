@@ -23,12 +23,12 @@ function response(body: unknown, status = 200): Response {
 beforeEach(() => {
   vi.stubGlobal('fetch', mockFetch)
   mockFetch.mockReset()
-  document.cookie = 'veyport_csrf=current-session-csrf'
+  document.cookie = '__Host-veyport_csrf=current-session-csrf; Path=/; Secure'
 })
 
 afterEach(() => {
   vi.unstubAllGlobals()
-  document.cookie = 'veyport_csrf=; expires=Thu, 01 Jan 1970 00:00:00 GMT'
+  document.cookie = '__Host-veyport_csrf=; expires=Thu, 01 Jan 1970 00:00:00 GMT; Path=/; Secure'
 })
 
 describe('security workflow HTTP bindings', () => {

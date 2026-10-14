@@ -1,0 +1,32 @@
+flowchart TB
+    subgraph Browser["User browser"]
+        Portal["Veyport portal\nMFA + authorized app list"]
+        AppCookie["Separate opaque\napplication session"]
+        NativeUI["Native application UI"]
+    end
+
+    subgraph Hub["Veyport Hub"]
+        Grant["Current user, role,\nlocal and directory grants"]
+        Launch["One-use ticket\nvalidated launch path"]
+        Gate["Exact-host app gate\ncredential and header boundary"]
+        Sessions["Independent session limits\n45m idle / 12h max"]
+    end
+
+    subgraph Route["Configured route"]
+        Direct["Hub route\nDNS + CIDR + TLS validation"]
+        Node["Node route\nagent tunnel + dial checks"]
+    end
+
+    Backend["Configured application backend\nnative login and authorization"]
+
+    Portal --> Grant
+    Grant --> Launch
+    Launch -- "one-use POST to exact host" --> Gate
+    Gate --> AppCookie
+    AppCookie --> Gate
+    Gate --> Sessions
+    Gate --> Direct
+    Gate --> Node
+    Direct --> Backend
+    Node --> Backend
+    Backend --> NativeUI

@@ -189,6 +189,40 @@ Traefik handles TLS termination (Let's Encrypt). The Hub sees plain HTTP on port
 
 ---
 
+## Browser application access
+
+Application access is optional. The Hub accepts `--application-domain` and `--application-portal-origin` at startup. Set both when enabling application access; use the exact HTTPS origin of the Veyport portal, for example:
+
+```text
+/app/veyport --addr :8081 --grpc-addr :9090 --db /data/veyport.db \
+  --agent-bin-dir /app --application-domain apps.example.com \
+  --application-portal-origin https://veyport.example.com
+```
+
+For Docker Compose, pass the same flags as the service command (the image entrypoint is `/app/veyport`). Keep the application's domain namespace dedicated to Veyport application hosts. Configure DNS and the HTTPS edge so each configured application hostname in `*.apps.example.com` reaches the Hub's HTTP listener, with a certificate valid for the exact hostname (typically a wildcard certificate). The edge must preserve the request host and support WebSocket upgrades. Keep the portal hostname and application namespace aligned with the two Hub flags.
+
+Example when the portal is published as `veyport.example.com:443` and the Hub also has a private control address:
+
+```text
+--application-domain apps.example.com
+--application-portal-origin https://veyport.example.com
+--application-control-deny-authorities veyport.internal.example:8443,veyport.example.com:443
+```
+
+`--application-control-deny-authorities` is a comma-separated list of additional `host:port` control-plane authorities that app backends must not target. Configure it for published or private Hub control mappings that differ from the Hub listener addresses or portal origin. For Docker, account for both sides of each published port mapping: for example, a host mapping `443:8081` is reached by clients as `veyport.example.com:443`, while `veyport.internal.example:8443` is a separate private address if that is how operators reach the Hub. Supply the client-visible authority, not the container's internal port, and keep this flag in the service command alongside the two application flags. The application hostname namespace itself must route to the Hub HTTP listener; backend application ports should remain private to the Hub or selected node.
+
+Each application is separately configured with a backend URL, an allowed destination CIDR set, and either a Hub route or an enrolled-node route. The Hub validates DNS results and pins an allowed destination address for direct routes; node routes also enforce destination policy at the node. Use a custom CA only when the backend uses a private certificate authority. Do not disable certificate verification. Restrict backend CIDRs to the intended application network and keep Hub control-plane addresses out of those ranges.
+
+The Hub bounds application transport: up to 128 active proxy connections globally, 32 node-routed connections per node, eight concurrent requests per application session, 64 KiB transport frames, and a 30-second socket write-stall deadline. Backend response headers are capped at 1 MiB. Request and response bodies stream through the proxy rather than being collected as whole-body buffers; a 64 MiB transfer is a test scenario, not a configured maximum body size. These are runtime guardrails, not a substitute for measuring memory and cleanup under the deployment's expected load.
+
+Native applications should use the configured public application URL for links and callbacks. Veyport does not rewrite arbitrary HTML or JavaScript URLs and does not follow backend redirects by opening a new backend connection. An external identity provider or other cross-origin service must be independently reachable and trusted by the browser; verify the application's redirect/callback behavior before enabling access.
+
+Before enabling the feature on an existing Hub, take and verify a consistent database backup, retain the current image or binary and exact startup configuration, and record the candidate artifact digest. Agree on an owner-approved rollout and rollback procedure. If rollback is needed, restore a mutually compatible software/configuration/database set from the recorded backup; do not assume that replacing only the binary reverses database changes. Disabling the application flags stops the feature from being configured at startup but does not restore records written after the backup. No staging or public deployment qualification is implied by this guide.
+
+The feature does not require exposing backend application servers directly to users. Choose DNS visibility, firewall rules, and edge exposure according to the deployment's access policy; this guide does not imply that a public application namespace is provisioned. See [[Application Access]] for grants, session behavior, and API details.
+
+---
+
 ## Agent Deployment
 
 Agents are lightweight Go binaries deployed on each managed server. They dial out to the Hub's gRPC port - no inbound firewall rules are needed on the agent host.

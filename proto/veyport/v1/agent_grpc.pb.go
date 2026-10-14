@@ -19,11 +19,12 @@ import (
 const _ = grpc.SupportPackageIsVersion9
 
 const (
-	AgentService_Connect_FullMethodName         = "/veyport.v1.AgentService/Connect"
-	AgentService_Execute_FullMethodName         = "/veyport.v1.AgentService/Execute"
-	AgentService_DownloadUpdate_FullMethodName  = "/veyport.v1.AgentService/DownloadUpdate"
-	AgentService_AuthorizeUpdate_FullMethodName = "/veyport.v1.AgentService/AuthorizeUpdate"
-	AgentService_BootstrapUpdate_FullMethodName = "/veyport.v1.AgentService/BootstrapUpdate"
+	AgentService_Connect_FullMethodName          = "/veyport.v1.AgentService/Connect"
+	AgentService_Execute_FullMethodName          = "/veyport.v1.AgentService/Execute"
+	AgentService_ApplicationProxy_FullMethodName = "/veyport.v1.AgentService/ApplicationProxy"
+	AgentService_DownloadUpdate_FullMethodName   = "/veyport.v1.AgentService/DownloadUpdate"
+	AgentService_AuthorizeUpdate_FullMethodName  = "/veyport.v1.AgentService/AuthorizeUpdate"
+	AgentService_BootstrapUpdate_FullMethodName  = "/veyport.v1.AgentService/BootstrapUpdate"
 )
 
 // AgentServiceClient is the client API for AgentService service.
@@ -34,6 +35,8 @@ type AgentServiceClient interface {
 	Connect(ctx context.Context, opts ...grpc.CallOption) (grpc.BidiStreamingClient[AgentMessage, HubMessage], error)
 	// Dedicated enrolled-node mTLS connection; never the enrollment control path.
 	Execute(ctx context.Context, opts ...grpc.CallOption) (grpc.BidiStreamingClient[ExecutionAgentMessage, ExecutionHubMessage], error)
+	// Raw application bytes use their own enrolled-node connection and admission.
+	ApplicationProxy(ctx context.Context, opts ...grpc.CallOption) (grpc.BidiStreamingClient[ApplicationAgentMessage, ApplicationHubMessage], error)
 	// Maintenance artifacts are selected by the Hub, never by a client URL.
 	DownloadUpdate(ctx context.Context, in *UpdateArtifactRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[UpdateArtifactChunk], error)
 	AuthorizeUpdate(ctx context.Context, in *UpdateArtifactRequest, opts ...grpc.CallOption) (*UpdateAuthorization, error)
@@ -74,9 +77,22 @@ func (c *agentServiceClient) Execute(ctx context.Context, opts ...grpc.CallOptio
 // This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
 type AgentService_ExecuteClient = grpc.BidiStreamingClient[ExecutionAgentMessage, ExecutionHubMessage]
 
+func (c *agentServiceClient) ApplicationProxy(ctx context.Context, opts ...grpc.CallOption) (grpc.BidiStreamingClient[ApplicationAgentMessage, ApplicationHubMessage], error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	stream, err := c.cc.NewStream(ctx, &AgentService_ServiceDesc.Streams[2], AgentService_ApplicationProxy_FullMethodName, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	x := &grpc.GenericClientStream[ApplicationAgentMessage, ApplicationHubMessage]{ClientStream: stream}
+	return x, nil
+}
+
+// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
+type AgentService_ApplicationProxyClient = grpc.BidiStreamingClient[ApplicationAgentMessage, ApplicationHubMessage]
+
 func (c *agentServiceClient) DownloadUpdate(ctx context.Context, in *UpdateArtifactRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[UpdateArtifactChunk], error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	stream, err := c.cc.NewStream(ctx, &AgentService_ServiceDesc.Streams[2], AgentService_DownloadUpdate_FullMethodName, cOpts...)
+	stream, err := c.cc.NewStream(ctx, &AgentService_ServiceDesc.Streams[3], AgentService_DownloadUpdate_FullMethodName, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -121,6 +137,8 @@ type AgentServiceServer interface {
 	Connect(grpc.BidiStreamingServer[AgentMessage, HubMessage]) error
 	// Dedicated enrolled-node mTLS connection; never the enrollment control path.
 	Execute(grpc.BidiStreamingServer[ExecutionAgentMessage, ExecutionHubMessage]) error
+	// Raw application bytes use their own enrolled-node connection and admission.
+	ApplicationProxy(grpc.BidiStreamingServer[ApplicationAgentMessage, ApplicationHubMessage]) error
 	// Maintenance artifacts are selected by the Hub, never by a client URL.
 	DownloadUpdate(*UpdateArtifactRequest, grpc.ServerStreamingServer[UpdateArtifactChunk]) error
 	AuthorizeUpdate(context.Context, *UpdateArtifactRequest) (*UpdateAuthorization, error)
@@ -140,6 +158,9 @@ func (UnimplementedAgentServiceServer) Connect(grpc.BidiStreamingServer[AgentMes
 }
 func (UnimplementedAgentServiceServer) Execute(grpc.BidiStreamingServer[ExecutionAgentMessage, ExecutionHubMessage]) error {
 	return status.Error(codes.Unimplemented, "method Execute not implemented")
+}
+func (UnimplementedAgentServiceServer) ApplicationProxy(grpc.BidiStreamingServer[ApplicationAgentMessage, ApplicationHubMessage]) error {
+	return status.Error(codes.Unimplemented, "method ApplicationProxy not implemented")
 }
 func (UnimplementedAgentServiceServer) DownloadUpdate(*UpdateArtifactRequest, grpc.ServerStreamingServer[UpdateArtifactChunk]) error {
 	return status.Error(codes.Unimplemented, "method DownloadUpdate not implemented")
@@ -184,6 +205,13 @@ func _AgentService_Execute_Handler(srv interface{}, stream grpc.ServerStream) er
 
 // This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
 type AgentService_ExecuteServer = grpc.BidiStreamingServer[ExecutionAgentMessage, ExecutionHubMessage]
+
+func _AgentService_ApplicationProxy_Handler(srv interface{}, stream grpc.ServerStream) error {
+	return srv.(AgentServiceServer).ApplicationProxy(&grpc.GenericServerStream[ApplicationAgentMessage, ApplicationHubMessage]{ServerStream: stream})
+}
+
+// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
+type AgentService_ApplicationProxyServer = grpc.BidiStreamingServer[ApplicationAgentMessage, ApplicationHubMessage]
 
 func _AgentService_DownloadUpdate_Handler(srv interface{}, stream grpc.ServerStream) error {
 	m := new(UpdateArtifactRequest)
@@ -258,6 +286,12 @@ var AgentService_ServiceDesc = grpc.ServiceDesc{
 		{
 			StreamName:    "Execute",
 			Handler:       _AgentService_Execute_Handler,
+			ServerStreams: true,
+			ClientStreams: true,
+		},
+		{
+			StreamName:    "ApplicationProxy",
+			Handler:       _AgentService_ApplicationProxy_Handler,
 			ServerStreams: true,
 			ClientStreams: true,
 		},

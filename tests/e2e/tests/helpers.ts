@@ -75,7 +75,7 @@ export async function loginViaAPI(page: Page, baseURL: string) {
   const expires = Math.floor(Date.now() / 1000)
   await page.context().addCookies([
     {
-      name: 'veyport_access',
+      name: '__Host-veyport_access',
       value: authData.access_token,
       domain: parsedBaseURL.hostname,
       path: '/',
@@ -85,17 +85,17 @@ export async function loginViaAPI(page: Page, baseURL: string) {
       sameSite: 'Strict',
     },
     {
-      name: 'veyport_refresh',
+      name: '__Host-veyport_refresh',
       value: authData.refresh_token,
       domain: parsedBaseURL.hostname,
-      path: '/api/auth/refresh',
+      path: '/',
       expires: expires + 604800,
       httpOnly: true,
       secure: parsedBaseURL.protocol === 'https:',
       sameSite: 'Strict',
     },
     {
-      name: 'veyport_csrf',
+      name: '__Host-veyport_csrf',
       value: 'e2e-csrf',
       domain: parsedBaseURL.hostname,
       path: '/',
@@ -114,7 +114,7 @@ export async function loginViaAPI(page: Page, baseURL: string) {
  * Build an APIRequestContext authenticated as the admin with a Bearer access
  * token. Bearer requests are exempt from the double-submit CSRF check, so this
  * context can issue mutating admin calls (PUT /api/settings/hub, POST/DELETE
- * /api/users) without juggling the veyport_csrf cookie.
+ * /api/users) without juggling the __Host-veyport_csrf cookie.
  *
  * Costs one POST /api/auth/login and one POST /api/auth/login/totp against the
  * per-IP limiters (10/min and 3/min respectively).

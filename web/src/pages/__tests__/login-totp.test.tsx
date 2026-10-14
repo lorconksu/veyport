@@ -101,7 +101,7 @@ describe('LoginTOTPPage', () => {
 
     await waitFor(() => {
       expect(mockLogin).toHaveBeenCalledWith(authResponse.user)
-      expect(mockNavigate).toHaveBeenCalledWith('/')
+      expect(mockNavigate).toHaveBeenCalledWith('/', { replace: true })
     })
   })
 
@@ -178,7 +178,7 @@ describe('LoginTOTPPage', () => {
         expect.objectContaining({ body: JSON.stringify({ totp_token: 'test-totp-token', code: '123456' }) }),
       )
       expect(mockLogin).toHaveBeenCalledWith(authResponse.user)
-      expect(mockNavigate).toHaveBeenCalledWith('/')
+      expect(mockNavigate).toHaveBeenCalledWith('/', { replace: true })
     })
   })
 

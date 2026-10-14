@@ -18,11 +18,12 @@ var ErrActivityCapacity = errors.New("agent activity capacity reached; wait for 
 type ActivityKind string
 
 const (
-	ActivityList   ActivityKind = "file-list"
-	ActivityRead   ActivityKind = "file-read"
-	ActivityDelete ActivityKind = "file-delete"
-	ActivityUpload ActivityKind = "upload"
-	ActivityLog    ActivityKind = "log"
+	ActivityList        ActivityKind = "file-list"
+	ActivityRead        ActivityKind = "file-read"
+	ActivityDelete      ActivityKind = "file-delete"
+	ActivityUpload      ActivityKind = "upload"
+	ActivityLog         ActivityKind = "log"
+	ActivityApplication ActivityKind = "application"
 )
 
 type activityKey struct {
@@ -60,6 +61,8 @@ func (cm *ConnManager) CompleteResponse(node string, stream pb.AgentService_Conn
 			return false
 		}
 		kind, id = ActivityLog, p.GetRequestId()
+	case *pb.ApplicationClosed:
+		kind, id = ActivityApplication, p.GetBinding().GetConnectionId()
 	default:
 		return false
 	}
@@ -97,7 +100,7 @@ func validActivity(id string, kind ActivityKind) bool {
 		return false
 	}
 	switch kind {
-	case ActivityList, ActivityRead, ActivityDelete, ActivityUpload, ActivityLog:
+	case ActivityList, ActivityRead, ActivityDelete, ActivityUpload, ActivityLog, ActivityApplication:
 		return true
 	}
 	return false
@@ -175,6 +178,8 @@ func messageActivity(msg *pb.HubMessage) (ActivityKind, string) {
 		return ActivityUpload, p.FileUploadRequest.GetRequestId()
 	case *pb.HubMessage_LogStreamRequest:
 		return ActivityLog, p.LogStreamRequest.GetRequestId()
+	case *pb.HubMessage_ApplicationOpen:
+		return ActivityApplication, p.ApplicationOpen.GetBinding().GetConnectionId()
 	}
 	return "", ""
 }

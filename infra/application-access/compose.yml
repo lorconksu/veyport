@@ -1,0 +1,42 @@
+# Run separately on the new direct/node fixture guest. Host networking keeps
+# upstream sources visible to the guest firewall; there are no published ports.
+name: veyport-application-fixtures
+services:
+  http:
+    build: ./fixture
+    image: veyport-application-fixture:local
+    network_mode: host
+    environment:
+      FIXTURE_LISTEN: ${LAB_BIND_IP:-127.0.0.1}:8080
+      FIXTURE_CREDENTIALS_FILE: /private/native-credentials.json
+    volumes:
+      - ${LAB_PRIVATE_DIR:?Provide the private fixture directory}:/private:ro
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    pids_limit: 64
+    mem_limit: 128m
+    cpus: 1.0
+    restart: unless-stopped
+    logging:
+      options: {max-size: 1m, max-file: '2'}
+  https:
+    build: ./fixture
+    image: veyport-application-fixture:local
+    network_mode: host
+    environment:
+      FIXTURE_LISTEN: ${LAB_BIND_IP:-127.0.0.1}:8443
+      FIXTURE_CREDENTIALS_FILE: /private/native-credentials.json
+      FIXTURE_TLS_CERT: /private/server.crt
+      FIXTURE_TLS_KEY: /private/server.key
+    volumes:
+      - ${LAB_PRIVATE_DIR:?Provide the private fixture directory}:/private:ro
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    pids_limit: 64
+    mem_limit: 128m
+    cpus: 1.0
+    restart: unless-stopped
+    logging:
+      options: {max-size: 1m, max-file: '2'}

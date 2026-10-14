@@ -183,6 +183,7 @@ func (s *Server) endOneSession(
 		respondError(w, http.StatusInternalServerError, "failed to read session")
 		return
 	case sess.EndedAt != nil:
+		s.endSessions(r, actorID, target, []string{sid}, false, nil, reason)
 		respondJSON(w, http.StatusOK, sessionStatusResponse{Status: sessionAlreadyEndedStatus})
 		return
 	}

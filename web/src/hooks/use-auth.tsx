@@ -8,7 +8,7 @@ interface AuthContextType {
   isLoading: boolean
   isAuthenticated: boolean
   login: (user: User) => void
-  logout: () => void
+  logout: () => Promise<void>
   refreshUser: () => Promise<User | null>
 }
 
@@ -76,8 +76,10 @@ export function AuthProvider({ children }: Readonly<{ children: ReactNode }>) {
   const logout = useCallback(async () => {
     sessionEnding.current = true
     const revision = ++authorityRevision.current
-    setUser(null)
-    await clearTokens()
+    try { await clearTokens() } catch (error) {
+      if (revision === authorityRevision.current) sessionEnding.current = false
+      throw error
+    }
     if (revision === authorityRevision.current) {
       authorityRevision.current++
       sessionEnding.current = false

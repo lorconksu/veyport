@@ -1,7 +1,7 @@
 import { useState, useMemo } from 'react'
 import { Outlet, NavLink, useNavigate, Link } from 'react-router-dom'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
-import { LayoutDashboard, ScrollText, Settings, LogOut, PanelLeftClose, PanelLeftOpen } from 'lucide-react'
+import { LayoutDashboard, ScrollText, Settings, LogOut, PanelLeftClose, PanelLeftOpen, AppWindow } from 'lucide-react'
 import { useAuth } from '@/hooks/use-auth'
 import { hasCapability } from '@/lib/auth'
 import { useSessionActivity } from '@/hooks/use-session-activity'
@@ -16,6 +16,8 @@ export function AppShell() {
   const navigate = useNavigate()
   const queryClient = useQueryClient()
   const [navCollapsed, setNavCollapsed] = useState(false)
+  const [logoutError, setLogoutError] = useState('')
+  const [logoutPending, setLogoutPending] = useState(false)
 
   const { data: versionData } = useQuery({
     queryKey: ['app-version'],
@@ -37,14 +39,15 @@ export function AppShell() {
     return { onlineCount: online, offlineCount: offline, pendingCount: pending }
   }, [servers])
 
-  const handleLogout = () => {
-    queryClient.clear()
-    logout()
-    navigate('/login')
+  const handleLogout = async () => {
+    setLogoutError('')
+    setLogoutPending(true)
+    try { await logout(); queryClient.clear(); navigate('/login') } catch { setLogoutError('Could not sign out. Retry.') } finally { setLogoutPending(false) }
   }
 
   const navItems = [
     { to: '/', icon: LayoutDashboard, label: 'Fleet Dashboard' },
+    { to: '/applications', icon: AppWindow, label: 'Applications' },
     ...(hasCapability(user, 'audit.read') ? [{ to: '/audit-logs', icon: ScrollText, label: 'Audit Logs' }] : []),
     { to: '/settings', icon: Settings, label: 'Settings' },
   ]
@@ -80,6 +83,7 @@ export function AppShell() {
           <button
             type="button"
             onClick={handleLogout}
+            disabled={logoutPending}
             className="text-text-muted hover:text-text-primary transition-colors"
             title="Sign out"
           >
@@ -87,6 +91,7 @@ export function AppShell() {
           </button>
         </div>
       </header>
+      {logoutError && <p role="alert" className="px-4 py-2 text-status-error text-xs">{logoutError}</p>}
 
       <div className="flex flex-1">
         {/* Left Sidebar */}

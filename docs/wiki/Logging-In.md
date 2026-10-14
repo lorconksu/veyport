@@ -52,7 +52,7 @@ Veyport enforces two-factor authentication (2FA) for every account with no excep
 
 1. **Password verification** - You submit your username and password. If correct, the server issues a short-lived session token that is only valid for the TOTP step.
 2. **TOTP verification** - You enter the 6-digit code from your authenticator app. The server verifies the code against your stored TOTP secret.
-3. **Session issued** - Once both factors are verified, the server issues a full session cookie. You are redirected to the Fleet Dashboard.
+3. **Session issued** - Once both factors are verified, the server issues a full session cookie. You are redirected to the Fleet Dashboard, or returned to the validated application launch page if you started from an application link. That return is restricted to the Veyport application launch route.
 
 If either step fails, no session is created. The two-step process ensures that a compromised password alone is not enough to gain access.
 

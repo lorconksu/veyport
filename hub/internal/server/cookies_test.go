@@ -68,7 +68,7 @@ func TestSetAuthCookies(t *testing.T) {
 	})
 	assertCookie(t, cookies, cookieExpectation{
 		name: cookieRefresh, value: "refresh456", httpOnly: true,
-		path: testRefreshPath, maxAge: 604800,
+		path: "/", maxAge: 604800,
 	})
 	assertCookie(t, cookies, cookieExpectation{
 		name: cookieCSRF, httpOnly: false,
@@ -82,15 +82,15 @@ func TestClearAuthCookies(t *testing.T) {
 
 	cookies := w.Result().Cookies()
 	// 3 current cookies + 3 legacy v1.x cookies cleared in the same response.
-	if len(cookies) != 6 {
-		t.Fatalf("expected 6 cookies, got %d", len(cookies))
+	if len(cookies) != 9 {
+		t.Fatalf("expected 9 cookies, got %d", len(cookies))
 	}
 
 	for _, c := range cookies {
 		if c.MaxAge != -1 {
 			t.Errorf("cookie %q MaxAge = %d, want -1", c.Name, c.MaxAge)
 		}
-		wantHTTPOnly := c.Name != cookieCSRF && c.Name != legacyCookieCSRF
+		wantHTTPOnly := c.Name != cookieCSRF && c.Name != legacyCookieCSRF && c.Name != "veyport_csrf"
 		if c.HttpOnly != wantHTTPOnly {
 			t.Errorf("cookie %q deletion HttpOnly=%v, want %v", c.Name, c.HttpOnly, wantHTTPOnly)
 		}

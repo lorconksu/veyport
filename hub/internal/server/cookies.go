@@ -8,9 +8,9 @@ import (
 )
 
 const (
-	cookieAccess  = "veyport_access"
-	cookieRefresh = "veyport_refresh"
-	cookieCSRF    = "veyport_csrf"
+	cookieAccess  = "__Host-veyport_access"
+	cookieRefresh = "__Host-veyport_refresh"
+	cookieCSRF    = "__Host-veyport_csrf"
 	bearerPrefix  = "Bearer "
 
 	// Legacy v1.x cookie names — cleared on logout for one release so browsers
@@ -37,7 +37,7 @@ func setAuthCookies(w http.ResponseWriter, accessToken, refreshToken string) {
 	http.SetCookie(w, &http.Cookie{
 		Name:     cookieRefresh,
 		Value:    refreshToken,
-		Path:     "/api/auth/refresh",
+		Path:     "/",
 		MaxAge:   604800, // 7 days
 		HttpOnly: true,
 		Secure:   true,
@@ -63,7 +63,7 @@ func setAuthCookies(w http.ResponseWriter, accessToken, refreshToken string) {
 // the legacy v1.x cookie names so browsers that still carry them from a pre-v2
 // session drop them on logout.
 func clearAuthCookies(w http.ResponseWriter) {
-	for _, name := range []string{cookieAccess, legacyCookieAccess} {
+	for _, name := range []string{cookieAccess, "veyport_access", legacyCookieAccess} {
 		http.SetCookie(w, &http.Cookie{
 			Name:     name,
 			Path:     "/",
@@ -73,17 +73,21 @@ func clearAuthCookies(w http.ResponseWriter) {
 			SameSite: http.SameSiteStrictMode,
 		})
 	}
-	for _, name := range []string{cookieRefresh, legacyCookieRefresh} {
+	for _, name := range []string{cookieRefresh, "veyport_refresh", legacyCookieRefresh} {
+		path := "/api/auth/refresh"
+		if name == cookieRefresh {
+			path = "/"
+		}
 		http.SetCookie(w, &http.Cookie{
 			Name:     name,
-			Path:     "/api/auth/refresh",
+			Path:     path,
 			MaxAge:   -1,
 			HttpOnly: true,
 			Secure:   true,
 			SameSite: http.SameSiteStrictMode,
 		})
 	}
-	for _, name := range []string{cookieCSRF, legacyCookieCSRF} {
+	for _, name := range []string{cookieCSRF, "veyport_csrf", legacyCookieCSRF} {
 		// Clear the intentionally browser-readable CSRF cookie, matching issuance.
 		// nosemgrep: go.lang.security.audit.net.cookie-missing-httponly.cookie-missing-httponly
 		http.SetCookie(w, &http.Cookie{
@@ -96,11 +100,26 @@ func clearAuthCookies(w http.ResponseWriter) {
 	}
 }
 
+func uniquePortalCookie(r *http.Request, name string) string {
+	value := ""
+	count := 0
+	for _, c := range r.Cookies() {
+		if c.Name == name {
+			count++
+			value = c.Value
+		}
+	}
+	if count != 1 {
+		return ""
+	}
+	return value
+}
+
 // readAccessToken reads the access token from the cookie first, falling back
 // to the Authorization: Bearer header.
 func readAccessToken(r *http.Request) string {
-	if c, err := r.Cookie(cookieAccess); err == nil && c.Value != "" {
-		return c.Value
+	if value := uniquePortalCookie(r, cookieAccess); value != "" {
+		return value
 	}
 	auth := r.Header.Get("Authorization")
 	if strings.HasPrefix(auth, bearerPrefix) {
@@ -125,8 +144,8 @@ func readCSRFToken(r *http.Request) string {
 
 // readCSRFCookie reads the CSRF cookie value from the request.
 func readCSRFCookie(r *http.Request) string {
-	if c, err := r.Cookie(cookieCSRF); err == nil {
-		return c.Value
+	if value := uniquePortalCookie(r, cookieCSRF); value != "" {
+		return value
 	}
 	return ""
 }

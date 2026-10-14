@@ -14,6 +14,7 @@
 
 **Administration**
 - [[Audit Logs]]
+- [[Application Access]]
 - [[Settings]]
 
 **Setup & Deployment**

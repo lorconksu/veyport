@@ -61,6 +61,9 @@ func runServer() error {
 	securityStateDir := flag.String("security-state-dir", "", "private persistent security state directory (default beside database)")
 	auditRuntimePath := flag.String("audit-runtime-config", "", "private operator-pinned audit runtime configuration (optional in Standard)")
 	executionSpoolDir := flag.String("execution-spool-dir", "", "private pre-provisioned encrypted filesystem directory for protected execution input")
+	applicationDomain := flag.String("application-domain", "", "exact application hostname namespace (e.g. apps.yiucloud.com)")
+	applicationControlDenyAuthorities := flag.String("application-control-deny-authorities", "", "CSV of additional protected Hub host:port authorities (published/private control mappings)")
+	applicationPortalOrigin := flag.String("application-portal-origin", "", "fixed HTTPS portal origin for application login")
 	showVersion := flag.Bool("version", false, "print version and exit")
 	flag.Parse()
 	if *showVersion {
@@ -164,6 +167,8 @@ func runServer() error {
 	}
 
 	srv := server.New(server.Config{
+		ApplicationDomain:         *applicationDomain,
+		ApplicationPortalOrigin:   *applicationPortalOrigin,
 		SecurityTransition:        transition,
 		SecurityDestinationTester: destinationTester,
 		SecurityAllowedHosts:      allowedAuditHosts,
@@ -193,20 +198,30 @@ func runServer() error {
 	agentUpdates.SetArtifactResolver(srv.ResolveAgentArtifact)
 	grpcExternalHost := resolveGRPCExternalHost(*grpcExternalAddr)
 
+	applicationTunnels := grpcserver.NewApplicationTunnels(st, cm, srv.ValidateApplicationTarget)
+	defer applicationTunnels.Close()
+	forbiddenEndpoints, endpointErr := applicationProtectedEndpoints([]string{*addr, *grpcAddr, *sshAddr}, *applicationPortalOrigin)
+	if endpointErr != nil {
+		return fmt.Errorf("application listener policy: %w", endpointErr)
+	}
+	applicationTunnels.SetForbiddenEndpoints(forbiddenEndpoints)
+	applicationTunnels.SetForbiddenAuthorities(applicationProtectedAuthorities(*applicationPortalOrigin, *grpcExternalAddr, *applicationControlDenyAuthorities))
+	srv.SetApplicationDialer(applicationTunnels)
 	grpcSrv := grpcserver.New(grpcserver.Config{
-		Addr:              *grpcAddr,
-		ExternalHostname:  grpcExternalHost,
-		Store:             st,
-		ConnMgr:           cm,
-		Pending:           pending,
-		LogSessions:       logSessions,
-		TerminalSessions:  terminalSessions,
-		ExecutionSessions: executionSessions,
-		AgentUpdates:      agentUpdates,
-		CACert:            caCert,
-		CAKey:             caKey,
-		Notifier:          notifier,
-		StorageKey:        storageKey,
+		ApplicationTunnels: applicationTunnels,
+		Addr:               *grpcAddr,
+		ExternalHostname:   grpcExternalHost,
+		Store:              st,
+		ConnMgr:            cm,
+		Pending:            pending,
+		LogSessions:        logSessions,
+		TerminalSessions:   terminalSessions,
+		ExecutionSessions:  executionSessions,
+		AgentUpdates:       agentUpdates,
+		CACert:             caCert,
+		CAKey:              caKey,
+		Notifier:           notifier,
+		StorageKey:         storageKey,
 	})
 
 	// The gateway shares the CA, host key and terminal machinery with the HTTP

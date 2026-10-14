@@ -7,7 +7,7 @@ package model
 // stays inline, so this file's use of constants is inconsistent rather than a
 // deliberate convention.
 const (
-	AuditCatalogLastUpdated      = "2026-09-06T12:00:00Z"
+	AuditCatalogLastUpdated      = "2026-10-14T07:00:00Z"
 	auditCategoryUserManagement  = "User Management"
 	auditCategoryAgentLifecycle  = "Agent Lifecycle"
 	auditCategoryFileAccess      = "File Access"
@@ -19,6 +19,16 @@ const (
 )
 
 var AuditCatalog = []AuditCatalogEntry{
+	{Action: "application.created", Label: "Application created", Category: "Application Access", Outcome: AuditOutcomeSuccess, ActorType: AuditActorTypeUser, ResourceType: "application"},
+	{Action: "application.updated", Label: "Application updated", Category: "Application Access", Outcome: AuditOutcomeSuccess, ActorType: AuditActorTypeUser, ResourceType: "application"},
+	{Action: "application.deleted", Label: "Application deleted", Category: "Application Access", Outcome: AuditOutcomeSuccess, ActorType: AuditActorTypeUser, ResourceType: "application"},
+	{Action: "application.grants_changed", Label: "Application grants changed", Category: "Application Access", Outcome: AuditOutcomeSuccess, ActorType: AuditActorTypeUser, ResourceType: "application"},
+	{Action: "application.group_changed", Label: "Application local group changed", Category: "Application Access", Outcome: AuditOutcomeSuccess, ActorType: AuditActorTypeUser, ResourceType: "application"},
+	{Action: "application.policy_changed", Label: "Application session policy changed", Category: "Application Access", Outcome: AuditOutcomeSuccess, ActorType: AuditActorTypeUser, ResourceType: "application"},
+	{Action: "application.launched", Label: "Application launched", Category: "Application Access", Outcome: AuditOutcomeSuccess, ActorType: AuditActorTypeUser, ResourceType: "application"},
+	{Action: "application.denied", Label: "Application access refused", Category: "Application Access", Outcome: AuditOutcomeFailure, ActorType: AuditActorTypeUser, ResourceType: "application"},
+	{Action: "application.request", Label: "Application request metadata", Category: "Application Access", Outcome: AuditOutcomeSuccess, ActorType: AuditActorTypeUser, ResourceType: "application"},
+	{Action: "application.session_ended", Label: "Application session ended", Category: "Application Access", Outcome: AuditOutcomeSuccess, ActorType: AuditActorTypeSystem, ResourceType: "application"},
 	{Action: AuditExecutionSubmitted, Label: "Command submitted", Category: auditCategorySSHGateway, Outcome: AuditOutcomeSuccess, ActorType: AuditActorTypeUser, ResourceType: "execution"},
 	{Action: AuditExecutionPrepared, Label: "Command identity prepared", Category: auditCategorySSHGateway, Outcome: AuditOutcomeSuccess, ActorType: AuditActorTypeUser, ResourceType: "execution"},
 	{Action: AuditExecutionDispatched, Label: "Command dispatched", Category: auditCategorySSHGateway, Outcome: AuditOutcomeSuccess, ActorType: AuditActorTypeUser, ResourceType: "execution"},

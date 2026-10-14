@@ -11,7 +11,6 @@ var csrfExemptPaths = []string{
 	"/api/auth/login",
 	"/api/auth/register",
 	"/api/auth/refresh",
-	"/api/auth/logout",
 	"/api/auth/login/totp",
 }
 
@@ -44,6 +43,13 @@ func csrfTokensMatch(r *http.Request) bool {
 // are also exempt since they originate from non-browser clients.
 func (s *Server) csrfMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/api/auth/logout" && !isUsingBearerAuth(r) && (uniquePortalCookie(r, cookieAccess) != "" || uniquePortalCookie(r, cookieRefresh) != "" || readCSRFCookie(r) != "") {
+			if r.Header.Get("Origin") == "" || !isValidOrigin(r, r.Header.Get("Origin"), s.requestScheme(r)) || !csrfTokensMatch(r) {
+				respondError(w, http.StatusForbidden, "logout origin or CSRF refused")
+				return
+			}
+		}
+
 		if !isMutationMethod(r.Method) || isUsingBearerAuth(r) || isCSRFExemptPath(r.URL.Path) {
 			next.ServeHTTP(w, r)
 			return

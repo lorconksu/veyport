@@ -73,6 +73,13 @@ jobs:
       - name: Release helper tests
         run: python3 -m unittest discover -s scripts/release -p "test_*.py"
 
+      - name: Application fixture lab guards and streaming compatibility
+        run: |
+          python3 -m unittest discover -s infra/application-access -p "test_*.py"
+          cd infra/application-access/fixture
+          go vet ./...
+          go test -race ./...
+
       - name: Hub tests outside the separately sharded server package
         run: |
           cd hub
@@ -384,12 +391,13 @@ jobs:
       - name: Create frontend embed stub
         run: mkdir -p hub/web/dist && touch hub/web/dist/index.html
 
-      - name: govulncheck all four source modules
+      - name: govulncheck production and application fixture source modules
         run: |
           set -euo pipefail
           mkdir -p source-vulnerability-results
-          for module in hub agent cli proto; do
-            (cd "$module" && govulncheck -show verbose ./...) 2>&1 | tee "source-vulnerability-results/$module.txt"
+          for module in hub agent cli proto infra/application-access/fixture; do
+            report="${module//\//-}"
+            (cd "$module" && govulncheck -show verbose ./...) 2>&1 | tee "source-vulnerability-results/$report.txt"
           done
 
       - name: Upload source vulnerability evidence

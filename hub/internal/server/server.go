@@ -16,6 +16,7 @@ import (
 	"github.com/google/uuid"
 	"golang.org/x/crypto/ssh"
 
+	"github.com/wyiu/veyport/hub/internal/applicationtransport"
 	"github.com/wyiu/veyport/hub/internal/auth"
 	"github.com/wyiu/veyport/hub/internal/authorization"
 	"github.com/wyiu/veyport/hub/internal/connmgr"
@@ -40,6 +41,14 @@ type ReEnrollReleaser interface {
 }
 
 type Server struct {
+	applicationAuditMu          sync.Mutex
+	applicationDomain           string
+	applicationPortalOrigin     string
+	applicationDialer           applicationtransport.Dialer
+	applicationMembershipReader ApplicationMembershipReader
+	applicationDirectory        *applicationDirectoryCache
+	applicationStreams          *applicationConnections
+
 	originalAccess            OriginalAccessConfig
 	originalRecovery          *originalRecovery
 	securityTransition        authorization.TransitionConfig
@@ -107,6 +116,11 @@ func (s *Server) now() time.Time {
 }
 
 type Config struct {
+	ApplicationDomain           string
+	ApplicationPortalOrigin     string
+	ApplicationDialer           applicationtransport.Dialer
+	ApplicationMembershipReader ApplicationMembershipReader
+
 	OriginalAccess            OriginalAccessConfig
 	SecurityTransition        authorization.TransitionConfig
 	SecurityDestinationTester SecurityDestinationTester
@@ -150,6 +164,13 @@ func New(cfg Config) *Server {
 	}
 
 	s := &Server{
+		applicationDomain:           cfg.ApplicationDomain,
+		applicationPortalOrigin:     cfg.ApplicationPortalOrigin,
+		applicationDialer:           cfg.ApplicationDialer,
+		applicationMembershipReader: cfg.ApplicationMembershipReader,
+		applicationDirectory:        newApplicationDirectoryCache(),
+		applicationStreams:          newApplicationConnections(),
+
 		originalAccess:            cfg.OriginalAccess,
 		securityTransition:        cfg.SecurityTransition,
 		securityDestinationTester: cfg.SecurityDestinationTester,
@@ -202,7 +223,11 @@ func New(cfg Config) *Server {
 		MaxHeaderBytes:    1 << 20,
 	}
 
-	s.startSessionPruner(sessionPruneInterval, sessionPruneRetention)
+	pruneInterval := sessionPruneInterval
+	if s.applicationDomain != "" {
+		pruneInterval = time.Minute
+	}
+	s.startSessionPruner(pruneInterval, sessionPruneRetention)
 	s.startOriginalRecovery()
 
 	return s
@@ -256,6 +281,7 @@ func (s *Server) Start() error {
 }
 
 func (s *Server) Shutdown(ctx context.Context) error {
+	s.applicationStreams.closeAll()
 	s.stopOriginalRecovery()
 	s.stopSessionPruner()
 	return s.httpServer.Shutdown(ctx)

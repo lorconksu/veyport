@@ -1198,6 +1198,9 @@ func (c *Client) startRecvLoopForSession(stream pb.AgentService_ConnectClient, s
 			if executions != nil && executions.handle(msg) {
 				continue
 			}
+			if activities != nil && activities.applications != nil && activities.applications.handle(msg) {
+				continue
+			}
 			if c.handleUpdateMessage(stream.Context(), msg, sendCh) {
 				continue
 			}
@@ -1259,6 +1262,13 @@ func (c *Client) connectAndStream(ctx context.Context) error {
 	if execErr != nil {
 		log.Printf("noninteractive execution unavailable: %v", execErr)
 	}
+	applications, applicationErr := c.newApplicationTransport(ctx, budget, sendCh, cancelSession)
+	if applicationErr != nil {
+		log.Printf("application transport unavailable: %v", applicationErr)
+	} else {
+		activities.applications = applications
+		defer applications.close()
+	}
 	capabilities := &pb.ExecutionCapabilities{ProtocolVersion: 1}
 	if executions != nil {
 		capabilities = executions.manager.Capabilities()
@@ -1269,6 +1279,11 @@ func (c *Client) connectAndStream(ctx context.Context) error {
 			executions.close()
 		}
 		return fmt.Errorf("send execution capabilities: %w", err)
+	}
+	if applications != nil {
+		if err := stream.Send(&pb.AgentMessage{Payload: &pb.AgentMessage_ApplicationCapabilities{ApplicationCapabilities: applications.capabilities()}}); err != nil {
+			return fmt.Errorf("send application capabilities: %w", err)
+		}
 	}
 	if c.updates != nil {
 		c.updates.Recheck()

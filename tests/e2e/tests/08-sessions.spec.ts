@@ -162,7 +162,7 @@ async function seedSessionCookies(context: BrowserContext, access: string, refre
   const expires = Math.floor(Date.now() / 1000)
   await context.addCookies([
     {
-      name: 'veyport_access',
+      name: '__Host-veyport_access',
       value: access,
       domain: parsed.hostname,
       path: '/',
@@ -172,10 +172,10 @@ async function seedSessionCookies(context: BrowserContext, access: string, refre
       sameSite: 'Strict',
     },
     {
-      name: 'veyport_refresh',
+      name: '__Host-veyport_refresh',
       value: refresh,
       domain: parsed.hostname,
-      path: '/api/auth/refresh',
+      path: '/',
       expires: expires + 604800,
       httpOnly: true,
       secure,
@@ -184,7 +184,7 @@ async function seedSessionCookies(context: BrowserContext, access: string, refre
     {
       // Double-submit CSRF: the SPA echoes whatever the cookie holds, so any
       // value works as long as cookie and header agree.
-      name: 'veyport_csrf',
+      name: '__Host-veyport_csrf',
       value: 'e2e-csrf',
       domain: parsed.hostname,
       path: '/',

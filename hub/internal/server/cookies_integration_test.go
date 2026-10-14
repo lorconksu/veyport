@@ -123,8 +123,8 @@ func TestCookieAuth_LoginSetsCookies(t *testing.T) {
 	if !refresh.HttpOnly {
 		t.Error("veyport_refresh should be httpOnly")
 	}
-	if refresh.Path != testRefreshPath {
-		t.Errorf("veyport_refresh path = %q, want /api/auth/refresh", refresh.Path)
+	if refresh.Path != "/" {
+		t.Errorf("veyport_refresh path = %q, want /", refresh.Path)
 	}
 
 	if csrf == nil {
@@ -243,6 +243,7 @@ func TestCookieAuth_PostWithCSRF(t *testing.T) {
 	req := httptest.NewRequest("PUT", testPasswordPath, bytes.NewReader(body))
 	addCookies(req, cookies)
 	req.Header.Set(testCSRFTokenHdr, csrfCookie.Value)
+	req.Header.Set("Origin", "http://example.com")
 	rec := httptest.NewRecorder()
 	s.routes().ServeHTTP(rec, req)
 
@@ -315,6 +316,7 @@ func TestCookieAuth_Logout(t *testing.T) {
 	req := httptest.NewRequest("POST", testLogoutPath, nil)
 	addCookies(req, cookies)
 	req.Header.Set(testCSRFTokenHdr, csrfCookie.Value)
+	req.Header.Set("Origin", "http://example.com")
 	rec := httptest.NewRecorder()
 	s.routes().ServeHTTP(rec, req)
 

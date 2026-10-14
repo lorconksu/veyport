@@ -79,6 +79,15 @@ func (s *Server) runAndLogSessionPrune(retention time.Duration) {
 // ago, relative to the server's clock (s.now, overridable in tests via
 // SetClock). It returns the number of rows removed.
 func (s *Server) runSessionPrune(retention time.Duration) (int64, error) {
+	policy := s.applicationPolicy()
+	if err := s.store.ExpireApplicationSessions(s.now(), time.Duration(policy.IdleSeconds)*time.Second, time.Duration(policy.MaxSeconds)*time.Second); err != nil {
+		return 0, err
+	}
+	s.auditApplicationSessionEnds()
+	if err := s.store.PruneApplicationRecords(s.now(), retention); err != nil {
+		return 0, err
+	}
+	s.auditApplicationSessionEnds()
 	cutoff := s.now().Add(-retention)
 	return s.store.PruneEndedSessions(cutoff)
 }

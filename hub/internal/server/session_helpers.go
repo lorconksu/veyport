@@ -336,6 +336,22 @@ func (s *Server) endSessions(
 	ids []string, all bool, exceptID *string, reason string,
 ) (ended, shells int) {
 	now := s.now().UTC()
+	if all {
+		except := ""
+		if exceptID != nil {
+			except = *exceptID
+		}
+		if err := s.store.RevokeUserApplications(target.ID, except, reason, now); err != nil {
+			log.Printf("application revocation failed: %v", err)
+		}
+	} else {
+		for _, id := range ids {
+			if err := s.store.RevokeApplicationFamily(target.ID, id, reason, now); err != nil {
+				log.Printf("application family revocation failed: %v", err)
+			}
+		}
+	}
+	defer s.auditApplicationSessionEnds()
 	endedIDs := s.endSessionRows(target, ids, all, exceptID, reason, actorID, now)
 
 	message := shellCloseMessage(reason)

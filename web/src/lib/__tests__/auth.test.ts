@@ -5,7 +5,7 @@ import type { AuditPolicyResponse } from '@/types/security'
 describe('auth', () => {
   beforeEach(() => {
     // Clear cookies
-    document.cookie = 'veyport_csrf=; expires=Thu, 01 Jan 1970 00:00:00 GMT'
+    document.cookie = '__Host-veyport_csrf=; expires=Thu, 01 Jan 1970 00:00:00 GMT; Path=/; Secure'
     vi.restoreAllMocks()
   })
 
@@ -15,13 +15,13 @@ describe('auth', () => {
     })
 
     it('returns the CSRF token from cookie', () => {
-      document.cookie = 'veyport_csrf=test-csrf-token-123'
+      document.cookie = '__Host-veyport_csrf=test-csrf-token-123; Path=/; Secure'
       expect(getCSRFToken()).toBe('test-csrf-token-123')
     })
 
     it('returns the CSRF token when multiple cookies exist', () => {
       document.cookie = 'other_cookie=abc'
-      document.cookie = 'veyport_csrf=my-csrf-value'
+      document.cookie = '__Host-veyport_csrf=my-csrf-value; Path=/; Secure'
       document.cookie = 'another=xyz'
       expect(getCSRFToken()).toBe('my-csrf-value')
     })
@@ -37,16 +37,24 @@ describe('auth', () => {
       expect(mockFetch).toHaveBeenCalledWith('/api/auth/logout', {
         method: 'POST',
         credentials: 'same-origin',
+        headers: { 'X-CSRF-Token': '' },
+        signal: expect.any(AbortSignal),
       })
 
       vi.unstubAllGlobals()
     })
 
-    it('does not throw when fetch fails', async () => {
+    it.each([403, 500])('does not claim signout after server%d refuses revocation', async status => {
+      vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response('', { status })))
+      await expect(clearTokens()).rejects.toThrow('Could not sign out. Retry.')
+      vi.unstubAllGlobals()
+    })
+
+    it('reports a retryable error when fetch fails', async () => {
       const mockFetch = vi.fn().mockRejectedValue(new Error('Network error'))
       vi.stubGlobal('fetch', mockFetch)
 
-      await expect(clearTokens()).resolves.toBeUndefined()
+      await expect(clearTokens()).rejects.toThrow('Could not sign out. Retry.')
 
       vi.unstubAllGlobals()
     })

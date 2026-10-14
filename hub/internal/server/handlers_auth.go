@@ -369,9 +369,7 @@ func (s *Server) handleLoginTOTP(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleRefresh(w http.ResponseWriter, r *http.Request) {
 	// Read refresh token from cookie first, fall back to request body
 	refreshTokenStr := ""
-	if c, err := r.Cookie(cookieRefresh); err == nil {
-		refreshTokenStr = c.Value
-	}
+	refreshTokenStr = uniquePortalCookie(r, cookieRefresh)
 	if refreshTokenStr == "" {
 		var req model.RefreshRequest
 		if err := decodeJSON(r, &req); err != nil {
@@ -440,15 +438,24 @@ func (s *Server) handleRefresh(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleLogout(w http.ResponseWriter, r *http.Request) {
-	// Blacklist the access token if present
-	if tokenStr := readAccessToken(r); tokenStr != "" {
-		if claims, err := auth.ValidateToken(s.jwtSecret, tokenStr); err == nil {
-			if claims.ID != "" {
-				s.tokenBlacklist.Add(claims.ID, claims.ExpiresAt.Time)
-			}
-			s.endSessionOnLogout(claims)
+	tokens := []string{readAccessToken(r), uniquePortalCookie(r, cookieRefresh)}
+	for _, token := range tokens {
+		claims, err := auth.ValidateToken(s.jwtSecret, token)
+		if err != nil || (claims.TokenType != auth.TokenTypeAccess && claims.TokenType != auth.TokenTypeRefresh) {
+			continue
 		}
+		if claims.TokenType == auth.TokenTypeAccess && claims.ID != "" {
+			s.tokenBlacklist.Add(claims.ID, claims.ExpiresAt.Time)
+		}
+		if claims.SessionID != "" {
+			if err = s.store.RevokeApplicationFamily(claims.Subject, claims.SessionID, model.SessionEndLogout, s.now()); err != nil {
+				respondError(w, 500, "logout could not revoke application access")
+				return
+			}
+		}
+		s.endSessionOnLogout(claims)
 	}
+	s.auditApplicationSessionEnds()
 	clearAuthCookies(w)
 	w.WriteHeader(http.StatusNoContent)
 }

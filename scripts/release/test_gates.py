@@ -113,9 +113,9 @@ if os.environ['TAG_MODE']=='create-lostreply': print('private-upstream-canary',f
 """)
             fake_gh.chmod(0o700)
             env = {**os.environ, "PATH": str(tools) + os.pathsep + os.environ["PATH"], "REGISTRY_FIXTURE": str(root), "GITHUB_REPOSITORY": "fixture/repo"}
-            def run(mode, tag_mode="match", prototype=True):
+            def run(mode, tag_mode="match", prototype=True, prototype_channel="ssh-passthrough"):
                 (root / "calls").write_text("")
-                tag, version = ("prototype-ssh-passthrough.1", "2.0.50-prototype.1") if prototype else ("v2.0.50", "2.0.50")
+                tag, version = ("prototype-" + prototype_channel + ".1", "2.0.50-prototype.1") if prototype else ("v2.0.50", "2.0.50")
                 result = subprocess.run(["bash", str(script), str(delivery), tag, version, str(prototype).lower(), "a" * 40], env={**env, "REGISTRY_MODE": mode, "TAG_MODE": tag_mode}, capture_output=True, timeout=5)
                 calls = [json.loads(line) for line in (root / "calls").read_text().splitlines()]
                 return result, calls
@@ -136,6 +136,13 @@ if os.environ['TAG_MODE']=='create-lostreply': print('private-upstream-canary',f
             result, calls = run("match")
             self.assertEqual(result.returncode, 0, result.stderr)
             self.assertFalse(any(call[0] == "copy" for call in calls))
+            for repository in ("veyport", "veyport-audit-ingest", "veyport-audit-export"):
+                (root / ("docker:__docker.io_yiucloud_" + repository)).unlink()
+            result, calls = run("absent", prototype_channel="application-access")
+            self.assertEqual(result.returncode, 0, result.stderr)
+            copies = [call for call in calls if call[0] == "copy"]
+            self.assertEqual(len(copies), 3)
+            self.assertTrue(all(call[-1].endswith(":prototype-application-access.1") for call in copies))
             for prototype in (True, False):
                 for tag_mode in ("mismatch", "outage", "malformed", "orphan", "duplicate", "unrelated"):
                     result, calls = run("match", tag_mode, prototype)
@@ -185,6 +192,32 @@ if os.environ['TAG_MODE']=='create-lostreply': print('private-upstream-canary',f
                 identity(version, tag, "a" * 40, ref, True)
         with self.assertRaises(ValueError):
             identity("2.0.50", "v2.0.50", "a" * 40, "refs/heads/main", False)
+
+    def test_explicit_prototype_channels_require_feature_branch_and_exact_revision(self):
+        for channel in ("ssh-passthrough", "application-access"):
+            for number in ("1", "12"):
+                tag = "prototype-" + channel + "." + number
+                with self.subTest(tag=tag):
+                    self.assertEqual(identity("2.0.53-prototype.1", tag, "a" * 40, "refs/heads/feat/application-access", True), {
+                        "version": "2.0.53-prototype.1", "tag": tag,
+                        "revision": "a" * 40, "prototype": True,
+                    })
+                    for ref in ("refs/heads/main", "refs/tags/" + tag, "feat/application-access"):
+                        with self.assertRaises(ValueError):
+                            identity("2.0.53-prototype.1", tag, "a" * 40, ref, True)
+                    for revision in ("a" * 7, "a" * 39, "a" * 41, "g" * 40, "a" * 40 + "\n"):
+                        with self.assertRaises(ValueError):
+                            identity("2.0.53-prototype.1", tag, revision, "refs/heads/feature", True)
+                    with self.assertRaises(ValueError):
+                        identity("2.0.53-prototype.1", tag, "a" * 40, "refs/tags/" + tag, False)
+
+    def test_prototype_tag_allowlist_rejects_other_channels_and_malformed_suffixes(self):
+        tags = ("prototype-other.1", "prototype-application-access-extra.1", "prototype-application-access", "latest", "staging", "v2.0.53")
+        for channel in ("ssh-passthrough", "application-access"):
+            tags += tuple("prototype-" + channel + suffix for suffix in (".0", ".01", ".-1", ".1.1", ".1\nX=bad", ".1;echo bad"))
+        for tag in tags:
+            with self.subTest(tag=tag), self.assertRaises(ValueError):
+                identity("2.0.53-prototype.1", tag, "a" * 40, "refs/heads/feature", True)
 
     def test_lint_only_new_lines_without_excluding_changed_files(self):
         self.assertEqual(changed_lines("@@ -2,0 +3,2 @@\n+a\n+b\n@@ -8 +10 @@\n-c\n+d\n@@ -12,2 +14,0 @@\n-old\n-old\n"), {3, 4, 10})

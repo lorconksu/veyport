@@ -3,18 +3,21 @@ import type { AuditPolicyResponse } from '@/types/security'
 
 // CSRF token is stored in a non-httpOnly cookie readable by JS
 export function getCSRFToken(): string {
-  const match = /(?:^|;\s*)veyport_csrf=([^;]+)/.exec(document.cookie)
+  const match = /(?:^|;\s*)__Host-veyport_csrf=([^;]+)/.exec(document.cookie)
   return match ? match[1] : ''
 }
 
 // Access and refresh tokens are now in httpOnly cookies — not accessible from JS.
 // clearTokens calls the server logout endpoint to clear cookies
 export async function clearTokens(): Promise<void> {
+  const controller = new AbortController()
+  const timeout = setTimeout(() => controller.abort(), 10_000)
   try {
-    await fetch('/api/auth/logout', { method: 'POST', credentials: 'same-origin' })
+    const response = await fetch('/api/auth/logout', { method: 'POST', credentials: 'same-origin', headers: { 'X-CSRF-Token': getCSRFToken() }, signal: controller.signal })
+    if (!response.ok) throw new Error('Could not sign out. Retry.')
   } catch {
-    // Best-effort — if server is unreachable, cookies will expire naturally
-  }
+    throw new Error('Could not sign out. Retry.')
+  } finally { clearTimeout(timeout) }
 }
 export function assignedRoles(user: User | null | undefined): AssignedRole[] {
   if (!user) return []

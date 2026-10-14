@@ -1,3 +1,4 @@
+import { safeApplicationReturn } from '@/lib/application-launch'
 import { useState, useEffect, useRef, useCallback } from 'react'
 import QRCode from 'qrcode'
 import { useLocation, useNavigate } from 'react-router-dom'
@@ -55,7 +56,7 @@ export function SetupTOTPPage() {
       })
 
       login(resp.user)
-      navigate('/')
+      navigate(safeApplicationReturn((location.state as { returnTo?: unknown } | null)?.returnTo), { replace: true })
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Verification failed')
       reset()

@@ -168,7 +168,7 @@ async function signInAdmin(browser: Browser): Promise<{
   const expires = Math.floor(Date.now() / 1000)
   await context.addCookies([
     {
-      name: 'veyport_access',
+      name: '__Host-veyport_access',
       value: accessToken,
       domain: parsedBaseURL.hostname,
       path: '/',
@@ -178,17 +178,17 @@ async function signInAdmin(browser: Browser): Promise<{
       sameSite: 'Strict',
     },
     {
-      name: 'veyport_refresh',
+      name: '__Host-veyport_refresh',
       value: refreshToken,
       domain: parsedBaseURL.hostname,
-      path: '/api/auth/refresh',
+      path: '/',
       expires: expires + 604800,
       httpOnly: true,
       secure,
       sameSite: 'Strict',
     },
     {
-      name: 'veyport_csrf',
+      name: '__Host-veyport_csrf',
       value: 'e2e-csrf',
       domain: parsedBaseURL.hostname,
       path: '/',
