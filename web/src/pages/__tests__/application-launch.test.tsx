@@ -3,7 +3,11 @@ import { MemoryRouter, Route, Routes } from 'react-router-dom'
 import { vi, it, expect } from 'vitest'
 import ApplicationLaunch from '../application-launch'
 import { launchApplication } from '@/lib/application-launch'
-vi.mock('@/lib/application-launch', async importOriginal => ({ ...await importOriginal<typeof import('@/lib/application-launch')>(), launchApplication: vi.fn() }))
+type ApplicationLaunchModule = typeof import('@/lib/application-launch')
+vi.mock('@/lib/application-launch', async importOriginal => {
+  const original = await importOriginal<ApplicationLaunchModule>()
+  return { ...original, launchApplication: vi.fn() }
+})
 it('launches the validated direct link once', async () => {
   vi.mocked(launchApplication).mockResolvedValue()
   render(<MemoryRouter initialEntries={['/applications/abc/launch?path=%2Fnative']}><Routes><Route path="/applications/:id/launch" element={<ApplicationLaunch />} /></Routes></MemoryRouter>)
