@@ -142,6 +142,15 @@ The dialog shows reported operation stages and the final result. It monitors
 for up to 150 seconds while open; close and reopen it or click **Refresh
 status** to continue checking. There is no bulk update action.
 
+When a verified operation finishes, the dashboard automatically refreshes the
+reported agent version, update availability, and dialog check. After a successful
+update, the row shows the version reported by the agent and **Up to date** when
+the Hub has no newer artifact. Closing the dialog still lets the regular fleet
+polling refresh the version and recheck availability when that version changes;
+availability also refreshes every 60 seconds while the tab is visible. A request
+whose response was lost continues to show **Inspect update** until you reopen
+the dialog to reconcile its operation status.
+
 The agent must be idle. The Hub blocks new work during the update and refuses to
 start while tracked file, log, terminal, command, or other agent work is active
 or cannot be confirmed idle. Let that work finish and retry later. A successful

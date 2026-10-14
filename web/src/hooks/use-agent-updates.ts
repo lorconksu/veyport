@@ -46,7 +46,9 @@ export function useAgentUpdates(servers: Server[]) {
   }, [client, scope, visible, isAdmin])
 
   const availability = useQuery({
-    queryKey: [scope, 'availability', nodes.map(node => node.id)],
+    // A reconnect can report a new version between the regular availability
+    // polls. Recheck that displayed page as soon as the fleet observes it.
+    queryKey: [scope, 'availability', nodes.map(node => [node.id, node.agent_version])],
     enabled: isAdmin && visible && nodes.length > 0,
     staleTime: 30_000,
     refetchInterval: visible ? 60_000 : false,

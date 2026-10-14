@@ -167,6 +167,137 @@ it('shows verified success only after exact version, revision and digest evidenc
   expect(await screen.findByText('Agent update verified')).toBeInTheDocument()
 })
 
+function completeUpdate() {
+  const completed: AgentUpdate = { ...operation, state: 'succeeded', observed_version: target.version,
+    observed_revision: target.revision, observed_sha256: target.sha256 }
+  statuses.s1 = completed
+  checks.s1 = { ...checked, current: { version: target.version, revision: target.revision, sha256: target.sha256 },
+    update_available: false, operation: completed }
+  servers = [{ ...server(), agent_version: target.version }]
+}
+
+async function advancePolling(ms: number) {
+  await act(async () => { await vi.advanceTimersByTimeAsync(ms) })
+}
+
+it('refreshes the row and confirmation automatically when polling verifies completion', async () => {
+  vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval', 'Date'] })
+  renderPage()
+  const dialog = await openUpdate()
+  fireEvent.click(await within(dialog).findByRole('button', { name: 'Update agent' }))
+  await within(dialog).findByText('Update requested')
+  completeUpdate()
+  await advancePolling(2_000)
+  await within(dialog).findByText('Agent update verified')
+  expect(await screen.findByRole('button', { name: 'Up to date for node-s1' })).toBeInTheDocument()
+  const row = screen.getByText('node-s1').closest('tr')!
+  expect(within(row).getByText(target.version)).toBeInTheDocument()
+  expect(await within(dialog).findByText('No newer verified Hub agent artifact is available.')).toBeInTheDocument()
+  expect(within(dialog).queryByRole('button', { name: 'Update agent' })).not.toBeInTheDocument()
+  const reads = vi.mocked(apiFetch).mock.calls.length
+  await advancePolling(6_000)
+  expect(apiFetch).toHaveBeenCalledTimes(reads)
+  expect(apiFetchOnce).toHaveBeenCalledTimes(1)
+})
+
+it('keeps the reported version and pending outcome until the Hub verifies completion', async () => {
+  vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval', 'Date'] })
+  renderPage()
+  const dialog = await openUpdate()
+  fireEvent.click(await within(dialog).findByRole('button', { name: 'Update agent' }))
+  await within(dialog).findByText('Update requested')
+  statuses.s1 = { ...operation, state: 'confirmation_pending' }
+  await advancePolling(2_000)
+  expect(await within(dialog).findByText('Awaiting durable agent confirmation')).toBeInTheDocument()
+  expect(within(screen.getByText('node-s1').closest('tr')!).getByText('v1.0.0')).toBeInTheDocument()
+  expect(screen.getByRole('button', { name: 'Inspect update for node-s1' })).toBeInTheDocument()
+  expect(screen.queryByText('Agent update verified')).not.toBeInTheDocument()
+  expect(screen.queryByRole('button', { name: 'Up to date for node-s1' })).not.toBeInTheDocument()
+  expect(apiFetchOnce).toHaveBeenCalledTimes(1)
+})
+
+it('refreshes a completed row through normal fleet polling after closing the dialog', async () => {
+  vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval', 'Date'] })
+  renderPage()
+  const dialog = await openUpdate()
+  fireEvent.click(await within(dialog).findByRole('button', { name: 'Update agent' }))
+  await within(dialog).findByText('Update requested')
+  fireEvent.click(within(dialog).getByRole('button', { name: 'Close agent update' }))
+  const statusReads = vi.mocked(apiFetch).mock.calls.filter(([path]) => path.includes('/agent-update/status')).length
+  completeUpdate()
+  await advancePolling(10_000)
+  expect(await screen.findByRole('button', { name: 'Up to date for node-s1' })).toBeInTheDocument()
+  expect(within(screen.getByText('node-s1').closest('tr')!).getByText(target.version)).toBeInTheDocument()
+  expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
+  expect(vi.mocked(apiFetch).mock.calls.filter(([path]) => path.includes('/agent-update/status'))).toHaveLength(statusReads)
+  expect(apiFetchOnce).toHaveBeenCalledTimes(1)
+})
+
+it('reconciles a closed dialog through bounded availability polling even without a version change', async () => {
+  vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval', 'Date'] })
+  servers = [{ ...server(), agent_version: target.version }]
+  checks.s1 = { ...checked, current: { ...checked.current!, version: target.version } }
+  renderPage()
+  const dialog = await openUpdate()
+  fireEvent.click(await within(dialog).findByRole('button', { name: 'Update agent' }))
+  await within(dialog).findByText('Update requested')
+  fireEvent.click(within(dialog).getByRole('button', { name: 'Close agent update' }))
+  completeUpdate()
+  await advancePolling(60_000)
+  expect(await screen.findByRole('button', { name: 'Up to date for node-s1' })).toBeInTheDocument()
+  expect(apiFetchOnce).toHaveBeenCalledTimes(1)
+})
+
+it.each(['failed', 'rolled_back', 'expired', 'recovery_acknowledged'] as const)('refreshes eligibility after %s without promoting the target version', async state => {
+  vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval', 'Date'] })
+  renderPage()
+  const dialog = await openUpdate()
+  fireEvent.click(await within(dialog).findByRole('button', { name: 'Update agent' }))
+  await within(dialog).findByText('Update requested')
+  statuses.s1 = { ...operation, state }
+  checks.s1 = { ...checked, operation: statuses.s1 }
+  await advancePolling(2_000)
+  expect(await screen.findByRole('button', { name: 'Update available for node-s1' })).toBeInTheDocument()
+  expect(within(screen.getByText('node-s1').closest('tr')!).getByText('v1.0.0')).toBeInTheDocument()
+  expect(screen.queryByText('Agent update verified')).not.toBeInTheDocument()
+  expect(apiFetchOnce).toHaveBeenCalledTimes(1)
+})
+
+it('keeps a closed uncertain request blocking until the dialog reconciles its matching operation', async () => {
+  vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval', 'Date'] })
+  vi.mocked(apiFetchOnce).mockRejectedValue(new TypeError('Lost response'))
+  renderPage()
+  const dialog = await openUpdate()
+  fireEvent.click(await within(dialog).findByRole('button', { name: 'Update agent' }))
+  await within(dialog).findByText(/request outcome is uncertain/)
+  fireEvent.click(within(dialog).getByRole('button', { name: 'Close agent update' }))
+  completeUpdate()
+  await advancePolling(10_000)
+  await waitFor(() => expect(within(screen.getByText('node-s1').closest('tr')!).getByText(target.version)).toBeInTheDocument())
+  expect(screen.getByRole('button', { name: 'Inspect update for node-s1' })).toBeInTheDocument()
+  const reopened = await openUpdate('s1', 'Inspect update')
+  expect(await within(reopened).findByText('Agent update verified')).toBeInTheDocument()
+  expect(await screen.findByRole('button', { name: 'Up to date for node-s1' })).toBeInTheDocument()
+  expect(apiFetchOnce).toHaveBeenCalledTimes(1)
+})
+
+it.each(['different operation', 'different artifact'])('does not replace a retained attempt with terminal availability for a %s', async kind => {
+  vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval', 'Date'] })
+  renderPage()
+  const dialog = await openUpdate()
+  fireEvent.click(await within(dialog).findByRole('button', { name: 'Update agent' }))
+  await within(dialog).findByText('Update requested')
+  fireEvent.click(within(dialog).getByRole('button', { name: 'Close agent update' }))
+  completeUpdate()
+  const completed = checks.s1 as AgentUpdateCheck
+  completed.operation = kind === 'different operation' ? { ...completed.operation!, id: 'older-operation' }
+    : { ...completed.operation!, target: { ...target, bytes: target.bytes + 1 } }
+  await advancePolling(10_000)
+  await waitFor(() => expect(within(screen.getByText('node-s1').closest('tr')!).getByText(target.version)).toBeInTheDocument())
+  expect(screen.getByRole('button', { name: 'Inspect update for node-s1' })).toBeInTheDocument()
+  expect(screen.queryByRole('button', { name: 'Up to date for node-s1' })).not.toBeInTheDocument()
+})
+
 it('refuses a falsely successful status with a different digest', async () => {
   statuses.s1 = { ...operation, state: 'succeeded', observed_version: target.version, observed_revision: target.revision, observed_sha256: 'wrong' }
   renderPage()
