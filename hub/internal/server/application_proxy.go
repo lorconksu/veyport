@@ -91,6 +91,12 @@ func (s *Server) applicationHostRouter(portal http.Handler) http.Handler {
 			return
 		}
 		if r.Host == s.applicationPortalHost() {
+			// API handlers retain their exact writer and security headers. Only
+			// browser documents need the origin-only launch referrer policy.
+			if strings.HasPrefix(r.URL.Path, "/api/") {
+				portal.ServeHTTP(w, r)
+				return
+			}
 			wrapped := &applicationPortalDocumentWriter{ResponseWriter: w, launch: applicationLaunchDocumentPath(r.URL.Path)}
 			portal.ServeHTTP(wrapped, r)
 			return
@@ -504,7 +510,11 @@ func rewriteApplicationResponse(resp *http.Response, a *model.Application, backe
 			if u.Path == "" {
 				u.Path = "/"
 			}
-			resp.Header.Set("Location", u.String())
+			mapped, err := applicationMappedLocation(u)
+			if err != nil {
+				return err
+			}
+			resp.Header.Set("Location", mapped)
 		}
 		if u.IsAbs() || u.Host != "" {
 			if strings.EqualFold(u.Host, backend.Host) && (u.Scheme == backend.Scheme || u.Scheme == "") {
@@ -519,11 +529,27 @@ func rewriteApplicationResponse(resp *http.Response, a *model.Application, backe
 				if u.Path == "" {
 					u.Path = "/"
 				}
-				resp.Header.Set("Location", u.String())
+				mapped, err := applicationMappedLocation(u)
+				if err != nil {
+					return err
+				}
+				resp.Header.Set("Location", mapped)
 			}
 		}
 	}
 	return nil
+}
+
+// Validate the final browser-visible path after removing the backend prefix.
+// Query and fragment retain native semantics; neither can become an authority.
+func applicationMappedLocation(destination *url.URL) (string, error) {
+	path := *destination
+	path.Scheme, path.Host, path.User = "", "", nil
+	path.Fragment, path.RawFragment = "", ""
+	if _, err := applicationPath(path.String()); err != nil {
+		return "", err
+	}
+	return destination.String(), nil
 }
 
 // Every upgraded socket write retains a stall deadline after HTTP ownership ends.
@@ -560,7 +586,9 @@ type applicationPortalDocumentWriter struct {
 }
 
 func (w *applicationPortalDocumentWriter) headers() {
-	w.Header().Set("Referrer-Policy", "strict-origin")
+	if w.Header().Get("Referrer-Policy") != "no-referrer" {
+		w.Header().Set("Referrer-Policy", "strict-origin")
+	}
 	if w.launch {
 		w.Header().Set("Cache-Control", "no-store")
 	}
@@ -573,6 +601,11 @@ func (w *applicationPortalDocumentWriter) Write(b []byte) (int, error) {
 	w.headers()
 	return w.ResponseWriter.Write(b)
 }
+func (w *applicationPortalDocumentWriter) FlushError() error {
+	w.headers()
+	return http.NewResponseController(w.ResponseWriter).Flush()
+}
+func (w *applicationPortalDocumentWriter) Flush()                      { _ = w.FlushError() }
 func (w *applicationPortalDocumentWriter) Unwrap() http.ResponseWriter { return w.ResponseWriter }
 
 func applicationPortalRedirect(origin, applicationID, path string) (string, error) {

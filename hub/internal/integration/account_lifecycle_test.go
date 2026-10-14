@@ -41,8 +41,14 @@ func requestWithCookies(t *testing.T, h *TestHarness, method, path string, cooki
 	if err != nil {
 		t.Fatalf("create %s %s request: %v", method, path, err)
 	}
+	if method != http.MethodGet && method != http.MethodHead {
+		req.Header.Set("Origin", "http://"+h.HTTPAddr)
+	}
 	for _, cookie := range cookies {
 		req.AddCookie(cookie)
+		if cookie.Name == cookieCSRF {
+			req.Header.Set("X-CSRF-Token", cookie.Value)
+		}
 	}
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
@@ -72,6 +78,15 @@ func assertResponse(t *testing.T, resp *http.Response, label string, wantStatus 
 // sign-in: temporary password, one-time-code setup, password rotation. It
 // returns the session cookies the account ends up holding and its TOTP secret.
 func completeFirstSignIn(t *testing.T, h *TestHarness, username, tempPassword string) (access, refresh *http.Cookie, totpSecret string) {
+	t.Helper()
+	access, refresh, _, totpSecret = completeFirstSignInCookies(t, h, username, tempPassword)
+	return access, refresh, totpSecret
+}
+
+// completeFirstSignInCookies also returns the issued double-submit cookie for
+// browser mutation tests. Secure cookies are transmitted manually only to the
+// harness-owned loopback HTTP listener; browser TLS behavior is qualified by E2E.
+func completeFirstSignInCookies(t *testing.T, h *TestHarness, username, tempPassword string) (access, refresh, csrf *http.Cookie, totpSecret string) {
 	t.Helper()
 
 	loginResp := h.HTTPPost(t, loginPath, model.LoginRequest{
@@ -111,7 +126,9 @@ func completeFirstSignIn(t *testing.T, h *TestHarness, username, tempPassword st
 	if access == nil || refresh == nil {
 		t.Fatal("expected access and refresh cookies after the first sign-in")
 	}
-	return access, refresh, totpSecret
+	csrf = findCookie(enableResp, cookieCSRF)
+	assertPortalCookies(t, enableResp)
+	return access, refresh, csrf, totpSecret
 }
 
 // mintAPIToken issues an API token for a user and returns the raw secret. It

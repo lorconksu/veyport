@@ -215,13 +215,38 @@ func TestSessions_LogoutEndsSessionAndRefreshToken(t *testing.T) {
 	adminToken := h.SetupAdmin(t)
 
 	viewerID, tempPassword := createViewer(t, h, adminToken, "leaver")
-	access, refresh, _ := completeFirstSignIn(t, h, "leaver", tempPassword)
+	access, refresh, csrf, _ := completeFirstSignInCookies(t, h, "leaver", tempPassword)
 	sid := sessionIDOf(t, h, access.Value)
 	if sid == "" {
 		t.Fatal("the viewer's token carries no session id")
 	}
 
-	assertResponse(t, requestWithCookies(t, h, "POST", logoutPath, access),
+	// Cookie-authenticated logout must carry the exact origin and issued
+	// double-submit value. Refused requests must leave authority intact.
+	for _, invalid := range []struct{ label, origin, token string }{
+		{"missing origin", "", csrf.Value},
+		{"foreign origin", "https://sibling.example.test", csrf.Value},
+		{"missing CSRF", "http://" + h.HTTPAddr, ""},
+	} {
+		request, err := http.NewRequest(http.MethodPost, "http://"+h.HTTPAddr+logoutPath, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, cookie := range []*http.Cookie{access, refresh, csrf} {
+			request.AddCookie(cookie)
+		}
+		request.Header.Set("Origin", invalid.origin)
+		request.Header.Set("X-CSRF-Token", invalid.token)
+		response, err := http.DefaultClient.Do(request)
+		if err != nil {
+			t.Fatal(err)
+		}
+		assertResponse(t, response, invalid.label, http.StatusForbidden, "logout origin or CSRF refused")
+		if sessionByID(t, h, sid).EndedAt != nil {
+			t.Fatal("refused logout ended a session")
+		}
+	}
+	assertResponse(t, requestWithCookies(t, h, "POST", logoutPath, access, refresh, csrf),
 		"sign out", http.StatusNoContent, "")
 
 	ended := sessionByID(t, h, sid)

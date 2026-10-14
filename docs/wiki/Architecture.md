@@ -37,6 +37,45 @@ Veyport uses a **Hub-and-Spoke** model. The Hub hosts the web UI, REST API, SSH 
 - Process results and evidence results are separate states. A command can finish while completion evidence remains unconfirmed. Archive intent proves preserved intent, not successful start or completion.
 - Enhanced evidence covers the submitted opaque command or complete supported finite script, not every internal shell command, dynamically fetched program, child-process action, or remote output. Command execution is not a sandbox and does not provide complete host process telemetry.
 
+## Browser application access (prototype)
+
+The unmerged application-access prototype adds browser access to configured
+HTTP/HTTPS backends. An administrator chooses a backend URL and either a direct
+Hub route or a route through an enrolled node. Each published app has an exact
+hostname in the configured application namespace. The backend keeps its native
+login and authorization; Veyport checks whether the user may reach the app.
+
+![Browser Application Access](../screenshots/diagram-application-access.png)
+
+Application grants can name a user, Veyport role, local application group, or
+directory group. These grants are separate from SSH permissions. Administration
+permission alone does not grant access to an app. Directory-backed users require
+fresh service-account checks of their identity, status, mapped roles and groups;
+directory failures deny access.
+
+A one-use form-POST ticket creates a host-bound app session without putting the
+ticket in a URL. Portal credentials and Veyport identity headers are removed
+before forwarding to the backend. App sessions default to 45 minutes of accepted
+HTTP request inactivity and a 12-hour maximum from the original completed MFA
+sign-in. Background HTTP requests count as activity; bytes on an existing stream
+do not. Logout and authority changes revoke app access and interrupt active
+streams independently of the portal's idle timer.
+
+Node routes use a dedicated outbound `ApplicationProxy` gRPC connection, separate
+from the control and execution traffic. The Hub independently verifies the
+enrolled-node certificate and binds each one-use tunnel attachment to the node,
+current control connection, and app version. Both routes validate destinations,
+apply configured CIDR restrictions, and verify backend TLS identities. Bounded
+frames, queues, connection slots and deadlines limit resource use. A missing or
+offline node never falls back to a direct Hub connection.
+
+Application audit entries record access and session metadata, not native app
+content or credentials. This is distinct from Enhanced command evidence; the
+proxy does not claim to record every action within an app. See
+[[Application Access]] for configuration and API details. This prototype is not
+included in stable v2.0.52; publication and reachable app hostnames require
+separate deployment qualification.
+
 ## Command execution boundary
 
 The feature-branch invocation has one command-string argument after `--`:

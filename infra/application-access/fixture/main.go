@@ -51,8 +51,9 @@ func token() string {
 	return hex.EncodeToString(b[:])
 }
 func equal(a, b string) bool {
-	ah, bh := sha256.Sum256([]byte(a)), sha256.Sum256([]byte(b))
-	return subtle.ConstantTimeCompare(ah[:], bh[:]) == 1
+	// Synthetic credential and CSRF lengths are public and fixed by the fixture
+	// generator. Compare their in-memory values without creating password hashes.
+	return subtle.ConstantTimeCompare([]byte(a), []byte(b)) == 1
 }
 func newFixture(c credentials) *fixture {
 	return &fixture{credentials: c, sessions: map[string]session{}, requests: map[string]int64{}}

@@ -1,6 +1,6 @@
 import { test, expect, APIRequestContext, Browser, BrowserContext, Page, request as apiRequest } from '@playwright/test'
 import { authenticator } from 'otplib'
-import { loadState, markTOTPCodeUsed, mintApiToken, waitForFreshTOTPCode } from './helpers'
+import { hostCookieURL, loadState, markTOTPCodeUsed, mintApiToken, waitForFreshTOTPCode } from './helpers'
 
 const BASE_URL = process.env.E2E_BASE_URL || 'http://localhost:18081'
 
@@ -163,38 +163,34 @@ async function signInAdmin(browser: Browser): Promise<{
 
   const context = await browser.newContext()
   const page = await context.newPage()
-  const parsedBaseURL = new URL(BASE_URL)
-  const secure = parsedBaseURL.protocol === 'https:'
+  const cookieURL = hostCookieURL(BASE_URL)
   const expires = Math.floor(Date.now() / 1000)
   await context.addCookies([
     {
       name: '__Host-veyport_access',
       value: accessToken,
-      domain: parsedBaseURL.hostname,
-      path: '/',
+      url: cookieURL,
       expires: expires + 900,
       httpOnly: true,
-      secure,
+      secure: true,
       sameSite: 'Strict',
     },
     {
       name: '__Host-veyport_refresh',
       value: refreshToken,
-      domain: parsedBaseURL.hostname,
-      path: '/',
+      url: cookieURL,
       expires: expires + 604800,
       httpOnly: true,
-      secure,
+      secure: true,
       sameSite: 'Strict',
     },
     {
       name: '__Host-veyport_csrf',
       value: 'e2e-csrf',
-      domain: parsedBaseURL.hostname,
-      path: '/',
+      url: cookieURL,
       expires: expires + 604800,
       httpOnly: false,
-      secure,
+      secure: true,
       sameSite: 'Strict',
     },
   ])

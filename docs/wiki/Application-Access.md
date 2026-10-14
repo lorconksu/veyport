@@ -1,6 +1,6 @@
 # Browser Application Access
 
-This feature is under review on the application-access prototype branch. It is not included in stable v2.0.52. The prototype PR remains unmerged; deployment and public hostname availability must be verified separately.
+This feature is under review on the application-access prototype branch. It is not included in stable v2.0.52. The prototype PR remains unmerged. The initial staging prototype is intended for LAN/VPN access only; public access is deferred. Deployment and hostname availability must be verified separately.
 
 Veyport can publish links to administrator-configured web applications through an exact application-host namespace. A signed-in user sees only applications currently authorized by a direct user, role, local application group, or directory-group grant. Selecting **Open application** starts the Veyport launch flow and opens the application in a new tab. When a user must sign in first, Veyport returns only to the validated application launch path after login and TOTP.
 

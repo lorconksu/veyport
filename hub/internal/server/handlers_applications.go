@@ -60,7 +60,7 @@ func applicationPath(raw string) (string, error) {
 	if raw == "" {
 		return "/", nil
 	}
-	if len(raw) > 4096 || !strings.HasPrefix(raw, "/") || strings.HasPrefix(raw, "//") || strings.ContainsAny(raw, "\\\x00\r\n") {
+	if len(raw) > 4096 || raw[0] != '/' || (len(raw) > 1 && (raw[1] == '/' || raw[1] == '\\')) || strings.ContainsAny(raw, "\\\x00\r\n") {
 		return "", errApplicationDenied
 	}
 	u, e := url.ParseRequestURI(raw)
@@ -68,7 +68,7 @@ func applicationPath(raw string) (string, error) {
 		return "", errApplicationDenied
 	}
 	decoded, e := url.PathUnescape(u.EscapedPath())
-	if e != nil || strings.ContainsAny(decoded, "\\\x00\r\n") || strings.HasPrefix(decoded, "//") || strings.HasPrefix(decoded, "/_veyport/") {
+	if e != nil || strings.ContainsAny(decoded, "\\\x00\r\n") || (len(decoded) > 1 && (decoded[1] == '/' || decoded[1] == '\\')) || strings.HasPrefix(decoded, "/_veyport/") {
 		return "", errApplicationDenied
 	}
 	for _, seg := range strings.Split(decoded, "/") {

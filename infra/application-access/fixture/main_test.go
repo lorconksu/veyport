@@ -17,6 +17,18 @@ import (
 	"golang.org/x/net/websocket"
 )
 
+func TestEphemeralComparisonRejectsChangedContentsAndLengths(t *testing.T) {
+	value := token()
+	for _, candidate := range []string{value[:len(value)-1], value + "0", "", strings.Repeat("x", len(value))} {
+		if equal(value, candidate) || equal(candidate, value) {
+			t.Fatal("different ephemeral values must not compare equal")
+		}
+	}
+	if !equal(value, value) {
+		t.Fatal("identical ephemeral values must compare equal")
+	}
+}
+
 func fixtureForTest(t *testing.T) (*fixture, *httptest.Server) {
 	t.Helper()
 	f := newFixture(credentials{Username: "synthetic-fixture", Password: token()})

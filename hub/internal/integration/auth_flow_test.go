@@ -36,6 +36,26 @@ func findCookie(resp *http.Response, name string) *http.Cookie {
 	return nil
 }
 
+// assertPortalCookies checks the host prefix isolation contract on real HTTP
+// responses, including the root refresh path needed for family logout.
+func assertPortalCookies(t *testing.T, response *http.Response) {
+	t.Helper()
+	for _, name := range []string{cookieAccess, cookieRefresh, cookieCSRF} {
+		cookie := findCookie(response, name)
+		if cookie == nil || cookie.Value == "" || cookie.Path != "/" || cookie.Domain != "" || !cookie.Secure || cookie.SameSite != http.SameSiteStrictMode {
+			t.Fatalf("invalid host-isolated portal cookie: %s", name)
+		}
+		if cookie.HttpOnly != (name != cookieCSRF) {
+			t.Fatalf("incorrect HttpOnly policy: %s", name)
+		}
+	}
+	for _, old := range []string{"veyport_access", "veyport_refresh", "veyport_csrf"} {
+		if cookie := findCookie(response, old); cookie != nil && cookie.Value != "" {
+			t.Fatalf("legacy portal credential was issued: %s", old)
+		}
+	}
+}
+
 // assertAuthStatus checks the /api/auth/status endpoint for the expected initialized value.
 func assertAuthStatus(t *testing.T, h *TestHarness, wantInitialized bool) {
 	t.Helper()
@@ -104,6 +124,7 @@ func enableTOTP(t *testing.T, h *TestHarness, secret, setupToken string) (access
 		t.Fatal("expected token fields in totp enable response body")
 	}
 
+	assertPortalCookies(t, resp)
 	access := findCookie(resp, cookieAccess)
 	refresh := findCookie(resp, cookieRefresh)
 	if access == nil || access.Value == "" || refresh == nil || refresh.Value == "" {
@@ -152,6 +173,7 @@ func completeTOTPLogin(t *testing.T, h *TestHarness, totpToken, secret string) (
 		t.Fatal("expected token fields in login/totp response body")
 	}
 
+	assertPortalCookies(t, resp)
 	access := findCookie(resp, cookieAccess)
 	refresh := findCookie(resp, cookieRefresh)
 	if access == nil || access.Value == "" || refresh == nil || refresh.Value == "" {
@@ -246,6 +268,7 @@ func TestFullAuthFlow(t *testing.T) {
 			t.Fatal("expected token fields in refresh response body")
 		}
 
+		assertPortalCookies(t, resp)
 		access := findCookie(resp, cookieAccess)
 		refresh := findCookie(resp, cookieRefresh)
 		if access == nil || access.Value == "" || refresh == nil || refresh.Value == "" {

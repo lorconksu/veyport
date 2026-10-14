@@ -264,14 +264,29 @@ func (s *Server) checkApplicationSession(ctx context.Context, a *model.Applicati
 	}
 	revision, fingerprint, e := s.applicationAuthorization(ctx, u, a)
 	if e != nil {
-		return e
+		// An aborted request is not evidence of directory authority loss.
+		// A bounded lookup failure with a live caller fails closed permanently.
+		if ctx.Err() != nil {
+			return e
+		}
+		return errors.Join(e, s.endApplicationAccessChanged(ss.ID, now))
 	}
 	if revision != ss.AccessRevision || fingerprint != ss.DirectoryFingerprint {
-		_ = s.store.EndApplicationSession(ss.ID, "access_changed", now)
-		return errApplicationDenied
+		return errors.Join(errApplicationDenied, s.endApplicationAccessChanged(ss.ID, now))
 	}
 	if touch {
 		return s.store.TouchApplicationSession(ss.ID, now)
 	}
 	return nil
+}
+
+// Authority restoration must require a new launch, never revive an old cookie.
+// Close only this session's streams even if persistence is unavailable, and
+// propagate write/audit failures so no successful access decision hides them.
+func (s *Server) endApplicationAccessChanged(id string, now time.Time) error {
+	s.applicationStreams.closeSession(id)
+	if err := s.store.EndApplicationSession(id, "access_changed", now); err != nil {
+		return err
+	}
+	return s.auditApplicationSessionEnds()
 }
