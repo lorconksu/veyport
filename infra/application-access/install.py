@@ -28,7 +28,8 @@ def build_image():
         subprocess.run(["go", "build", "-trimpath", "-o", str(folder / "application-fixture"), "."],
                        cwd=Path(__file__).parent / "fixture", env={**os.environ, "CGO_ENABLED": "0"},
                        check=True, capture_output=True)
-        (folder / "Dockerfile").write_text('FROM scratch\nCOPY application-fixture /application-fixture\nENTRYPOINT ["/application-fixture"]\n')
+        (folder / "THIRD_PARTY_LICENSES.txt").write_bytes((Path(__file__).parent / "fixture/THIRD_PARTY_LICENSES.txt").read_bytes())
+        (folder / "Dockerfile").write_text('FROM scratch\nCOPY application-fixture /application-fixture\nCOPY THIRD_PARTY_LICENSES.txt /THIRD_PARTY_LICENSES.txt\nUSER 65532:65532\nENTRYPOINT ["/application-fixture"]\n')
         subprocess.run(["docker", "--host", "unix:///var/run/docker.sock", "build", "-q", "-t", IMAGE_TAG, str(folder)],
                        check=True, capture_output=True)
     image = subprocess.check_output(["docker", "--host", "unix:///var/run/docker.sock", "image", "inspect",

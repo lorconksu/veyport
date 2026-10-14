@@ -105,7 +105,7 @@ func (s *Server) applicationHostRouter(portal http.Handler) http.Handler {
 			http.Error(w, "application unavailable", http.StatusNotFound)
 			return
 		}
-		w.Header().Set("Referrer-Policy", "no-referrer")
+		w.Header().Set("Referrer-Policy", "strict-origin")
 		if r.URL.Path == "/_veyport/launch" {
 			launchLimiter.middleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { s.exchangeApplicationLaunch(w, r, a) })).ServeHTTP(w, r)
 			return
@@ -140,7 +140,14 @@ func (s *Server) applicationUnauthenticated(w http.ResponseWriter, r *http.Reque
 			http.Error(w, "invalid application destination", 400)
 			return
 		}
-		destination := s.applicationPortalOrigin + "/applications/" + url.PathEscape(a.ID) + "/launch?path=" + url.QueryEscape(path)
+		destination, e := applicationPortalRedirect(s.applicationPortalOrigin, a.ID, path)
+		if e != nil {
+			http.Error(w, "portal login route unavailable", 503)
+			return
+		}
+		// Origin/authority come solely from fixed operator configuration; the
+		// validated app path is encoded as a query value, never a redirect authority.
+		// nosemgrep: go.lang.security.injection.open-redirect.open-redirect
 		http.Redirect(w, r, destination, http.StatusFound)
 		return
 	}
@@ -188,6 +195,13 @@ func (s *Server) exchangeApplicationLaunch(w http.ResponseWriter, r *http.Reques
 		http.Error(w, "launch expired", 403)
 		return
 	}
+	path, e = applicationPath(path)
+	if e != nil {
+		_ = s.store.EndApplicationSession(id, "launch_denied", s.now())
+		s.applicationAudit(r, "application.denied", a.ID, "invalid_destination")
+		http.Error(w, "invalid application destination", 400)
+		return
+	}
 	ss, e := s.store.GetApplicationSession(refreshDigest(credential))
 	if e != nil || s.checkApplicationSession(r.Context(), a, ss, false) != nil {
 		_ = s.store.EndApplicationSession(id, "launch_denied", s.now())
@@ -196,6 +210,9 @@ func (s *Server) exchangeApplicationLaunch(w http.ResponseWriter, r *http.Reques
 		return
 	}
 	http.SetCookie(w, &http.Cookie{Name: applicationCookie, Value: credential, Path: "/", Secure: true, HttpOnly: true, SameSite: http.SameSiteLaxMode, Expires: expires, MaxAge: int(expires.Sub(s.now()).Seconds())})
+	// applicationPath validates this consumed ticket destination at the sink:
+	// root-relative only; no authority, scheme, backslash or control characters.
+	// nosemgrep: go.lang.security.injection.open-redirect.open-redirect
 	http.Redirect(w, r, path, http.StatusSeeOther)
 }
 func appRequestOriginAllowed(r *http.Request, host string) bool {
@@ -232,6 +249,8 @@ type applicationWriter struct {
 	ctx      context.Context
 	mu       sync.Mutex
 	hijacked net.Conn
+	finished bool
+	readers  int
 }
 
 func (w *applicationWriter) WriteHeader(status int) {
@@ -240,18 +259,20 @@ func (w *applicationWriter) WriteHeader(status int) {
 }
 func (w *applicationWriter) Unwrap() http.ResponseWriter { return w.ResponseWriter }
 func (w *applicationWriter) Write(b []byte) (int, error) {
-	if e := w.ctx.Err(); e != nil {
+	if e := w.armDeadline(false); e != nil {
 		return 0, e
 	}
-	_ = http.NewResponseController(w.ResponseWriter).SetWriteDeadline(time.Now().Add(30 * time.Second))
 	n, e := w.ResponseWriter.Write(b)
 	w.bytes.Add(int64(n))
 	return n, e
 }
-func (w *applicationWriter) Flush() {
-	_ = http.NewResponseController(w.ResponseWriter).SetWriteDeadline(time.Now().Add(30 * time.Second))
-	_ = http.NewResponseController(w.ResponseWriter).Flush()
+func (w *applicationWriter) FlushError() error {
+	if e := w.armDeadline(false); e != nil {
+		return e
+	}
+	return http.NewResponseController(w.ResponseWriter).Flush()
 }
+func (w *applicationWriter) Flush() { _ = w.FlushError() }
 func (w *applicationWriter) Hijack() (net.Conn, *bufio.ReadWriter, error) {
 	conn, rw, e := http.NewResponseController(w.ResponseWriter).Hijack()
 	if e != nil {
@@ -269,26 +290,73 @@ func (w *applicationWriter) Hijack() (net.Conn, *bufio.ReadWriter, error) {
 	}
 	return applicationWriteConn{Conn: conn, bytes: &w.bytes}, rw, nil
 }
-func (w *applicationWriter) closeHijacked() {
+
+// Serialize deadline resets against cancellation. Holding this lock during
+// socket I/O would prevent cancellation from interrupting a blocked operation.
+func (w *applicationWriter) armDeadline(read bool) error {
 	w.mu.Lock()
-	c := w.hijacked
+	defer w.mu.Unlock()
+	if e := w.ctx.Err(); e != nil {
+		return e
+	}
+	controller := http.NewResponseController(w.ResponseWriter)
+	var e error
+	if read {
+		e = controller.SetReadDeadline(time.Now().Add(30 * time.Second))
+	} else {
+		e = controller.SetWriteDeadline(time.Now().Add(30 * time.Second))
+	}
+	if e != nil && !errors.Is(e, http.ErrNotSupported) {
+		return e
+	}
+	if read {
+		w.readers++
+	}
+	return nil
+}
+func (w *applicationWriter) finish() { w.mu.Lock(); w.finished = true; w.mu.Unlock() }
+func (w *applicationWriter) interruptFrontend() {
+	w.mu.Lock()
+	controller := http.NewResponseController(w.ResponseWriter)
+	// Normal handler completion must still permit net/http to flush final bytes.
+	// An upload reader can outlive an early upstream response and still needs
+	// interruption even when the response handler has completed.
+	if !w.finished || w.readers > 0 {
+		_ = controller.SetReadDeadline(time.Now())
+	}
+	if !w.finished {
+		_ = controller.SetWriteDeadline(time.Now())
+	}
+	conn := w.hijacked
 	w.mu.Unlock()
-	if c != nil {
-		_ = c.Close()
+	if conn != nil {
+		_ = conn.Close()
 	}
 }
 
 type applicationBody struct {
 	bytes atomic.Int64
 	io.ReadCloser
-	controller *http.ResponseController
+	writer *applicationWriter
 }
 
 func (b *applicationBody) Read(p []byte) (int, error) {
-	_ = b.controller.SetReadDeadline(time.Now().Add(30 * time.Second))
+	// ReadController is unsupported by recorders, but real server sockets must
+	// still be cancellable. Preserve the context check independently of support.
+	e := b.writer.armDeadline(true)
+	if e != nil && !errors.Is(e, http.ErrNotSupported) {
+		return 0, e
+	}
+	defer func() { b.writer.mu.Lock(); b.writer.readers--; b.writer.mu.Unlock() }()
 	n, e := b.ReadCloser.Read(p)
 	b.bytes.Add(int64(n))
 	return n, e
+}
+func (b *applicationBody) Close() error {
+	if b.writer.ctx.Err() != nil {
+		_ = http.NewResponseController(b.writer.ResponseWriter).SetReadDeadline(time.Now())
+	}
+	return b.ReadCloser.Close()
 }
 func (s *Server) serveApplication(w http.ResponseWriter, r *http.Request, a *model.Application) {
 	credential, e := uniqueApplicationCookie(r)
@@ -330,7 +398,7 @@ func (s *Server) serveApplication(w http.ResponseWriter, r *http.Request, a *mod
 	_ = controller.SetReadDeadline(time.Time{})
 	_ = controller.SetWriteDeadline(time.Time{})
 	r = r.WithContext(ctx)
-	r.Body = &applicationBody{ReadCloser: r.Body, controller: controller}
+	r.Body = &applicationBody{ReadCloser: r.Body, writer: aw}
 	finished := make(chan struct{})
 	go func() {
 		defer close(finished)
@@ -339,21 +407,21 @@ func (s *Server) serveApplication(w http.ResponseWriter, r *http.Request, a *mod
 		for {
 			select {
 			case <-ctx.Done():
-				aw.closeHijacked()
+				aw.interruptFrontend()
 				return
 			case <-ticker.C:
 				current, e := s.store.GetApplication(a.ID)
 				fresh, e2 := s.store.ApplicationSessionByID(ss.ID)
 				if e != nil || e2 != nil || s.checkApplicationSession(ctx, current, fresh, false) != nil {
 					cancel()
-					aw.closeHijacked()
+					aw.interruptFrontend()
 					s.auditApplicationSessionEnds()
 					return
 				}
 			}
 		}
 	}()
-	defer func() { cancel(); <-finished }()
+	defer func() { aw.finish(); cancel(); <-finished }()
 	target, e := applicationTarget(a)
 	if e != nil {
 		http.Error(w, "backend configuration invalid", 502)
@@ -492,7 +560,7 @@ type applicationPortalDocumentWriter struct {
 }
 
 func (w *applicationPortalDocumentWriter) headers() {
-	w.Header().Set("Referrer-Policy", "no-referrer")
+	w.Header().Set("Referrer-Policy", "strict-origin")
 	if w.launch {
 		w.Header().Set("Cache-Control", "no-store")
 	}
@@ -506,3 +574,18 @@ func (w *applicationPortalDocumentWriter) Write(b []byte) (int, error) {
 	return w.ResponseWriter.Write(b)
 }
 func (w *applicationPortalDocumentWriter) Unwrap() http.ResponseWriter { return w.ResponseWriter }
+
+func applicationPortalRedirect(origin, applicationID, path string) (string, error) {
+	fixed, e := url.Parse(origin)
+	if e != nil || fixed.Scheme != "https" || fixed.Host == "" || fixed.User != nil || (fixed.Path != "" && fixed.Path != "/") || fixed.RawQuery != "" || fixed.ForceQuery || fixed.Fragment != "" || !applicationSlug.MatchString(applicationID) {
+		return "", errApplicationDenied
+	}
+	destination, e := applicationPath(path)
+	if e != nil {
+		return "", e
+	}
+	fixed.Path = "/applications/" + applicationID + "/launch"
+	fixed.RawPath = ""
+	fixed.RawQuery = url.Values{"path": []string{destination}}.Encode()
+	return fixed.String(), nil
+}

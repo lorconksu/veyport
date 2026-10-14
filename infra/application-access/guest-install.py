@@ -45,6 +45,11 @@ for name in expected:
     with (base / name).open("xb") as file:
         file.write(archive.extractfile(archive.getmember(name)).read())
     (base / name).chmod(0o600)
+# The scratch image has no passwd database. Use the same fixed, unprivileged
+# numeric identity for the directory and every private file it must read.
+os.chown(base / "private", 65532, 65532)
+for private_file in (base / "private").iterdir():
+    os.chown(private_file, 65532, 65532)
 identity = json.loads((base / "image-identity.json").read_text())
 if hashlib.sha256((base / "image.tar").read_bytes()).hexdigest() != identity["archive_sha256"]:
     raise SystemExit("Fixture image archive changed")
@@ -85,7 +90,8 @@ actual = subprocess.check_output(["docker", "--host", "unix:///var/run/docker.so
 if actual != identity["image_id"]:
     raise SystemExit("Loaded image identity differs")
 bind = vm["ip"] if vm["mode"] == "direct" else "127.0.0.1"
-env = {**os.environ, "LAB_BIND_IP": bind, "LAB_PRIVATE_DIR": str(base / "private")}
+env = {**os.environ, "LAB_BIND_IP": bind, "LAB_PRIVATE_DIR": str(base / "private"),
+       "LAB_UID": "65532", "LAB_GID": "65532"}
 subprocess.run(["docker", "--host", "unix:///var/run/docker.sock", "compose", "-f", str(base / "compose.yml"),
                 "up", "-d", "--no-build", "--pull", "never", "--wait"], env=env, check=True, capture_output=True)
 for scheme, port in (("http", 8080), ("https", 8443)):

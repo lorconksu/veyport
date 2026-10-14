@@ -75,7 +75,7 @@ func (s *Store) UpdateApplication(a *model.Application, expected int64, now time
 	if e != nil {
 		return e
 	}
-	res, e := tx.Exec(`UPDATE applications SET slug=?,public_hostname=?,name=?,config_version=?,enabled=?,config_json=? WHERE id=? AND config_version=?`, a.Slug, a.PublicHostname, a.Name, a.ConfigVersion, a.Enabled, string(b), a.ID, expected)
+	res, e := tx.Exec(`UPDATE applications SET slug=?,public_hostname=?,name=?,config_version=?,enabled=?,config_json=? WHERE id=? AND config_version=? AND deleting=0`, a.Slug, a.PublicHostname, a.Name, a.ConfigVersion, a.Enabled, string(b), a.ID, expected)
 	if e != nil {
 		return e
 	}
@@ -89,8 +89,18 @@ func (s *Store) UpdateApplication(a *model.Application, expected int64, now time
 	return tx.Commit()
 }
 func (s *Store) DeleteApplication(id string) error {
-	_, e := s.db.Exec(`DELETE FROM applications WHERE id=?`, id)
-	return e
+	res, e := s.db.Exec(`DELETE FROM applications WHERE id=? AND deleting=1 AND NOT EXISTS(SELECT 1 FROM application_sessions WHERE app_id=applications.id AND (ended_at IS NULL OR audited_at IS NULL))`, id)
+	if e != nil {
+		return e
+	}
+	n, e := res.RowsAffected()
+	if e != nil {
+		return e
+	}
+	if n != 1 {
+		return ErrApplicationConflict
+	}
+	return nil
 }
 func (s *Store) ApplicationGrants(id string) ([]model.ApplicationGrant, error) {
 	rows, e := s.db.Query(`SELECT kind,subject_id FROM application_grants WHERE application_id=? ORDER BY kind,subject_id`, id)
@@ -124,7 +134,7 @@ func (s *Store) ReplaceApplicationGrants(id string, grants []model.ApplicationGr
 		return e
 	}
 	defer tx.Rollback()
-	res, e := tx.Exec(`UPDATE applications SET config_version=?,config_json=? WHERE id=? AND config_version=?`, a.ConfigVersion, string(b), id, expected)
+	res, e := tx.Exec(`UPDATE applications SET config_version=?,config_json=? WHERE id=? AND config_version=? AND deleting=0`, a.ConfigVersion, string(b), id, expected)
 	if e != nil {
 		return e
 	}
@@ -196,8 +206,18 @@ func (s *Store) GetApplicationAnchor(id string) (*model.ApplicationAnchor, error
 	return &a, e
 }
 func (s *Store) CreateApplicationTicket(t model.ApplicationLaunchTicket) error {
-	_, e := s.db.Exec(`INSERT INTO application_launch_tickets(digest,app_id,user_id,anchor_id,hostname,path,config_version,access_revision,directory_fingerprint,expires_at) SELECT ?,?,?,?,?,?,?,?,?,? WHERE EXISTS(SELECT 1 FROM application_login_anchors WHERE id=? AND revoked_at IS NULL)`, t.Digest, t.ApplicationID, t.UserID, t.AnchorID, t.Hostname, t.Path, t.ConfigVersion, t.AccessRevision, t.DirectoryFingerprint, t.ExpiresAt.UnixMilli(), t.AnchorID)
-	return e
+	res, e := s.db.Exec(`INSERT INTO application_launch_tickets(digest,app_id,user_id,anchor_id,hostname,path,config_version,access_revision,directory_fingerprint,expires_at) SELECT ?,?,?,?,?,?,?,?,?,? WHERE EXISTS(SELECT 1 FROM application_login_anchors WHERE id=? AND revoked_at IS NULL) AND EXISTS(SELECT 1 FROM applications WHERE id=? AND enabled=1 AND deleting=0 AND config_version=?)`, t.Digest, t.ApplicationID, t.UserID, t.AnchorID, t.Hostname, t.Path, t.ConfigVersion, t.AccessRevision, t.DirectoryFingerprint, t.ExpiresAt.UnixMilli(), t.AnchorID, t.ApplicationID, t.ConfigVersion)
+	if e != nil {
+		return e
+	}
+	n, e := res.RowsAffected()
+	if e != nil {
+		return e
+	}
+	if n != 1 {
+		return ErrApplicationConflict
+	}
+	return nil
 }
 func (s *Store) ConsumeApplicationTicket(digest, host string, ss model.ApplicationSession, now time.Time) (string, error) {
 	tx, e := s.db.BeginTx(context.Background(), nil)
@@ -210,7 +230,7 @@ func (s *Store) ConsumeApplicationTicket(digest, host string, ss model.Applicati
 	if e != nil {
 		return "", ErrApplicationConflict
 	}
-	res, e := tx.Exec(`INSERT INTO application_sessions(id,credential_digest,app_id,user_id,anchor_id,config_version,access_revision,directory_fingerprint,created_at,last_seen_at,expires_at) SELECT ?,?,?,?,?,?,?,?,?,?,? WHERE EXISTS(SELECT 1 FROM application_login_anchors la JOIN users u ON u.id=la.user_id WHERE la.id=? AND la.revoked_at IS NULL AND la.token_generation=u.token_generation AND u.disabled_at IS NULL) AND EXISTS(SELECT 1 FROM applications WHERE id=? AND enabled=1 AND config_version=?) AND COALESCE((SELECT revision FROM application_access_versions WHERE user_id=?),0)=?`, ss.ID, ss.CredentialDigest, t.ApplicationID, t.UserID, t.AnchorID, t.ConfigVersion, t.AccessRevision, t.DirectoryFingerprint, now.UnixMilli(), now.UnixMilli(), ss.ExpiresAt.UnixMilli(), t.AnchorID, t.ApplicationID, t.ConfigVersion, t.UserID, t.AccessRevision)
+	res, e := tx.Exec(`INSERT INTO application_sessions(id,credential_digest,app_id,user_id,anchor_id,config_version,access_revision,directory_fingerprint,created_at,last_seen_at,expires_at) SELECT ?,?,?,?,?,?,?,?,?,?,? WHERE EXISTS(SELECT 1 FROM application_login_anchors la JOIN users u ON u.id=la.user_id WHERE la.id=? AND la.revoked_at IS NULL AND la.token_generation=u.token_generation AND u.disabled_at IS NULL) AND EXISTS(SELECT 1 FROM applications WHERE id=? AND enabled=1 AND deleting=0 AND config_version=?) AND COALESCE((SELECT revision FROM application_access_versions WHERE user_id=?),0)=?`, ss.ID, ss.CredentialDigest, t.ApplicationID, t.UserID, t.AnchorID, t.ConfigVersion, t.AccessRevision, t.DirectoryFingerprint, now.UnixMilli(), now.UnixMilli(), ss.ExpiresAt.UnixMilli(), t.AnchorID, t.ApplicationID, t.ConfigVersion, t.UserID, t.AccessRevision)
 	if e != nil {
 		return "", e
 	}
@@ -535,9 +555,34 @@ func (s *Store) ExpireApplicationSessions(now time.Time, idle, max time.Duration
 	_, e = s.db.Exec(`UPDATE application_sessions SET ended_at=last_seen_at+?,end_reason='expired_idle' WHERE ended_at IS NULL AND last_seen_at+?<?`, idle.Milliseconds(), idle.Milliseconds(), now.UnixMilli())
 	return e
 }
-func (s *Store) RevokeApplicationScope(app, reason string, now time.Time) error {
-	_, e := s.db.Exec(`UPDATE application_sessions SET ended_at=?,end_reason=? WHERE app_id=? AND ended_at IS NULL`, now.UnixMilli(), reason, app)
-	return e
+
+// BeginApplicationDeletion takes SQLite's writer lock before reading any
+// admission state. Either ticket consumption commits first and is ended here,
+// or this transaction commits first and no ticket can subsequently be admitted.
+func (s *Store) BeginApplicationDeletion(app string, now time.Time) error {
+	tx, e := s.db.Begin()
+	if e != nil {
+		return e
+	}
+	defer tx.Rollback()
+	res, e := tx.Exec(`UPDATE applications SET enabled=0,config_version=CASE WHEN deleting=0 THEN config_version+1 ELSE config_version END,config_json=json_set(config_json,'$.enabled',json('false'),'$.config_version',CASE WHEN deleting=0 THEN config_version+1 ELSE config_version END,'$.updated_at',?),deleting=1 WHERE id=?`, now.UTC().Format(time.RFC3339Nano), app)
+	if e != nil {
+		return e
+	}
+	n, e := res.RowsAffected()
+	if e != nil {
+		return e
+	}
+	if n != 1 {
+		return ErrApplicationConflict
+	}
+	if _, e = tx.Exec(`DELETE FROM application_launch_tickets WHERE app_id=?`, app); e != nil {
+		return e
+	}
+	if _, e = tx.Exec(`UPDATE application_sessions SET ended_at=?,end_reason='application_deleted' WHERE app_id=? AND ended_at IS NULL`, now.UnixMilli(), app); e != nil {
+		return e
+	}
+	return tx.Commit()
 }
 func (s *Store) PendingApplicationEndAudits(app string) (int, error) {
 	var count int

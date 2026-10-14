@@ -221,6 +221,9 @@ func TestApplicationStoreLifecycleAndBoundedQueries(t *testing.T) {
 	if e = s.DeleteApplicationGroup("g"); e != nil {
 		t.Fatal(e)
 	}
+	if e = s.BeginApplicationDeletion("a", now); e != nil {
+		t.Fatal(e)
+	}
 	if e = s.DeleteApplication("a"); e != nil {
 		t.Fatal(e)
 	}
@@ -234,6 +237,100 @@ func TestApplicationStoreFailsClosedDuringPersistenceOutage(t *testing.T) {
 	for i, check := range checks {
 		if e := check(); e == nil {
 			t.Errorf("operation%d allowed during outage", i)
+		}
+	}
+}
+
+func TestApplicationDeletionClosesAdmissionBeforeAuditing(t *testing.T) {
+	s := appStore(t)
+	now := time.Now().UTC()
+	a := &model.Application{ID: "a", Name: "Demo", Slug: "demo", PublicHostname: "demo.apps.example.test", Route: "hub", BackendURL: "http://127.0.0.1:9999", AllowedCIDRs: []string{"127.0.0.0/8"}, Enabled: true}
+	if e := s.CreateApplication(a, now); e != nil {
+		t.Fatal(e)
+	}
+	if e := s.EnsureApplicationAnchor(model.ApplicationAnchor{ID: "parent", UserID: "u", CompletedMFAAt: now}); e != nil {
+		t.Fatal(e)
+	}
+	rev, _ := s.ApplicationAccessRevision("u")
+	ticket := model.ApplicationLaunchTicket{Digest: "pending", ApplicationID: a.ID, UserID: "u", AnchorID: "parent", Hostname: a.PublicHostname, Path: "/", ConfigVersion: 1, AccessRevision: rev, ExpiresAt: now.Add(time.Minute)}
+	if e := s.CreateApplicationTicket(ticket); e != nil {
+		t.Fatal(e)
+	}
+	if e := s.BeginApplicationDeletion(a.ID, now); e != nil {
+		t.Fatal(e)
+	}
+	current, e := s.GetApplication(a.ID)
+	if e != nil || current.Enabled || current.ConfigVersion != 2 {
+		t.Fatal("deletion left admission enabled", e, current)
+	}
+	if _, e = s.ConsumeApplicationTicket(ticket.Digest, a.PublicHostname, model.ApplicationSession{ID: "late", CredentialDigest: "late", ExpiresAt: now.Add(time.Hour)}, now); e == nil {
+		t.Fatal("ticket admitted after deletion began")
+	}
+	ticket.ConfigVersion = current.ConfigVersion
+	ticket.Digest = "late-ticket"
+	if e = s.CreateApplicationTicket(ticket); e == nil {
+		t.Fatal("new ticket issued while deleting")
+	}
+	current.Enabled = true
+	if e = s.UpdateApplication(current, current.ConfigVersion, now); e == nil {
+		t.Fatal("deleting application reopened by concurrent editor")
+	}
+	if e = s.ReplaceApplicationGrants(a.ID, nil, current.ConfigVersion, now); e == nil {
+		t.Fatal("grants mutated during deletion")
+	}
+	if e = s.BeginApplicationDeletion(a.ID, now); e != nil {
+		t.Fatal("deletion retry failed", e)
+	}
+}
+func TestApplicationConcurrentDeletionAndExchangeCannotLeaveActiveSessions(t *testing.T) {
+	s := appStore(t)
+	now := time.Now().UTC()
+	a := &model.Application{ID: "a", Name: "Demo", Slug: "demo", PublicHostname: "demo.apps.example.test", Route: "hub", BackendURL: "http://127.0.0.1:9999", AllowedCIDRs: []string{"127.0.0.0/8"}, Enabled: true}
+	if e := s.CreateApplication(a, now); e != nil {
+		t.Fatal(e)
+	}
+	if e := s.EnsureApplicationAnchor(model.ApplicationAnchor{ID: "parent", UserID: "u", CompletedMFAAt: now}); e != nil {
+		t.Fatal(e)
+	}
+	rev, _ := s.ApplicationAccessRevision("u")
+	for i := 0; i < 16; i++ {
+		if e := s.CreateApplicationTicket(model.ApplicationLaunchTicket{Digest: fmt.Sprint(i), ApplicationID: a.ID, UserID: "u", AnchorID: "parent", Hostname: a.PublicHostname, Path: "/", ConfigVersion: 1, AccessRevision: rev, ExpiresAt: now.Add(time.Minute)}); e != nil {
+			t.Fatal(e)
+		}
+	}
+	start := make(chan struct{})
+	done := make(chan bool, 16)
+	for i := 0; i < 16; i++ {
+		go func(i int) {
+			<-start
+			_, e := s.ConsumeApplicationTicket(fmt.Sprint(i), a.PublicHostname, model.ApplicationSession{ID: fmt.Sprint(i), CredentialDigest: fmt.Sprint(i), ExpiresAt: now.Add(time.Hour)}, now)
+			done <- e == nil
+		}(i)
+	}
+	close(start)
+	if e := s.BeginApplicationDeletion(a.ID, now); e != nil {
+		t.Fatal(e)
+	}
+	admitted := 0
+	for i := 0; i < 16; i++ {
+		if <-done {
+			admitted++
+		}
+	}
+	var active, tickets int
+	if e := s.DB().QueryRow(`SELECT count(*) FROM application_sessions WHERE app_id=? AND ended_at IS NULL`, a.ID).Scan(&active); e != nil {
+		t.Fatal(e)
+	}
+	if e := s.DB().QueryRow(`SELECT count(*) FROM application_launch_tickets WHERE app_id=?`, a.ID).Scan(&tickets); e != nil {
+		t.Fatal(e)
+	}
+	pending, e := s.PendingApplicationEndAudits(a.ID)
+	if e != nil || active != 0 || tickets != 0 || pending != admitted {
+		t.Fatalf("deletion audit race active=%d tickets=%d pending=%d admitted=%d err=%v", active, tickets, pending, admitted, e)
+	}
+	if admitted > 0 {
+		if e = s.DeleteApplication(a.ID); e == nil {
+			t.Fatal("unaudited ended sessions cascaded")
 		}
 	}
 }

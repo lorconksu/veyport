@@ -5,6 +5,7 @@ services:
   http:
     build: ./fixture
     image: veyport-application-fixture:local
+    user: "${LAB_UID:?Provide the unprivileged private-file owner UID}:${LAB_GID:?Provide the private-file owner GID}"
     network_mode: host
     environment:
       FIXTURE_LISTEN: ${LAB_BIND_IP:-127.0.0.1}:8080
@@ -23,6 +24,7 @@ services:
   https:
     build: ./fixture
     image: veyport-application-fixture:local
+    user: "${LAB_UID:?Provide the unprivileged private-file owner UID}:${LAB_GID:?Provide the private-file owner GID}"
     network_mode: host
     environment:
       FIXTURE_LISTEN: ${LAB_BIND_IP:-127.0.0.1}:8443

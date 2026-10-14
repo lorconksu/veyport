@@ -15,3 +15,9 @@ it('shows a refused launch and a fresh login control', async () => {
   render(<MemoryRouter initialEntries={['/applications/abc/launch']}><Routes><Route path="/applications/:id/launch" element={<ApplicationLaunch />} /></Routes></MemoryRouter>)
   await waitFor(() => expect(screen.getByRole('alert')).toHaveTextContent('Sign in again'))
 })
+it('rejects an invalid direct-link path asynchronously without launching it', async () => {
+  vi.mocked(launchApplication).mockClear()
+  render(<MemoryRouter initialEntries={['/applications/abc/launch?path=%2F%2Fevil.example']}><Routes><Route path="/applications/:id/launch" element={<ApplicationLaunch />} /></Routes></MemoryRouter>)
+  await waitFor(() => expect(screen.getByRole('alert')).toHaveTextContent('Invalid application destination'))
+  expect(launchApplication).not.toHaveBeenCalled()
+})

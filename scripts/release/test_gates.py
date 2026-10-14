@@ -325,7 +325,7 @@ if os.environ['TAG_MODE']=='create-lostreply': print('private-upstream-canary',f
     def test_only_bounded_individually_reviewed_source_annotations_pass(self):
         with tempfile.TemporaryDirectory() as temp:
             path = Path(temp) / "sarif.json"
-            rule, source = next(iter(REVIEWED_ANNOTATIONS))
+            rule, source = next(key for key, count in REVIEWED_ANNOTATIONS.items() if count == 1)
             finding = {"ruleId": rule, "locations": [{"physicalLocation": {"artifactLocation": {"uri": source}}}], "suppressions": [{"kind": "inSource"}]}
             run = {"results": [finding], "tool": {"driver": {"name": "Semgrep"}}, "invocations": [{"executionSuccessful": True}]}
             path.write_text(json.dumps({"runs": [run]}))
@@ -340,6 +340,30 @@ if os.environ['TAG_MODE']=='create-lostreply': print('private-upstream-canary',f
             with self.assertRaises(ValueError):
                 check(path, "semgrep")
 
+
+    def test_application_redirect_annotations_are_bound_to_exact_file_and_count(self):
+        rule = "go.lang.security.injection.open-redirect.open-redirect"
+        source = "hub/internal/server/application_proxy.go"
+        with tempfile.TemporaryDirectory() as temp:
+            path = Path(temp) / "sarif.json"
+            finding = {"ruleId": rule, "locations": [{"physicalLocation": {"artifactLocation": {"uri": source}}}], "suppressions": [{"kind": "inSource", "status": "accepted"}]}
+            run = {"results": [finding, finding], "tool": {"driver": {"name": "Semgrep"}}, "invocations": [{"executionSuccessful": True}]}
+            path.write_text(json.dumps({"runs": [run]}))
+            check(path, "semgrep")
+            run["results"].append(finding)
+            path.write_text(json.dumps({"runs": [run]}))
+            with self.assertRaises(ValueError):
+                check(path, "semgrep")
+            run["results"] = [finding]
+            finding["locations"][0]["physicalLocation"]["artifactLocation"]["uri"] = "hub/internal/server/other.go"
+            path.write_text(json.dumps({"runs": [run]}))
+            with self.assertRaises(ValueError):
+                check(path, "semgrep")
+            finding["locations"][0]["physicalLocation"]["artifactLocation"]["uri"] = source
+            finding["suppressions"] = []
+            path.write_text(json.dumps({"runs": [run]}))
+            with self.assertRaises(ValueError):
+                check(path, "semgrep")
 
 if __name__ == "__main__":
     unittest.main()

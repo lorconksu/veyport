@@ -419,7 +419,7 @@ func TestApplicationDirectLinkAndLaunchExchangeRefuseInvalidAuthority(t *testing
 	for _, tc := range []struct {
 		method, origin, body, path string
 		want                       int
-	}{{"GET", s.applicationPortalOrigin, "", "/_veyport/launch", 403}, {"POST", "https://sibling.apps.example.test", "ticket=" + strings.Repeat("A", 43), "/_veyport/launch", 403}, {"POST", s.applicationPortalOrigin, "ticket=short", "/_veyport/launch", 403}, {"POST", s.applicationPortalOrigin, "ticket=" + strings.Repeat("A", 43), "/_veyport/launch", 403}, {"GET", "", "", "/_veyport/unknown", 404}} {
+	}{{"GET", s.applicationPortalOrigin, "", "/_veyport/launch", 403}, {"POST", "null", "ticket=" + strings.Repeat("A", 43), "/_veyport/launch", 403}, {"POST", "https://sibling.apps.example.test", "ticket=" + strings.Repeat("A", 43), "/_veyport/launch", 403}, {"POST", s.applicationPortalOrigin, "ticket=short", "/_veyport/launch", 403}, {"POST", s.applicationPortalOrigin, "ticket=" + strings.Repeat("A", 43), "/_veyport/launch", 403}, {"GET", "", "", "/_veyport/unknown", 404}} {
 		r = httptest.NewRequest(tc.method, "https://"+a.PublicHostname+tc.path, strings.NewReader(tc.body))
 		r.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 		r.Header.Set("Origin", tc.origin)
@@ -503,6 +503,9 @@ func TestApplicationNativeCSRFHeaderSurvivesProxy(t *testing.T) {
 	if w.Code != 204 {
 		t.Fatal("native CSRF broken", w.Code)
 	}
+	if w.Header().Get("Referrer-Policy") != "strict-origin" {
+		t.Fatal("native app document policy must preserve same-origin form Origin")
+	}
 }
 func TestApplicationHousekeepingAuditsExpiryBeforeRetention(t *testing.T) {
 	s, a, c := applicationFixture(t, "http://127.0.0.1:9999")
@@ -523,15 +526,15 @@ func TestApplicationHousekeepingAuditsExpiryBeforeRetention(t *testing.T) {
 		t.Fatal("wrong app")
 	}
 }
-func TestApplicationLaunchDocumentNeverLeaksNativePathReferrer(t *testing.T) {
+func TestApplicationLaunchDocumentUsesOriginOnlyReferrerPolicy(t *testing.T) {
 	s := testServer(t)
 	s.applicationDomain = "apps.example.test"
 	s.applicationPortalOrigin = "https://portal.example.test"
 	for _, path := range []string{"/applications/abc/launch?path=%2Fnative%3Fsecret%3Dx", "/login?returnTo=launch"} {
 		w := httptest.NewRecorder()
 		s.routes().ServeHTTP(w, httptest.NewRequest("GET", s.applicationPortalOrigin+path, nil))
-		if w.Header().Get("Referrer-Policy") != "no-referrer" {
-			t.Fatal("portal launch/login may leak referrer")
+		if w.Header().Get("Referrer-Policy") != "strict-origin" {
+			t.Fatal("portal launch/login must preserve form Origin without exposing path/query")
 		}
 		if strings.HasPrefix(path, "/applications") && w.Header().Get("Cache-Control") != "no-store" {
 			t.Fatal("launch document cached")
@@ -555,5 +558,133 @@ func TestApplicationLogoutPersistenceFailureDoesNotClearCredentials(t *testing.T
 	s.routes().ServeHTTP(w, r)
 	if w.Code != 500 || len(w.Result().Cookies()) != 0 {
 		t.Fatalf("false logout result%d cookies%d", w.Code, len(w.Result().Cookies()))
+	}
+}
+
+func TestApplicationRevocationInterruptsStalledHTTPResponse(t *testing.T) {
+	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Length", "67108864")
+		_, _ = io.Copy(w, io.LimitReader(applicationZeroReader{}, 64<<20))
+	}))
+	defer backend.Close()
+	s, a, c := applicationFixture(t, backend.URL)
+	done := make(chan struct{})
+	gateway := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { defer close(done); s.routes().ServeHTTP(w, r) }))
+	defer gateway.Close()
+	socket, e := net.Dial("tcp", gateway.Listener.Addr().String())
+	if e != nil {
+		t.Fatal(e)
+	}
+	defer socket.Close()
+	_, e = io.WriteString(socket, "GET /large HTTP/1.1\r\nHost: "+a.PublicHostname+"\r\nCookie: "+applicationCookie+"="+c+"\r\n\r\n")
+	if e != nil {
+		t.Fatal(e)
+	}
+	reader := bufio.NewReader(socket)
+	for {
+		line, e := reader.ReadString('\n')
+		if e != nil {
+			t.Fatal(e)
+		}
+		if line == "\r\n" {
+			break
+		}
+	}
+	time.Sleep(300 * time.Millisecond)
+	ss, _ := s.store.GetApplicationSession(refreshDigest(c))
+	if e := s.store.EndApplicationSession(ss.ID, "revoked_self", s.now()); e != nil {
+		t.Fatal(e)
+	}
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		socket.Close()
+		t.Fatal("revocation did not interrupt stalled frontend write within5s")
+	}
+}
+func TestApplicationRevocationInterruptsStalledHTTPUpload(t *testing.T) {
+	backendStarted := make(chan struct{})
+	backendDone := make(chan struct{})
+	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		defer close(backendDone)
+		close(backendStarted)
+		_, _ = io.Copy(io.Discard, r.Body)
+	}))
+	defer backend.Close()
+	s, a, c := applicationFixture(t, backend.URL)
+	done := make(chan struct{})
+	gateway := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { defer close(done); s.routes().ServeHTTP(w, r) }))
+	defer gateway.Close()
+	socket, e := net.Dial("tcp", gateway.Listener.Addr().String())
+	if e != nil {
+		t.Fatal(e)
+	}
+	defer socket.Close()
+	_, e = io.WriteString(socket, "POST /upload HTTP/1.1\r\nHost: "+a.PublicHostname+"\r\nOrigin: https://"+a.PublicHostname+"\r\nCookie: "+applicationCookie+"="+c+"\r\nContent-Length: 67108864\r\n\r\n"+strings.Repeat("x", 65536))
+	if e != nil {
+		t.Fatal(e)
+	}
+	select {
+	case <-backendStarted:
+	case <-time.After(3 * time.Second):
+		t.Fatal("backend upload not started")
+	}
+	ss, _ := s.store.GetApplicationSession(refreshDigest(c))
+	if e = s.store.EndApplicationSession(ss.ID, "revoked_self", s.now()); e != nil {
+		t.Fatal(e)
+	}
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		socket.Close()
+		t.Fatal("revocation left incoming upload stalled")
+	}
+	select {
+	case <-backendDone:
+	case <-time.After(time.Second):
+		t.Fatal("backend upload worker not cleaned up")
+	}
+}
+func TestApplicationRedirectsKeepUntrustedDataWithinFixedOrigins(t *testing.T) {
+	origin := "https://portal.example.test"
+	for _, path := range []string{"/native?next=https://evil.example/login", "/https://evil.example", "/?next=//evil.example", "/%252f%252fevil.example"} {
+		target, e := applicationPortalRedirect(origin, "application-id", path)
+		if e != nil {
+			t.Fatal(e)
+		}
+		parsed, e := url.Parse(target)
+		if e != nil || parsed.Scheme != "https" || parsed.Host != "portal.example.test" || parsed.Path != "/applications/application-id/launch" || parsed.Query().Get("path") != path {
+			t.Fatalf("redirect origin escaped %q", target)
+		}
+	}
+	for _, path := range []string{"//evil.example", "https://evil.example", "/%2f%2fevil.example", "/%5cevil", "/path\r\nLocation: https://evil.example"} {
+		if _, e := applicationPortalRedirect(origin, "application-id", path); e == nil {
+			t.Fatal("unsafe redirect accepted", path)
+		}
+	}
+	for _, badOrigin := range []string{"https://portal.example.test/other", "https://user:pass@portal.example.test", "http://portal.example.test", "https://portal.example.test?next=evil"} {
+		if _, e := applicationPortalRedirect(badOrigin, "application-id", "/"); e == nil {
+			t.Fatal("invalid fixed portal origin accepted")
+		}
+	}
+}
+func TestApplicationExchangeRevalidatesStoredRedirectBeforeIssuingCookie(t *testing.T) {
+	s, a, c := applicationFixture(t, "http://127.0.0.1:9999")
+	ss, _ := s.store.GetApplicationSession(refreshDigest(c))
+	secret, e := applicationSecret()
+	if e != nil {
+		t.Fatal(e)
+	}
+	ticket := model.ApplicationLaunchTicket{Digest: refreshDigest(secret), ApplicationID: a.ID, UserID: ss.UserID, AnchorID: ss.AnchorID, Hostname: a.PublicHostname, Path: "//evil.example", ConfigVersion: a.ConfigVersion, AccessRevision: ss.AccessRevision, ExpiresAt: s.now().Add(time.Minute)}
+	if e = s.store.CreateApplicationTicket(ticket); e != nil {
+		t.Fatal(e)
+	}
+	r := httptest.NewRequest("POST", "https://"+a.PublicHostname+"/_veyport/launch", strings.NewReader("ticket="+secret))
+	r.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	r.Header.Set("Origin", s.applicationPortalOrigin)
+	w := httptest.NewRecorder()
+	s.routes().ServeHTTP(w, r)
+	if w.Code != 400 || w.Header().Get("Location") != "" || len(w.Result().Cookies()) != 0 {
+		t.Fatalf("unsafe stored redirect escaped%d %s", w.Code, w.Body.String())
 	}
 }

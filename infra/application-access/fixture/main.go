@@ -87,7 +87,7 @@ func (f *fixture) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	case "/form":
 		if r.Method == http.MethodGet {
 			csrf := token()
-			cookie(w, "fixture_csrf", csrf, false)
+			cookie(w, "fixture_csrf", csrf)
 			_ = form.Execute(w, map[string]string{"Token": csrf, "Title": "Native CSRF form", "Action": "form"})
 			return
 		}
@@ -169,8 +169,8 @@ func respond(w http.ResponseWriter, value any) {
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(value)
 }
-func cookie(w http.ResponseWriter, name, value string, httpOnly bool) {
-	http.SetCookie(w, &http.Cookie{Name: name, Value: value, Path: "/", Secure: true, HttpOnly: httpOnly, SameSite: http.SameSiteLaxMode})
+func cookie(w http.ResponseWriter, name, value string) {
+	http.SetCookie(w, &http.Cookie{Name: name, Value: value, Path: "/", Secure: true, HttpOnly: true, SameSite: http.SameSiteLaxMode})
 }
 
 var form = template.Must(template.New("native").Parse(`<!doctype html><title>{{.Title}}</title><h1>{{.Title}}</h1><form action="{{.Action}}" method="post"><input type="hidden" name="csrf" value="{{.Token}}"><label>Username <input name="username" autocomplete="username"></label><label>Password <input name="password" type="password" autocomplete="current-password"></label><button type="submit">Submit native form</button></form>`))
@@ -186,7 +186,7 @@ func csrfValid(w http.ResponseWriter, r *http.Request) bool {
 func (f *fixture) login(w http.ResponseWriter, r *http.Request) {
 	if r.Method == http.MethodGet {
 		csrf := token()
-		cookie(w, "fixture_csrf", csrf, false)
+		cookie(w, "fixture_csrf", csrf)
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
 		_ = form.Execute(w, map[string]string{"Token": csrf, "Title": "Native application login", "Action": "login"})
 		return
@@ -214,7 +214,7 @@ func (f *fixture) login(w http.ResponseWriter, r *http.Request) {
 	}
 	f.sessions[value] = session{f.credentials.Username, now.Add(12 * time.Hour)}
 	f.mu.Unlock()
-	cookie(w, "fixture_session", value, true)
+	cookie(w, "fixture_session", value)
 	w.Header().Set("Location", "whoami")
 	w.WriteHeader(303)
 }

@@ -270,7 +270,7 @@ func (s *Server) handleApplicationUpdate(w http.ResponseWriter, r *http.Request)
 }
 func (s *Server) handleApplicationDelete(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
-	if e := s.store.RevokeApplicationScope(id, "application_deleted", s.now()); e != nil {
+	if e := s.store.BeginApplicationDeletion(id, s.now()); e != nil {
 		respondError(w, 500, "cannot end application access")
 		return
 	}
@@ -526,7 +526,7 @@ func (s *Server) handleApplicationLaunch(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	w.Header().Set("Cache-Control", "no-store")
-	w.Header().Set("Referrer-Policy", "no-referrer")
+	w.Header().Set("Referrer-Policy", "strict-origin")
 	s.applicationAudit(r, "application.launched", a.ID, "")
 	respondJSON(w, 200, map[string]any{"launch_url": "https://" + a.PublicHostname + "/_veyport/launch", "ticket": ticket, "expires_at": deadline, "path": path})
 }

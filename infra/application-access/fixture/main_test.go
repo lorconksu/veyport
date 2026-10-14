@@ -59,12 +59,20 @@ func TestNativeCookieLoginKeepsCSRFAndBasicIndependent(t *testing.T) {
 	if !bytes.Contains(body, []byte("Native application login")) {
 		t.Fatal("native form missing")
 	}
+	for _, c := range r.Cookies() {
+		if !c.Secure || !c.HttpOnly || c.Domain != "" {
+			t.Fatal("native form cookie must be host-only, Secure and HttpOnly")
+		}
+	}
 	origin, _ := url.Parse(s.URL)
 	var csrf string
 	for _, c := range client.Jar.Cookies(origin) {
 		if c.Name == "fixture_csrf" {
 			csrf = c.Value
 		}
+	}
+	if csrf == "" || !bytes.Contains(body, []byte(`name="csrf" value="`+csrf+`"`)) {
+		t.Fatal("native hidden form proof must remain usable with HttpOnly cookies")
 	}
 	for _, proof := range []string{"invalid", csrf} {
 		r, err = client.PostForm(s.URL+"/login", url.Values{"username": {f.credentials.Username}, "password": {f.credentials.Password}, "csrf": {proof}})
