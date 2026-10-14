@@ -53,6 +53,44 @@ describe('Applications page', () => {
     expect(mockedFetch).toHaveBeenCalledWith('/applications?limit=50&offset=50')
   })
 
+
+  it('refreshes both lists and identifies an ended legacy session without showing revoke', async () => {
+    mockedFetch.mockImplementation(async path => {
+      if (path.startsWith('/applications?')) return { applications: [{ id: 'app-a', name: 'Tools', description: '', public_url: '', available: true }], total: 1 }
+      if (path.startsWith('/auth/application-sessions?')) return { sessions: [{ id: 'old-session', application_id: 'retired-app', created_at: '2026-01-01T00:00:00Z', last_seen_at: '2026-01-01T00:00:00Z', expires_at: '2026-01-02T00:00:00Z', ended_at: '2026-01-01T01:00:00Z', end_reason: 'expired_idle' }], total: 1 }
+      return { status: 'ok' }
+    })
+    mount()
+    const sessions = screen.getByText('Your application sessions').closest('section')!
+    expect(await within(sessions).findByText('Application retired-app')).toBeInTheDocument()
+    expect(within(sessions).getByText('Ended: expired idle')).toBeInTheDocument()
+    expect(within(sessions).queryByRole('button', { name: 'End session' })).not.toBeInTheDocument()
+    fireEvent.click(await screen.findByRole('button', { name: 'Refresh' }))
+    fireEvent.click(within(sessions).getByRole('button', { name: 'Refresh application sessions' }))
+    await waitFor(() => expect(mockedFetch.mock.calls.filter(([path]) => path.startsWith('/applications?')).length).toBeGreaterThan(1))
+    await waitFor(() => expect(mockedFetch.mock.calls.filter(([path]) => path.startsWith('/auth/application-sessions?')).length).toBeGreaterThan(1))
+  })
+
+  it('shows session load and revoke failures without hiding the rest of the page', async () => {
+    const confirm = vi.spyOn(window, 'confirm').mockReturnValue(true)
+    mockedFetch.mockImplementation(async (path, options) => {
+      if (path.startsWith('/applications?')) return { applications: [], total: 0 }
+      if (path.startsWith('/auth/application-sessions?')) {
+        if (mockedFetch.mock.calls.filter(([p]) => p.startsWith('/auth/application-sessions?')).length === 1) throw new Error('Session history unavailable')
+        return { sessions: [{ id: 'live-session', application_id: 'app-live', created_at: '', last_seen_at: '', expires_at: '2026-01-02T00:00:00Z' }], total: 1 }
+      }
+      if (path === '/auth/application-sessions/live-session' && options?.method === 'DELETE') throw new Error('Revocation failed')
+      return { status: 'ok' }
+    })
+    mount()
+    const sessions = screen.getByText('Your application sessions').closest('section')!
+    expect(await within(sessions).findByRole('alert')).toHaveTextContent('Session history unavailable')
+    fireEvent.click(within(sessions).getByRole('button', { name: 'Refresh application sessions' }))
+    fireEvent.click(await within(sessions).findByRole('button', { name: 'End session' }))
+    expect(await within(sessions).findByRole('alert')).toHaveTextContent('Revocation failed')
+    confirm.mockRestore()
+  })
+
   it('paginates all application sessions and can revoke an older page entry', async () => {
     const confirm = vi.spyOn(window, 'confirm').mockReturnValue(true)
     mockedFetch.mockImplementation(async (path, options) => {
@@ -100,6 +138,7 @@ describe('Applications page', () => {
     expect(link).toHaveAttribute('href', '/applications/app-node/launch')
     expect(link).not.toHaveAttribute('href', 'https://build.apps.test')
     expect(await screen.findByText(/connected node is offline/i)).toBeInTheDocument()
+    expect(fireEvent.click(link)).toBe(false)
   })
 
   it('hides management panels without the operations capability', async () => {
@@ -155,6 +194,30 @@ describe('Applications page', () => {
     expect(JSON.parse(String(request?.body))).toMatchObject({ name: 'Wiki updated', route: 'node', node_id: 'node-1', expected_version: 8 })
   })
 
+  it('loads omitted optional application fields as empty values and keeps an edit open on failure', async () => {
+    mockedFetch.mockImplementation(async (path, options) => {
+      if (path.startsWith('/applications?')) return { applications: [], total: 0 }
+      if (path.startsWith('/admin/applications?')) return { applications: [{ id: 'app-partial', name: 'Partial config', slug: 'partial', description: '', public_hostname: 'partial.apps.test', route: 'hub', backend_url: 'https://partial.internal', enabled: false, config_version: 2, created_at: '', updated_at: '' }], total: 1 }
+      if (path === '/admin/applications/app-partial' && options?.method === 'PUT') throw new Error('Address is not allowed')
+      return { status: 'ok' }
+    })
+    mount()
+    fireEvent.click(await screen.findByRole('tab', { name: 'Manage applications' }))
+    fireEvent.click(await screen.findByRole('button', { name: 'Edit' }))
+    const form = screen.getByRole('form', { name: 'Edit application' })
+    expect(within(form).getByLabelText('Allowed network ranges')).toHaveValue('')
+    expect(within(form).getByLabelText('Private certificate authority (optional)')).toHaveValue('')
+    expect(within(form).getByLabelText('Application is enabled')).not.toBeChecked()
+    fireEvent.change(within(form).getByLabelText('Description'), { target: { value: 'Private docs' } })
+    fireEvent.change(within(form).getByLabelText('Allowed network ranges'), { target: { value: '10.1.0.0/16' } })
+    fireEvent.click(within(form).getByLabelText('Application is enabled'))
+    fireEvent.click(within(form).getByRole('button', { name: 'Save changes' }))
+    expect(await within(form).findByRole('alert')).toHaveTextContent('Address is not allowed')
+    expect(screen.getByRole('form', { name: 'Edit application' })).toBeInTheDocument()
+    const [, request] = mockedFetch.mock.calls.find(([path, opts]) => path === '/admin/applications/app-partial' && opts?.method === 'PUT')!
+    expect(JSON.parse(String(request?.body))).toMatchObject({ description: 'Private docs', allowed_cidrs: ['10.1.0.0/16'], ca_pem: '', enabled: true, expected_version: 2 })
+  })
+
   it('creates and deletes a local application group with confirmations', async () => {
     const confirm = vi.spyOn(window, 'confirm').mockReturnValue(true)
     mockedFetch.mockImplementation(async (path, options) => {
@@ -196,6 +259,40 @@ describe('Applications page', () => {
     await waitFor(() => expect(mockedFetch).toHaveBeenCalledWith('/admin/application-groups/group-1', expect.objectContaining({ method: 'PUT' })))
     const [, request] = mockedFetch.mock.calls.find(([path, opts]) => path === '/admin/application-groups/group-1' && opts?.method === 'PUT')!
     expect(JSON.parse(String(request?.body))).toMatchObject({ name: 'Editors', user_ids: ['user-1', 'user-2'], expected_version: 4 })
+  })
+
+  it('shows directory-user lookup errors while editing a group', async () => {
+    mockedFetch.mockImplementation(async path => {
+      if (path.startsWith('/applications?')) return { applications: [], total: 0 }
+      if (path.startsWith('/admin/application-groups?')) return { groups: [{ id: 'group-offline', name: 'Reviewers', user_ids: [], version: 1 }], total: 1 }
+      if (path === '/admin/application-groups/group-offline') return { id: 'group-offline', name: 'Reviewers', user_ids: [], version: 1 }
+      if (path.startsWith('/admin/application-subjects/users?')) throw new Error('People lookup is unavailable')
+      return { status: 'ok' }
+    })
+    mount()
+    fireEvent.click(await screen.findByRole('tab', { name: 'Application groups' }))
+    fireEvent.click(await screen.findByRole('button', { name: 'Edit members' }))
+    const form = await screen.findByRole('form', { name: 'Edit application group' })
+    expect(await within(form).findByRole('alert')).toHaveTextContent('People lookup is unavailable')
+  })
+
+  it('keeps a group edit available after a versioned membership update is rejected', async () => {
+    mockedFetch.mockImplementation(async (path, options) => {
+      if (path.startsWith('/applications?')) return { applications: [], total: 0 }
+      if (path.startsWith('/admin/application-groups?')) return { groups: [{ id: 'group-stale', name: 'Reviewers', user_ids: [], member_count: 0, version: 4 }], total: 1 }
+      if (path === '/admin/application-groups/group-stale' && options?.method === 'PUT') throw new Error('Group changed; reload before saving')
+      if (path === '/admin/application-groups/group-stale') return { id: 'group-stale', name: 'Reviewers', user_ids: [], version: 4 }
+      if (path.startsWith('/admin/application-subjects/users?')) return { users: [], total: 0 }
+      return { status: 'ok' }
+    })
+    mount()
+    fireEvent.click(await screen.findByRole('tab', { name: 'Application groups' }))
+    fireEvent.click(await screen.findByRole('button', { name: 'Edit members' }))
+    const form = await screen.findByRole('form', { name: 'Edit application group' })
+    fireEvent.change(within(form).getByLabelText('Group name'), { target: { value: 'Reviewers updated' } })
+    fireEvent.click(within(form).getByRole('button', { name: 'Save group' }))
+    expect(await within(form).findByRole('alert')).toHaveTextContent('Group changed; reload before saving')
+    expect(screen.getByRole('form', { name: 'Edit application group' })).toBeInTheDocument()
   })
 
   it('fetches the next bounded user page when editing local-group membership', async () => {
@@ -279,6 +376,43 @@ describe('Applications page', () => {
     expect(mockedFetch).not.toHaveBeenCalledWith(expect.stringContaining('/application-subjects/users?'), expect.anything())
   })
 
+  it('adds a person grant using the selected username and stable user ID', async () => {
+    mockedFetch.mockImplementation(async (path, options) => {
+      if (path.startsWith('/applications?')) return { applications: [], total: 0 }
+      if (path.startsWith('/admin/applications?')) return { applications: [{ id: 'app-person', name: 'Reports', slug: 'reports', description: '', public_hostname: 'reports.apps.test', route: 'hub', backend_url: 'https://reports.internal', allowed_cidrs: [], enabled: true, config_version: 2, created_at: '', updated_at: '' }], total: 1 }
+      if (path === '/admin/applications/app-person/grants' && options?.method === 'PUT') return { grants: [{ kind: 'user', subject_id: 'user-2' }], config_version: 3 }
+      if (path === '/admin/applications/app-person/grants') return { grants: [], config_version: 2 }
+      if (path.startsWith('/admin/application-subjects/users?')) return { users: [{ id: 'user-2', username: 'jane' }], total: 1 }
+      return { status: 'ok' }
+    })
+    mount()
+    fireEvent.click(await screen.findByRole('tab', { name: 'Manage applications' }))
+    fireEvent.click(await screen.findByRole('button', { name: 'Access' }))
+    const dialog = await screen.findByRole('dialog', { name: 'Access for Reports' })
+    fireEvent.change(await within(dialog).findByLabelText('Search people for grant'), { target: { value: 'jane' } })
+    expect(await within(dialog).findByRole('option', { name: 'jane (user-2)' })).toHaveValue('user-2')
+    fireEvent.change(within(dialog).getByLabelText('Grant subject'), { target: { value: 'user-2' } })
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Add' }))
+    await waitFor(() => expect(mockedFetch).toHaveBeenCalledWith('/admin/applications/app-person/grants', expect.objectContaining({ method: 'PUT' })))
+    const [, request] = mockedFetch.mock.calls.find(([path, opts]) => path === '/admin/applications/app-person/grants' && opts?.method === 'PUT')!
+    expect(JSON.parse(String(request?.body))).toMatchObject({ grants: [{ kind: 'user', subject_id: 'user-2' }], expected_version: 2 })
+  })
+
+  it('keeps the access editor open and reports an access-rule loading error', async () => {
+    mockedFetch.mockImplementation(async path => {
+      if (path.startsWith('/applications?')) return { applications: [], total: 0 }
+      if (path.startsWith('/admin/applications?')) return { applications: [{ id: 'app-no-grants', name: 'Reports', slug: 'reports', description: '', public_hostname: 'reports.apps.test', route: 'hub', backend_url: 'https://reports.internal', allowed_cidrs: [], enabled: true, config_version: 2, created_at: '', updated_at: '' }], total: 1 }
+      if (path === '/admin/applications/app-no-grants/grants') throw new Error('Access rules could not be loaded')
+      return { status: 'ok' }
+    })
+    mount()
+    fireEvent.click(await screen.findByRole('tab', { name: 'Manage applications' }))
+    fireEvent.click(await screen.findByRole('button', { name: 'Access' }))
+    expect(await screen.findByRole('dialog', { name: 'Access for Reports' })).toBeInTheDocument()
+    expect(await screen.findByRole('alert')).toHaveTextContent('Access rules could not be loaded')
+    expect(screen.queryByLabelText('Grant type')).not.toBeInTheDocument()
+  })
+
 
   it('asks before removing an access grant that can end active sessions', async () => {
     const confirm = vi.spyOn(window, 'confirm').mockReturnValue(false)
@@ -303,5 +437,148 @@ describe('Applications page', () => {
     mount()
     expect(await screen.findByRole('alert')).toHaveTextContent('Access service is unavailable')
     expect(screen.queryByText(/no applications are available/i)).not.toBeInTheDocument()
+  })
+
+  it('reports application creation and deletion failures in their forms', async () => {
+    const confirm = vi.spyOn(window, 'confirm').mockReturnValue(true)
+    mockedFetch.mockImplementation(async (path, options) => {
+      if (path.startsWith('/applications?')) return { applications: [], total: 0 }
+      if (path.startsWith('/admin/applications?')) return { applications: [{ id: 'app-delete', name: 'Legacy wiki', slug: 'legacy', description: '', public_hostname: 'legacy.apps.test', route: 'hub', backend_url: 'https://legacy.internal', allowed_cidrs: ['10.0.0.0/8'], enabled: true, config_version: 1, created_at: '', updated_at: '' }], total: 1 }
+      if (path === '/admin/applications' && options?.method === 'POST') throw new Error('Application could not be created')
+      if (path === '/admin/applications/app-delete' && options?.method === 'DELETE') throw new Error('Application still has an active dependency')
+      return { status: 'ok' }
+    })
+    mount()
+    fireEvent.click(await screen.findByRole('tab', { name: 'Manage applications' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Add application' }))
+    const form = screen.getByRole('form', { name: 'Add application' })
+    fireEvent.change(within(form).getByLabelText('Name'), { target: { value: 'Internal wiki' } })
+    fireEvent.change(within(form).getByLabelText('Short name'), { target: { value: 'wiki' } })
+    fireEvent.change(within(form).getByLabelText('Application address'), { target: { value: 'https://wiki.internal' } })
+    fireEvent.change(within(form).getByLabelText('Allowed network ranges'), { target: { value: '10.0.0.0/8' } })
+    fireEvent.click(within(form).getByRole('button', { name: 'Create application' }))
+    expect(await within(form).findByRole('alert')).toHaveTextContent('Application could not be created')
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }))
+    fireEvent.click(await screen.findByRole('button', { name: 'Delete Legacy wiki' }))
+    expect(confirm).toHaveBeenCalledWith(expect.stringContaining('ends its active application sessions'))
+    expect(await screen.findByRole('alert')).toHaveTextContent('Application still has an active dependency')
+    confirm.mockRestore()
+  })
+
+  it('reports group list and detail lookup failures', async () => {
+    mockedFetch.mockImplementation(async path => {
+      if (path.startsWith('/applications?')) return { applications: [], total: 0 }
+      if (path.startsWith('/admin/application-groups?')) throw new Error('Groups are unavailable')
+      if (path === '/admin/application-groups/group-detail') throw new Error('Group details are unavailable')
+      return { status: 'ok' }
+    })
+    mount()
+    fireEvent.click(await screen.findByRole('tab', { name: 'Application groups' }))
+    expect(await screen.findByRole('alert')).toHaveTextContent('Groups are unavailable')
+    mockedFetch.mockImplementation(async path => {
+      if (path.startsWith('/applications?')) return { applications: [], total: 0 }
+      if (path.startsWith('/admin/application-groups?')) return { groups: [{ id: 'group-detail', name: 'Editors', user_ids: [], member_count: 0, version: 1 }], total: 1 }
+      if (path === '/admin/application-groups/group-detail') throw new Error('Group details are unavailable')
+      return { status: 'ok' }
+    })
+    fireEvent.click(await screen.findByRole('tab', { name: 'Available to me' }))
+    fireEvent.click(await screen.findByRole('tab', { name: 'Application groups' }))
+    fireEvent.click(await screen.findByRole('button', { name: 'Edit members' }))
+    expect(await screen.findByRole('alert')).toHaveTextContent('Group details are unavailable')
+  })
+
+  it('confirms application-group deletion and leaves a visible error when it fails', async () => {
+    const confirm = vi.spyOn(window, 'confirm').mockReturnValue(false)
+    mockedFetch.mockImplementation(async (path, options) => {
+      if (path.startsWith('/applications?')) return { applications: [], total: 0 }
+      if (path.startsWith('/admin/application-groups?')) return { groups: [{ id: 'group-delete', name: 'Contractors', user_ids: [], member_count: 2, version: 1 }], total: 1 }
+      if (path === '/admin/application-groups/group-delete' && options?.method === 'DELETE') throw new Error('Group is still assigned')
+      return { status: 'ok' }
+    })
+    mount()
+    fireEvent.click(await screen.findByRole('tab', { name: 'Application groups' }))
+    fireEvent.click(await screen.findByRole('button', { name: 'Delete Contractors' }))
+    expect(mockedFetch).not.toHaveBeenCalledWith('/admin/application-groups/group-delete', expect.objectContaining({ method: 'DELETE' }))
+    confirm.mockReturnValue(true)
+    fireEvent.click(screen.getByRole('button', { name: 'Delete Contractors' }))
+    expect(await screen.findByRole('alert')).toHaveTextContent('Group is still assigned')
+    confirm.mockRestore()
+  })
+
+  it('reports administrative application list failures without treating them as an empty list', async () => {
+    mockedFetch.mockImplementation(async path => {
+      if (path.startsWith('/applications?')) return { applications: [], total: 0 }
+      if (path.startsWith('/admin/applications?')) throw 'admin list unavailable'
+      return { status: 'ok' }
+    })
+    mount()
+    fireEvent.click(await screen.findByRole('tab', { name: 'Manage applications' }))
+    expect(await screen.findByRole('alert')).toHaveTextContent('Could not load applications.')
+    expect(screen.queryByText('No applications configured.')).not.toBeInTheDocument()
+  })
+
+  it('saves and removes local-group grants, with directory search failures shown', async () => {
+    const confirm = vi.spyOn(window, 'confirm').mockReturnValue(true)
+    let saved = false
+    mockedFetch.mockImplementation(async (path, options) => {
+      if (path.startsWith('/applications?')) return { applications: [], total: 0 }
+      if (path.startsWith('/admin/applications?')) return { applications: [{ id: 'app-grants', name: 'Wiki', slug: 'wiki', description: '', public_hostname: 'wiki.apps.test', route: 'hub', backend_url: 'https://wiki.internal', allowed_cidrs: [], enabled: true, config_version: 3, created_at: '', updated_at: '' }], total: 1 }
+      if (path.startsWith('/admin/application-groups?')) return { groups: [{ id: 'group-editors', name: 'Editors', user_ids: [], member_count: 0, version: 1 }], total: 1 }
+      if (path === '/admin/applications/app-grants/grants' && options?.method === 'PUT') {
+        saved = JSON.parse(String(options.body)).grants.length > 0
+        return { grants: saved ? [{ kind: 'local_group', subject_id: 'group-editors' }] : [], config_version: 4 }
+      }
+      if (path === '/admin/applications/app-grants/grants') return { grants: saved ? [{ kind: 'local_group', subject_id: 'group-editors' }] : [], config_version: 3 }
+      if (path.startsWith('/admin/application-subjects/directory-groups?')) throw new Error('Directory search is unavailable')
+      return { status: 'ok' }
+    })
+    mount()
+    fireEvent.click(await screen.findByRole('tab', { name: 'Manage applications' }))
+    fireEvent.click(await screen.findByRole('button', { name: 'Access' }))
+    const dialog = await screen.findByRole('dialog', { name: 'Access for Wiki' })
+    fireEvent.change(await within(dialog).findByLabelText('Grant type'), { target: { value: 'local_group' } })
+    expect(await within(dialog).findByRole('option', { name: /Editors/ })).toBeInTheDocument()
+    fireEvent.change(await within(dialog).findByLabelText('Grant subject'), { target: { value: 'group-editors' } })
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Add' }))
+    await waitFor(() => expect(mockedFetch).toHaveBeenCalledWith('/admin/applications/app-grants/grants', expect.objectContaining({ method: 'PUT' })))
+    fireEvent.click(await within(dialog).findByRole('button', { name: 'Remove' }))
+    await waitFor(() => expect(mockedFetch.mock.calls.filter(([path, options]) => path === '/admin/applications/app-grants/grants' && options?.method === 'PUT')).toHaveLength(2))
+    fireEvent.change(within(dialog).getByLabelText('Grant type'), { target: { value: 'directory_group' } })
+    fireEvent.change(within(dialog).getByLabelText('Search directory groups'), { target: { value: 'finance' } })
+    expect(await within(dialog).findByRole('alert')).toHaveTextContent('Directory search is unavailable')
+    confirm.mockRestore()
+  })
+
+  it('shows application policy load and save failures', async () => {
+    let rejectSave = false
+    mockedFetch.mockImplementation(async (path, options) => {
+      if (path.startsWith('/applications?')) return { applications: [], total: 0 }
+      if (path === '/admin/application-settings' && options?.method === 'PUT') {
+        if (rejectSave) throw new Error('Policy update was rejected')
+        return { idle_seconds: 2700, max_seconds: 43200, version: 2 }
+      }
+      if (path === '/admin/application-settings') return { idle_seconds: 2700, max_seconds: 43200, version: 1 }
+      return { status: 'ok' }
+    })
+    mount()
+    fireEvent.click(await screen.findByRole('tab', { name: 'Session policy' }))
+    fireEvent.click(await screen.findByRole('button', { name: 'Save policy' }))
+    expect(await screen.findByRole('status')).toHaveTextContent('Application session policy saved.')
+    fireEvent.change(screen.getByLabelText('End after inactivity (minutes)'), { target: { value: '30' } })
+    rejectSave = true
+    fireEvent.click(screen.getByRole('button', { name: 'Save policy' }))
+    expect(await screen.findByRole('alert')).toHaveTextContent('Policy update was rejected')
+  })
+
+  it('shows a policy load error rather than rendering an empty session form', async () => {
+    mockedFetch.mockImplementation(async path => {
+      if (path.startsWith('/applications?')) return { applications: [], total: 0 }
+      if (path === '/admin/application-settings') throw new Error('Session policy is unavailable')
+      return { status: 'ok' }
+    })
+    mount()
+    fireEvent.click(await screen.findByRole('tab', { name: 'Session policy' }))
+    expect(await screen.findByRole('alert')).toHaveTextContent('Session policy is unavailable')
+    expect(screen.queryByLabelText('End after inactivity (minutes)')).not.toBeInTheDocument()
   })
 })
