@@ -26,6 +26,8 @@ jobs:
   required-ci:
     if: inputs.prototype
     uses: ./.github/workflows/ci.yml
+    with:
+      sonar_pull_request_required: true
     secrets:
       DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
       DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}

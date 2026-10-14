@@ -6,6 +6,11 @@ on:
   pull_request:
     branches: [main]
   workflow_call:
+    inputs:
+      sonar_pull_request_required:
+        description: Require an exact open PR context for a prototype scan
+        type: boolean
+        default: false
     secrets:
       DOCKERHUB_USERNAME:
         required: false
@@ -374,12 +379,20 @@ jobs:
         with:
           name: coverage-integration
 
+      - name: Resolve exact Sonar analysis context
+        id: sonar-context
+        env:
+          EXPECTED_SOURCE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+          SONAR_PULL_REQUEST_REQUIRED: ${{ inputs.sonar_pull_request_required }}
+        run: python3 scripts/release/sonar_context.py
+
       - uses: SonarSource/sonarqube-scan-action@c7ee0f9df90b7aa20e8dcf9695dcfe2e7da5b4f2 # v7
         with:
           args: >
             -Dsonar.qualitygate.wait=true
             -Dsonar.qualitygate.timeout=300
             -Dsonar.scm.revision=${{ github.event.pull_request.head.sha || github.sha }}
+            ${{ steps.sonar-context.outputs.args }}
         env:
           SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
           FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
