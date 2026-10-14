@@ -177,6 +177,9 @@ func (s *Server) lookupApplicationLDAP(ctx context.Context, u *model.User) (Appl
 	return ApplicationMembership{Groups: groups, Role: role}, nil
 }
 func (s *Server) applicationAuthorization(ctx context.Context, u *model.User, a *model.Application) (int64, string, error) {
+	if quarantined, err := s.retryApplicationRevocationQuarantine(); quarantined {
+		return 0, "", errors.Join(errApplicationDenied, err)
+	}
 	if !a.Enabled || s.accountAccessError(u) != nil || u.MustChangePassword || !u.TOTPEnabled {
 		return 0, "", errApplicationDenied
 	}
@@ -238,6 +241,9 @@ func (s *Server) applicationAuthorization(ctx context.Context, u *model.User, a 
 	return revision, member.Fingerprint, e
 }
 func (s *Server) checkApplicationSession(ctx context.Context, a *model.Application, ss *model.ApplicationSession, touch bool) error {
+	if err := s.checkApplicationPendingRevocation(ss.ID); err != nil {
+		return err
+	}
 	now := s.now()
 	if ss.EndedAt != nil || ss.ApplicationID != a.ID || ss.ConfigVersion != a.ConfigVersion {
 		return errApplicationDenied
@@ -274,6 +280,9 @@ func (s *Server) checkApplicationSession(ctx context.Context, a *model.Applicati
 	if revision != ss.AccessRevision || fingerprint != ss.DirectoryFingerprint {
 		return errors.Join(errApplicationDenied, s.endApplicationAccessChanged(ss.ID, now))
 	}
+	if err := s.checkApplicationPendingRevocation(ss.ID); err != nil {
+		return err
+	}
 	if touch {
 		return s.store.TouchApplicationSession(ss.ID, now)
 	}
@@ -284,9 +293,5 @@ func (s *Server) checkApplicationSession(ctx context.Context, a *model.Applicati
 // Close only this session's streams even if persistence is unavailable, and
 // propagate write/audit failures so no successful access decision hides them.
 func (s *Server) endApplicationAccessChanged(id string, now time.Time) error {
-	s.applicationStreams.closeSession(id)
-	if err := s.store.EndApplicationSession(id, "access_changed", now); err != nil {
-		return err
-	}
-	return s.auditApplicationSessionEnds()
+	return s.persistApplicationAccessChanged(id, now)
 }

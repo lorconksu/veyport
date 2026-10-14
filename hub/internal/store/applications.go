@@ -589,3 +589,20 @@ func (s *Store) PendingApplicationEndAudits(app string) (int, error) {
 	e := s.db.QueryRow(`SELECT count(*) FROM application_sessions WHERE app_id=? AND ended_at IS NOT NULL AND audited_at IS NULL`, app).Scan(&count)
 	return count, e
 }
+
+// EndAllApplicationSessions is a fail-closed startup/overflow boundary. Pending
+// launch tickets cannot survive it and create fresh descendants of old state.
+func (s *Store) EndAllApplicationSessions(reason string, now time.Time) error {
+	tx, err := s.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	if _, err = tx.Exec(`UPDATE application_sessions SET ended_at=?,end_reason=? WHERE ended_at IS NULL`, now.UnixMilli(), reason); err != nil {
+		return err
+	}
+	if _, err = tx.Exec(`DELETE FROM application_launch_tickets`); err != nil {
+		return err
+	}
+	return tx.Commit()
+}

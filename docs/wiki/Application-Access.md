@@ -10,6 +10,8 @@ The browser receives a separate opaque application session. It does not send the
 
 Accepted HTTP requests reset the application idle timer, including background requests made by the application. Bytes sent over an existing WebSocket or server-sent event stream do not reset it. The maximum lifetime is measured from the original completed Veyport MFA sign-in, so opening another application or refreshing a page does not extend that limit. Reaching the maximum requires a new sign-in with MFA. Signing out of Veyport also revokes application access, even when the portal session has already expired.
 
+The prototype ends application sessions and unused launch tickets when the Hub restarts. Reopen the application through Veyport afterward. A new launch keeps the original completed-MFA maximum deadline; restarting the Hub does not extend it or change portal and CLI session policy. If startup cleanup writes are unavailable, application admission stays closed until cleanup succeeds. Pending revocations are bounded in memory while the Hub runs; startup cleanup supplies the restart boundary.
+
 ![Browser Application Access](../screenshots/diagram-application-access.png)
 
 ## Administration

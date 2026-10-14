@@ -55,16 +55,21 @@ export async function trustedContext(person: Person): Promise<{ context: Browser
     const result = spawnSync('certutil', args, { stdio: 'pipe' })
     if (result.status !== 0) { fs.rmSync(profile, { recursive: true, force: true }); throw new Error('Private browser CA trust setup failed') }
   }
-  let context: BrowserContext
+  let context: BrowserContext | undefined
   try {
     // This localhost CONNECT service accepts only QA hosts and never resolves
     // them to the real staging service. Certificate verification stays enabled.
     context = await firefox.launchPersistentContext(profile, { headless: true, proxy: { server: 'http://127.0.0.1:19080' }, ignoreHTTPSErrors: false })
     const state = JSON.parse(privateFile(`${person}-browser-state.json`).toString()) as { cookies: Parameters<BrowserContext['addCookies']>[0] }
     await context.addCookies(state.cookies)
-  } catch { fs.rmSync(profile, { recursive: true, force: true }); throw new Error('Trusted disposable browser setup failed; private details withheld') }
-  context.setDefaultTimeout(15_000)
-  return { context, close: async () => { try { await context.close() } finally { fs.rmSync(profile, { recursive: true, force: true }) } } }
+  } catch {
+    try { await context?.close() } catch { /* Preserve the scrubbed setup error. */ }
+    fs.rmSync(profile, { recursive: true, force: true })
+    throw new Error('Trusted disposable browser setup failed; private details withheld')
+  }
+  const ready = context
+  ready.setDefaultTimeout(15_000)
+  return { context: ready, close: async () => { try { await ready.close() } finally { fs.rmSync(profile, { recursive: true, force: true }) } } }
 }
 export async function portalPage(context: BrowserContext): Promise<Page> {
   const page = await context.newPage()

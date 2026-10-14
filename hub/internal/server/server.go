@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"io/fs"
+	"log"
 	"net"
 	"net/http"
 	"strconv"
@@ -48,6 +49,7 @@ type Server struct {
 	applicationMembershipReader ApplicationMembershipReader
 	applicationDirectory        *applicationDirectoryCache
 	applicationStreams          *applicationConnections
+	applicationRevocations      *applicationRevocations
 
 	originalAccess            OriginalAccessConfig
 	originalRecovery          *originalRecovery
@@ -205,6 +207,10 @@ func New(cfg Config) *Server {
 	s.securityTransition.ResolveSecret = s.resolveSecuritySecret
 	s.securityTransition.PrepareChange = s.prepareSecurityChange
 	s.installAuditObservers()
+	s.applicationRevocations = newApplicationRevocations(s.now())
+	if _, err := s.retryApplicationRevocationQuarantine(); err != nil {
+		log.Printf("application startup cleanup or session-end auditing needs retry")
+	}
 	startupCtx, startupCancel := context.WithTimeout(context.Background(), 10*time.Second)
 	if err := authorization.New(s.store).Startup(startupCtx, s.securityTransition); err != nil {
 		_ = s.store.RequirePolicyRecovery()

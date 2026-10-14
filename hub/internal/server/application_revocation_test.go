@@ -198,3 +198,35 @@ func TestApplicationDirectoryRevocationPropagatesPersistenceFailure(t *testing.T
 		t.Fatal("revocation retry did not persist", err)
 	}
 }
+
+func TestApplicationDirectoryRestorationBeforeRevocationRetryNeverResumesCookie(t *testing.T) {
+	s, app, session := directorySessionFixture(t, "user")
+	now := s.now()
+	s.SetClock(func() time.Time { return now.Add(3 * time.Second) })
+	s.applicationMembershipReader = applicationMemberReaderFunc(func(context.Context, *model.User) (ApplicationMembership, error) {
+		return ApplicationMembership{}, errApplicationDenied
+	})
+	if _, err := s.store.DB().Exec(`CREATE TRIGGER fail_app_restore_end BEFORE UPDATE OF ended_at ON application_sessions BEGIN SELECT RAISE(ABORT,'synthetic end unavailable'); END`); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.checkApplicationSession(context.Background(), app, session, false); err == nil {
+		t.Fatal("observed loss with failed persistence authorized access")
+	}
+	if _, err := s.store.DB().Exec(`DROP TRIGGER fail_app_restore_end`); err != nil {
+		t.Fatal(err)
+	}
+	s.applicationMembershipReader = applicationMemberReaderFunc(func(context.Context, *model.User) (ApplicationMembership, error) {
+		return ApplicationMembership{Groups: []string{"ldap:synthetic-group"}, Role: model.RoleAuditor}, nil
+	})
+	s.SetClock(func() time.Time { return now.Add(6 * time.Second) })
+	if err := s.checkApplicationSession(context.Background(), app, session, true); err == nil {
+		t.Fatal("old cookie resumed when directory restored before persistence retry")
+	}
+	current, err := s.store.ApplicationSessionByID(session.ID)
+	if err != nil || current.EndedAt == nil || current.EndReason != "access_changed" {
+		t.Fatal("pending revocation was not durably retried", err)
+	}
+	if err := s.checkApplicationSession(context.Background(), app, session, true); err == nil {
+		t.Fatal("stale snapshot bypassed durable end after pending marker cleanup")
+	}
+}
