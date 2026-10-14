@@ -39,6 +39,7 @@ export function AgentUpdateModal({ server, scope, attempt, open, onClose, onAtte
   const dispatched = useRef(false)
   const authority = useRef(user)
   const lifecycle = useRef<AbortController | null>(null)
+  const refreshedOutcome = useRef<string | null>(null)
   useEffect(() => { authority.current = user }, [user])
   useEffect(() => {
     const controller = new AbortController()
@@ -90,6 +91,19 @@ export function AgentUpdateModal({ server, scope, attempt, open, onClose, onAtte
       || !attempt.target || !sameArtifact(recovered.target, attempt.target))) return
     if (attempt?.operation !== recovered) onAttempt({ operation: recovered })
   }, [recovered, isAdmin, attempt, onAttempt])
+
+  useEffect(() => {
+    if (!recovered || !terminalAgentUpdate(recovered) || attempt?.uncertain || !isAdmin || !open || !visible
+      || lifecycle.current?.signal.aborted) return
+    const outcome = `${recovered.id}:${recovered.state}`
+    if (refreshedOutcome.current === outcome) return
+    refreshedOutcome.current = outcome
+    // The POST only acknowledges dispatch. Refresh reported state after a
+    // validated durable outcome, including the dialog's cached preflight.
+    void client.invalidateQueries({ queryKey: ['servers'] })
+    void client.invalidateQueries({ queryKey: [scope, 'availability'] })
+    void client.invalidateQueries({ queryKey: [scope, 'confirmation', server.id] })
+  }, [recovered, attempt?.uncertain, isAdmin, open, visible, client, scope, server.id])
 
   useEffect(() => {
     if ([status.error, check.error].some(error => error instanceof ApiError && (error.status === 401 || error.status === 403))) {
