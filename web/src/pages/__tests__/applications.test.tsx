@@ -1,5 +1,6 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react'
+import userEvent from '@testing-library/user-event'
 import { MemoryRouter } from 'react-router-dom'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { ApplicationsPage } from '@/pages/applications'
@@ -169,6 +170,41 @@ describe('Applications page', () => {
     await waitFor(() => expect(mockedFetch).toHaveBeenCalledWith('/admin/applications', expect.objectContaining({ method: 'POST' })))
     const [, request] = mockedFetch.mock.calls.find(([path, opts]) => path === '/admin/applications' && opts?.method === 'POST')!
     expect(JSON.parse(String(request?.body))).toMatchObject({ name: 'Internal wiki', slug: 'wiki', route: 'hub', backend_url: 'https://wiki.internal:8443', allowed_cidrs: ['10.8.0.0/16', 'fd00:8::/64'] })
+  })
+
+  it('marks required fields and toggles field help with click and keyboard without submitting', async () => {
+    const user = userEvent.setup()
+    mockedFetch.mockImplementation(async path => {
+      if (path.startsWith('/applications?')) return { applications: [], total: 0 }
+      if (path.startsWith('/admin/applications?')) return { applications: [], total: 0, limit: 50, offset: 0 }
+      return { status: 'ok' }
+    })
+    mount()
+    fireEvent.click(await screen.findByRole('tab', { name: 'Manage applications' }))
+    fireEvent.click(screen.getByRole('button', { name: /add application/i }))
+    const form = screen.getByRole('form', { name: 'Add application' })
+    expect(within(form).getByText('Required field')).toBeInTheDocument()
+    for (const label of ['Name', 'Short name', 'Connect through', 'Application address', 'Allowed network ranges']) {
+      expect(within(form).getByLabelText(label)).toBeRequired()
+      expect(within(form).getByLabelText(label).getAttribute('aria-describedby')).toBeTruthy()
+    }
+    expect(within(form).queryByLabelText('Connected node')).not.toBeInTheDocument()
+
+    await user.click(within(form).getByRole('button', { name: 'Help for Short name' }))
+    expect(within(form).getByText(/1–63 lowercase letters, digits, or hyphens/i)).toBeVisible()
+    expect(within(form).getByRole('button', { name: 'Help for Short name' })).toHaveAttribute('aria-expanded', 'true')
+
+    const nameHelp = within(form).getByRole('button', { name: 'Help for Name' })
+    nameHelp.focus()
+    await user.keyboard('{Enter}')
+    expect(nameHelp).toHaveAttribute('aria-expanded', 'true')
+    await user.keyboard(' ')
+    expect(nameHelp).toHaveAttribute('aria-expanded', 'false')
+
+    fireEvent.change(within(form).getByLabelText('Connect through'), { target: { value: 'node' } })
+    expect(within(form).getByLabelText('Connected node')).toBeRequired()
+    expect(within(form).queryByRole('button', { name: 'Create application' })).toBeInTheDocument()
+    expect(mockedFetch).not.toHaveBeenCalledWith('/admin/applications', expect.objectContaining({ method: 'POST' }))
   })
 
 
