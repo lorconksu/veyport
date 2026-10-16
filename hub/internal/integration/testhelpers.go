@@ -26,8 +26,9 @@ const (
 	httpURLFormat = "http://%s%s" // NOSONAR: test harness listeners bind exclusively to loopback.
 	// bearerPrefix is the Authorization header prefix for bearer tokens.
 	bearerPrefix  = "Bearer "
-	cookieAccess  = "veyport_access"
-	cookieRefresh = "veyport_refresh"
+	cookieAccess  = "__Host-veyport_access"
+	cookieRefresh = "__Host-veyport_refresh"
+	cookieCSRF    = "__Host-veyport_csrf"
 	// totpSetupPath is the TOTP enrollment endpoint used while bootstrapping
 	// admin accounts in the test harness.
 	totpSetupPath = "/api/auth/totp/setup"

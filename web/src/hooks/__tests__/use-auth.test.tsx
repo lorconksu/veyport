@@ -23,7 +23,7 @@ function TestConsumer() {
       <button onClick={() => login({ id: '1', username: 'admin', email: 'a@b.com', role: 'admin', totp_enabled: true, avatar: null, created_at: '', updated_at: '' })}>
         Login
       </button>
-      <button onClick={logout}>Logout</button>
+      <button onClick={() => void logout().catch(() => {})}>Logout</button>
       <button onClick={() => void refreshUser()}>Refresh</button>
     </div>
   )
@@ -108,6 +108,7 @@ describe('AuthProvider', () => {
   })
 
   it('refreshes revoked capabilities on focus and fails closed on network failure', async () => {
+    vi.spyOn(document, 'visibilityState', 'get').mockReturnValue('visible')
     const user = { id: '1', username: 'officer', role: 'viewer', capabilities: ['security.read'] }
     const mockFetch = vi.spyOn(globalThis, 'fetch')
       .mockResolvedValueOnce(new Response(JSON.stringify(user)))
@@ -142,6 +143,16 @@ describe('AuthProvider', () => {
     expect(screen.getByTestId('username').textContent).toBe('admin')
   })
 
+  it('retains the authenticated user after a failed durable logout', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce(new Response(JSON.stringify({ id: '1', username: 'officer' })))
+    mockClearTokens.mockRejectedValueOnce(new Error('Could not sign out. Retry.'))
+    render(<AuthProvider><TestConsumer /></AuthProvider>)
+    await waitFor(() => expect(screen.getByTestId('authenticated').textContent).toBe('true'))
+    await act(async () => screen.getByText('Logout').click())
+    expect(screen.getByTestId('authenticated').textContent).toBe('true')
+    expect(screen.getByTestId('username').textContent).toBe('officer')
+  })
+
   it('never resurrects a session when a refresh finishes across pending logout', async () => {
     let resolveMe!: (response: Response) => void
     let resolveLogout!: () => void
@@ -153,7 +164,7 @@ describe('AuthProvider', () => {
     await waitFor(() => expect(screen.getByTestId('authenticated').textContent).toBe('true'))
     act(() => screen.getByText('Refresh').click())
     act(() => screen.getByText('Logout').click())
-    expect(screen.getByTestId('authenticated').textContent).toBe('false')
+    expect(screen.getByTestId('authenticated').textContent).toBe('true')
     act(() => { window.dispatchEvent(new Event('focus')); screen.getByText('Refresh').click() })
     expect(mockFetch).toHaveBeenCalledTimes(2)
     await act(async () => { resolveLogout(); resolveMe(new Response(JSON.stringify({ username: 'old-session' }))) })

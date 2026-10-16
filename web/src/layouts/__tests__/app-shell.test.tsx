@@ -113,7 +113,7 @@ describe('AppShell', () => {
 
     fireEvent.click(screen.getByTitle('Sign out'))
     expect(logoutFn).toHaveBeenCalled()
-    expect(mockNavigate).toHaveBeenCalledWith('/login')
+    await waitFor(() => expect(mockNavigate).toHaveBeenCalledWith('/login'))
   })
 
   it('shows server status counts', async () => {
@@ -184,4 +184,14 @@ describe('AppShell', () => {
       expect(screen.getByText('v1.2.3')).toBeInTheDocument()
     })
   })
+})
+
+it('keeps the current page and shows retry when durable logout fails', async () => {
+  mockNavigate.mockReset()
+  const logout = vi.fn().mockRejectedValue(new Error('server failed'))
+  mockUseAuth.mockReturnValue({ user: { id: '1', username: 'admin', role: 'admin' }, logout })
+  renderWithProviders(<AppShell />)
+  fireEvent.click(screen.getByTitle('Sign out'))
+  await waitFor(() => expect(screen.getByRole('alert')).toHaveTextContent('Could not sign out. Retry.'))
+  expect(mockNavigate).not.toHaveBeenCalledWith('/login')
 })

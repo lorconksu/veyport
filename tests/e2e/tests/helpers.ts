@@ -47,6 +47,22 @@ export function markTOTPCodeUsed(code: string) {
   lastUsedTOTPCode = code
 }
 
+/** Chrome's cookie seeding API requires a secure source URL for __Host cookies.
+ * Localhost remains the loopback-only HTTP exception when those cookies are sent.
+ */
+export function hostCookieURL(baseURL: string): string {
+  const source = new URL('/', baseURL)
+  if (source.protocol === 'http:') {
+    if (!['localhost', '127.0.0.1', '[::1]'].includes(source.hostname)) {
+      throw new Error('HTTP cookie fixtures require a loopback hostname')
+    }
+    source.protocol = 'https:'
+  } else if (source.protocol !== 'https:') {
+    throw new Error('Unsupported cookie fixture scheme')
+  }
+  return source.href
+}
+
 export async function loginViaAPI(page: Page, baseURL: string) {
   const { totpSecret } = loadState()
 
@@ -71,37 +87,34 @@ export async function loginViaAPI(page: Page, baseURL: string) {
   const authData = await totpResp.json() as { access_token: string; refresh_token: string }
 
   // Step 3: Seed auth cookies so the SPA's cookie-based auth picks them up.
-  const parsedBaseURL = new URL(baseURL)
+  const cookieURL = hostCookieURL(baseURL)
   const expires = Math.floor(Date.now() / 1000)
   await page.context().addCookies([
     {
-      name: 'veyport_access',
+      name: '__Host-veyport_access',
       value: authData.access_token,
-      domain: parsedBaseURL.hostname,
-      path: '/',
+      url: cookieURL,
       expires: expires + 900,
       httpOnly: true,
-      secure: parsedBaseURL.protocol === 'https:',
+      secure: true,
       sameSite: 'Strict',
     },
     {
-      name: 'veyport_refresh',
+      name: '__Host-veyport_refresh',
       value: authData.refresh_token,
-      domain: parsedBaseURL.hostname,
-      path: '/api/auth/refresh',
+      url: cookieURL,
       expires: expires + 604800,
       httpOnly: true,
-      secure: parsedBaseURL.protocol === 'https:',
+      secure: true,
       sameSite: 'Strict',
     },
     {
-      name: 'veyport_csrf',
+      name: '__Host-veyport_csrf',
       value: 'e2e-csrf',
-      domain: parsedBaseURL.hostname,
-      path: '/',
+      url: cookieURL,
       expires: expires + 604800,
       httpOnly: false,
-      secure: parsedBaseURL.protocol === 'https:',
+      secure: true,
       sameSite: 'Strict',
     },
   ])
@@ -114,7 +127,7 @@ export async function loginViaAPI(page: Page, baseURL: string) {
  * Build an APIRequestContext authenticated as the admin with a Bearer access
  * token. Bearer requests are exempt from the double-submit CSRF check, so this
  * context can issue mutating admin calls (PUT /api/settings/hub, POST/DELETE
- * /api/users) without juggling the veyport_csrf cookie.
+ * /api/users) without juggling the __Host-veyport_csrf cookie.
  *
  * Costs one POST /api/auth/login and one POST /api/auth/login/totp against the
  * per-IP limiters (10/min and 3/min respectively).

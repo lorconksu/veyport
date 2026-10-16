@@ -7,6 +7,8 @@ service AgentService {
   rpc Connect(stream AgentMessage) returns (stream HubMessage);
   // Dedicated enrolled-node mTLS connection; never the enrollment control path.
   rpc Execute(stream ExecutionAgentMessage) returns (stream ExecutionHubMessage);
+  // Raw application bytes use their own enrolled-node connection and admission.
+  rpc ApplicationProxy(stream ApplicationAgentMessage) returns (stream ApplicationHubMessage);
   // Maintenance artifacts are selected by the Hub, never by a client URL.
   rpc DownloadUpdate(UpdateArtifactRequest) returns (stream UpdateArtifactChunk);
   rpc AuthorizeUpdate(UpdateArtifactRequest) returns (UpdateAuthorization);
@@ -36,6 +38,8 @@ message AgentMessage {
     ExecutionStatus execution_status = 32;
     UpdateCapabilities update_capabilities = 40;
     AgentUpdateStatus update_status = 41;
+    ApplicationCapabilities application_capabilities = 50;
+    ApplicationClosed application_closed = 51;
   }
 }
 
@@ -66,6 +70,8 @@ message HubMessage {
     ExecutionStatusRequest execution_status_request = 33;
     AgentUpdateRequest agent_update_request = 40;
     UpdateConfirmation update_confirmation = 41;
+    ApplicationOpen application_open = 50;
+    ApplicationClose application_close = 51;
   }
 }
 
@@ -91,6 +97,74 @@ message RegisterAgent {
   string enroll_fingerprint = 8;
   bytes node_transport_pubkey = 9;
   ExecutionCapabilities execution_capabilities = 10;
+  ApplicationCapabilities application_capabilities = 11;
+}
+
+message ApplicationCapabilities {
+  uint32 protocol_version = 1;
+  bool raw_tcp = 2;
+  string boot_id = 3;
+}
+message ApplicationBinding {
+  string connection_id = 1;
+  string application_id = 2;
+  int64 config_version = 3;
+  string node_id = 4;
+  string control_generation = 5;
+  string boot_id = 6;
+  int64 expires_unix_milli = 7;
+}
+message ApplicationTarget {
+  string scheme = 1;
+  string hostname = 2;
+  uint32 port = 3;
+  repeated string allowed_cidrs = 4;
+  repeated string forbidden_authorities = 5;
+}
+message ApplicationOpen {
+  ApplicationBinding binding = 1;
+  ApplicationTarget target = 2;
+  bytes attach_ticket = 3;
+}
+message ApplicationAttach {
+  ApplicationBinding binding = 1;
+  bytes ticket = 2;
+}
+message ApplicationAttached { ApplicationBinding binding = 1; }
+message ApplicationOpened { ApplicationBinding binding = 1; }
+message ApplicationOpenFailed {
+  ApplicationBinding binding = 1;
+  string reason_code = 2;
+}
+message ApplicationData {
+  uint64 sequence = 1;
+  bytes data = 2;
+}
+message ApplicationEOF { uint64 sequence = 1; }
+message ApplicationClose {
+  ApplicationBinding binding = 1;
+  string reason_code = 2;
+}
+message ApplicationClosed {
+  ApplicationBinding binding = 1;
+  string reason_code = 2;
+}
+message ApplicationAgentMessage {
+  oneof payload {
+    ApplicationAttach attach = 1;
+    ApplicationOpened opened = 2;
+    ApplicationOpenFailed open_failed = 3;
+    ApplicationData data = 4;
+    ApplicationEOF eof = 5;
+  }
+}
+message ApplicationHubMessage {
+  oneof payload {
+    ApplicationAttached attached = 1;
+    ApplicationData data = 2;
+    ApplicationEOF eof = 3;
+    ApplicationClose close = 4;
+  }
 }
 
 message RegisterAck {

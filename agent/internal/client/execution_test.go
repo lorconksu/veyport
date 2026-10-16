@@ -75,7 +75,7 @@ func (h *executionTestHub) Connect(stream pb.AgentService_ConnectServer) error {
 	if err != nil {
 		return err
 	}
-	if msg.GetUpdateCapabilities() != nil {
+	for msg.GetUpdateCapabilities() != nil || msg.GetApplicationCapabilities() != nil {
 		msg, err = stream.Recv()
 		if err != nil {
 			return err

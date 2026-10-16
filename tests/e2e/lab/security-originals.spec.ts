@@ -16,7 +16,7 @@ test('actual historical original access requires an approved reader role, exact 
       await officer.goto(`${HUB}/audit-logs`)
       await expect(officer.getByRole('button', { name: 'Request script original' })).toHaveCount(0)
       const refused = await officer.evaluate(async id => {
-        const csrf = /(?:^|;\s*)veyport_csrf=([^;]+)/.exec(document.cookie)?.[1] ?? ''
+        const csrf = /(?:^|;\s*)__Host-veyport_csrf=([^;]+)/.exec(document.cookie)?.[1] ?? ''
         return (await fetch(`/api/executions/${id}/original-access/preview`, { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': csrf }, body: JSON.stringify({ purpose: 'Synthetic permission refusal', records: ['script'] }) })).status
       }, execution.id)
       expect(refused).toBe(403)

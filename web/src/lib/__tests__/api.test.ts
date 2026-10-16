@@ -7,7 +7,7 @@ beforeEach(() => {
   vi.stubGlobal('fetch', mockFetch)
   mockFetch.mockReset()
   // Clear cookies
-  document.cookie = 'veyport_csrf=; expires=Thu, 01 Jan 1970 00:00:00 GMT'
+  document.cookie = '__Host-veyport_csrf=; expires=Thu, 01 Jan 1970 00:00:00 GMT; Path=/; Secure'
   // Reset window.location.href stub
   Object.defineProperty(window, 'location', {
     value: { href: '' },
@@ -62,7 +62,7 @@ describe('apiFetch', () => {
   })
 
   it('includes X-CSRF-Token header when CSRF cookie exists', async () => {
-    document.cookie = 'veyport_csrf=csrf-token-abc'
+    document.cookie = '__Host-veyport_csrf=csrf-token-abc; Path=/; Secure'
     mockFetch.mockResolvedValueOnce(makeResponse({ ok: true }))
     await apiFetch('/protected')
     const [, init] = mockFetch.mock.calls[0]
@@ -206,7 +206,7 @@ describe('apiFetch', () => {
   })
 
   it('includes CSRF token in refresh request when cookie exists', async () => {
-    document.cookie = 'veyport_csrf=my-csrf'
+    document.cookie = '__Host-veyport_csrf=my-csrf; Path=/; Secure'
     mockFetch.mockResolvedValueOnce(makeResponse({ error: 'Unauthorized' }, 401))
     mockFetch.mockResolvedValueOnce(makeResponse({ ok: true }))
     mockFetch.mockResolvedValueOnce(makeResponse({ data: 'ok' }))
@@ -274,7 +274,7 @@ describe('apiFetchWithToken', () => {
   })
 
   it('includes CSRF token when cookie exists', async () => {
-    document.cookie = 'veyport_csrf=csrf-for-setup'
+    document.cookie = '__Host-veyport_csrf=csrf-for-setup; Path=/; Secure'
     mockFetch.mockResolvedValueOnce(makeResponse({ ok: true }))
     await apiFetchWithToken('/setup', 'tok')
     const [, init] = mockFetch.mock.calls[0]
@@ -287,7 +287,7 @@ describe('re-enrollment API helpers', () => {
   beforeEach(() => {
     vi.stubGlobal('fetch', mockFetch)
     mockFetch.mockReset()
-    document.cookie = 'veyport_csrf=; expires=Thu, 01 Jan 1970 00:00:00 GMT'
+    document.cookie = '__Host-veyport_csrf=; expires=Thu, 01 Jan 1970 00:00:00 GMT; Path=/; Secure'
   })
 
   afterEach(() => {

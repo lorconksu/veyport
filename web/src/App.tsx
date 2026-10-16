@@ -1,9 +1,10 @@
 import React, { Suspense } from 'react'
-import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom'
+import { BrowserRouter, Routes, Route, Navigate, useLocation } from 'react-router-dom'
 import { QueryClientProvider } from '@tanstack/react-query'
 import { queryClient } from '@/lib/query-client'
 import { AuthProvider, useAuth } from '@/hooks/use-auth'
 import { hasCapability } from '@/lib/auth'
+import { safeApplicationReturn } from '@/lib/application-launch'
 import { AuthLayout } from '@/layouts/auth-layout'
 import { AppShell } from '@/layouts/app-shell'
 
@@ -16,11 +17,14 @@ const DashboardPage = React.lazy(() => import('@/pages/dashboard').then(m => ({ 
 const AuditLogsPage = React.lazy(() => import('@/pages/audit-logs').then(m => ({ default: m.AuditLogsPage })))
 const SettingsPage = React.lazy(() => import('@/pages/settings').then(m => ({ default: m.SettingsPage })))
 const ServerDetailPage = React.lazy(() => import('@/pages/server-detail').then(m => ({ default: m.ServerDetailPage })))
+const ApplicationsPage = React.lazy(() => import('@/pages/applications').then(m => ({ default: m.ApplicationsPage })))
+const ApplicationLaunchPage = React.lazy(() => import('@/pages/application-launch'))
 
 const LazyFallback = <div className="p-8 text-center">Loading...</div>
 
 function ProtectedRoute({ children }: Readonly<{ children: React.ReactNode }>) {
   const { isAuthenticated, isLoading } = useAuth()
+  const location = useLocation()
 
   if (isLoading) {
     return (
@@ -31,7 +35,7 @@ function ProtectedRoute({ children }: Readonly<{ children: React.ReactNode }>) {
   }
 
   if (!isAuthenticated) {
-    return <Navigate to="/login" replace />
+    return <Navigate to="/login" replace state={{ returnTo: safeApplicationReturn(location.pathname + location.search) }} />
   }
 
   return <>{children}</>
@@ -58,11 +62,14 @@ function AppRoutes() {
         <Route path="/setup/totp" element={<Suspense fallback={LazyFallback}><SetupTOTPPage /></Suspense>} />
       </Route>
 
+      <Route path="/applications/:id/launch" element={<ProtectedRoute><Suspense fallback={LazyFallback}><ApplicationLaunchPage /></Suspense></ProtectedRoute>} />
+
       {/* Protected routes */}
       <Route element={<ProtectedRoute><AppShell /></ProtectedRoute>}>
         <Route path="/" element={<Suspense fallback={LazyFallback}><DashboardPage /></Suspense>} />
         <Route path="/audit-logs" element={<Suspense fallback={LazyFallback}><AuditRoute><AuditLogsPage /></AuditRoute></Suspense>} />
         <Route path="/settings" element={<Suspense fallback={LazyFallback}><SettingsPage /></Suspense>} />
+        <Route path="/applications" element={<Suspense fallback={LazyFallback}><ApplicationsPage /></Suspense>} />
         <Route path="/servers/:id" element={<Suspense fallback={LazyFallback}><ServerDetailPage /></Suspense>} />
       </Route>
     </Routes>

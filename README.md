@@ -44,6 +44,7 @@ for issue and pull-request expectations.
 ## Features
 
 - **Fleet Dashboard** — At-a-glance health overview of all connected servers with live status, search, and filtering
+- **Browser Application Access (prototype)** — Open authorized HTTP/HTTPS apps through the Hub or an enrolled node, with independent app sessions and each app's existing login. See the [prototype guide](docs/wiki/Application-Access.md).
 - **Real-time Log Tailing** — Live log streaming over SSE with server-side grep/filter, pause/resume, and terminal-like UI
 - **Live Browser Terminal** — xterm-based shell sessions over the existing agent stream for admins and authorized LDAP users
 - **Remote File Browser** — Browse remote file systems with syntax highlighting for 16 languages; resizable sidebar, refresh button, and binaries/forbidden paths shown but greyed out

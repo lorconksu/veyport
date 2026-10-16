@@ -13,6 +13,7 @@ import { authenticator } from 'otplib'
 import { spawnSync } from 'child_process'
 import fs from 'fs'
 import path from 'path'
+import { hostCookieURL } from './helpers'
 
 // Container / network config for the screenshot run
 const CONTAINER_NAME = 'veyport-screenshots'
@@ -144,33 +145,30 @@ async function injectAuth(page: Page, targetPath = '/') {
   const expires = Math.floor(Date.now() / 1000)
   await page.context().addCookies([
     {
-      name: 'veyport_access',
+      name: '__Host-veyport_access',
       value: authTokens!.access_token,
-      domain: 'localhost',
-      path: '/',
+      url: hostCookieURL(BASE_URL),
       expires: expires + 900,
       httpOnly: true,
-      secure: false,
+      secure: true,
       sameSite: 'Strict',
     },
     {
-      name: 'veyport_refresh',
+      name: '__Host-veyport_refresh',
       value: authTokens!.refresh_token,
-      domain: 'localhost',
-      path: '/api/auth/refresh',
+      url: hostCookieURL(BASE_URL),
       expires: expires + 604800,
       httpOnly: true,
-      secure: false,
+      secure: true,
       sameSite: 'Strict',
     },
     {
-      name: 'veyport_csrf',
+      name: '__Host-veyport_csrf',
       value: 'screenshots-csrf',
-      domain: 'localhost',
-      path: '/',
+      url: hostCookieURL(BASE_URL),
       expires: expires + 604800,
       httpOnly: false,
-      secure: false,
+      secure: true,
       sameSite: 'Strict',
     },
   ])

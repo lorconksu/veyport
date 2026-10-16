@@ -30,6 +30,7 @@
 16. [Terminal Endpoints](#terminal-endpoints)
 17. [SSH Gateway Endpoints](#ssh-gateway-endpoints)
 18. [Session Endpoints](#session-endpoints)
+19. [Application Access Endpoints](#application-access-endpoints)
 
 ---
 
@@ -39,7 +40,7 @@
 |---|---|
 | Base URL | `http://<hub-host>:8081` (dev) or `https://<hub-domain>` (prod) |
 | Content Type | `application/json` (request and response) |
-| Browser Auth | `veyport_access` and `veyport_refresh` secure cookies, plus `veyport_csrf` for mutating requests |
+| Browser Auth | `__Host-veyport_access` and `__Host-veyport_refresh` secure cookies, plus `__Host-veyport_csrf` for mutating requests |
 | API Client Auth | `Authorization: Bearer <JWT access token or CLI-created API token>` |
 | Pagination | `?limit=N&offset=N` (default limit varies, max 100) |
 | CORS | Enabled in dev mode for `http://localhost:5173` |
@@ -306,7 +307,7 @@ Complete login by providing a TOTP code (second factor).
 }
 ```
 
-On success, the Hub also sets `veyport_access`, `veyport_refresh`, and `veyport_csrf` cookies for browser clients.
+On success, the Hub also sets `__Host-veyport_access`, `__Host-veyport_refresh`, and `__Host-veyport_csrf` cookies for browser clients.
 
 **Error Cases:**
 - `401` - Invalid or expired TOTP token, invalid TOTP code, user not found
@@ -329,7 +330,7 @@ Exchange a refresh token for a new access/refresh token pair.
 
 | Property | Value |
 |---|---|
-| Auth | None. Browser clients usually send the `veyport_refresh` cookie; non-browser clients may send `refresh_token` in the JSON body |
+| Auth | None. Browser clients usually send the `__Host-veyport_refresh` cookie; non-browser clients may send `refresh_token` in the JSON body |
 | Rate Limited | Yes (30 requests / 60s) |
 
 **Request Body:**
@@ -347,7 +348,7 @@ Exchange a refresh token for a new access/refresh token pair.
 ```
 
 On success, the Hub atomically rotates the refresh token for the session making this request and
-sets new `veyport_access`, `veyport_refresh`, and `veyport_csrf` cookies. Rotation does not
+sets new `__Host-veyport_access`, `__Host-veyport_refresh`, and `__Host-veyport_csrf` cookies. Rotation does not
 invalidate independent sessions or access tokens that remain valid. Explicit logout, expiry,
 account or security changes, and session revocation retain their existing effects.
 
@@ -433,7 +434,7 @@ Verify and enable TOTP by providing a valid code. For users created with a tempo
 }
 ```
 
-On success, the Hub also sets `veyport_access`, `veyport_refresh`, and `veyport_csrf` cookies for browser clients. This also counts as a successful sign-in: the account's failure count resets and `last_login_at` is stamped, same as a normal login.
+On success, the Hub also sets `__Host-veyport_access`, `__Host-veyport_refresh`, and `__Host-veyport_csrf` cookies for browser clients. This also counts as a successful sign-in: the account's failure count resets and `last_login_at` is stamped, same as a normal login.
 
 **Error Cases:**
 - `401` - Invalid TOTP code
@@ -3247,3 +3248,28 @@ previous checksum, an idle node, and the expiry plus 190 seconds.
 
 This endpoint records the human verification and releases the maintenance
 reservation. It does not remotely verify the agent binary.
+
+
+---
+
+## Application Access Endpoints
+
+Application access is configured and managed in [[Application Access]]. These endpoints are served on the portal Hub origin. Portal authentication and CSRF rules apply; administration routes require the live `operations.admin` capability. Paginated collections use `limit` and `offset` (default 50, maximum 100).
+
+| Method and path | Access | Contract summary |
+|---|---|---|
+| `GET /api/applications` | Signed-in user | Authorized applications only: `{applications:[{id,name,description,public_url,available,availability_reason}],total}`. Backend configuration is omitted. |
+| `POST /api/applications/{id}/launch` | Signed-in user | JSON `{path}` creates `{launch_url,ticket,expires_at,path}`. The browser posts the one-use ticket to the exact `launch_url`; do not place tickets in URLs or logs. |
+| `GET /api/admin/applications` | `operations.admin` | Paginated full application configuration. |
+| `POST /api/admin/applications` | `operations.admin` | Create from `{name,slug,description,route,node_id?,backend_url,allowed_cidrs,ca_pem?,enabled}`. |
+| `GET, PUT, DELETE /api/admin/applications/{id}` | `operations.admin` | Read, update with `expected_version`, or delete. Update version conflicts return `409`. |
+| `GET, PUT /api/admin/applications/{id}/grants` | `operations.admin` | Read or replace `{grants:[{kind,subject_id}],expected_version}`; grant kinds are `user`, `role`, `local_group`, and `directory_group`. |
+| `GET, POST /api/admin/application-groups` | `operations.admin` | Paginated local groups (list rows include `member_count`, not `user_ids`) or create a group. |
+| `GET, PUT, DELETE /api/admin/application-groups/{id}` | `operations.admin` | Read, update `{name,user_ids,expected_version}`, or delete. |
+| `GET, PUT /api/admin/application-settings` | `operations.admin` | Read or update `{idle_seconds,max_seconds,expected_version}`. |
+| `GET /api/admin/application-subjects/users?limit=50&offset=0&q=...` | `operations.admin` | Bounded user selector page: `{users:[{id,username}],total}`. |
+| `GET /api/admin/application-subjects/directory-groups?q=...` | `operations.admin` | Directory subjects: `{groups:[{subject_id,name}],total}`. Send the returned stable `subject_id` unchanged. |
+| `GET /api/auth/application-sessions?limit=50&offset=0` | Signed-in user | Bounded page `{sessions:[...],total}` for this user, including application name, idle deadline, absolute expiry, and end reason when ended. |
+| `DELETE /api/auth/application-sessions/{id}` | Session owner | Revoke one application session and cancel its streams. |
+
+Application grants and configuration changes revoke affected sessions. Application sessions use their own idle and absolute deadlines, separate from portal sessions. A browser-only unauthenticated application document request can be redirected to the fixed portal launch flow; API and non-browser requests receive `401`.

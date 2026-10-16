@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"net"
 	"net/url"
 	"strings"
 	"time"
@@ -260,15 +261,49 @@ func dialLDAP(cfg LDAPConfig) (LDAPConnection, error) {
 	if err != nil {
 		return nil, err
 	}
-	conn, err := ldap.DialURL(cfg.URL, ldap.DialWithTLSConfig(tlsConfig))
+	parsed, err := url.Parse(cfg.URL)
+	if err != nil || parsed.Hostname() == "" {
+		return nil, fmt.Errorf("invalid LDAP URL")
+	}
+	port := parsed.Port()
+	if port == "" {
+		port = "389"
+		if parsed.Scheme == "ldaps" {
+			port = "636"
+		}
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	raw, err := (&net.Dialer{}).DialContext(ctx, "tcp", net.JoinHostPort(parsed.Hostname(), port))
 	if err != nil {
 		return nil, err
 	}
-	if cfg.StartTLS {
-		if err := conn.StartTLS(tlsConfig); err != nil {
-			conn.Close()
+	if err = raw.SetDeadline(time.Now().Add(time.Second)); err != nil {
+		_ = raw.Close()
+		return nil, err
+	}
+	var transport net.Conn = raw
+	secure := parsed.Scheme == "ldaps"
+	if secure {
+		encrypted := tls.Client(raw, tlsConfig)
+		if err = encrypted.HandshakeContext(ctx); err != nil {
+			_ = raw.Close()
 			return nil, err
 		}
+		transport = encrypted
+	}
+	conn := ldap.NewConn(transport, secure)
+	conn.Start()
+	conn.SetTimeout(time.Second)
+	if cfg.StartTLS {
+		if err = conn.StartTLS(tlsConfig); err != nil {
+			_ = conn.Close()
+			return nil, err
+		}
+	}
+	if err = raw.SetDeadline(time.Time{}); err != nil {
+		_ = conn.Close()
+		return nil, err
 	}
 	return conn, nil
 }

@@ -32,18 +32,19 @@ import (
 
 type Handler struct {
 	pb.UnimplementedAgentServiceServer
-	store       *store.Store
-	connMgr     *connmgr.ConnManager
-	pending     *PendingRequests
-	logSessions *LogSessions
-	terminals   *TerminalSessions
-	executions  *ExecutionSessions
-	updates     *AgentUpdates
-	hbCoalescer *HeartbeatCoalescer
-	caCert      *x509.Certificate
-	caKey       *ecdsa.PrivateKey
-	notifier    *notify.Notifier
-	storageKey  string
+	store        *store.Store
+	connMgr      *connmgr.ConnManager
+	pending      *PendingRequests
+	logSessions  *LogSessions
+	terminals    *TerminalSessions
+	executions   *ExecutionSessions
+	updates      *AgentUpdates
+	applications *ApplicationTunnels
+	hbCoalescer  *HeartbeatCoalescer
+	caCert       *x509.Certificate
+	caKey        *ecdsa.PrivateKey
+	notifier     *notify.Notifier
+	storageKey   string
 
 	// Re-enrollment session registry (P2.T6 / P2.T7).
 	reEnrollMu       sync.Mutex
@@ -212,6 +213,9 @@ func (h *Handler) onAgentConnected(serverID, peerAddr string) {
 
 // onAgentDisconnected unregisters the connection, flushes heartbeats, and logs the disconnect event.
 func (h *Handler) onAgentDisconnected(serverID string, stream pb.AgentService_ConnectServer) {
+	if h.applications != nil {
+		h.applications.EndConnection(serverID, stream)
+	}
 	if h.updates != nil {
 		h.updates.EndConnection(serverID, stream)
 	}
@@ -428,6 +432,14 @@ func (h *Handler) performHeartbeatHandshake(stream pb.AgentService_ConnectServer
 // routeAgentMessage dispatches an incoming agent message to the appropriate handler.
 func (h *Handler) routeAgentMessage(serverID string, stream pb.AgentService_ConnectServer, msg *pb.AgentMessage) error {
 	switch p := msg.Payload.(type) {
+	case *pb.AgentMessage_ApplicationCapabilities:
+		if h.applications != nil {
+			return h.applications.ObserveCapabilities(serverID, stream, p.ApplicationCapabilities)
+		}
+	case *pb.AgentMessage_ApplicationClosed:
+		if h.applications != nil {
+			return h.applications.ObserveClosed(serverID, stream, p.ApplicationClosed)
+		}
 	case *pb.AgentMessage_Heartbeat:
 		return h.handleStreamHeartbeat(serverID, stream)
 	case *pb.AgentMessage_FileListResponse:

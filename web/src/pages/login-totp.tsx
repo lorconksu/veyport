@@ -1,3 +1,4 @@
+import { safeApplicationReturn } from '@/lib/application-launch'
 import { useState, useEffect } from 'react'
 import { useLocation, useNavigate } from 'react-router-dom'
 import { apiFetch } from '@/lib/api'
@@ -27,7 +28,7 @@ export function LoginTOTPPage() {
       })
 
       login(resp.user)
-      navigate('/')
+      navigate(safeApplicationReturn((location.state as { returnTo?: unknown } | null)?.returnTo), { replace: true })
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Verification failed')
       reset()

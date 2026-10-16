@@ -10,6 +10,9 @@ from go_binary_evidence import decode_stream, package_absent
 # Individually reviewed source annotations, with bounded occurrence counts.
 # The SARIF findings remain in public evidence; any other suppression blocks.
 REVIEWED_ANNOTATIONS = {
+    # Redirect tests bind one sink to the fixed operator portal origin and
+    # revalidate the other sink as root-relative after ticket consumption.
+    ("go.lang.security.injection.open-redirect.open-redirect", "hub/internal/server/application_proxy.go"): 2,
     ("go.lang.security.audit.crypto.use_of_weak_crypto.use-of-md5", "hub/internal/auditingest/s3.go"): 1,
     ("go.lang.security.audit.net.cookie-missing-httponly.cookie-missing-httponly", "hub/internal/server/cookies.go"): 2,
     ("typescript.react.security.audit.react-dangerouslysetinnerhtml.react-dangerouslysetinnerhtml", "web/src/components/markdown-viewer.tsx"): 1,

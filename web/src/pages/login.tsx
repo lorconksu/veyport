@@ -1,11 +1,14 @@
 import { useState, useEffect } from 'react'
-import { useNavigate } from 'react-router-dom'
+import { useLocation, useNavigate } from 'react-router-dom'
+import { safeApplicationReturn } from '@/lib/application-launch'
 import { apiFetch } from '@/lib/api'
 import { useAuth } from '@/hooks/use-auth'
 import type { LoginRequest, LoginResponse, AuthResponse, AuthStatusResponse } from '@/types/api'
 
 export function LoginPage() {
   const navigate = useNavigate()
+  const location = useLocation()
+  const returnTo = safeApplicationReturn((location.state as { returnTo?: unknown } | null)?.returnTo || new URLSearchParams(location.search).get('returnTo'))
   const { login } = useAuth()
   const [username, setUsername] = useState('')
   const [password, setPassword] = useState('')
@@ -44,14 +47,14 @@ export function LoginPage() {
 
       if ('user' in resp && resp.user) {
         login(resp.user)
-        navigate('/')
+        navigate(returnTo, { replace: true })
         return
       }
 
       if ('requires_totp_setup' in resp && resp.requires_totp_setup && resp.setup_token) {
-        navigate('/setup/totp', { state: { setupToken: resp.setup_token, mustChangePassword: resp.must_change_password === true } })
+        navigate('/setup/totp', { state: { returnTo, setupToken: resp.setup_token, mustChangePassword: resp.must_change_password === true } })
       } else if ('totp_token' in resp && resp.totp_token) {
-        navigate('/login/totp', { state: { totpToken: resp.totp_token } })
+        navigate('/login/totp', { state: { returnTo, totpToken: resp.totp_token } })
       }
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Login failed')

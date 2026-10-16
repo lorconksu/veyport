@@ -5,6 +5,8 @@ import re
 import subprocess
 import sys
 
+from metadata import PROTOTYPE_TAG
+
 
 def lookup(tag):
     reference = "refs/tags/" + tag
@@ -25,7 +27,7 @@ def lookup(tag):
 
 
 def verify(tag, revision, repository, create):
-    if not re.fullmatch(r"prototype-ssh-passthrough\.[1-9][0-9]*|v[0-9]+\.[0-9]+\.[0-9]+", tag) or not re.fullmatch(r"[0-9a-f]{40}|[0-9a-f]{64}", revision) or not re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", repository):
+    if not (PROTOTYPE_TAG.fullmatch(tag) or re.fullmatch(r"v[0-9]+\.[0-9]+\.[0-9]+", tag)) or not re.fullmatch(r"[0-9a-f]{40}|[0-9a-f]{64}", revision) or not re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", repository):
         raise ValueError("validated release identity required")
     existing = lookup(tag)
     if existing is not None:

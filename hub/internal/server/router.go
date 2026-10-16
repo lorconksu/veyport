@@ -9,6 +9,7 @@ import (
 
 func (s *Server) routes() http.Handler {
 	mux := http.NewServeMux()
+	s.registerApplicationRoutes(mux)
 
 	loginLimiter := newRateLimiter(10, 60*time.Second)
 	totpLimiter := newRateLimiter(3, 60*time.Second)
@@ -190,5 +191,5 @@ func (s *Server) routes() http.Handler {
 	mux.Handle("/", s.spaHandler())
 
 	// Apply CSRF, then CORS, then cache control for API, then security headers as outermost wrapper
-	return securityHeaders(apiCacheControl(s.corsMiddleware(s.csrfMiddleware(requestIDMiddleware(mux)))))
+	return s.applicationHostRouter(securityHeaders(apiCacheControl(s.corsMiddleware(s.csrfMiddleware(requestIDMiddleware(mux))))))
 }

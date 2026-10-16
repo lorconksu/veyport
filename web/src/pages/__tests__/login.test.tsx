@@ -92,7 +92,7 @@ describe('LoginPage', () => {
     fireEvent.submit(screen.getByRole('button', { name: /sign in/i }).closest('form')!)
 
     await waitFor(() => {
-      expect(mockNavigate).toHaveBeenCalledWith('/login/totp', { state: { totpToken: 'totp-tok-123' } })
+      expect(mockNavigate).toHaveBeenCalledWith('/login/totp', { state: { returnTo: '/', totpToken: 'totp-tok-123' } })
     })
   })
 
@@ -108,7 +108,7 @@ describe('LoginPage', () => {
 
     await waitFor(() => {
       expect(mockNavigate).toHaveBeenCalledWith('/setup/totp', {
-        state: { setupToken: 'setup-tok', mustChangePassword: false },
+        state: { returnTo: '/', setupToken: 'setup-tok', mustChangePassword: false },
       })
     })
   })
@@ -218,7 +218,7 @@ describe('LoginPage', () => {
 
     await waitFor(() => {
       expect(mockLogin).toHaveBeenCalledWith(user)
-      expect(mockNavigate).toHaveBeenCalledWith('/')
+      expect(mockNavigate).toHaveBeenCalledWith('/', { replace: true })
     })
   })
 })

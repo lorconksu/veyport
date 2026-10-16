@@ -1,6 +1,6 @@
 import { test, expect, APIRequestContext, Browser, BrowserContext, Page, request as apiRequest } from '@playwright/test'
 import { authenticator } from 'otplib'
-import { loadState, markTOTPCodeUsed, mintApiToken, waitForFreshTOTPCode } from './helpers'
+import { hostCookieURL, loadState, markTOTPCodeUsed, mintApiToken, waitForFreshTOTPCode } from './helpers'
 
 const BASE_URL = process.env.E2E_BASE_URL || 'http://localhost:18081'
 
@@ -157,40 +157,36 @@ async function bearerContext(accessToken: string): Promise<APIRequestContext> {
 
 /** Seed the SPA's auth cookies so a browser context carries an existing session. */
 async function seedSessionCookies(context: BrowserContext, access: string, refresh: string) {
-  const parsed = new URL(BASE_URL)
-  const secure = parsed.protocol === 'https:'
+  const cookieURL = hostCookieURL(BASE_URL)
   const expires = Math.floor(Date.now() / 1000)
   await context.addCookies([
     {
-      name: 'veyport_access',
+      name: '__Host-veyport_access',
       value: access,
-      domain: parsed.hostname,
-      path: '/',
+      url: cookieURL,
       expires: expires + 900,
       httpOnly: true,
-      secure,
+      secure: true,
       sameSite: 'Strict',
     },
     {
-      name: 'veyport_refresh',
+      name: '__Host-veyport_refresh',
       value: refresh,
-      domain: parsed.hostname,
-      path: '/api/auth/refresh',
+      url: cookieURL,
       expires: expires + 604800,
       httpOnly: true,
-      secure,
+      secure: true,
       sameSite: 'Strict',
     },
     {
       // Double-submit CSRF: the SPA echoes whatever the cookie holds, so any
       // value works as long as cookie and header agree.
-      name: 'veyport_csrf',
+      name: '__Host-veyport_csrf',
       value: 'e2e-csrf',
-      domain: parsed.hostname,
-      path: '/',
+      url: cookieURL,
       expires: expires + 604800,
       httpOnly: false,
-      secure,
+      secure: true,
       sameSite: 'Strict',
     },
   ])

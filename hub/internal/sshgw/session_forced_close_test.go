@@ -19,13 +19,10 @@ import (
 
 const forcedCloseMessage = "veyport: session ended by an administrator"
 
-// waitForShell blocks until a registered shell for the session appears.
+// waitForShell blocks until the bridge attaches the registered shell.
 func waitForShell(t *testing.T, f *fixture, sessionID string) grpcserver.TerminalSessionInfo {
 	t.Helper()
-	waitFor(t, "session attach", func() bool {
-		_, ok := f.terminals.Get(testServerID, sessionID)
-		return ok
-	})
+	f.waitForSessionAttached(sessionID)
 	info, ok := f.terminals.Get(testServerID, sessionID)
 	if !ok {
 		t.Fatal("the shell disappeared from the registry")

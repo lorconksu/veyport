@@ -58,5 +58,11 @@
     "image": "docs/screenshots/diagram-api-reference-0047ed06.png",
     "title": "Authentication Flow",
     "private": false
+  },
+  {
+    "source": "docs/diagrams/diagram-application-access.mmd",
+    "image": "docs/screenshots/diagram-application-access.png",
+    "title": "Browser Application Access",
+    "private": false
   }
 ]

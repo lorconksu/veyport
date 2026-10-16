@@ -425,3 +425,8 @@ request/API contract. The published command-passthrough prototype is Hub
 prototype 9 artifacts. Older CLI prototype 6 builds are also compatible with
 the Hub. These are prototype builds, not a stable or main-branch release. Check
 current publication and qualification on the [release page](https://github.com/lorconksu/veyport/releases).
+
+
+## Application sessions
+
+Application sessions are separate from the portal sessions listed in this page. Open the **Applications** page and scroll below the available application cards to review the applications you have accessed, see each session's idle deadline and maximum expiry, or revoke it. Administrators manage the application idle and maximum durations under **Applications → Session policy**; the defaults are 45 minutes idle and 12 hours maximum. These application limits do not alter the web or CLI account policy above. See [[Application Access]].

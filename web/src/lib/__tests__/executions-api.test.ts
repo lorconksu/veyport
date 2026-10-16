@@ -15,11 +15,11 @@ function response(body: unknown, status = 200): Response { return new Response(J
 beforeEach(() => {
   vi.stubGlobal('fetch', mockFetch)
   mockFetch.mockReset()
-  document.cookie = 'veyport_csrf=session-csrf'
+  document.cookie = '__Host-veyport_csrf=session-csrf; Path=/; Secure'
 })
 afterEach(() => {
   vi.unstubAllGlobals()
-  document.cookie = 'veyport_csrf=; expires=Thu, 01 Jan 1970 00:00:00 GMT'
+  document.cookie = '__Host-veyport_csrf=; expires=Thu, 01 Jan 1970 00:00:00 GMT; Path=/; Secure'
 })
 
 it('returns execution metadata, preserving null preparation and real root identity', async () => {

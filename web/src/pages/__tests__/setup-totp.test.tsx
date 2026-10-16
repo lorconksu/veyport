@@ -174,7 +174,7 @@ describe('SetupTOTPPage', () => {
 
     await waitFor(() => {
       expect(mockLogin).toHaveBeenCalledWith(authResponse.user)
-      expect(mockNavigate).toHaveBeenCalledWith('/')
+      expect(mockNavigate).toHaveBeenCalledWith('/', { replace: true })
     })
   })
 

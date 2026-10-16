@@ -677,14 +677,15 @@ func TestKeyringStoreSaveOverCorruptEntryRepairs(t *testing.T) {
 	if _, _, err := s.Load(hubA); err == nil {
 		t.Fatal("Load of a corrupt keyring entry succeeded, want error")
 	}
-	if err := s.Save(hubA, sessionFor(hubA)); err != nil {
+	want := sessionFor(hubA)
+	if err := s.Save(hubA, want); err != nil {
 		t.Fatalf("Save over a corrupt keyring entry: %v", err)
 	}
 	got, ok, err := s.Load(hubA)
 	if err != nil || !ok {
 		t.Fatalf("Load after repair = (ok %v, err %v), want (true, nil)", ok, err)
 	}
-	assertSession(t, got, sessionFor(hubA))
+	assertSession(t, got, want)
 }
 
 // TestKeyringStoreSurfacesSSHBackendErrors is

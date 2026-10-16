@@ -43,6 +43,7 @@ type Config struct {
 	LogSessions            *LogSessions
 	TerminalSessions       *TerminalSessions
 	ExecutionSessions      *ExecutionSessions
+	ApplicationTunnels     *ApplicationTunnels
 	AgentUpdates           *AgentUpdates
 	CACert                 *x509.Certificate
 	CAKey                  *ecdsa.PrivateKey
@@ -135,6 +136,7 @@ func New(cfg Config) *Server {
 		terminals:        s.terminals,
 		executions:       cfg.ExecutionSessions,
 		updates:          cfg.AgentUpdates,
+		applications:     cfg.ApplicationTunnels,
 		hbCoalescer:      hbCoalescer,
 		caCert:           cfg.CACert,
 		caKey:            cfg.CAKey,
