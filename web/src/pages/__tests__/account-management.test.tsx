@@ -7,7 +7,10 @@ import type { User } from '@/types/api'
 
 const mocks = vi.hoisted(() => ({ api: vi.fn(), once: vi.fn(), actor: { id: 'admin', username: 'admin', role: 'admin' } as Partial<User> | null }))
 vi.mock('@/hooks/use-auth', () => ({ useAuth: () => ({ user: mocks.actor }) }))
-vi.mock('@/lib/api', async importOriginal => ({ ...await importOriginal<typeof import('@/lib/api')>(), apiFetch: mocks.api, apiFetchOnce: mocks.once }))
+vi.mock('@/lib/api', async importOriginal => {
+  const actual = await importOriginal() as typeof import('@/lib/api')
+  return { ...actual, apiFetch: mocks.api, apiFetchOnce: mocks.once }
+})
 
 const target: User = { id: 'local', username: 'localuser', email: 'local@example.test', role: 'viewer', auth_provider: 'local', credential_revision: 4, protected: false, status: 'dormant', totp_enabled: true, avatar: null, created_at: '2026-01-01', updated_at: '2026-01-01' }
 const secret = 'SYNTHETIC-temporary-37!'
