@@ -119,3 +119,16 @@ func TestSSHCredentialEpochRecheckedAtRegistryAdmission(t *testing.T) {
 		t.Fatal("execution recheck ignored durable SSH revocation epoch")
 	}
 }
+
+func TestPresentedSSHCredentialEpochMissingMetadataKeepsRevocation(t *testing.T) {
+	for _, generation := range []int{0, 1} {
+		user := &model.User{SSHCredentialGeneration: generation}
+		legacyCurrent := generation == 0
+		if certificateAuthorityCurrent(nil, user) != legacyCurrent {
+			t.Fatal("missing connection metadata restored a revoked SSH epoch")
+		}
+		if certificateAuthorityCurrent(&ssh.ServerConn{}, user) != legacyCurrent {
+			t.Fatal("missing permission metadata restored a revoked SSH epoch")
+		}
+	}
+}

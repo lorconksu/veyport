@@ -124,3 +124,67 @@ func TestApprovedRecoveryCompletionRejectsGenerationOnlyRevocation(t *testing.T)
 		t.Fatal("rejected generation-only revocation changed password authority")
 	}
 }
+
+func TestApprovedRecoveryAuditedStorageFailureRollsBackHistoryAndAuthority(t *testing.T) {
+	s, target := recoveryServer(t)
+	_, _, sessionID := sessionTokenPair(t, s, target.ID)
+	installApprovedTemporaryPassword(t, s, "SyntheticTemporary@1234")
+	before, err := s.store.GetUserByID(target.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	replacement, err := auth.HashPassword("SyntheticReplacement@1234")
+	if err != nil {
+		t.Fatal(err)
+	}
+	snapshot := store.PasswordRecoverySnapshot{UserID: before.ID, PasswordHash: before.PasswordHash, SecurityRevision: before.SecurityRevision, TokenGeneration: before.TokenGeneration}
+	entry := model.AuditEntry{UserID: &target.ID, Target: &target.ID, Action: model.AuditUserPasswordChanged}
+	for _, fault := range []struct{ name, boundary string }{
+		{"password history", "BEFORE INSERT ON password_history"},
+		{"durable session revocation", "BEFORE UPDATE OF ended_at ON sessions WHEN OLD.user_id='recovery-target'"},
+		{"atomic success audit", "BEFORE INSERT ON audit_logs WHEN NEW.action='user.password_changed'"},
+	} {
+		t.Run(fault.name, func(t *testing.T) {
+			managementServerExec(t, s, "CREATE TRIGGER approved_completion_fault "+fault.boundary+" BEGIN SELECT RAISE(ABORT,'synthetic audited completion failure'); END")
+			if _, err := s.store.CompleteApprovedPasswordRecoveryAudited(snapshot, replacement, s.now(), 5, entry); err == nil {
+				t.Fatal("failed storage completed protected recovery")
+			}
+			assertApprovedCompletionRollback(t, s, before, sessionID)
+			managementServerExec(t, s, "DROP TRIGGER approved_completion_fault")
+		})
+	}
+	if _, err := s.store.CompleteApprovedPasswordRecoveryAudited(snapshot, replacement, s.now(), 5, entry); err != nil {
+		t.Fatalf("restored storage did not permit approved retry: %v", err)
+	}
+}
+
+func assertApprovedCompletionRollback(t *testing.T, s *Server, before *model.User, sessionID string) {
+	t.Helper()
+	after, err := s.store.GetUserByID(before.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if after.PasswordHash != before.PasswordHash || after.TokenGeneration != before.TokenGeneration || after.SecurityRevision != before.SecurityRevision || !after.MustChangePassword {
+		t.Fatal("failed audited completion changed protected credential state")
+	}
+	var grants, history, audits int
+	for _, check := range []struct {
+		query string
+		value *int
+	}{
+		{"SELECT COUNT(*) FROM security_password_recoveries WHERE user_id=?", &grants},
+		{"SELECT COUNT(*) FROM password_history WHERE user_id=?", &history},
+		{"SELECT COUNT(*) FROM audit_logs WHERE user_id=? AND action='user.password_changed'", &audits},
+	} {
+		if err := s.store.DB().QueryRow(check.query, before.ID).Scan(check.value); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if grants != 1 || history != 0 || audits != 0 {
+		t.Fatal("failed completion consumed approval or retained history/success audit")
+	}
+	session, err := s.store.GetSession(sessionID)
+	if err != nil || session.EndedAt != nil {
+		t.Fatal("failed audited completion partially revoked durable authority")
+	}
+}

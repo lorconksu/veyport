@@ -181,7 +181,10 @@ func (s *Store) ChangeLocalPassword(user *model.User, hash string, now time.Time
 		if live.AuthProvider != model.AuthProviderLocal {
 			return ErrLocalPasswordOnly
 		}
-		if live.TokenGeneration != user.TokenGeneration || live.PasswordHash != user.PasswordHash || live.DisabledAt != nil {
+		// Bind the exact pre-body/pre-hash authority, including MFA removal or
+		// replacement committed before a separate token-generation revocation.
+		// Initial enrollment legitimately presents an unchanged MFA=false snapshot.
+		if live.TokenGeneration != user.TokenGeneration || live.SecurityRevision != user.SecurityRevision || live.TOTPEnabled != user.TOTPEnabled || live.PasswordHash != user.PasswordHash || live.DisabledAt != nil {
 			return ErrSecurityConflict
 		}
 		if requireTemporary && (!live.MustChangePassword || live.TempPasswordExpiresAt == nil || !now.Before(*live.TempPasswordExpiresAt)) {
