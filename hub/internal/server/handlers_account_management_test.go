@@ -329,29 +329,7 @@ func TestAccountManagementRejectsActorMFAChangesBeforePrivilegedCommit(t *testin
 func TestPasswordRecoveryUsesOnlyExplicitBearerDespiteBrowserCookies(t *testing.T) {
 	for _, mode := range []string{"stale cookie and valid bearer", "cookie-only recovery refused", "blacklisted recovery bearer refused", "password-stage bearer refused", "expired recovery bearer refused"} {
 		t.Run(mode, func(t *testing.T) {
-			f := newLifecycleFixture(t)
-			managementEnableExistingMFA(t, f)
-			staleAccess, _, _ := sessionTokenPair(t, f.s, f.viewerID)
-			reset := managementReset(t, f)
-			recovery := managementRecovery(t, f, reset["temporary_password"].(string))
-			request := managementRecoveryBearerRequest(t, f, mode, staleAccess, recovery)
-			response := httptest.NewRecorder()
-			f.s.routes().ServeHTTP(response, request)
-			want := http.StatusOK
-			if mode != "stale cookie and valid bearer" {
-				want = http.StatusUnauthorized
-			}
-			if response.Code != want {
-				t.Fatalf("%s status %d wanted %d", mode, response.Code, want)
-			}
-			live := managementUser(t, f)
-			if mode == "stale cookie and valid bearer" {
-				if live.MustChangePassword || managementJSON(t, response)["requires_login"] != true {
-					t.Fatal("explicit recovery bearer did not complete replacement")
-				}
-			} else if !live.MustChangePassword {
-				t.Fatal("cookie-only request consumed recovery authority")
-			}
+			runManagementBearerScenario(t, mode)
 		})
 	}
 }
@@ -452,4 +430,37 @@ func managementRecoveryBearerRequest(t *testing.T, f *lifecycleFixture, mode, st
 		t.Fatalf("unknown recovery credential case %q", mode)
 	}
 	return request
+}
+
+func runManagementBearerScenario(t *testing.T, mode string) {
+	t.Helper()
+	f := newLifecycleFixture(t)
+	managementEnableExistingMFA(t, f)
+	staleAccess, _, _ := sessionTokenPair(t, f.s, f.viewerID)
+	reset := managementReset(t, f)
+	recovery := managementRecovery(t, f, reset["temporary_password"].(string))
+	request := managementRecoveryBearerRequest(t, f, mode, staleAccess, recovery)
+	response := httptest.NewRecorder()
+	f.s.routes().ServeHTTP(response, request)
+
+	assertManagementBearerOutcome(t, f, mode, response)
+}
+
+func assertManagementBearerOutcome(t *testing.T, f *lifecycleFixture, mode string, response *httptest.ResponseRecorder) {
+	t.Helper()
+	want := http.StatusOK
+	if mode != "stale cookie and valid bearer" {
+		want = http.StatusUnauthorized
+	}
+	if response.Code != want {
+		t.Fatalf("%s status %d wanted %d", mode, response.Code, want)
+	}
+	live := managementUser(t, f)
+	if mode == "stale cookie and valid bearer" {
+		if live.MustChangePassword || managementJSON(t, response)["requires_login"] != true {
+			t.Fatal("explicit recovery bearer did not complete replacement")
+		}
+	} else if !live.MustChangePassword {
+		t.Fatal("cookie-only request consumed recovery authority")
+	}
 }

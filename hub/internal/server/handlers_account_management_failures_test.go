@@ -204,7 +204,7 @@ func TestAccountManagementActorSnapshotRejectsInvalidAndDeletedIdentity(t *testi
 	s := testServer(t)
 	malformed := httptest.NewRequest("POST", "/api/users/target/reactivate", nil)
 	malformed.Header.Set("Authorization", testBearerPrefix+"invalid")
-	if actor := s.accountManagementActor(malformed); actor != (store.AccountManagementActor{}) {
+	if s.accountManagementActor(malformed) != (store.AccountManagementActor{}) {
 		t.Fatal("invalid credential returned administrator snapshot")
 	}
 	token, err := auth.GenerateTokenWithExpiry(s.jwtSecret, "deleted-principal", string(model.RoleAdmin), auth.TokenTypeAccess, time.Minute, 0)
@@ -213,7 +213,7 @@ func TestAccountManagementActorSnapshotRejectsInvalidAndDeletedIdentity(t *testi
 	}
 	missing := httptest.NewRequest("POST", "/api/users/target/reactivate", nil)
 	missing.Header.Set("Authorization", testBearerPrefix+token)
-	if actor := s.accountManagementActor(missing); actor != (store.AccountManagementActor{}) {
+	if s.accountManagementActor(missing) != (store.AccountManagementActor{}) {
 		t.Fatal("deleted principal returned administrator snapshot")
 	}
 }

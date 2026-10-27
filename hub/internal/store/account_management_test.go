@@ -67,34 +67,15 @@ func TestResetLocalPasswordAtomicRevocationAndRollback(t *testing.T) {
 			}
 			got, err := s.ResetLocalPassword(store.PasswordResetTarget{UserID: u.ID, ExpectedGeneration: 0}, store.TemporaryPasswordCredential{Hash: managementReplacementHash, ExpiresAt: expires}, now, 5, managementAudit("actor", u.ID, model.AuditUserPasswordReset))
 			live := mustGetUser(t, s, u.ID)
-			var sessions, anchors, history, audits int
-			for _, check := range []struct {
-				q string
-				v *int
-			}{
-				{"SELECT COUNT(*) FROM sessions WHERE user_id='target' AND ended_at IS NULL", &sessions},
-				{"SELECT COUNT(*) FROM application_login_anchors WHERE user_id='target' AND revoked_at IS NULL", &anchors},
-				{"SELECT COUNT(*) FROM password_history WHERE user_id='target'", &history},
-				{"SELECT COUNT(*) FROM audit_logs WHERE action='user.password_reset'", &audits},
-			} {
-				if e := s.DB().QueryRow(check.q).Scan(check.v); e != nil {
-					t.Fatal(e)
-				}
-			}
+			counts := readManagementResetCounts(t, s)
 			if fail {
-				if err == nil {
-					t.Fatal("transaction unexpectedly committed")
-				}
-				if live.PasswordHash != u.PasswordHash || live.TokenGeneration != 0 || live.MustChangePassword || sessions != 1 || anchors != 1 || history != 0 || audits != 0 {
-					t.Fatal("failure partially changed authority")
-				}
-				assertTokenActive(t, s, "tokenhash", true)
+				assertManagementFailedReset(t, s, u, live, counts, err)
 				return
 			}
 			if err != nil {
 				t.Fatal(err)
 			}
-			if got.PasswordHash != managementReplacementHash || live.TokenGeneration != 1 || !live.MustChangePassword || !live.TempPasswordExpiresAt.Equal(expires) || live.TOTPSecret == nil || *live.TOTPSecret != secret || !live.TOTPEnabled || sessions != 0 || anchors != 0 || history != 2 || audits != 1 {
+			if got.PasswordHash != managementReplacementHash || live.TokenGeneration != 1 || !live.MustChangePassword || !live.TempPasswordExpiresAt.Equal(expires) || live.TOTPSecret == nil || *live.TOTPSecret != secret || !live.TOTPEnabled || counts.sessions != 0 || counts.anchors != 0 || counts.history != 2 || counts.audits != 1 {
 				t.Fatal("reset did not preserve MFA or revoke durable authority atomically")
 			}
 			assertTokenActive(t, s, "tokenhash", false)
@@ -415,4 +396,36 @@ func assertManagementActorState(t *testing.T, s *store.Store, actor store.Accoun
 	if (session.EndedAt == nil) != liveSession {
 		t.Fatal("actor mutation did not isolate session liveness")
 	}
+}
+
+type managementResetCounts struct{ sessions, anchors, history, audits int }
+
+func readManagementResetCounts(t *testing.T, s *store.Store) managementResetCounts {
+	t.Helper()
+	var counts managementResetCounts
+	for _, check := range []struct {
+		q string
+		v *int
+	}{
+		{"SELECT COUNT(*) FROM sessions WHERE user_id='target' AND ended_at IS NULL", &counts.sessions},
+		{"SELECT COUNT(*) FROM application_login_anchors WHERE user_id='target' AND revoked_at IS NULL", &counts.anchors},
+		{"SELECT COUNT(*) FROM password_history WHERE user_id='target'", &counts.history},
+		{"SELECT COUNT(*) FROM audit_logs WHERE action='user.password_reset'", &counts.audits},
+	} {
+		if e := s.DB().QueryRow(check.q).Scan(check.v); e != nil {
+			t.Fatal(e)
+		}
+	}
+	return counts
+}
+
+func assertManagementFailedReset(t *testing.T, s *store.Store, u, live *model.User, counts managementResetCounts, err error) {
+	t.Helper()
+	if err == nil {
+		t.Fatal("transaction unexpectedly committed")
+	}
+	if live.PasswordHash != u.PasswordHash || live.TokenGeneration != 0 || live.MustChangePassword || counts.sessions != 1 || counts.anchors != 1 || counts.history != 0 || counts.audits != 0 {
+		t.Fatal("failure partially changed authority")
+	}
+	assertTokenActive(t, s, "tokenhash", true)
 }

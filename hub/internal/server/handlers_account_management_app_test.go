@@ -122,35 +122,11 @@ func TestPasswordResetRevokesActualApplicationCookieTicketAndLiveStream(t *testi
 		t.Fatal("reset closed another user's app stream")
 	default:
 	}
-	live, err := s.store.ApplicationSessionByID(session.ID)
-	if err != nil || live.EndedAt == nil {
-		t.Fatal("application session remained durable after reset")
-	}
-	anchor, err := s.store.GetApplicationAnchor(session.AnchorID)
-	if err != nil || anchor.RevokedAt == nil {
-		t.Fatal("application anchor remained durable after reset")
-	}
-	var tickets int
-	if err := s.store.DB().QueryRow("SELECT COUNT(*) FROM application_launch_tickets WHERE user_id=?", user.ID).Scan(&tickets); err != nil || tickets != 0 {
-		t.Fatal("reset retained a launch ticket")
-	}
+	assertManagementApplicationAuthorityRevoked(t, s, session, user.ID)
 	// Complete the real password+MFA recovery route, then prove the old authority
 	// stays revoked even after mandatory replacement has been cleared.
 	temporary := managementJSON(t, reset)["temporary_password"].(string)
-	primary := portal("POST", "/api/auth/login", "", model.LoginRequest{Username: user.Username, Password: temporary})
-	if primary.Code != 202 {
-		t.Fatalf("recovery login status %d", primary.Code)
-	}
-	challenge := managementJSON(t, primary)["totp_token"].(string)
-	mfa := portal("POST", "/api/auth/login/totp", "", model.LoginTOTPRequest{TOTPToken: challenge, Code: validTOTPCode(t, secret, s.now())})
-	if mfa.Code != 200 {
-		t.Fatalf("recovery MFA status %d", mfa.Code)
-	}
-	recovery := managementJSON(t, mfa)["recovery_token"].(string)
-	completed := portal("POST", "/api/auth/password/recovery", recovery, map[string]string{"new_password": "NewPermanent!Password123"})
-	if completed.Code != 200 {
-		t.Fatalf("recovery completion status %d", completed.Code)
-	}
+	completeManagementApplicationRecovery(t, s, user, temporary, secret, portal)
 	refused := httptest.NewRecorder()
 	s.routes().ServeHTTP(refused, appRequest(app, cookie, "GET", "/"))
 	if refused.Code == 200 {
@@ -205,4 +181,40 @@ func openManagementApplicationStream(t *testing.T, client *http.Client, gatewayU
 		t.Fatal(err)
 	}
 	return response
+}
+
+func assertManagementApplicationAuthorityRevoked(t *testing.T, s *Server, session *model.ApplicationSession, userID string) {
+	t.Helper()
+	live, err := s.store.ApplicationSessionByID(session.ID)
+	if err != nil || live.EndedAt == nil {
+		t.Fatal("application session remained durable after reset")
+	}
+	anchor, err := s.store.GetApplicationAnchor(session.AnchorID)
+	if err != nil || anchor.RevokedAt == nil {
+		t.Fatal("application anchor remained durable after reset")
+	}
+	var tickets int
+	if err := s.store.DB().QueryRow("SELECT COUNT(*) FROM application_launch_tickets WHERE user_id=?", userID).Scan(&tickets); err != nil || tickets != 0 {
+		t.Fatal("reset retained a launch ticket")
+	}
+}
+
+type managementPortalCall func(method, path, token string, body any) *httptest.ResponseRecorder
+
+func completeManagementApplicationRecovery(t *testing.T, s *Server, user *model.User, temporary, secret string, portal managementPortalCall) {
+	t.Helper()
+	primary := portal("POST", "/api/auth/login", "", model.LoginRequest{Username: user.Username, Password: temporary})
+	if primary.Code != 202 {
+		t.Fatalf("recovery login status %d", primary.Code)
+	}
+	challenge := managementJSON(t, primary)["totp_token"].(string)
+	mfa := portal("POST", "/api/auth/login/totp", "", model.LoginTOTPRequest{TOTPToken: challenge, Code: validTOTPCode(t, secret, s.now())})
+	if mfa.Code != 200 {
+		t.Fatalf("recovery MFA status %d", mfa.Code)
+	}
+	recovery := managementJSON(t, mfa)["recovery_token"].(string)
+	completed := portal("POST", "/api/auth/password/recovery", recovery, map[string]string{"new_password": "NewPermanent!Password123"})
+	if completed.Code != 200 {
+		t.Fatalf("recovery completion status %d", completed.Code)
+	}
 }
