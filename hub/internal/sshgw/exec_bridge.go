@@ -41,6 +41,9 @@ func (s *Server) authorizeExec(conn *ssh.ServerConn) (execParams, error) {
 	if err != nil {
 		return execParams{}, errors.New("account is not available for command execution")
 	}
+	if !certificateAuthorityCurrent(conn, user) {
+		return execParams{}, errors.New("SSH credential revoked; run vey ssh-cert after signing in again")
+	}
 	node, err := s.resolveServer(target)
 	if err != nil {
 		return execParams{}, err
@@ -53,7 +56,7 @@ func (s *Server) authorizeExec(conn *ssh.ServerConn) (execParams, error) {
 	if err != nil {
 		return execParams{}, err
 	}
-	return execParams{policy: policy, bridgeParams: bridgeParams{serverID: node.ID, serverName: node.Name, userID: user.ID, username: username, executionUser: runAs, remoteIP: remoteHost(conn.RemoteAddr())}, user: user}, nil
+	return execParams{policy: policy, bridgeParams: bridgeParams{serverID: node.ID, serverName: node.Name, userID: user.ID, credentialGeneration: user.SSHCredentialGeneration, username: username, executionUser: runAs, remoteIP: remoteHost(conn.RemoteAddr())}, user: user}, nil
 }
 
 // Request success means submission acceptance. No preparation, remote process
@@ -474,7 +477,7 @@ func (s *Server) recheckExecution(p execParams) error {
 // SSH credentials. Compare the credential and identity snapshot instead; global
 // revocation additionally closes the shared registry marker immediately.
 func executionCredentialsChanged(original, current *model.User) bool {
-	if original.PasswordHash != current.PasswordHash || original.TOTPEnabled != current.TOTPEnabled || original.Username != current.Username || original.AuthProvider != current.AuthProvider || original.ExternalID != current.ExternalID || original.LDAPDN != current.LDAPDN || original.LDAPUsername != current.LDAPUsername || original.Role != current.Role || original.SecurityRevision != current.SecurityRevision {
+	if original.SSHCredentialGeneration != current.SSHCredentialGeneration || original.PasswordHash != current.PasswordHash || original.TOTPEnabled != current.TOTPEnabled || original.Username != current.Username || original.AuthProvider != current.AuthProvider || original.ExternalID != current.ExternalID || original.LDAPDN != current.LDAPDN || original.LDAPUsername != current.LDAPUsername || original.Role != current.Role || original.SecurityRevision != current.SecurityRevision {
 		return true
 	}
 	return (original.TOTPSecret == nil) != (current.TOTPSecret == nil) || (original.TOTPSecret != nil && current.TOTPSecret != nil && *original.TOTPSecret != *current.TOTPSecret)

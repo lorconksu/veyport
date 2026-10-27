@@ -15,7 +15,9 @@ export interface User {
   roles?: AssignedRole[]
   capabilities?: Capability[]
   person_id?: string
-  auth_provider?: 'local' | 'ldap'
+  auth_provider?: string
+  credential_revision?: number
+  protected?: boolean
   terminal_access?: boolean
   totp_enabled: boolean
   avatar: string | null
@@ -72,6 +74,23 @@ export interface AuthResponse {
   access_token?: string
   refresh_token?: string
   user: User
+}
+
+export interface PasswordRecoveryResponse {
+  must_change_password: true
+  recovery_token: string
+  expires_at: string
+}
+
+export interface ReactivateUserResponse {
+  user: User
+  changed: boolean
+}
+
+export interface ResetPasswordResponse {
+  user: User
+  temporary_password: string
+  expires_at: string
 }
 
 export interface TokenPair {

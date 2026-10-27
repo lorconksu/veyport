@@ -27,36 +27,38 @@ func IsValidRole(role Role) bool {
 }
 
 type User struct {
-	ID                    string       `json:"id"`
-	Username              string       `json:"username"`
-	Email                 string       `json:"email"`
-	PasswordHash          string       `json:"-"`
-	Role                  Role         `json:"role"`
-	AuthProvider          AuthProvider `json:"auth_provider"`
-	ExternalID            string       `json:"external_id,omitempty"`
-	LDAPDN                string       `json:"ldap_dn,omitempty"`
-	LDAPUsername          string       `json:"ldap_username,omitempty"`
-	LDAPLastSyncAt        *time.Time   `json:"ldap_last_sync_at,omitempty"`
-	TerminalAccess        bool         `json:"terminal_access"`
-	TOTPSecret            *string      `json:"-"`
-	TOTPEnabled           bool         `json:"totp_enabled"`
-	TokenGeneration       int          `json:"-"`
-	SecurityRevision      int          `json:"-"`
-	Roles                 []Role       `json:"roles"`
-	Capabilities          []string     `json:"capabilities"`
-	PersonID              string       `json:"person_id,omitempty"`
-	Avatar                *string      `json:"avatar"`
-	MustChangePassword    bool         `json:"must_change_password,omitempty"`
-	TempPasswordExpiresAt *time.Time   `json:"temp_password_expires_at,omitempty"`
-	FailedLoginCount      int          `json:"failed_login_count"`
-	LastFailedLoginAt     *time.Time   `json:"last_failed_login_at,omitempty"`
-	LastLoginAt           *time.Time   `json:"last_login_at,omitempty"`
-	LockedUntil           *time.Time   `json:"locked_until,omitempty"`
-	DisabledAt            *time.Time   `json:"disabled_at,omitempty"`
-	DisabledBy            *string      `json:"disabled_by,omitempty"`
-	ReactivatedAt         *time.Time   `json:"reactivated_at,omitempty"`
-	DormancyExempt        bool         `json:"dormancy_exempt"`
-	LastActivityAt        *time.Time   `json:"last_activity_at,omitempty"`
+	ID                      string       `json:"id"`
+	Username                string       `json:"username"`
+	Email                   string       `json:"email"`
+	PasswordHash            string       `json:"-"`
+	Role                    Role         `json:"role"`
+	AuthProvider            AuthProvider `json:"auth_provider"`
+	ExternalID              string       `json:"external_id,omitempty"`
+	LDAPDN                  string       `json:"ldap_dn,omitempty"`
+	LDAPUsername            string       `json:"ldap_username,omitempty"`
+	LDAPLastSyncAt          *time.Time   `json:"ldap_last_sync_at,omitempty"`
+	TerminalAccess          bool         `json:"terminal_access"`
+	TOTPSecret              *string      `json:"-"`
+	TOTPEnabled             bool         `json:"totp_enabled"`
+	TokenGeneration         int          `json:"credential_revision"`
+	Protected               bool         `json:"protected"`
+	SecurityRevision        int          `json:"-"`
+	SSHCredentialGeneration int          `json:"-"`
+	Roles                   []Role       `json:"roles"`
+	Capabilities            []string     `json:"capabilities"`
+	PersonID                string       `json:"person_id,omitempty"`
+	Avatar                  *string      `json:"avatar"`
+	MustChangePassword      bool         `json:"must_change_password,omitempty"`
+	TempPasswordExpiresAt   *time.Time   `json:"temp_password_expires_at,omitempty"`
+	FailedLoginCount        int          `json:"failed_login_count"`
+	LastFailedLoginAt       *time.Time   `json:"last_failed_login_at,omitempty"`
+	LastLoginAt             *time.Time   `json:"last_login_at,omitempty"`
+	LockedUntil             *time.Time   `json:"locked_until,omitempty"`
+	DisabledAt              *time.Time   `json:"disabled_at,omitempty"`
+	DisabledBy              *string      `json:"disabled_by,omitempty"`
+	ReactivatedAt           *time.Time   `json:"reactivated_at,omitempty"`
+	DormancyExempt          bool         `json:"dormancy_exempt"`
+	LastActivityAt          *time.Time   `json:"last_activity_at,omitempty"`
 	// Status is derived (not stored) — active|locked|disabled|dormant — and
 	// populated by handlers that already hold the policy and current time.
 	Status    string    `json:"status,omitempty"`
@@ -132,10 +134,12 @@ type AuthStatusResponse struct {
 }
 
 type LoginResponse struct {
-	TOTPToken          string `json:"totp_token,omitempty"`
-	SetupToken         string `json:"setup_token,omitempty"`
-	RequiresTOTPSetup  bool   `json:"requires_totp_setup,omitempty"`
-	MustChangePassword bool   `json:"must_change_password,omitempty"`
+	TOTPToken          string     `json:"totp_token,omitempty"`
+	RecoveryToken      string     `json:"recovery_token,omitempty"`
+	ExpiresAt          *time.Time `json:"expires_at,omitempty"`
+	SetupToken         string     `json:"setup_token,omitempty"`
+	RequiresTOTPSetup  bool       `json:"requires_totp_setup,omitempty"`
+	MustChangePassword bool       `json:"must_change_password,omitempty"`
 }
 
 type AuthResponse struct {

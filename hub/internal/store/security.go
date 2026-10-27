@@ -617,7 +617,7 @@ func applySecurityPayload(ctx context.Context, conn *sql.Conn, c model.SecurityC
 			if len(r.PreparedPasswordHash) != 60 || !strings.HasPrefix(r.PreparedPasswordHash, "$2") {
 				return ErrSecurityConflict
 			}
-			_, err = conn.ExecContext(ctx, "UPDATE users SET password_hash=?,must_change_password=1,temp_password_expires_at=datetime('now','+24 hours') WHERE id=?", r.PreparedPasswordHash, r.UserID)
+			_, err = conn.ExecContext(ctx, "UPDATE users SET password_hash=?,must_change_password=1,temp_password_expires_at=datetime('now','+24 hours'),ssh_credential_generation=ssh_credential_generation+1 WHERE id=?", r.PreparedPasswordHash, r.UserID)
 		}
 		if err != nil {
 			return err
@@ -732,16 +732,24 @@ func (s *Store) securityUserWrite(user string, mfaSetup bool, fn func(context.Co
 // installed by an externally completed approved recovery. The HTTP caller must
 // authenticate the principal and its current credential/MFA before this CAS.
 func (s *Store) CompleteApprovedPasswordRecovery(user, currentHash string, revision int, newHash string, now time.Time) (int, error) {
+	return s.completeApprovedPasswordRecovery(user, currentHash, revision, newHash, now, 0, nil, -1)
+}
+
+func (s *Store) CompleteApprovedPasswordRecoveryAudited(user, currentHash string, revision int, newHash string, now time.Time, history int, entry model.AuditEntry, expectedGeneration int) (int, error) {
+	return s.completeApprovedPasswordRecovery(user, currentHash, revision, newHash, now, history, &entry, expectedGeneration)
+}
+
+func (s *Store) completeApprovedPasswordRecovery(user, currentHash string, revision int, newHash string, now time.Time, history int, entry *model.AuditEntry, expectedGeneration int) (int, error) {
 	var generation int
 	err := s.withImmediateTx(func(ctx context.Context, conn *sql.Conn) error {
 		var allowed bool
-		if err := conn.QueryRowContext(ctx, "SELECT EXISTS(SELECT 1 FROM users u JOIN security_password_recoveries r ON r.user_id=u.id JOIN security_changes c ON c.id=r.request_id WHERE u.id=? AND u.password_hash=? AND r.password_hash=u.password_hash AND u.security_revision=? AND u.must_change_password AND u.disabled_at IS NULL AND unixepoch(u.temp_password_expires_at)>? AND c.state='applied' AND c.result_ref!='')", user, currentHash, revision, now.Unix()).Scan(&allowed); err != nil {
+		if err := conn.QueryRowContext(ctx, "SELECT EXISTS(SELECT 1 FROM users u JOIN security_password_recoveries r ON r.user_id=u.id JOIN security_changes c ON c.id=r.request_id WHERE u.id=? AND u.password_hash=? AND r.password_hash=u.password_hash AND u.security_revision=? AND (?<0 OR u.token_generation=?) AND u.must_change_password AND u.disabled_at IS NULL AND unixepoch(u.temp_password_expires_at)>? AND c.state='applied' AND c.result_ref!='')", user, currentHash, revision, expectedGeneration, expectedGeneration, now.Unix()).Scan(&allowed); err != nil {
 			return err
 		}
 		if !allowed {
 			return ErrProtectedChange
 		}
-		if _, err := conn.ExecContext(ctx, "UPDATE users SET password_hash=?,must_change_password=0,temp_password_expires_at=NULL,token_generation=token_generation+1,updated_at=datetime('now') WHERE id=?", newHash, user); err != nil {
+		if _, err := conn.ExecContext(ctx, "UPDATE users SET password_hash=?,must_change_password=0,temp_password_expires_at=NULL,token_generation=token_generation+1,ssh_credential_generation=ssh_credential_generation+1,updated_at=datetime('now') WHERE id=?", newHash, user); err != nil {
 			return err
 		}
 		if _, err := conn.ExecContext(ctx, "DELETE FROM security_password_recoveries WHERE user_id=?", user); err != nil {
@@ -754,6 +762,17 @@ func (s *Store) CompleteApprovedPasswordRecovery(user, currentHash string, revis
 		_, err := conn.ExecContext(ctx, "UPDATE api_tokens SET revoked_at=datetime('now') WHERE user_id=? AND revoked_at IS NULL", user)
 		if err != nil {
 			return err
+		}
+		if entry != nil {
+			if err := appendPasswordHistoryConn(ctx, conn, user, currentHash, newHash, history, now); err != nil {
+				return err
+			}
+			if err := revokePasswordAuthorityConn(ctx, conn, user, entry.UserID, now); err != nil {
+				return err
+			}
+			if err := logAuditConn(ctx, conn, *entry); err != nil {
+				return err
+			}
 		}
 		return conn.QueryRowContext(ctx, "SELECT token_generation FROM users WHERE id=?", user).Scan(&generation)
 	})

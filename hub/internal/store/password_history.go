@@ -30,7 +30,7 @@ func (s *Store) TrimPasswordHistory(userID string, limit int) error {
 		   AND id NOT IN (
 		     SELECT id FROM password_history
 		     WHERE user_id = ?
-		     ORDER BY created_at DESC
+		     ORDER BY created_at DESC, rowid DESC
 		     LIMIT ?
 		   )`,
 		userID, userID, limit,
@@ -46,7 +46,7 @@ func (s *Store) PasswordMatchesRecent(userID, candidate string, limit int) (bool
 		`SELECT password_hash
 		 FROM password_history
 		 WHERE user_id = ?
-		 ORDER BY created_at DESC
+		 ORDER BY created_at DESC, rowid DESC
 		 LIMIT ?`,
 		userID, limit,
 	)

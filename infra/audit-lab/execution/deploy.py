@@ -50,12 +50,12 @@ def write_remote(role, path, data, executable=False):
 
 def build():
     ARTIFACTS.mkdir(mode=0o700, parents=True, exist_ok=True)
-    environment = dict(os.environ, GOTOOLCHAIN='go1.26.9', GOOS='linux', GOARCH='amd64', CGO_ENABLED='0')
+    environment = dict(os.environ, GOTOOLCHAIN='go1.26.10', GOOS='linux', GOARCH='amd64', CGO_ENABLED='0')
     for module, package, name in [('hub', './cmd/veyport', 'veyport-hub'), ('agent', './cmd/veyport-agent', 'veyport-agent'), ('cli', './cmd/vey', 'vey')]:
         result = subprocess.run(['go', 'build', '-trimpath', '-o', str(ARTIFACTS / name), package], cwd=REPO / module, env=environment, capture_output=True)
         if result.returncode:
             raise RuntimeError('Patched ' + module + ' build failed; no private material emitted')
-    metadata = {'source_commit': subprocess.check_output(['git', 'rev-parse', 'HEAD'], cwd=REPO, text=True).strip(), 'toolchain': 'go1.26.9', 'binaries': {name: hashlib.sha256((ARTIFACTS / name).read_bytes()).hexdigest() for name in ['veyport-hub', 'veyport-agent', 'vey']}}
+    metadata = {'source_commit': subprocess.check_output(['git', 'rev-parse', 'HEAD'], cwd=REPO, text=True).strip(), 'toolchain': 'go1.26.10', 'binaries': {name: hashlib.sha256((ARTIFACTS / name).read_bytes()).hexdigest() for name in ['veyport-hub', 'veyport-agent', 'vey']}}
     (ARTIFACTS / 'build.json').write_text(json.dumps(metadata, indent=2) + '\n')
     print('Patched hub, agent and CLI artifacts built; public digests recorded')
 
@@ -94,7 +94,7 @@ def main():
     if args.apply:
         deploy()
     if not args.build and not args.apply:
-        print('Plan: build go1.26.9 artifacts; deploy only .59 hub/.64 agent; trust existing lab HTTPS CA; preserve all databases, installation IDs and anchors')
+        print('Plan: build go1.26.10 artifacts; deploy only .59 hub/.64 agent; trust existing lab HTTPS CA; preserve all databases, installation IDs and anchors')
 
 
 if __name__ == '__main__':

@@ -20,12 +20,18 @@ func (s *Server) handleListUsers(w http.ResponseWriter, r *http.Request) {
 		respondError(w, http.StatusInternalServerError, "failed to list users")
 		return
 	}
+	protected, err := s.store.ProtectedUsers()
+	if err != nil {
+		respondError(w, http.StatusInternalServerError, "failed to read account protection")
+		return
+	}
 	// Status is derived rather than stored (research R7), so it is computed
 	// here against the live policy and clock. An administrator therefore sees
 	// an account turn dormant the moment the window closes, with no background
 	// job and no stale column to reconcile.
 	for i := range users {
 		users[i].Status = string(s.accountStatus(&users[i]))
+		users[i].Protected = protected[users[i].ID]
 	}
 	respondJSON(w, http.StatusOK, model.UserListResponse{Users: users})
 }

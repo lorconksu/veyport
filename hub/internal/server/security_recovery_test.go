@@ -129,25 +129,23 @@ func TestSecurityApprovedPasswordRecoveryWithExistingMFA(t *testing.T) {
 	}
 	code, _ := auth.GenerateValidCode(*target.TOTPSecret)
 	login = securityCall(s, "POST", "/api/auth/login/totp", "", mustMarshal(t, model.LoginTOTPRequest{TOTPToken: stage.TOTPToken, Code: code}))
-	var signed model.AuthResponse
-	if login.Code != 200 || json.Unmarshal(login.Body.Bytes(), &signed) != nil {
-		t.Fatalf("recovery MFA login: %d %s", login.Code, login.Body.String())
+	var recovered model.LoginResponse
+	if login.Code != 200 || json.Unmarshal(login.Body.Bytes(), &recovered) != nil || !recovered.MustChangePassword || recovered.RecoveryToken == "" {
+		t.Fatalf("recovery MFA did not issue purpose-bound completion authority: status %d", login.Code)
 	}
-	if !signed.User.MustChangePassword || signed.AccessToken == "" || signed.RefreshToken == "" {
-		t.Fatal("authenticated recovery did not issue its mandatory-rotation session")
-	}
-	refreshed := securityCall(s, "POST", "/api/auth/refresh", "", mustMarshal(t, model.RefreshRequest{RefreshToken: signed.RefreshToken}))
+	refreshed := securityCall(s, "POST", "/api/auth/refresh", "", mustMarshal(t, model.RefreshRequest{RefreshToken: recovered.RecoveryToken}))
 	if refreshed.Code != 401 {
-		t.Fatalf("unfinished recovery refreshed its session: %d", refreshed.Code)
+		t.Fatalf("recovery challenge refreshed: %d", refreshed.Code)
 	}
-	original := securityCall(s, "POST", "/api/executions/not-a-read-permit/original-access/preview", signed.AccessToken, mustMarshal(t, map[string]any{"purpose": "Recovery must not grant original access", "records": []string{"script"}}))
+	original := securityCall(s, "POST", "/api/executions/not-a-read-permit/original-access/preview", recovered.RecoveryToken, mustMarshal(t, map[string]any{"purpose": "Recovery must not grant original access", "records": []string{"script"}}))
 	if original.Code != 403 {
-		t.Fatalf("unfinished recovery used original-reader authority: %d", original.Code)
+		t.Fatalf("recovery challenge used original-reader authority: %d", original.Code)
 	}
-	rotated := securityCall(s, "PUT", "/api/auth/password", signed.AccessToken, mustMarshal(t, model.ChangePasswordRequest{CurrentPassword: temporary, NewPassword: replacement}))
+	rotated := securityCall(s, "POST", "/api/auth/password/recovery", recovered.RecoveryToken, mustMarshal(t, map[string]string{"new_password": replacement}))
 	if rotated.Code != 200 {
-		t.Fatalf("approved mandatory rotation: %d %s", rotated.Code, rotated.Body.String())
+		t.Fatalf("approved completion status %d", rotated.Code)
 	}
+
 	current, _ := s.store.GetUserByID(target.ID)
 	if current.MustChangePassword || !auth.ComparePassword(current.PasswordHash, replacement) {
 		t.Fatal("approved temporary password did not rotate")

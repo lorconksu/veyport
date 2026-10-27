@@ -408,7 +408,7 @@ func TestLockout_ExpiredTemporaryPasswordDoesNotCount(t *testing.T) {
 	if err != nil {
 		t.Fatalf("hash password: %v", err)
 	}
-	expired := time.Now().UTC().Add(-time.Hour)
+	expired := s.now().UTC().Add(-time.Hour)
 	user := &model.User{
 		ID:                    uuid.NewString(),
 		Username:              "heidi",

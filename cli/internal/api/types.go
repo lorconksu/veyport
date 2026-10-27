@@ -36,9 +36,10 @@ type User struct {
 // populated) and from POST /api/auth/refresh (User absent/zero-value: the
 // refresh endpoint returns only the rotated access/refresh tokens).
 type TokenPair struct {
-	AccessToken  string `json:"access_token"`
-	RefreshToken string `json:"refresh_token"`
-	User         User   `json:"user"`
+	MustChangePassword bool   `json:"must_change_password,omitempty"`
+	AccessToken        string `json:"access_token"`
+	RefreshToken       string `json:"refresh_token"`
+	User               User   `json:"user"`
 }
 
 // Me is the 200 response from GET /api/auth/me.

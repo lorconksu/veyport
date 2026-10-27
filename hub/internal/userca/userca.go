@@ -17,6 +17,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"strconv"
 	"time"
 
 	"golang.org/x/crypto/ssh"
@@ -128,7 +129,7 @@ func (c *UserCA) IsUserAuthority(key ssh.PublicKey) bool {
 // SignUserCert issues an SSH user certificate binding clientPub to a single
 // principal for ttl. The principal is the sole entry in ValidPrincipals and is
 // also the KeyId (so it appears in audit logs); no critical options are set.
-func (c *UserCA) SignUserCert(clientPub ssh.PublicKey, principal string, ttl time.Duration) (*ssh.Certificate, error) {
+func (c *UserCA) SignUserCert(clientPub ssh.PublicKey, principal string, ttl time.Duration, credentialGeneration ...int) (*ssh.Certificate, error) {
 	if c == nil || c.signer == nil {
 		return nil, errors.New("sign user cert: user CA not initialized")
 	}
@@ -160,6 +161,11 @@ func (c *UserCA) SignUserCert(clientPub ssh.PublicKey, principal string, ttl tim
 		},
 	}
 
+	generation := 0
+	if len(credentialGeneration) > 0 {
+		generation = credentialGeneration[0]
+	}
+	cert.Permissions.Extensions[CredentialGenerationExtension] = strconv.Itoa(generation)
 	if err := cert.SignCert(rand.Reader, c.signer); err != nil {
 		return nil, fmt.Errorf("sign user cert: %w", err)
 	}
@@ -285,3 +291,6 @@ func randomSerial() (uint64, error) {
 	}
 	return 0, errors.New("generate certificate serial: exhausted retries")
 }
+
+// CredentialGenerationExtension binds a user certificate to a durable account credential epoch.
+const CredentialGenerationExtension = "veyport-credential-generation"

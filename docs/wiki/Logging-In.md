@@ -27,8 +27,9 @@ password is even checked:
 - **"account disabled — contact an administrator"** - an administrator has turned this account
   off. Only an administrator can turn it back on.
 - **"account dormant — contact an administrator"** - the account has gone unused (no sign-in and
-  no API-token use) for longer than the hub's dormancy policy. An administrator can restore it
-  with **Enable**.
+  no API-token use) for longer than the hub's dormancy policy. An administrator can use
+  **Reactivate** to restart its dormancy clock. If the account is locked too, it remains locked
+  until separately unlocked; disabled accounts use **Enable**.
 
 ---
 
@@ -43,6 +44,13 @@ Open your authenticator app and find the Veyport entry. Enter the current 6-digi
 The code changes every 30 seconds. If the code is rejected, check that the time on your phone is correct (TOTP codes are time-based) and try the next code when the timer resets.
 
 Click **Verify** to complete login.
+
+If an administrator issued you a temporary password for an existing account, enter that password
+and your existing TOTP code. Veyport then allows only the required password replacement or
+cancellation; it does not issue normal access while the temporary password is in effect. Complete
+the replacement in the browser, then sign in again with the new password and the same TOTP. The
+`vey` CLI cannot finish this browser recovery step. Accounts that do not yet have TOTP continue
+through the first-login enrollment flow.
 
 ---
 
@@ -142,7 +150,12 @@ a recurring inconvenience; sessions created after the upgrade behave exactly as 
 
 ### I forgot my password
 
-Veyport does not have a "forgot password" email flow. Ask an admin to reset your account. Admins can delete your account and create a new one, or (if the admin has server access) use the CLI break-glass command to reset your credentials.
+Veyport does not have a "forgot password" email flow. For a Local account, ask an administrator
+to issue a temporary password in Settings > Users and share it with you privately. Use it with
+your existing TOTP, complete the required password replacement in a browser, then sign in again.
+For an LDAP account, contact a directory administrator to reset the password in the directory and
+complete any required directory password change there before signing in to Veyport. Veyport
+administrators do not necessarily administer the directory.
 
 ### I lost access to my authenticator app
 

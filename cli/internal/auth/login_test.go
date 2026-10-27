@@ -1064,3 +1064,16 @@ func TestTerminalPrompterUsernamePropagatesReadLineError(t *testing.T) {
 		t.Errorf("error %v was treated as a normal EOF, want a wrapped read error", err)
 	}
 }
+
+func TestLoginTemporaryPasswordRequiresBrowserAndStoresNothing(t *testing.T) {
+	stub := &loginHubStub{loginStatus: http.StatusAccepted, loginBody: `{"totp_token":"tt-abc123"}`, totpStatus: http.StatusOK, totpBody: `{"must_change_password":true,"recovery_token":"sensitive-recovery-token","expires_at":"2026-10-27T18:00:00Z"}`}
+	srv := newLoginHubStub(t, stub)
+	store := newLoginTestStore(t)
+	pair, err := Login(context.Background(), LoginOptions{Client: api.NewClient(srv.URL, ""), HubURL: srv.URL, Store: store, Prompter: scriptedPrompter()})
+	if err == nil || pair != nil || !strings.Contains(err.Error(), "web UI") || strings.Contains(err.Error(), "sensitive-recovery-token") {
+		t.Fatalf("missing safe browser guidance: %v", err)
+	}
+	if _, found, err := store.Load(srv.URL); err == nil && found {
+		t.Fatal("temporary recovery persisted credentials")
+	}
+}

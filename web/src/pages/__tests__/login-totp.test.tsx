@@ -18,6 +18,7 @@ vi.mock('react-router-dom', async (importOriginal) => {
 
 vi.mock('@/lib/api', () => ({
   apiFetch: vi.fn(),
+  apiFetchWithToken: vi.fn(),
 }))
 
 vi.mock('@/hooks/use-auth', () => ({
@@ -26,7 +27,7 @@ vi.mock('@/hooks/use-auth', () => ({
   })),
 }))
 
-import { apiFetch } from '@/lib/api'
+import { apiFetch, apiFetchWithToken } from '@/lib/api'
 const mockApiFetch = apiFetch as ReturnType<typeof vi.fn>
 
 import { useLocation } from 'react-router-dom'
@@ -48,7 +49,49 @@ describe('LoginTOTPPage', () => {
     mockApiFetch.mockReset()
     mockNavigate.mockReset()
     mockLogin.mockReset()
+    vi.mocked(apiFetchWithToken).mockReset()
     mockUseLocation.mockReturnValue({ state: { totpToken: 'test-totp-token' } })
+  })
+
+  it('keeps MFA recovery completion-only and requires fresh sign-in after changing the password', async () => {
+    mockApiFetch.mockResolvedValue({ must_change_password: true, recovery_token: 'private-recovery', expires_at: '2026-12-01T12:00:00Z' })
+    vi.mocked(apiFetchWithToken).mockResolvedValue({ requires_login: true })
+    renderPage()
+    fireEvent.change(screen.getAllByRole('textbox')[0], { target: { value: '123456' } })
+    expect(await screen.findByText('Change temporary password')).toBeInTheDocument()
+    expect(mockLogin).not.toHaveBeenCalled()
+    expect(mockNavigate).not.toHaveBeenCalled()
+    expect(screen.queryByText('private-recovery')).not.toBeInTheDocument()
+    fireEvent.change(screen.getByLabelText('New password'), { target: { value: 'Permanent#Strong2026' } })
+    fireEvent.change(screen.getByLabelText('Confirm new password'), { target: { value: 'Permanent#Strong2026' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Change password and return to sign-in' }))
+    await waitFor(() => expect(mockNavigate).toHaveBeenCalledWith('/login', { replace: true, state: null }))
+    expect(apiFetchWithToken).toHaveBeenCalledWith('/auth/password/recovery', 'private-recovery', expect.objectContaining({ method: 'POST', body: JSON.stringify({ new_password: 'Permanent#Strong2026' }), signal: expect.any(AbortSignal) }))
+    expect(mockLogin).not.toHaveBeenCalled()
+  })
+
+  it('can cancel recovery without installing authority or normal navigation', async () => {
+    mockApiFetch.mockResolvedValue({ must_change_password: true, recovery_token: 'private-recovery', expires_at: '2026-12-01T12:00:00Z' })
+    renderPage()
+    fireEvent.change(screen.getAllByRole('textbox')[0], { target: { value: '123456' } })
+    fireEvent.click(await screen.findByRole('button', { name: 'Cancel and return to sign-in' }))
+    expect(mockNavigate).toHaveBeenCalledWith('/login', { replace: true, state: null })
+    expect(mockLogin).not.toHaveBeenCalled()
+    expect(apiFetchWithToken).not.toHaveBeenCalled()
+  })
+
+  it('shows recovery refusal and preserves the completion-only boundary', async () => {
+    mockApiFetch.mockResolvedValue({ must_change_password: true, recovery_token: 'private-recovery', expires_at: '2026-12-01T12:00:00Z' })
+    vi.mocked(apiFetchWithToken).mockRejectedValue(new Error('expired'))
+    renderPage()
+    fireEvent.change(screen.getAllByRole('textbox')[0], { target: { value: '123456' } })
+    await screen.findByText('Change temporary password')
+    fireEvent.change(screen.getByLabelText('New password'), { target: { value: 'Permanent#Strong2026' } })
+    fireEvent.change(screen.getByLabelText('Confirm new password'), { target: { value: 'Permanent#Strong2026' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Change password and return to sign-in' }))
+    expect(await screen.findByRole('alert')).toHaveTextContent('expired or changed')
+    expect(mockNavigate).not.toHaveBeenCalled()
+    expect(mockLogin).not.toHaveBeenCalled()
   })
 
   it('renders the TOTP heading', () => {

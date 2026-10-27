@@ -3,7 +3,9 @@ package sshgw
 import (
 	"errors"
 	"fmt"
+	"github.com/wyiu/veyport/hub/internal/userca"
 	"log"
+	"strconv"
 	"sync"
 	"time"
 
@@ -211,6 +213,11 @@ func (s *Server) runShell(sshConn *ssh.ServerConn, ch ssh.Channel, cols, rows ui
 		return
 	}
 
+	if !certificateAuthorityCurrent(sshConn, user) {
+		s.refuseShell(ch, user.ID, "", ip, "reason=credential_revoked", "veyport: SSH credential revoked; run vey ssh-cert after signing in again")
+		return
+	}
+
 	// Live account status outranks a valid certificate, exactly as a deleted
 	// account does above: an operator disabled (or gone dormant) after their
 	// certificate was minted must not get a shell for its remaining lifetime
@@ -246,16 +253,17 @@ func (s *Server) runShell(sshConn *ssh.ServerConn, ch ssh.Channel, cols, rows ui
 	}
 
 	s.bridge(ch, bridgeParams{
-		serverID:      srv.ID,
-		serverName:    srv.Name,
-		userID:        user.ID,
-		username:      username,
-		executionUser: executionUser,
-		remoteIP:      ip,
-		cols:          cols,
-		rows:          rows,
-		win:           win,
-		clientGone:    clientGone,
+		serverID:             srv.ID,
+		serverName:           srv.Name,
+		userID:               user.ID,
+		credentialGeneration: user.SSHCredentialGeneration,
+		username:             username,
+		executionUser:        executionUser,
+		remoteIP:             ip,
+		cols:                 cols,
+		rows:                 rows,
+		win:                  win,
+		clientGone:           clientGone,
 	})
 }
 
@@ -377,4 +385,19 @@ func replyTo(req *ssh.Request, ok bool) {
 	if req.WantReply {
 		_ = req.Reply(ok, nil)
 	}
+}
+
+// Missing epochs identify legacy certificates. Generation zero remains compatible
+// until the first credential revocation; a retained connection must pass this
+// check again for every new shell or exec channel.
+func certificateAuthorityCurrent(conn *ssh.ServerConn, user *model.User) bool {
+	if conn == nil || conn.Permissions == nil {
+		return user.SSHCredentialGeneration == 0
+	}
+	raw := conn.Permissions.Extensions[userca.CredentialGenerationExtension]
+	if raw == "" {
+		return user.SSHCredentialGeneration == 0
+	}
+	generation, err := strconv.Atoi(raw)
+	return err == nil && generation >= 0 && generation == user.SSHCredentialGeneration
 }

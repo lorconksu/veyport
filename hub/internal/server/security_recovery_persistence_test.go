@@ -92,3 +92,35 @@ func TestApprovedRecoveryCompletionRollsBackCredentialAndRevocationWritesTogethe
 		t.Fatal("completion retries rewrote or duplicated the independently approved transitions")
 	}
 }
+
+func TestApprovedRecoveryCompletionRejectsGenerationOnlyRevocation(t *testing.T) {
+	s, target := recoveryServer(t)
+	installApprovedTemporaryPassword(t, s, "SyntheticTemporary@1234")
+	before, err := s.store.GetUserByID(target.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.store.IncrementTokenGeneration(target.ID); err != nil {
+		t.Fatal(err)
+	}
+	current, err := s.store.GetUserByID(target.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if current.SecurityRevision != before.SecurityRevision || current.PasswordHash != before.PasswordHash {
+		t.Fatal("fixture changed more than credential generation")
+	}
+	replacement, err := auth.HashPassword("SyntheticReplacement@1234")
+	if err != nil {
+		t.Fatal(err)
+	}
+	entry := model.AuditEntry{UserID: &target.ID, Target: &target.ID, Action: model.AuditUserPasswordChanged}
+	_, err = s.store.CompleteApprovedPasswordRecoveryAudited(before.ID, before.PasswordHash, before.SecurityRevision, replacement, s.now(), 5, entry, before.TokenGeneration)
+	if !errors.Is(err, store.ErrProtectedChange) {
+		t.Fatalf("revoked completion challenge accepted: %v", err)
+	}
+	after, err := s.store.GetUserByID(target.ID)
+	if err != nil || after.PasswordHash != before.PasswordHash || !after.MustChangePassword {
+		t.Fatal("rejected generation-only revocation changed password authority")
+	}
+}

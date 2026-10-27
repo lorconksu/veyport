@@ -107,8 +107,22 @@ func (s *Server) handleIssueSSHCertificate(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
+	// A request body may arrive long after middleware authentication. Bind the
+	// epoch we are signing to that original interactive credential and session;
+	// never upgrade a revoked caller to a newer credential generation.
+	claims, claimErr := auth.ValidateToken(s.jwtSecret, readAccessToken(r))
+	if claimErr != nil || claims.TokenType != auth.TokenTypeAccess || claims.Subject != userID || claims.TokenGeneration != user.TokenGeneration || !user.TOTPEnabled {
+		s.auditSSHCertRefused(r, userID, "authentication credential changed")
+		respondError(w, http.StatusUnauthorized, "authentication credential changed; sign in again")
+		return
+	}
+	if err := s.checkSessionAccess(claims, false); err != nil {
+		s.auditSSHCertRefused(r, userID, "interactive session ended")
+		respondError(w, http.StatusUnauthorized, "interactive session ended; sign in again")
+		return
+	}
 	ttl := time.Duration(s.sshConfig.CertTTLHours) * time.Hour
-	cert, err := s.userCA.SignUserCert(clientPub, user.Username, ttl)
+	cert, err := s.userCA.SignUserCert(clientPub, user.Username, ttl, user.SSHCredentialGeneration)
 	if err != nil {
 		log.Printf("ssh: sign user certificate for user %s: %v", userID, err)
 		s.auditSSHCertRefused(r, userID, "certificate signing failed")

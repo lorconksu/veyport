@@ -16,7 +16,7 @@ const configInitialSetupComplete = "initial_setup_completed"
 
 const userSelectColumns = `id, username, email, password_hash, role, auth_provider, external_id,
         ldap_dn, ldap_username, ldap_last_sync_at, terminal_access, totp_secret, totp_enabled,
-        token_generation, security_revision, avatar, must_change_password, temp_password_expires_at,
+        token_generation, security_revision, ssh_credential_generation, avatar, must_change_password, temp_password_expires_at,
         failed_login_count, last_failed_login_at, last_login_at, locked_until,
         disabled_at, disabled_by, reactivated_at, dormancy_exempt, last_activity_at,
         created_at, updated_at`
@@ -260,10 +260,11 @@ func (s *Store) UpdateUserTOTP(userID string, secret *string, enabled bool, setu
 	return s.securityUserWrite(userID, len(setupGeneration) == 1, func(ctx context.Context, conn *sql.Conn) error {
 		if len(setupGeneration) == 1 {
 			var current int
-			if err := conn.QueryRowContext(ctx, "SELECT token_generation FROM users WHERE id=?", userID).Scan(&current); err != nil {
+			var alreadyEnabled bool
+			if err := conn.QueryRowContext(ctx, "SELECT token_generation,totp_enabled FROM users WHERE id=?", userID).Scan(&current, &alreadyEnabled); err != nil {
 				return err
 			}
-			if current != setupGeneration[0] {
+			if current != setupGeneration[0] || alreadyEnabled {
 				return ErrSecurityConflict
 			}
 		}
@@ -469,7 +470,7 @@ func (s *Store) scanUser(row *sql.Row) (*model.User, error) {
 	var disabledAt, disabledBy, reactivatedAt, lastActivityAt sql.NullString
 	err := row.Scan(&u.ID, &u.Username, &u.Email, &u.PasswordHash, &u.Role,
 		&u.AuthProvider, &u.ExternalID, &u.LDAPDN, &u.LDAPUsername, &ldapLastSyncAt,
-		&u.TerminalAccess, &u.TOTPSecret, &u.TOTPEnabled, &u.TokenGeneration, &u.SecurityRevision, &u.Avatar,
+		&u.TerminalAccess, &u.TOTPSecret, &u.TOTPEnabled, &u.TokenGeneration, &u.SecurityRevision, &u.SSHCredentialGeneration, &u.Avatar,
 		&u.MustChangePassword, &tempPasswordExpiresAt,
 		&u.FailedLoginCount, &lastFailedLoginAt, &lastLoginAt, &lockedUntil,
 		&disabledAt, &disabledBy, &reactivatedAt, &u.DormancyExempt, &lastActivityAt,
@@ -499,7 +500,7 @@ func (s *Store) scanUserRow(rows *sql.Rows) (*model.User, error) {
 	var disabledAt, disabledBy, reactivatedAt, lastActivityAt sql.NullString
 	err := rows.Scan(&u.ID, &u.Username, &u.Email, &u.PasswordHash, &u.Role,
 		&u.AuthProvider, &u.ExternalID, &u.LDAPDN, &u.LDAPUsername, &ldapLastSyncAt,
-		&u.TerminalAccess, &u.TOTPSecret, &u.TOTPEnabled, &u.TokenGeneration, &u.SecurityRevision, &u.Avatar,
+		&u.TerminalAccess, &u.TOTPSecret, &u.TOTPEnabled, &u.TokenGeneration, &u.SecurityRevision, &u.SSHCredentialGeneration, &u.Avatar,
 		&u.MustChangePassword, &tempPasswordExpiresAt,
 		&u.FailedLoginCount, &lastFailedLoginAt, &lastLoginAt, &lockedUntil,
 		&disabledAt, &disabledBy, &reactivatedAt, &u.DormancyExempt, &lastActivityAt,

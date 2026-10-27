@@ -571,6 +571,11 @@ Veyport uses SQLite with WAL mode. The database is a single file.
 
 **Auto-migrations**: On every startup, the Hub checks for and applies any unapplied migration files. No manual schema management is needed after upgrades.
 
+Migration 031 adds the per-account SSH credential generation used to invalidate existing SSH
+certificates after password recovery. Existing accounts start at generation zero, so certificates
+issued before this migration remain compatible until a password recovery advances the generation.
+No manual database migration step is required.
+
 **Backups**: SQLite's WAL mode makes it safe to copy the database file while the Hub is running. To take a consistent snapshot:
 
 ```bash

@@ -1,3 +1,5 @@
+import { useDialogFocus } from '@/hooks/use-dialog-focus'
+
 /**
  * Generic confirmation dialog shared by Settings' account-lifecycle actions
  * (disable/enable/unlock/dormancy exemption in settings.tsx) and the
@@ -20,10 +22,11 @@ export function ConfirmActionModal({
   onCancel: () => void
   onConfirm: () => void
 }>) {
+  const { ref: dialogRef, onKeyDown: dialogKeyDown } = useDialogFocus()
   return (
     <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
-      <div className="bg-surface border border-border rounded-lg p-6 w-full max-w-sm">
-        <h3 className="text-sm font-semibold text-text-primary mb-2">{title}</h3>
+      <section ref={dialogRef} tabIndex={-1} role="dialog" aria-modal="true" aria-labelledby="confirm-action-title" onKeyDown={event => dialogKeyDown(event, onCancel)} className="bg-surface border border-border rounded-lg p-6 w-full max-w-sm">
+        <h3 id="confirm-action-title" className="text-sm font-semibold text-text-primary mb-2">{title}</h3>
         <p className="text-text-muted text-xs mb-4">{body}</p>
         <div className="flex gap-2">
           <button
@@ -44,7 +47,7 @@ export function ConfirmActionModal({
             {isPending ? `${confirmLabel}...` : confirmLabel}
           </button>
         </div>
-      </div>
+      </section>
     </div>
   )
 }

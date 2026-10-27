@@ -351,6 +351,11 @@ func TestAccountLifecycle_DormancyRefusesStaleAccounts(t *testing.T) {
 	setDormantDays(t, h, adminToken, 1)
 
 	viewerID, tempPassword := createViewer(t, h, adminToken, "dormantviewer")
+	// This acceptance case exercises dormancy independently of the required
+	// replacement gate, which now rejects normal API authority while pending.
+	if err := h.Store.SetTemporaryPasswordState(viewerID, false, nil); err != nil {
+		t.Fatal(err)
+	}
 	apiToken := mintAPIToken(t, h, viewerID, "pre-dormancy token")
 	assertResponse(t, h.HTTPGet(t, serversPath, apiToken), "api token before dormancy", http.StatusOK, "")
 

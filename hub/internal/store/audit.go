@@ -43,9 +43,24 @@ func (s *Store) LogAudit(entry model.AuditEntry) (err error) {
 		s.noteAuditSuccess()
 	}()
 
+	if err = logAuditConn(ctx, conn, entry); err != nil {
+		return err
+	}
+
+	if _, err = conn.ExecContext(ctx, "COMMIT"); err != nil {
+		err = fmt.Errorf("commit audit: %w", err)
+		return err
+	}
+	committed = true
+	return nil
+}
+
+// logAuditConn appends to the integrity chain within an existing write transaction.
+func logAuditConn(ctx context.Context, conn *sql.Conn, entry model.AuditEntry) error {
+	entry = normalizeAuditEntry(entry)
 	// Compute integrity hash chain: SHA-256(prev_hash + current entry fields)
 	var prevHash string
-	err = conn.QueryRowContext(ctx, "SELECT prev_hash FROM audit_logs ORDER BY rowid DESC LIMIT 1").Scan(&prevHash)
+	err := conn.QueryRowContext(ctx, "SELECT prev_hash FROM audit_logs ORDER BY rowid DESC LIMIT 1").Scan(&prevHash)
 	if err != nil && err != sql.ErrNoRows {
 		err = fmt.Errorf("query previous audit hash: %w", err)
 		return err
@@ -72,11 +87,6 @@ func (s *Store) LogAudit(entry model.AuditEntry) (err error) {
 		return err
 	}
 
-	if _, err = conn.ExecContext(ctx, "COMMIT"); err != nil {
-		err = fmt.Errorf("commit audit: %w", err)
-		return err
-	}
-	committed = true
 	return nil
 }
 

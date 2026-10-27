@@ -2,6 +2,7 @@ package sshgw
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -52,15 +53,16 @@ type windowSize struct {
 // bridgeParams is everything the relay needs about an already-authorized
 // session.
 type bridgeParams struct {
-	serverID      string
-	serverName    string
-	userID        string
-	username      string
-	executionUser string
-	remoteIP      string
-	cols          uint32
-	rows          uint32
-	win           <-chan windowSize
+	serverID             string
+	serverName           string
+	userID               string
+	credentialGeneration int
+	username             string
+	executionUser        string
+	remoteIP             string
+	cols                 uint32
+	rows                 uint32
+	win                  <-chan windowSize
 	// clientGone closes when the SSH session channel is finished. It is the
 	// authoritative end-of-session signal: a client that merely half-closes
 	// its stdin (`ssh ... < /dev/null`) must keep the remote shell running,
@@ -89,6 +91,10 @@ func (s *Server) bridge(ch ssh.Channel, p bridgeParams) {
 	sessionID := uuid.NewString()
 
 	events, executionUser, err := s.cfg.Terminals.RegisterInteractive(s.cfg.Store, s.cfg.ConnMgr, p.serverID, sessionID, p.userID, func() (string, error) {
+		live, err := s.cfg.Store.GetUserByID(p.userID)
+		if err != nil || live.SSHCredentialGeneration != p.credentialGeneration {
+			return "", errors.New("SSH credential revoked; run vey ssh-cert after signing in again")
+		}
 		if err := s.securityService().GuardInteractive(p.userID, p.serverID); err != nil {
 			return "", err
 		}

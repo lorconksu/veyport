@@ -174,7 +174,7 @@ func TestSessionRefreshRefusesRevokedAuthorityBeforeDurableSpend(t *testing.T) {
 	}
 }
 
-func TestRecoverySessionPublishesOnlyItsAuthenticatedInitialPasswordState(t *testing.T) {
+func TestRecoverySessionNeverPublishesNormalAuthority(t *testing.T) {
 	t.Run("initial_issue_without_refresh_permission", func(t *testing.T) {
 		s := testStore(t)
 		u := refreshStoreOwner(t, s)
@@ -187,15 +187,15 @@ func TestRecoverySessionPublishesOnlyItsAuthenticatedInitialPasswordState(t *tes
 		}
 		sid := refreshStoreSession(t, s, u)
 		issued := strings.Repeat("a", 64)
-		if err := s.RotateSessionRefresh(context.Background(), u, sid, "", issued, refreshTime, lockout.Policy{SessionIdle: time.Hour, CLISessionIdle: time.Hour}); err != nil {
-			t.Fatalf("authenticated mandatory-change sign-in: %v", err)
+		if err := s.RotateSessionRefresh(context.Background(), u, sid, "", issued, refreshTime, lockout.Policy{SessionIdle: time.Hour, CLISessionIdle: time.Hour}); !errors.Is(err, store.ErrSessionRefreshRejected) {
+			t.Fatalf("mandatory-change sign-in published normal authority: %v", err)
 		}
 		if err := s.RotateSessionRefresh(context.Background(), u, sid, issued, strings.Repeat("b", 64), refreshTime.Add(time.Minute), lockout.Policy{SessionIdle: time.Hour, CLISessionIdle: time.Hour}); !errors.Is(err, store.ErrSessionRefreshRejected) {
 			t.Fatalf("unfinished recovery rotated refresh authority: %v", err)
 		}
 		var current string
-		if err := s.DB().QueryRow("SELECT refresh_token_sha256 FROM sessions WHERE id=?", sid).Scan(&current); err != nil || current != issued {
-			t.Fatal("rejected recovery refresh spent the issued token")
+		if err := s.DB().QueryRow("SELECT refresh_token_sha256 FROM sessions WHERE id=?", sid).Scan(&current); err != nil || current != "" {
+			t.Fatal("rejected recovery request published normal authority")
 		}
 	})
 	for _, initial := range []bool{false, true} {

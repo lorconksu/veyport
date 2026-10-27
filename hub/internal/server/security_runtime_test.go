@@ -533,20 +533,17 @@ func TestGovernanceHTTPProtectedPasswordAndMFARecoveryUsesRealApprovedArchive(t 
 		t.Fatal(err)
 	}
 	response = h.call(t, "POST", "/api/auth/login/totp", "viewer", model.LoginTOTPRequest{TOTPToken: primary.TOTPToken, Code: code}, 200)
-	var login model.AuthResponse
+	var login model.LoginResponse
 	decodeResult(t, response, &login)
-	h.tokens["viewer"] = login.AccessToken
-	if !login.User.MustChangePassword {
-		t.Fatal("approved recovery lost mandatory password completion")
+	h.tokens["viewer"] = login.RecoveryToken
+	if !login.MustChangePassword || login.RecoveryToken == "" {
+		t.Fatal("approved recovery lost purpose-bound completion authority")
 	}
-	h.call(t, "POST", "/api/auth/refresh", "viewer", model.RefreshRequest{RefreshToken: login.RefreshToken}, 401)
+	h.call(t, "POST", "/api/auth/refresh", "viewer", model.RefreshRequest{RefreshToken: login.RecoveryToken}, 401)
 	h.call(t, "POST", "/api/executions/not-a-read-permit/original-access/preview", "viewer", map[string]any{"purpose": "Recovery is not an original-read permit", "records": []string{"script"}}, 403)
-	previewBytes := h.call(t, "POST", "/api/security/changes/preview", "viewer", authorization.Proposal{Reason: "Unfinished recovery cannot mutate governance", ExpectedVersion: 3, Change: mustMarshal(t, model.SecurityChangePayload{Kind: "policy", Policy: &h.policy})}, 200)
-	var preview authorization.Preview
-	decodeResult(t, previewBytes, &preview)
-	proof := h.stepup(t, "viewer", authorization.ActionRequest, preview.Digest, "")
-	h.call(t, "POST", "/api/security/changes", "viewer", map[string]any{"reason": preview.Proposal.Reason, "expected_version": preview.Proposal.ExpectedVersion, "change": json.RawMessage(preview.Proposal.Change), "step_up_proof": proof}, 409)
-	response = h.call(t, "PUT", "/api/auth/password", "viewer", model.ChangePasswordRequest{CurrentPassword: temporary, NewPassword: replacement}, 200)
+	h.call(t, "POST", "/api/security/changes/preview", "viewer", authorization.Proposal{Reason: "Unfinished recovery cannot mutate governance", ExpectedVersion: 3, Change: mustMarshal(t, model.SecurityChangePayload{Kind: "policy", Policy: &h.policy})}, 403)
+	response = h.call(t, "POST", "/api/auth/password/recovery", "viewer", map[string]string{"new_password": replacement}, 200)
+
 	current, err := h.s.store.GetUserByID("viewer")
 	if err != nil || current.MustChangePassword || !auth.ComparePassword(current.PasswordHash, replacement) {
 		t.Fatal("approved temporary credential was not consumed by mandatory rotation")
@@ -568,8 +565,9 @@ func TestGovernanceHTTPProtectedPasswordAndMFARecoveryUsesRealApprovedArchive(t 
 		t.Fatal(err)
 	}
 	response = h.call(t, "POST", "/api/auth/totp/enable", "viewer", model.TOTPEnableRequest{Code: code}, 200)
-	decodeResult(t, response, &login)
-	h.tokens["viewer"] = login.AccessToken
+	var signed model.AuthResponse
+	decodeResult(t, response, &signed)
+	h.tokens["viewer"] = signed.AccessToken
 	response = h.call(t, "GET", "/api/auth/me", "viewer", nil, 200)
 	if !bytes.Contains(response, []byte("original-reader")) {
 		t.Fatal("approved MFA completion lost live security role")

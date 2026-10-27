@@ -69,6 +69,10 @@ func (s *Server) authMiddleware(requiredType string, next http.Handler) http.Han
 
 		userID, role, tokenType, sessionID, err := s.authenticateRequestToken(tokenStr)
 		if err != nil {
+			if errors.Is(err, errPasswordChangeRequired) {
+				respondJSON(w, http.StatusForbidden, map[string]string{"error": err.Error(), "code": "password_change_required"})
+				return
+			}
 			// A credential that is itself valid but belongs to an account that
 			// may no longer use it gets the canonical account-state message
 			// instead of the generic one, so an operator whose account was
@@ -126,6 +130,9 @@ func (s *Server) authenticateRequestToken(tokenStr string) (userID, role, tokenT
 			if err != nil || claims.TokenGeneration != user.TokenGeneration {
 				return "", "", "", "", fmt.Errorf("token has been revoked")
 			}
+			if user.MustChangePassword {
+				return "", "", "", "", errPasswordChangeRequired
+			}
 			if accountErr := s.accountAccessError(user); accountErr != nil {
 				return "", "", "", "", accountErr
 			}
@@ -133,10 +140,13 @@ func (s *Server) authenticateRequestToken(tokenStr string) (userID, role, tokenT
 				return "", "", "", "", sessionErr
 			}
 		}
-		if claims.TokenType == auth.TokenTypeSetup || claims.TokenType == auth.TokenTypeTOTP {
+		if claims.TokenType == auth.TokenTypeSetup || claims.TokenType == auth.TokenTypeTOTP || claims.TokenType == auth.TokenTypePasswordRecovery {
 			user, err := s.store.GetUserByID(claims.Subject)
-			if err != nil || user.TokenGeneration != claims.TokenGeneration || user.DisabledAt != nil {
+			if err != nil || user.TokenGeneration != claims.TokenGeneration || user.DisabledAt != nil || temporaryCredentialExpired(user, s.now()) {
 				return "", "", "", "", fmt.Errorf("password-stage credential was revoked")
+			}
+			if err := s.accountAccessError(user); err != nil {
+				return "", "", "", "", err
 			}
 		}
 		role := claims.Role
@@ -167,6 +177,9 @@ func (s *Server) authenticateRequestToken(tokenStr string) (userID, role, tokenT
 	// Checked before the token is stamped as used: a refused request must
 	// leave no trace of activity, or a disabled account's own rejected calls
 	// would keep it looking alive (008 FR-009, FR-012).
+	if user.MustChangePassword {
+		return "", "", "", "", errPasswordChangeRequired
+	}
 	if accountErr := s.accountAccessError(user); accountErr != nil {
 		return "", "", "", "", accountErr
 	}

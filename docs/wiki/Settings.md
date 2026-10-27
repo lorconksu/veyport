@@ -72,9 +72,11 @@ The Users tab lists all accounts registered in Veyport. This tab is only visible
 
 ![Settings Users](screenshots/settings-users.png)
 
-LDAP-backed users are created or updated when they successfully log in through LDAP. Their role and terminal eligibility come from LDAP group mapping rather than manual local-user creation.
+LDAP-backed users are created or updated when they successfully log in through LDAP. Their role and terminal eligibility come from LDAP group mapping rather than manual local-user creation. The **Account source** column shows **Local**, **LDAP**, or **Unknown**; Local credentials are managed in Veyport, while LDAP credentials are managed in the configured directory.
 
-The table includes two columns covering sign-in activity:
+The table identifies the credential source and includes two columns covering sign-in activity:
+
+- **Account source** - **Local** passwords are managed by Veyport; **LDAP** passwords are managed in the configured directory. An unrecognized source is shown as **Unknown**. Account source does not change the account's role, lifecycle status, or application access.
 
 - **Last login** - the account's most recent successful sign-in, shown as a relative time ("just now", "5 minutes ago", "3 hours ago", "2 days ago", or a date once it's further back). Hover for the exact local date and time. Shows **Never** (muted) for an account that has not yet signed in.
 - **Status** - one badge per row, following the precedence **Disabled > Dormant > Locked > Active**:
@@ -85,7 +87,7 @@ The table includes two columns covering sign-in activity:
 
   An administrator account carrying the dormancy exemption shows a small **"Never dormant"** marker next to its status, whatever that status is - hover it for "Exempt from dormancy."
 
-### Row Actions: Disable, Enable, Unlock, Exempt from Dormancy
+### Row Actions: Disable, Reactivate, Enable, Unlock, Password Recovery, Exempt from Dormancy
 
 Alongside the existing role dropdown, Disable 2FA, and Delete, each row (never your own) offers
 the actions that apply to its current state, each behind a confirmation dialog:
@@ -93,20 +95,52 @@ the actions that apply to its current state, each behind a confirmation dialog:
 | Action | Shown when | What it does |
 |---|---|---|
 | **Disable** | account is not disabled | Immediately turns the account off: every one of the account's web and CLI sessions is ended and any open SSH shell is closed within seconds (feature 009 - same effect as **Log out everywhere** in **Sessions** below), every API token the account holds is revoked, and sign-in and SSH certificate issuance are refused. The row switches to **Disabled**. |
+| **Reactivate** | account is dormant | Restarts the dormancy clock without enabling a disabled account or clearing a separate lock. A dormant-and-locked account remains **Locked**. |
 | **Enable** | account is disabled | Turns the account back on: clears any lock and the failure count, restarts the dormancy clock, and lets the account sign in again. Its API tokens stay revoked - the user must mint new ones. |
 | **Unlock** | account is locked | Clears the lock and the consecutive-failure count immediately, without waiting for the lock to expire. Restarts the dormancy clock. |
+| **Reset password** / **Password help** | ordinary local / LDAP account | Local recovery creates an expiring temporary password; LDAP credentials must be reset by a directory administrator. See **Password recovery** below. |
 | **Exempt from dormancy** / **Remove exemption** | account's role is Admin | Marks (or unmarks) the account as "never dormant" - see **Dormant accounts** below. Only administrator accounts can carry the exemption; it has no effect on locking or disabling. |
 | **Sessions** | always (every row, including your own) | Opens the **Sessions** panel for that account - see **Sessions** below. |
 
 Two guards apply to Disable, enforced by the server as well as the UI: you cannot disable your
 own account, and you cannot disable the last remaining enabled administrator - an administrator
 who is already disabled does not count toward that minimum. Both are refused with an explanatory
-message rather than silently ignored. Every Disable, Enable, Unlock, and exemption change writes
-an audit entry naming the acting administrator and the target account (see [[Audit Logs]]).
+message rather than silently ignored. Lifecycle and password-recovery actions write audit entries
+naming the acting administrator and target account without recording credential values (see
+[[Audit Logs]]).
 
-LDAP-backed (directory) accounts are governed identically to local accounts: an admin can
-disable, enable, unlock, or exempt them, and a later directory sync cannot re-enable, unlock, or
-clear the dormancy state of an account the hub has acted on.
+LDAP-backed (directory) accounts are governed identically for lifecycle actions: an admin can
+disable, enable, unlock, reactivate, or exempt them, and a later directory sync cannot re-enable,
+unlock, or clear the dormancy state of an account the hub has acted on. Their passwords remain
+owned by the configured directory; Veyport's local password reset is unavailable for LDAP or
+unknown-source accounts.
+
+### Password recovery
+
+For an ordinary **Local** account, **Reset password** generates a temporary password that expires
+according to the configured temporary-password lifetime. The dialog displays the password once;
+copy it and deliver it to the user through a private channel. Veyport does not email the password,
+and it cannot be retrieved after the result is closed. If the result is lost, explicitly perform a
+new reset. The request is not automatically retried. The user must replace the temporary password
+before normal access. Existing TOTP remains enabled and is still required; completing the change
+ends the recovery flow and requires a fresh sign-in. For an account without TOTP, the existing
+first-login TOTP enrollment and password replacement flow remains in force.
+
+Resetting a password does not enable, reactivate, or unlock the account. Review its Status and
+perform the separate applicable lifecycle action if needed. Recovery revokes existing sessions,
+API tokens, and durable application access; open browser-backed terminals and SSH shells are
+closed through the normal revocation process, and active application streams recheck durable
+authority within five seconds. Existing SSH certificates are permanently refused after password
+recovery, even if they have not expired. After setting the permanent password, the user must sign
+in again with `vey login` and obtain a fresh certificate with `vey ssh-cert` before using `vey ssh`.
+MFA, roles, grants, and account source are retained.
+
+The ordinary reset action is unavailable for your own account, LDAP or Unknown accounts, and
+protected principals. Use the existing self-service password-change route for your own account;
+protected-account recovery continues through its security approval workflow. For LDAP, a directory
+administrator must reset the password in the configured directory and the user must complete any
+directory-required password change there before signing in to Veyport. Veyport administrator
+access does not imply directory administration access.
 
 ### Sessions
 
@@ -172,9 +206,9 @@ SSH certificate issuance, and at SSH shell establishment - not by a background s
 is nothing to run and nothing to wait for. Between uses, the badge in the user list reflects the
 same rule computed live each time the list is loaded.
 
-To review a dormant account, look at its status badge and, if appropriate, click **Enable** -
-this restarts its activity clock and restores access exactly like re-enabling a disabled account.
-There is no separate "un-dormant" action.
+To review a dormant account, look at its status badge and, if appropriate, click **Reactivate**.
+This restarts its activity clock while preserving any separate lock. A disabled account uses
+**Enable**, which has distinct lifecycle behavior; a locked account uses **Unlock**.
 
 **The dormancy exemption** exists so a hub is never left with an unusable administrator: mark one
 administrator account (typically a dedicated recovery admin) **"never dormant"** in **Exempt from
