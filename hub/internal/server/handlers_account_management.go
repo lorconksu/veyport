@@ -11,6 +11,11 @@ import (
 	"github.com/wyiu/veyport/hub/internal/store"
 )
 
+const (
+	accountManagementCacheHeader = "Cache-Control"
+	accountManagementNoStore     = "no-store"
+)
+
 var errPasswordChangeRequired = errors.New("password change required; complete password recovery in the browser")
 
 func (s *Server) accountManagementAudit(r *http.Request, actor, target, action string) model.AuditEntry {
@@ -63,7 +68,7 @@ func (s *Server) auditAccountManagementRefusal(r *http.Request, actor, target, a
 }
 
 func (s *Server) handleResetUserPassword(w http.ResponseWriter, r *http.Request) {
-	w.Header().Set("Cache-Control", "no-store")
+	w.Header().Set(accountManagementCacheHeader, accountManagementNoStore)
 	actor, target := UserIDFromContext(r.Context()), r.PathValue("id")
 	if actor == target {
 		respondError(w, http.StatusBadRequest, "use the self-service password change for your own account")
@@ -104,7 +109,7 @@ func (s *Server) handleResetUserPassword(w http.ResponseWriter, r *http.Request)
 	settings := s.store.GetAuditSettings()
 	now := s.now().UTC()
 	expires := now.Add(time.Duration(settings.TemporaryPasswordTTLHours) * time.Hour).Truncate(time.Second)
-	user, err := s.store.ResetLocalPassword(target, *req.Expected, hash, expires, now, settings.PasswordHistoryCount, s.accountManagementAudit(r, actor, target, model.AuditUserPasswordReset), authority)
+	user, err := s.store.ResetLocalPassword(store.PasswordResetTarget{UserID: target, ExpectedGeneration: *req.Expected}, store.TemporaryPasswordCredential{Hash: hash, ExpiresAt: expires}, now, settings.PasswordHistoryCount, s.accountManagementAudit(r, actor, target, model.AuditUserPasswordReset), authority)
 	if err != nil {
 		s.auditAccountManagementRefusal(r, actor, target, model.AuditUserPasswordReset, err)
 		s.accountManagementError(w, err)
@@ -138,12 +143,12 @@ func (s *Server) respondPasswordRecovery(w http.ResponseWriter, user *model.User
 		return
 	}
 	claims, _ := auth.ValidateToken(s.jwtSecret, token)
-	w.Header().Set("Cache-Control", "no-store")
+	w.Header().Set(accountManagementCacheHeader, accountManagementNoStore)
 	respondJSON(w, http.StatusOK, map[string]any{"must_change_password": true, "recovery_token": token, "expires_at": claims.ExpiresAt.Time})
 }
 
 func (s *Server) handleCompletePasswordRecovery(w http.ResponseWriter, r *http.Request) {
-	w.Header().Set("Cache-Control", "no-store")
+	w.Header().Set(accountManagementCacheHeader, accountManagementNoStore)
 	// Recovery authority is explicitly supplied in memory by the sign-in flow.
 	// Browser cookies can still contain the revoked pre-reset access token and
 	// must neither mask this bearer nor authorize recovery on their own.
@@ -198,7 +203,7 @@ func (s *Server) handleCompletePasswordRecovery(w http.ResponseWriter, r *http.R
 		return
 	}
 	if protected {
-		_, err = s.store.CompleteApprovedPasswordRecoveryAudited(user.ID, user.PasswordHash, user.SecurityRevision, hash, s.now(), settings.PasswordHistoryCount, s.accountManagementAudit(r, user.ID, user.ID, model.AuditUserPasswordChanged), user.TokenGeneration)
+		_, err = s.store.CompleteApprovedPasswordRecoveryAudited(store.PasswordRecoverySnapshot{UserID: user.ID, PasswordHash: user.PasswordHash, SecurityRevision: user.SecurityRevision, TokenGeneration: user.TokenGeneration}, hash, s.now(), settings.PasswordHistoryCount, s.accountManagementAudit(r, user.ID, user.ID, model.AuditUserPasswordChanged))
 	} else {
 		_, err = s.store.ChangeLocalPassword(user, hash, s.now(), settings.PasswordHistoryCount, true, s.accountManagementAudit(r, user.ID, user.ID, model.AuditUserPasswordChanged))
 	}

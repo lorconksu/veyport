@@ -732,14 +732,15 @@ func (s *Store) securityUserWrite(user string, mfaSetup bool, fn func(context.Co
 // installed by an externally completed approved recovery. The HTTP caller must
 // authenticate the principal and its current credential/MFA before this CAS.
 func (s *Store) CompleteApprovedPasswordRecovery(user, currentHash string, revision int, newHash string, now time.Time) (int, error) {
-	return s.completeApprovedPasswordRecovery(user, currentHash, revision, newHash, now, 0, nil, -1)
+	return s.completeApprovedPasswordRecovery(PasswordRecoverySnapshot{UserID: user, PasswordHash: currentHash, SecurityRevision: revision, TokenGeneration: -1}, newHash, now, 0, nil)
 }
 
-func (s *Store) CompleteApprovedPasswordRecoveryAudited(user, currentHash string, revision int, newHash string, now time.Time, history int, entry model.AuditEntry, expectedGeneration int) (int, error) {
-	return s.completeApprovedPasswordRecovery(user, currentHash, revision, newHash, now, history, &entry, expectedGeneration)
+func (s *Store) CompleteApprovedPasswordRecoveryAudited(snapshot PasswordRecoverySnapshot, newHash string, now time.Time, history int, entry model.AuditEntry) (int, error) {
+	return s.completeApprovedPasswordRecovery(snapshot, newHash, now, history, &entry)
 }
 
-func (s *Store) completeApprovedPasswordRecovery(user, currentHash string, revision int, newHash string, now time.Time, history int, entry *model.AuditEntry, expectedGeneration int) (int, error) {
+func (s *Store) completeApprovedPasswordRecovery(snapshot PasswordRecoverySnapshot, newHash string, now time.Time, history int, entry *model.AuditEntry) (int, error) {
+	user, currentHash, revision, expectedGeneration := snapshot.UserID, snapshot.PasswordHash, snapshot.SecurityRevision, snapshot.TokenGeneration
 	var generation int
 	err := s.withImmediateTx(func(ctx context.Context, conn *sql.Conn) error {
 		var allowed bool

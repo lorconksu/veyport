@@ -141,11 +141,7 @@ func (s *Server) authenticateRequestToken(tokenStr string) (userID, role, tokenT
 			}
 		}
 		if claims.TokenType == auth.TokenTypeSetup || claims.TokenType == auth.TokenTypeTOTP || claims.TokenType == auth.TokenTypePasswordRecovery {
-			user, err := s.store.GetUserByID(claims.Subject)
-			if err != nil || user.TokenGeneration != claims.TokenGeneration || user.DisabledAt != nil || temporaryCredentialExpired(user, s.now()) {
-				return "", "", "", "", fmt.Errorf("password-stage credential was revoked")
-			}
-			if err := s.accountAccessError(user); err != nil {
+			if err := s.validateChallengeAuthority(claims); err != nil {
 				return "", "", "", "", err
 			}
 		}
@@ -440,4 +436,17 @@ func clientIP(r *http.Request) string {
 		return r.RemoteAddr
 	}
 	return ip
+}
+
+// validateChallengeAuthority keeps password/setup challenges subject to live
+// generation, temporary expiry and lifecycle checks before endpoint dispatch.
+func (s *Server) validateChallengeAuthority(claims *auth.Claims) error {
+	user, err := s.store.GetUserByID(claims.Subject)
+	if err != nil || user.TokenGeneration != claims.TokenGeneration || user.DisabledAt != nil || temporaryCredentialExpired(user, s.now()) {
+		return fmt.Errorf("password-stage credential was revoked")
+	}
+	if err := s.accountAccessError(user); err != nil {
+		return err
+	}
+	return nil
 }

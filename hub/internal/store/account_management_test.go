@@ -2,6 +2,7 @@ package store_test
 
 import (
 	"errors"
+	"slices"
 	"sync"
 	"testing"
 	"time"
@@ -10,6 +11,8 @@ import (
 	"github.com/wyiu/veyport/hub/internal/model"
 	"github.com/wyiu/veyport/hub/internal/store"
 )
+
+const managementReplacementHash = "replacement-hash"
 
 func managementAudit(actor, target, action string) model.AuditEntry {
 	return model.AuditEntry{UserID: &actor, Target: &target, Action: action}
@@ -56,22 +59,13 @@ func TestResetLocalPasswordAtomicRevocationAndRollback(t *testing.T) {
 			now := time.Now().UTC().Truncate(time.Second)
 			expires := now.Add(time.Hour)
 			secret := "preserved-mfa"
-			if err := s.UpdateUserTOTP(u.ID, &secret, true); err != nil {
-				t.Fatal(err)
-			}
-			newLifecycleToken(t, s, "token", u.ID, "tokenhash")
-			if _, err := s.DB().Exec(`INSERT INTO sessions(id,user_id,kind,created_at,last_seen_at) VALUES('session',?,'web',?,?)`, u.ID, now.Format("2006-01-02 15:04:05"), now.Format("2006-01-02 15:04:05")); err != nil {
-				t.Fatal(err)
-			}
-			if _, err := s.DB().Exec(`INSERT INTO application_login_anchors(id,user_id,completed_mfa_at,token_generation) VALUES('anchor',?,1,0)`, u.ID); err != nil {
-				t.Fatal(err)
-			}
+			installManagementLiveAuthority(t, s, u.ID, secret, now)
 			if fail {
 				if _, err := s.DB().Exec(`CREATE TRIGGER reject_reset_audit BEFORE INSERT ON audit_logs WHEN NEW.action='user.password_reset' BEGIN SELECT RAISE(ABORT,'injected audit failure'); END`); err != nil {
 					t.Fatal(err)
 				}
 			}
-			got, err := s.ResetLocalPassword(u.ID, 0, "replacement-hash", expires, now, 5, managementAudit("actor", u.ID, model.AuditUserPasswordReset))
+			got, err := s.ResetLocalPassword(store.PasswordResetTarget{UserID: u.ID, ExpectedGeneration: 0}, store.TemporaryPasswordCredential{Hash: managementReplacementHash, ExpiresAt: expires}, now, 5, managementAudit("actor", u.ID, model.AuditUserPasswordReset))
 			live := mustGetUser(t, s, u.ID)
 			var sessions, anchors, history, audits int
 			for _, check := range []struct {
@@ -100,7 +94,7 @@ func TestResetLocalPasswordAtomicRevocationAndRollback(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if got.PasswordHash != "replacement-hash" || live.TokenGeneration != 1 || !live.MustChangePassword || !live.TempPasswordExpiresAt.Equal(expires) || live.TOTPSecret == nil || *live.TOTPSecret != secret || !live.TOTPEnabled || sessions != 0 || anchors != 0 || history != 2 || audits != 1 {
+			if got.PasswordHash != managementReplacementHash || live.TokenGeneration != 1 || !live.MustChangePassword || !live.TempPasswordExpiresAt.Equal(expires) || live.TOTPSecret == nil || *live.TOTPSecret != secret || !live.TOTPEnabled || sessions != 0 || anchors != 0 || history != 2 || audits != 1 {
 				t.Fatal("reset did not preserve MFA or revoke durable authority atomically")
 			}
 			assertTokenActive(t, s, "tokenhash", false)
@@ -122,7 +116,7 @@ func TestResetPasswordConflictsAndSourceGuard(t *testing.T) {
 		go func() {
 			defer wg.Done()
 			<-start
-			_, err := s.ResetLocalPassword(u.ID, 0, "new-hash", now.Add(time.Hour), now, 5, entry)
+			_, err := s.ResetLocalPassword(store.PasswordResetTarget{UserID: u.ID, ExpectedGeneration: 0}, store.TemporaryPasswordCredential{Hash: "new-hash", ExpiresAt: now.Add(time.Hour)}, now, 5, entry)
 			errs <- err
 		}()
 	}
@@ -146,7 +140,7 @@ func TestResetPasswordConflictsAndSourceGuard(t *testing.T) {
 		if _, err := s.DB().Exec("UPDATE users SET auth_provider=? WHERE id=?", provider, u.ID); err != nil {
 			t.Fatal(err)
 		}
-		if _, err := s.ResetLocalPassword(u.ID, 1, "forbidden", now.Add(time.Hour), now, 5, entry); !errors.Is(err, store.ErrLocalPasswordOnly) {
+		if _, err := s.ResetLocalPassword(store.PasswordResetTarget{UserID: u.ID, ExpectedGeneration: 1}, store.TemporaryPasswordCredential{Hash: "forbidden", ExpiresAt: now.Add(time.Hour)}, now, 5, entry); !errors.Is(err, store.ErrLocalPasswordOnly) {
 			t.Fatalf("provider %s accepted: %v", provider, err)
 		}
 	}
@@ -158,7 +152,7 @@ func TestPasswordChangeCannotOverwriteResetOrDisabledState(t *testing.T) {
 	u := newLifecycleUser(t, s, "target", "target", model.RoleViewer)
 	now := time.Now().UTC()
 	entry := managementAudit("actor", u.ID, model.AuditUserPasswordReset)
-	if _, err := s.ResetLocalPassword(u.ID, 0, "new-hash", now.Add(time.Hour), now, 5, entry); err != nil {
+	if _, err := s.ResetLocalPassword(store.PasswordResetTarget{UserID: u.ID, ExpectedGeneration: 0}, store.TemporaryPasswordCredential{Hash: "new-hash", ExpiresAt: now.Add(time.Hour)}, now, 5, entry); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := s.ChangeLocalPassword(u, "stale", now, 5, false, entry); !errors.Is(err, store.ErrSecurityConflict) {
@@ -174,20 +168,26 @@ func TestPasswordChangeCannotOverwriteResetOrDisabledState(t *testing.T) {
 }
 
 func TestPrivilegedResetRechecksActorAuthority(t *testing.T) {
-	for _, mutation := range []string{"UPDATE users SET token_generation=token_generation+1 WHERE id='actor'", "UPDATE users SET role='viewer' WHERE id='actor'", "UPDATE sessions SET ended_at=datetime('now') WHERE id='actor-session'"} {
-		t.Run(mutation, func(t *testing.T) {
+	for _, mutation := range []struct {
+		name, sql          string
+		generationDelta    int
+		admin, liveSession bool
+	}{
+		{"credential generation", "UPDATE users SET token_generation=token_generation+1 WHERE id='actor'", 1, true, true},
+		{"canonical administrator role", "DELETE FROM user_roles WHERE user_id='actor' AND role='admin'", 0, false, true},
+		{"interactive session", "UPDATE sessions SET ended_at=datetime('now') WHERE id='actor-session'", 0, true, false},
+	} {
+		t.Run(mutation.name, func(t *testing.T) {
 			s := testStore(t)
 			newLifecycleUser(t, s, "actor", "actor", model.RoleAdmin)
 			u := newLifecycleUser(t, s, "target", "target", model.RoleViewer)
 			now := time.Now().UTC()
-			if _, err := s.DB().Exec(`INSERT INTO sessions(id,user_id,kind,created_at,last_seen_at) VALUES('actor-session','actor','web',datetime('now'),datetime('now'))`); err != nil {
+			actor := liveManagementActor(t, s, "actor")
+			if _, err := s.DB().Exec(mutation.sql); err != nil {
 				t.Fatal(err)
 			}
-			if _, err := s.DB().Exec(mutation); err != nil {
-				t.Fatal(err)
-			}
-			actor := store.AccountManagementActor{UserID: "actor", SessionID: "actor-session"}
-			if _, err := s.ResetLocalPassword(u.ID, 0, "forbidden", now.Add(time.Hour), now, 5, managementAudit("actor", u.ID, model.AuditUserPasswordReset), actor); !errors.Is(err, store.ErrAccountManagementActor) {
+			assertManagementActorState(t, s, actor, mutation.generationDelta, mutation.admin, mutation.liveSession)
+			if _, err := s.ResetLocalPassword(store.PasswordResetTarget{UserID: u.ID, ExpectedGeneration: 0}, store.TemporaryPasswordCredential{Hash: "forbidden", ExpiresAt: now.Add(time.Hour)}, now, 5, managementAudit("actor", u.ID, model.AuditUserPasswordReset), actor); !errors.Is(err, store.ErrAccountManagementActor) {
 				t.Fatalf("stale actor accepted: %v", err)
 			}
 			if got := mustGetUser(t, s, u.ID); got.PasswordHash != u.PasswordHash || got.TokenGeneration != 0 {
@@ -203,7 +203,7 @@ func TestPasswordRecoveryCompletionExpiresAndConsumesGeneration(t *testing.T) {
 	u := newLifecycleUser(t, s, "target", "target", model.RoleViewer)
 	now := time.Now().UTC().Truncate(time.Second)
 	entry := managementAudit("actor", u.ID, model.AuditUserPasswordReset)
-	live, err := s.ResetLocalPassword(u.ID, 0, "temporary", now.Add(time.Hour), now, 5, entry)
+	live, err := s.ResetLocalPassword(store.PasswordResetTarget{UserID: u.ID, ExpectedGeneration: 0}, store.TemporaryPasswordCredential{Hash: "temporary", ExpiresAt: now.Add(time.Hour)}, now, 5, entry)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -236,7 +236,7 @@ func TestResetPreservesOutgoingPasswordHistory(t *testing.T) {
 		t.Fatal(err)
 	}
 	now := time.Now().UTC()
-	if _, err := s.ResetLocalPassword(u.ID, 0, "new", now.Add(time.Hour), now, 5, managementAudit("actor", u.ID, model.AuditUserPasswordReset)); err != nil {
+	if _, err := s.ResetLocalPassword(store.PasswordResetTarget{UserID: u.ID, ExpectedGeneration: 0}, store.TemporaryPasswordCredential{Hash: "new", ExpiresAt: now.Add(time.Hour)}, now, 5, managementAudit("actor", u.ID, model.AuditUserPasswordReset)); err != nil {
 		t.Fatal(err)
 	}
 	matches, err := s.PasswordMatchesRecent(u.ID, "Previous!Password123", 5)
@@ -267,7 +267,7 @@ func TestPasswordResetPreservesEveryLifecycleRestriction(t *testing.T) {
 				}
 			}
 			before := mustGetUser(t, s, u.ID)
-			after, err := s.ResetLocalPassword(u.ID, before.TokenGeneration, "new-hash", now.Add(time.Hour), now, 5, managementAudit("actor", u.ID, model.AuditUserPasswordReset))
+			after, err := s.ResetLocalPassword(store.PasswordResetTarget{UserID: u.ID, ExpectedGeneration: before.TokenGeneration}, store.TemporaryPasswordCredential{Hash: "new-hash", ExpiresAt: now.Add(time.Hour)}, now, 5, managementAudit("actor", u.ID, model.AuditUserPasswordReset))
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -289,27 +289,7 @@ func TestResetAndReactivateSerializeWithConcurrentDisable(t *testing.T) {
 			if _, err := s.DB().Exec("UPDATE users SET created_at=? WHERE id=?", now.Add(-60*24*time.Hour).Format("2006-01-02 15:04:05"), u.ID); err != nil {
 				t.Fatal(err)
 			}
-			start := make(chan struct{})
-			results := make(chan error, 2)
-			go func() { <-start; _, err := s.DisableUser(u.ID, "actor", now); results <- err }()
-			go func() {
-				<-start
-				entry := managementAudit("actor", u.ID, model.AuditUserReactivated)
-				if action == "reactivate" {
-					_, _, err := s.ReactivateUser(u.ID, now, 35, entry)
-					results <- err
-				} else {
-					_, err := s.ResetLocalPassword(u.ID, 0, "reset-hash", now.Add(time.Hour), now, 5, entry)
-					results <- err
-				}
-			}()
-			close(start)
-			for range 2 {
-				err := <-results
-				if err != nil && !errors.Is(err, store.ErrSecurityConflict) && !errors.Is(err, store.ErrAccountDisabled) {
-					t.Fatal(err)
-				}
-			}
+			raceManagementDisableAction(t, s, u, action, now)
 			live := mustGetUser(t, s, u.ID)
 			if live.DisabledAt == nil {
 				t.Fatal("concurrent administrative action restored disabled access")
@@ -330,7 +310,7 @@ func TestAccountManagementProtectionIsReevaluatedInsideStore(t *testing.T) {
 	if _, err := s.DB().Exec("INSERT INTO user_roles(user_id,role) VALUES(?,'original-reader')", u.ID); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := s.ResetLocalPassword(u.ID, 0, "forbidden", now.Add(time.Hour), now, 5, managementAudit("actor", u.ID, model.AuditUserPasswordReset)); !errors.Is(err, store.ErrProtectedChange) {
+	if _, err := s.ResetLocalPassword(store.PasswordResetTarget{UserID: u.ID, ExpectedGeneration: 0}, store.TemporaryPasswordCredential{Hash: "forbidden", ExpiresAt: now.Add(time.Hour)}, now, 5, managementAudit("actor", u.ID, model.AuditUserPasswordReset)); !errors.Is(err, store.ErrProtectedChange) {
 		t.Fatalf("protected reset accepted: %v", err)
 	}
 	if _, _, err := s.ReactivateUser(u.ID, now, 35, managementAudit("actor", u.ID, model.AuditUserReactivated)); !errors.Is(err, store.ErrProtectedChange) {
@@ -339,5 +319,100 @@ func TestAccountManagementProtectionIsReevaluatedInsideStore(t *testing.T) {
 	flags, err := s.ProtectedUsers()
 	if err != nil || !flags[u.ID] || flags["actor"] {
 		t.Fatalf("batched protected metadata wrong: %v", err)
+	}
+}
+
+func installManagementLiveAuthority(t *testing.T, s *store.Store, userID, secret string, now time.Time) {
+	t.Helper()
+	if err := s.UpdateUserTOTP(userID, &secret, true); err != nil {
+		t.Fatal(err)
+	}
+	newLifecycleToken(t, s, "token", userID, "tokenhash")
+	if _, err := s.DB().Exec(`INSERT INTO sessions(id,user_id,kind,created_at,last_seen_at) VALUES('session',?,'web',?,?)`, userID, now.Format("2006-01-02 15:04:05"), now.Format("2006-01-02 15:04:05")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.DB().Exec(`INSERT INTO application_login_anchors(id,user_id,completed_mfa_at,token_generation) VALUES('anchor',?,1,0)`, userID); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func raceManagementDisableAction(t *testing.T, s *store.Store, u *model.User, action string, now time.Time) {
+	t.Helper()
+	start := make(chan struct{})
+	results := make(chan error, 2)
+	go func() { <-start; _, err := s.DisableUser(u.ID, "actor", now); results <- err }()
+	go func() {
+		<-start
+		entry := managementAudit("actor", u.ID, model.AuditUserReactivated)
+		if action == "reactivate" {
+			_, _, err := s.ReactivateUser(u.ID, now, 35, entry)
+			results <- err
+		} else {
+			_, err := s.ResetLocalPassword(store.PasswordResetTarget{UserID: u.ID, ExpectedGeneration: 0}, store.TemporaryPasswordCredential{Hash: "reset-hash", ExpiresAt: now.Add(time.Hour)}, now, 5, entry)
+			results <- err
+		}
+	}()
+	close(start)
+	for range 2 {
+		err := <-results
+		if err != nil && !errors.Is(err, store.ErrSecurityConflict) && !errors.Is(err, store.ErrAccountDisabled) {
+			t.Fatal(err)
+		}
+	}
+}
+
+// liveManagementActor establishes every independent authorization prerequisite
+// before a test mutates exactly one of them.
+func liveManagementActor(t *testing.T, s *store.Store, id string) store.AccountManagementActor {
+	t.Helper()
+	secret := "JBSWY3DPEHPK3PXP"
+	if err := s.UpdateUserTOTP(id, &secret, true); err != nil {
+		t.Fatal(err)
+	}
+	sessionID := id + "-session"
+	if _, err := s.DB().Exec(`INSERT INTO sessions(id,user_id,kind,created_at,last_seen_at) VALUES(?,?,'web',datetime('now'),datetime('now'))`, sessionID, id); err != nil {
+		t.Fatal(err)
+	}
+	user := mustGetUser(t, s, id)
+	return store.AccountManagementActor{UserID: id, SessionID: sessionID, Generation: user.TokenGeneration, SecurityRevision: user.SecurityRevision}
+}
+
+func TestPrivilegedResetAcceptsLiveActorSnapshot(t *testing.T) {
+	s := testStore(t)
+	newLifecycleUser(t, s, "actor", "actor", model.RoleAdmin)
+	target := newLifecycleUser(t, s, "target", "target", model.RoleViewer)
+	actor := liveManagementActor(t, s, "actor")
+	now := time.Now().UTC()
+	updated, err := s.ResetLocalPassword(store.PasswordResetTarget{UserID: target.ID, ExpectedGeneration: target.TokenGeneration}, store.TemporaryPasswordCredential{Hash: managementReplacementHash, ExpiresAt: now.Add(time.Hour)}, now, 5, managementAudit("actor", target.ID, model.AuditUserPasswordReset), actor)
+	if err != nil {
+		t.Fatalf("live actor was refused: %v", err)
+	}
+	if updated.PasswordHash != managementReplacementHash || updated.TokenGeneration != target.TokenGeneration+1 || !updated.MustChangePassword {
+		t.Fatal("live actor did not commit the requested reset")
+	}
+}
+
+func assertManagementActorState(t *testing.T, s *store.Store, actor store.AccountManagementActor, generationDelta int, admin, liveSession bool) {
+	t.Helper()
+	user := mustGetUser(t, s, actor.UserID)
+	if !user.TOTPEnabled || user.DisabledAt != nil || user.MustChangePassword || user.SecurityRevision != actor.SecurityRevision {
+		t.Fatal("actor mutation changed unrelated MFA/lifecycle/security predicates")
+	}
+	if user.TokenGeneration != actor.Generation+generationDelta {
+		t.Fatal("actor mutation changed unexpected credential generation")
+	}
+	roles, err := s.UserRoles(actor.UserID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if slices.Contains(roles, model.RoleAdmin) != admin {
+		t.Fatal("actor mutation did not isolate canonical administrator authority")
+	}
+	session, err := s.GetSession(actor.SessionID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if (session.EndedAt == nil) != liveSession {
+		t.Fatal("actor mutation did not isolate session liveness")
 	}
 }

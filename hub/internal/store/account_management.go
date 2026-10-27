@@ -4,8 +4,9 @@ import (
 	"context"
 	"database/sql"
 	"errors"
-	"github.com/wyiu/veyport/hub/internal/lockout"
 	"time"
+
+	"github.com/wyiu/veyport/hub/internal/lockout"
 
 	"github.com/google/uuid"
 	"github.com/wyiu/veyport/hub/internal/account"
@@ -15,6 +16,26 @@ import (
 var ErrAccountDisabled = errors.New("account disabled; enable it separately")
 var ErrLocalPasswordOnly = errors.New("password recovery is available for local accounts only")
 var ErrTemporaryPasswordExpired = errors.New("temporary password expired")
+
+// PasswordResetTarget binds an administrator's confirmation to the observed credential generation.
+type PasswordResetTarget struct {
+	UserID             string
+	ExpectedGeneration int
+}
+
+// TemporaryPasswordCredential contains only the one-way credential and its expiry.
+type TemporaryPasswordCredential struct {
+	Hash      string
+	ExpiresAt time.Time
+}
+
+// PasswordRecoverySnapshot is the immutable password-stage authority checked at commit.
+type PasswordRecoverySnapshot struct {
+	UserID, PasswordHash              string
+	SecurityRevision, TokenGeneration int
+}
+
+const accountUserByIDQuery = "SELECT " + userSelectColumns + " FROM users WHERE id=?"
 
 // ProtectedUsers resolves governance protection in one query for the user table.
 func (s *Store) ProtectedUsers() (map[string]bool, error) {
@@ -46,7 +67,7 @@ func (s *Store) ReactivateUser(id string, now time.Time, dormantDays int, entry 
 			return err
 		}
 		var e error
-		user, e = s.scanUser(conn.QueryRowContext(ctx, "SELECT "+userSelectColumns+" FROM users WHERE id=?", id))
+		user, e = s.scanUser(conn.QueryRowContext(ctx, accountUserByIDQuery, id))
 		if e != nil {
 			return e
 		}
@@ -74,7 +95,9 @@ func (s *Store) ReactivateUser(id string, now time.Time, dormantDays int, entry 
 
 // ResetLocalPassword installs one credential generation and revokes all durable
 // authority in the same write transaction as its history and success audit.
-func (s *Store) ResetLocalPassword(id string, expected int, hash string, expires, now time.Time, history int, entry model.AuditEntry, actors ...AccountManagementActor) (user *model.User, err error) {
+func (s *Store) ResetLocalPassword(target PasswordResetTarget, credential TemporaryPasswordCredential, now time.Time, history int, entry model.AuditEntry, actors ...AccountManagementActor) (user *model.User, err error) {
+	id, expected := target.UserID, target.ExpectedGeneration
+	hash, expires := credential.Hash, credential.ExpiresAt
 	err = s.withImmediateTx(func(ctx context.Context, conn *sql.Conn) error {
 		if err := guardAccountManagementActor(ctx, conn, actors, now); err != nil {
 			return err
@@ -82,7 +105,7 @@ func (s *Store) ResetLocalPassword(id string, expected int, hash string, expires
 		if err := guardSecurityPrincipal(ctx, conn, id); err != nil {
 			return err
 		}
-		current, e := s.scanUser(conn.QueryRowContext(ctx, "SELECT "+userSelectColumns+" FROM users WHERE id=?", id))
+		current, e := s.scanUser(conn.QueryRowContext(ctx, accountUserByIDQuery, id))
 		if e != nil {
 			return e
 		}
@@ -104,7 +127,7 @@ func (s *Store) ResetLocalPassword(id string, expected int, hash string, expires
 		if e = logAuditConn(ctx, conn, entry); e != nil {
 			return e
 		}
-		user, e = s.scanUser(conn.QueryRowContext(ctx, "SELECT "+userSelectColumns+" FROM users WHERE id=?", id))
+		user, e = s.scanUser(conn.QueryRowContext(ctx, accountUserByIDQuery, id))
 		return e
 	})
 	return
@@ -151,7 +174,7 @@ func (s *Store) ChangeLocalPassword(user *model.User, hash string, now time.Time
 		if err := guardSecurityPrincipal(ctx, conn, user.ID); err != nil {
 			return err
 		}
-		live, err := s.scanUser(conn.QueryRowContext(ctx, "SELECT "+userSelectColumns+" FROM users WHERE id=?", user.ID))
+		live, err := s.scanUser(conn.QueryRowContext(ctx, accountUserByIDQuery, user.ID))
 		if err != nil {
 			return err
 		}

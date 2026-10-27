@@ -115,7 +115,7 @@ func TestApprovedRecoveryCompletionRejectsGenerationOnlyRevocation(t *testing.T)
 		t.Fatal(err)
 	}
 	entry := model.AuditEntry{UserID: &target.ID, Target: &target.ID, Action: model.AuditUserPasswordChanged}
-	_, err = s.store.CompleteApprovedPasswordRecoveryAudited(before.ID, before.PasswordHash, before.SecurityRevision, replacement, s.now(), 5, entry, before.TokenGeneration)
+	_, err = s.store.CompleteApprovedPasswordRecoveryAudited(store.PasswordRecoverySnapshot{UserID: before.ID, PasswordHash: before.PasswordHash, SecurityRevision: before.SecurityRevision, TokenGeneration: before.TokenGeneration}, replacement, s.now(), 5, entry)
 	if !errors.Is(err, store.ErrProtectedChange) {
 		t.Fatalf("revoked completion challenge accepted: %v", err)
 	}

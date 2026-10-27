@@ -556,11 +556,12 @@ function UsersTab({ canOpenSecurity }: Readonly<{ canOpenSecurity: boolean }>) {
     onSuccess: response => {
       void queryClient.invalidateQueries({ queryKey: ['users'] })
       setConfirmAction(null)
-      setReactivationResult(response.changed
-        ? response.user.status === 'locked'
-          ? `${response.user.username} is reactivated but remains locked. Unlock the account separately.`
-          : `${response.user.username} is reactivated. Current status: ${response.user.status ?? 'unknown'}.`
-        : `${response.user.username} needed no reactivation. Current status: ${response.user.status ?? 'unknown'}.`)
+      let message = `${response.user.username} needed no reactivation. Current status: ${response.user.status ?? 'unknown'}.`
+      if (response.changed) {
+        message = `${response.user.username} is reactivated. Current status: ${response.user.status ?? 'unknown'}.`
+        if (response.user.status === 'locked') message = `${response.user.username} is reactivated but remains locked. Unlock the account separately.`
+      }
+      setReactivationResult(message)
     },
     onError: () => { void queryClient.invalidateQueries({ queryKey: ['users'] }); setConfirmAction(null) },
   })
@@ -650,7 +651,7 @@ function UsersTab({ canOpenSecurity }: Readonly<{ canOpenSecurity: boolean }>) {
           {actionBannerError}
         </div>
       )}
-      {reactivationResult && <p role="status" className="text-xs text-text-secondary mb-3">{reactivationResult}</p>}
+      {reactivationResult && <output className="block text-xs text-text-secondary mb-3">{reactivationResult}</output>}
 
       <div className="border border-border rounded overflow-x-auto">
         <table className="w-full text-sm">
@@ -671,7 +672,7 @@ function UsersTab({ canOpenSecurity }: Readonly<{ canOpenSecurity: boolean }>) {
             {isLoading && (
               <tr><td colSpan={9} className="px-4 py-8 text-center text-text-muted">Loading...</td></tr>
             )}
-            {usersError && <tr><td colSpan={9} role="alert" className="px-4 py-8 text-center text-status-error">Failed to load users.</td></tr>}
+            {usersError && <tr><td colSpan={9} className="px-4 py-8 text-center text-status-error"><p role="alert">Failed to load users.</p></td></tr>}
             {!isLoading && !usersError && (!users || users.length === 0) && (
               <tr><td colSpan={9} className="px-4 py-8 text-center text-text-muted">No users found.</td></tr>
             )}

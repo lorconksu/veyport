@@ -94,31 +94,9 @@ func TestAccountManagementExistingMFAPasswordRecovery(t *testing.T) {
 	if !live.TOTPEnabled || live.TOTPSecret == nil || *live.TOTPSecret != managementMFASecret || !live.MustChangePassword {
 		t.Fatal("reset changed existing MFA")
 	}
-	if rec := lifecycleRequest(t, f.s, "GET", "/api/auth/me", oldAccess, nil); rec.Code != 401 {
-		t.Fatalf("old access status %d", rec.Code)
-	}
-	if rec := lifecycleRequest(t, f.s, "POST", "/api/auth/refresh", "", model.RefreshRequest{RefreshToken: oldRefresh}); rec.Code != 403 && rec.Code != 401 {
-		t.Fatalf("old refresh status %d", rec.Code)
-	}
-	sess, err := f.s.store.GetSession(oldSession)
-	if err != nil || sess.EndedAt == nil {
-		t.Fatal("reset did not end durable session")
-	}
-	if rec := lifecycleRequest(t, f.s, "POST", "/api/auth/login", "", model.LoginRequest{Username: lifecycleViewerName, Password: f.viewerPass}); rec.Code != 401 {
-		t.Fatal("old password still accepted")
-	}
+	assertManagementOldAuthorityRevoked(t, f, oldAccess, oldRefresh, oldSession)
 	recovery := managementRecovery(t, f, password)
-	for _, path := range []string{"/api/auth/me", "/api/servers", "/api/users", "/api/auth/sessions"} {
-		if rec := lifecycleRequest(t, f.s, "GET", path, recovery, nil); rec.Code != 403 {
-			t.Fatalf("recovery reached %s: %d", path, rec.Code)
-		}
-	}
-	if rec := lifecycleRequest(t, f.s, "POST", "/api/auth/totp/setup", recovery, nil); rec.Code != 403 {
-		t.Fatal("recovery allowed MFA replacement")
-	}
-	if rec := lifecycleRequest(t, f.s, "POST", "/api/auth/refresh", "", model.RefreshRequest{RefreshToken: recovery}); rec.Code != 401 {
-		t.Fatal("recovery token refreshed")
-	}
+	assertManagementRecoveryHasNoNormalAuthority(t, f, recovery)
 	if rec := lifecycleRequest(t, f.s, "POST", "/api/auth/password/recovery", recovery, map[string]string{"new_password": password}); rec.Code != 400 {
 		t.Fatal("temporary password reuse accepted")
 	}
@@ -207,32 +185,7 @@ func TestAccountManagementInteractiveAndCSRF(t *testing.T) {
 func TestAccountManagementRecoveryInvalidationStages(t *testing.T) {
 	for _, stage := range []string{"between password and MFA", "after MFA", "expiry"} {
 		t.Run(stage, func(t *testing.T) {
-			f := newLifecycleFixture(t)
-			managementEnableExistingMFA(t, f)
-			first := managementReset(t, f)
-			password := first["temporary_password"].(string)
-			var credential string
-			if stage == "between password and MFA" {
-				credential = managementChallenge(t, f, password)
-			} else {
-				credential = managementRecovery(t, f, password)
-			}
-			if stage == "expiry" {
-				if _, err := f.s.store.DB().Exec("UPDATE users SET temp_password_expires_at=datetime('now','-1 second') WHERE id=?", f.viewerID); err != nil {
-					t.Fatal(err)
-				}
-			} else {
-				managementReset(t, f)
-			}
-			var rec *httptest.ResponseRecorder
-			if stage == "between password and MFA" {
-				rec = lifecycleRequest(t, f.s, "POST", "/api/auth/login/totp", "", model.LoginTOTPRequest{TOTPToken: credential, Code: validTOTPCode(t, managementMFASecret, f.s.now())})
-			} else {
-				rec = lifecycleRequest(t, f.s, "POST", "/api/auth/password/recovery", credential, map[string]string{"new_password": "ChosenPermanent!Password123"})
-			}
-			if rec.Code != 401 {
-				t.Fatalf("invalid recovery stage status %d", rec.Code)
-			}
+			assertManagementInvalidationStage(t, stage)
 		})
 	}
 }
@@ -362,7 +315,7 @@ func TestAccountManagementRejectsActorMFAChangesBeforePrivilegedCommit(t *testin
 			}
 			before := managementUser(t, f)
 			now := f.s.now()
-			_, err := f.s.store.ResetLocalPassword(f.viewerID, before.TokenGeneration, "forbidden-hash", now.Add(time.Hour), now, 5, f.s.accountManagementAudit(req, f.adminID, f.viewerID, model.AuditUserPasswordReset), authority)
+			_, err := f.s.store.ResetLocalPassword(store.PasswordResetTarget{UserID: f.viewerID, ExpectedGeneration: before.TokenGeneration}, store.TemporaryPasswordCredential{Hash: "forbidden-hash", ExpiresAt: now.Add(time.Hour)}, now, 5, f.s.accountManagementAudit(req, f.adminID, f.viewerID, model.AuditUserPasswordReset), authority)
 			if err != store.ErrAccountManagementActor {
 				t.Fatalf("changed administrator MFA accepted: %v", err)
 			}
@@ -381,34 +334,7 @@ func TestPasswordRecoveryUsesOnlyExplicitBearerDespiteBrowserCookies(t *testing.
 			staleAccess, _, _ := sessionTokenPair(t, f.s, f.viewerID)
 			reset := managementReset(t, f)
 			recovery := managementRecovery(t, f, reset["temporary_password"].(string))
-			request := httptest.NewRequest("POST", "/api/auth/password/recovery", mustJSON(t, map[string]string{"new_password": "ChosenPermanent!Password123"}))
-			if mode == "stale cookie and valid bearer" {
-				request.AddCookie(&http.Cookie{Name: cookieAccess, Value: staleAccess})
-				request.Header.Set("Authorization", testBearerPrefix+recovery)
-			} else if mode == "password-stage bearer refused" {
-				token, err := auth.GenerateTOTPToken(f.s.jwtSecret, f.viewerID, string(model.RoleViewer), managementUser(t, f).TokenGeneration)
-				if err != nil {
-					t.Fatal(err)
-				}
-				request.Header.Set("Authorization", testBearerPrefix+token)
-			} else if mode == "expired recovery bearer refused" {
-				token, err := auth.GenerateTokenWithExpiry(f.s.jwtSecret, f.viewerID, string(model.RoleViewer), auth.TokenTypePasswordRecovery, -time.Minute, managementUser(t, f).TokenGeneration)
-				if err != nil {
-					t.Fatal(err)
-				}
-				request.Header.Set("Authorization", testBearerPrefix+token)
-			} else if mode == "blacklisted recovery bearer refused" {
-				claims, err := auth.ValidateToken(f.s.jwtSecret, recovery)
-				if err != nil {
-					t.Fatal(err)
-				}
-				f.s.tokenBlacklist.Add(claims.ID, claims.ExpiresAt.Time)
-				request.Header.Set("Authorization", testBearerPrefix+recovery)
-			} else {
-				request.AddCookie(&http.Cookie{Name: cookieAccess, Value: recovery})
-				request.AddCookie(&http.Cookie{Name: cookieCSRF, Value: "valid-csrf"})
-				request.Header.Set("X-CSRF-Token", "valid-csrf")
-			}
+			request := managementRecoveryBearerRequest(t, f, mode, staleAccess, recovery)
 			response := httptest.NewRecorder()
 			f.s.routes().ServeHTTP(response, request)
 			want := http.StatusOK
@@ -428,4 +354,102 @@ func TestPasswordRecoveryUsesOnlyExplicitBearerDespiteBrowserCookies(t *testing.
 			}
 		})
 	}
+}
+
+func assertManagementOldAuthorityRevoked(t *testing.T, f *lifecycleFixture, oldAccess, oldRefresh, oldSession string) {
+	t.Helper()
+	if rec := lifecycleRequest(t, f.s, "GET", "/api/auth/me", oldAccess, nil); rec.Code != 401 {
+		t.Fatalf("old access status %d", rec.Code)
+	}
+	if rec := lifecycleRequest(t, f.s, "POST", "/api/auth/refresh", "", model.RefreshRequest{RefreshToken: oldRefresh}); rec.Code != 403 && rec.Code != 401 {
+		t.Fatalf("old refresh status %d", rec.Code)
+	}
+	sess, err := f.s.store.GetSession(oldSession)
+	if err != nil || sess.EndedAt == nil {
+		t.Fatal("reset did not end durable session")
+	}
+	if rec := lifecycleRequest(t, f.s, "POST", "/api/auth/login", "", model.LoginRequest{Username: lifecycleViewerName, Password: f.viewerPass}); rec.Code != 401 {
+		t.Fatal("old password still accepted")
+	}
+}
+
+func assertManagementRecoveryHasNoNormalAuthority(t *testing.T, f *lifecycleFixture, recovery string) {
+	t.Helper()
+	for _, path := range []string{"/api/auth/me", "/api/servers", "/api/users", "/api/auth/sessions"} {
+		if rec := lifecycleRequest(t, f.s, "GET", path, recovery, nil); rec.Code != 403 {
+			t.Fatalf("recovery reached %s: %d", path, rec.Code)
+		}
+	}
+	if rec := lifecycleRequest(t, f.s, "POST", "/api/auth/totp/setup", recovery, nil); rec.Code != 403 {
+		t.Fatal("recovery allowed MFA replacement")
+	}
+	if rec := lifecycleRequest(t, f.s, "POST", "/api/auth/refresh", "", model.RefreshRequest{RefreshToken: recovery}); rec.Code != 401 {
+		t.Fatal("recovery token refreshed")
+	}
+}
+
+func assertManagementInvalidationStage(t *testing.T, stage string) {
+	t.Helper()
+	f := newLifecycleFixture(t)
+	managementEnableExistingMFA(t, f)
+	first := managementReset(t, f)
+	password := first["temporary_password"].(string)
+	var credential string
+	if stage == "between password and MFA" {
+		credential = managementChallenge(t, f, password)
+	} else {
+		credential = managementRecovery(t, f, password)
+	}
+	if stage == "expiry" {
+		if _, err := f.s.store.DB().Exec("UPDATE users SET temp_password_expires_at=datetime('now','-1 second') WHERE id=?", f.viewerID); err != nil {
+			t.Fatal(err)
+		}
+	} else {
+		managementReset(t, f)
+	}
+	var rec *httptest.ResponseRecorder
+	if stage == "between password and MFA" {
+		rec = lifecycleRequest(t, f.s, "POST", "/api/auth/login/totp", "", model.LoginTOTPRequest{TOTPToken: credential, Code: validTOTPCode(t, managementMFASecret, f.s.now())})
+	} else {
+		rec = lifecycleRequest(t, f.s, "POST", "/api/auth/password/recovery", credential, map[string]string{"new_password": "ChosenPermanent!Password123"})
+	}
+	if rec.Code != 401 {
+		t.Fatalf("invalid recovery stage status %d", rec.Code)
+	}
+}
+
+func managementRecoveryBearerRequest(t *testing.T, f *lifecycleFixture, mode, staleAccess, recovery string) *http.Request {
+	t.Helper()
+	request := httptest.NewRequest("POST", "/api/auth/password/recovery", mustJSON(t, map[string]string{"new_password": "ChosenPermanent!Password123"}))
+	switch mode {
+	case "stale cookie and valid bearer":
+		request.AddCookie(&http.Cookie{Name: cookieAccess, Value: staleAccess})
+		request.Header.Set("Authorization", testBearerPrefix+recovery)
+	case "password-stage bearer refused":
+		token, err := auth.GenerateTOTPToken(f.s.jwtSecret, f.viewerID, string(model.RoleViewer), managementUser(t, f).TokenGeneration)
+		if err != nil {
+			t.Fatal(err)
+		}
+		request.Header.Set("Authorization", testBearerPrefix+token)
+	case "expired recovery bearer refused":
+		token, err := auth.GenerateTokenWithExpiry(f.s.jwtSecret, f.viewerID, string(model.RoleViewer), auth.TokenTypePasswordRecovery, -time.Minute, managementUser(t, f).TokenGeneration)
+		if err != nil {
+			t.Fatal(err)
+		}
+		request.Header.Set("Authorization", testBearerPrefix+token)
+	case "blacklisted recovery bearer refused":
+		claims, err := auth.ValidateToken(f.s.jwtSecret, recovery)
+		if err != nil {
+			t.Fatal(err)
+		}
+		f.s.tokenBlacklist.Add(claims.ID, claims.ExpiresAt.Time)
+		request.Header.Set("Authorization", testBearerPrefix+recovery)
+	case "cookie-only recovery refused":
+		request.AddCookie(&http.Cookie{Name: cookieAccess, Value: recovery})
+		request.AddCookie(&http.Cookie{Name: cookieCSRF, Value: "valid-csrf"})
+		request.Header.Set("X-CSRF-Token", "valid-csrf")
+	default:
+		t.Fatalf("unknown recovery credential case %q", mode)
+	}
+	return request
 }

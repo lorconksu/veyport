@@ -50,7 +50,7 @@ func TestAccountManagementMigrationPreservesLegacyUsersAndRevokesSSHCredentials(
 	}
 	now := time.Now().UTC()
 	entry := model.AuditEntry{UserID: &u.ID, Target: &u.ID, Action: model.AuditUserPasswordReset}
-	reset, err := st.ResetLocalPassword(u.ID, 7, "temporary-hash", now.Add(time.Hour), now, 5, entry)
+	reset, err := st.ResetLocalPassword(store.PasswordResetTarget{UserID: u.ID, ExpectedGeneration: 7}, store.TemporaryPasswordCredential{Hash: "temporary-hash", ExpiresAt: now.Add(time.Hour)}, now, 5, entry)
 	if err != nil {
 		t.Fatal(err)
 	}

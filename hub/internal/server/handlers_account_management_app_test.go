@@ -45,16 +45,7 @@ func managementApplicationCredential(t *testing.T, s *Server, app *model.Applica
 }
 
 func TestPasswordResetRevokesActualApplicationCookieTicketAndLiveStream(t *testing.T) {
-	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/events" {
-			w.Write([]byte("allowed"))
-			return
-		}
-		w.Header().Set("Content-Type", "text/event-stream")
-		w.Write([]byte("data: ready\n\n"))
-		w.(http.Flusher).Flush()
-		<-r.Context().Done()
-	}))
+	backend := httptest.NewServer(http.HandlerFunc(managementApplicationBackend))
 	defer backend.Close()
 	s, app, oldCookie := applicationFixture(t, backend.URL)
 	portal := func(method, path, token string, body any) *httptest.ResponseRecorder {
@@ -100,28 +91,10 @@ func TestPasswordResetRevokesActualApplicationCookieTicketAndLiveStream(t *testi
 	gateway := httptest.NewServer(s.routes())
 	defer gateway.Close()
 	client := &http.Client{Timeout: 8 * time.Second}
-	stream := func(credential string) *http.Response {
-		req, err := http.NewRequest("GET", gateway.URL+"/events", nil)
-		if err != nil {
-			t.Fatal(err)
-		}
-		req.Host = app.PublicHostname
-		req.AddCookie(&http.Cookie{Name: applicationCookie, Value: credential})
-		response, err := client.Do(req)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if response.StatusCode != 200 {
-			t.Fatalf("stream status %d", response.StatusCode)
-		}
-		if _, err := io.ReadFull(response.Body, make([]byte, 13)); err != nil {
-			t.Fatal(err)
-		}
-		return response
-	}
-	targetStream := stream(cookie)
+
+	targetStream := openManagementApplicationStream(t, client, gateway.URL, app, cookie)
 	defer targetStream.Body.Close()
-	otherStream := stream(otherCookie)
+	otherStream := openManagementApplicationStream(t, client, gateway.URL, app, otherCookie)
 	defer otherStream.Body.Close()
 	targetEnded := make(chan struct{})
 	otherEnded := make(chan struct{})
@@ -200,4 +173,36 @@ func TestPasswordResetRevokesActualApplicationCookieTicketAndLiveStream(t *testi
 	if err != nil || currentOther.EndedAt != nil || s.checkApplicationSession(context.Background(), app, currentOther, false) != nil {
 		t.Fatal("other user's durable authority revoked")
 	}
+}
+
+func managementApplicationBackend(w http.ResponseWriter, r *http.Request) {
+	if r.URL.Path != "/events" {
+		w.Write([]byte("allowed"))
+		return
+	}
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.Write([]byte("data: ready\n\n"))
+	w.(http.Flusher).Flush()
+	<-r.Context().Done()
+}
+
+func openManagementApplicationStream(t *testing.T, client *http.Client, gatewayURL string, app *model.Application, credential string) *http.Response {
+	t.Helper()
+	req, err := http.NewRequest("GET", gatewayURL+"/events", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Host = app.PublicHostname
+	req.AddCookie(&http.Cookie{Name: applicationCookie, Value: credential})
+	response, err := client.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if response.StatusCode != 200 {
+		t.Fatalf("stream status %d", response.StatusCode)
+	}
+	if _, err := io.ReadFull(response.Body, make([]byte, 13)); err != nil {
+		t.Fatal(err)
+	}
+	return response
 }

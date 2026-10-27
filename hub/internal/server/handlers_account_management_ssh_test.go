@@ -10,6 +10,7 @@ import (
 
 	"github.com/wyiu/veyport/hub/internal/auth"
 	"github.com/wyiu/veyport/hub/internal/model"
+	"github.com/wyiu/veyport/hub/internal/store"
 )
 
 type managementDelayedBody struct {
@@ -50,7 +51,7 @@ func TestSSHCertificateIssuanceRechecksOriginalAuthorityAfterDelayedBody(t *test
 				audit := model.AuditEntry{UserID: &user.ID, Target: &user.ID, Action: model.AuditUserPasswordReset}
 				switch change {
 				case "recovery completed":
-					reset, err := s.store.ResetLocalPassword(user.ID, user.TokenGeneration, "temporary-hash", now.Add(time.Hour), now, 5, audit)
+					reset, err := s.store.ResetLocalPassword(store.PasswordResetTarget{UserID: user.ID, ExpectedGeneration: user.TokenGeneration}, store.TemporaryPasswordCredential{Hash: "temporary-hash", ExpiresAt: now.Add(time.Hour)}, now, 5, audit)
 					if err != nil {
 						t.Fatal(err)
 					}

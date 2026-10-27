@@ -858,7 +858,7 @@ func (s *Server) updateAuthenticatedPassword(r *http.Request, user *model.User, 
 	if TokenTypeFromContext(r.Context()) == auth.TokenTypeAccess && SessionIDFromContext(r.Context()) == "" {
 		return store.ErrProtectedChange
 	}
-	generation, err := s.store.CompleteApprovedPasswordRecoveryAudited(user.ID, user.PasswordHash, user.SecurityRevision, hash, s.now(), s.store.GetAuditSettings().PasswordHistoryCount, s.accountManagementAudit(r, user.ID, user.ID, model.AuditUserPasswordChanged), user.TokenGeneration)
+	generation, err := s.store.CompleteApprovedPasswordRecoveryAudited(store.PasswordRecoverySnapshot{UserID: user.ID, PasswordHash: user.PasswordHash, SecurityRevision: user.SecurityRevision, TokenGeneration: user.TokenGeneration}, hash, s.now(), s.store.GetAuditSettings().PasswordHistoryCount, s.accountManagementAudit(r, user.ID, user.ID, model.AuditUserPasswordChanged))
 	if err == nil {
 		user.TokenGeneration = generation
 	}

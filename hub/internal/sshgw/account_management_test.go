@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/wyiu/veyport/hub/internal/model"
+	"github.com/wyiu/veyport/hub/internal/store"
 	"github.com/wyiu/veyport/hub/internal/userca"
 	"golang.org/x/crypto/ssh"
 )
@@ -22,7 +23,7 @@ func TestPasswordRecoveryPermanentlyRevokesOldSSHCertificatesAndConnections(t *t
 	defer retained.Close()
 	now := time.Now().UTC()
 	entry := model.AuditEntry{UserID: ptrManagement(testUserID), Target: ptrManagement(testUserID), Action: model.AuditUserPasswordReset}
-	reset, err := f.store.ResetLocalPassword(testUserID, 0, "temporary-hash", now.Add(time.Hour), now, 5, entry)
+	reset, err := f.store.ResetLocalPassword(store.PasswordResetTarget{UserID: testUserID, ExpectedGeneration: 0}, store.TemporaryPasswordCredential{Hash: "temporary-hash", ExpiresAt: now.Add(time.Hour)}, now, 5, entry)
 	if err != nil {
 		t.Fatal(err)
 	}
