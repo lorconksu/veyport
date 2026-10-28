@@ -141,7 +141,7 @@ func (s *Server) bridge(ch ssh.Channel, p bridgeParams) {
 		s.forwardClientInput(ch, sessionID, p)
 	}()
 
-	exit := s.relay(ch, events, sessionID, p)
+	exit := s.relayAttached(ch, events, info, sessionID, p)
 	// teardown closes the channel, which is what unblocks the input reader;
 	// only then can we wait for it, so the session leaves nothing running.
 	s.teardown(ch, p, sessionID, exit)
@@ -205,8 +205,16 @@ func (s *Server) openAgentTerminal(sessionID string, p bridgeParams) error {
 func (s *Server) relay(ch ssh.Channel, events <-chan grpcserver.TerminalEvent, sessionID string, p bridgeParams) exitInfo {
 	info, exists := s.cfg.Terminals.Get(p.serverID, sessionID)
 	if !exists {
-		return exitInfo{code: exitAborted}
+		return exitInfo{code: exitAborted, message: "the session was closed by the hub", agentInitiated: true}
 	}
+	return s.relayAttached(ch, events, info, sessionID, p)
+}
+
+// relayAttached uses the exact registration returned by AttachStream. Looking
+// it up again after the opened audit creates a race with administrator or
+// reaper removal: the map entry can disappear even though the retained output
+// authority still records why the session was revoked.
+func (s *Server) relayAttached(ch ssh.Channel, events <-chan grpcserver.TerminalEvent, info grpcserver.TerminalSessionInfo, sessionID string, p bridgeParams) exitInfo {
 	abort := p.abortOutput
 	if abort == nil {
 		abort = ch.Close
