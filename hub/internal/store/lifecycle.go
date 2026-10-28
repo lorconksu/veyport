@@ -66,12 +66,36 @@ func (s *Store) withImmediateTx(fn func(ctx context.Context, conn *sql.Conn) err
 	return nil
 }
 
+// advancingClock preserves an injected wall clock while including monotonic
+// elapsed time spent acquiring connections, local locks and SQLite's writer.
+// Read it inside the transaction, immediately before authority is consumed.
+func advancingClock(now time.Time) func() time.Time {
+	started := time.Now()
+	return func() time.Time { return now.Add(time.Since(started)) }
+}
+
+func (s *Store) withImmediateTxAt(now time.Time, fn func(context.Context, *sql.Conn, time.Time) error) error {
+	return s.withImmediateTxClock(now, func(ctx context.Context, conn *sql.Conn, clock func() time.Time) error {
+		return fn(ctx, conn, clock())
+	})
+}
+
+// withImmediateTxClock lets a transaction resample elapsed time after any
+// blocking policy/authority reads and immediately before commit authorization.
+func (s *Store) withImmediateTxClock(now time.Time, fn func(context.Context, *sql.Conn, func() time.Time) error) error {
+	clock := advancingClock(now)
+	return s.withImmediateTx(func(ctx context.Context, conn *sql.Conn) error {
+		return fn(ctx, conn, clock)
+	})
+}
+
 // DisableUser disables an account as one atomic step and returns the number of
 // API tokens the disable revoked.
 //
 // Everything that removes access happens in a single BEGIN IMMEDIATE
 // transaction: the disabled marker and actor are stamped, token_generation is
-// advanced (which invalidates the account's access and refresh tokens), and
+// advanced (which invalidates the account's access and refresh tokens), the SSH
+// credential generation advances permanently, and
 // every active API token the account holds is revoked. There is no
 // half-disabled state to observe, and re-enabling does not resurrect the old
 // tokens (FR-002, FR-003).
@@ -121,7 +145,8 @@ func (s *Store) DisableUser(userID, byID string, now time.Time) (revokedTokens i
 			ctx,
 			`UPDATE users
 			 SET disabled_at = ?, disabled_by = ?,
-			     token_generation = token_generation + 1, updated_at = ?
+			     token_generation = token_generation + 1,
+			     ssh_credential_generation = ssh_credential_generation + 1, updated_at = ?
 			 WHERE id = ? AND disabled_at IS NULL`,
 			stamp, byID, stamp, userID,
 		)

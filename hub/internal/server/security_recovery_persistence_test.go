@@ -1,14 +1,66 @@
 package server
 
 import (
+	"context"
 	"errors"
 	"net/http"
+	"reflect"
 	"testing"
 
 	"github.com/wyiu/veyport/hub/internal/auth"
+	"github.com/wyiu/veyport/hub/internal/authorization"
 	"github.com/wyiu/veyport/hub/internal/model"
 	"github.com/wyiu/veyport/hub/internal/store"
 )
+
+func TestApprovedPasswordResetHistoryFailureRollsBackAndReconciles(t *testing.T) {
+	for _, fault := range []struct{ name, boundary string }{
+		{"legacy cleanup", "BEFORE DELETE ON password_history WHEN OLD.password_hash!='older-hash'"},
+		{"outgoing insert", "BEFORE INSERT ON password_history"},
+		{"history retention", "BEFORE DELETE ON password_history WHEN OLD.password_hash='older-hash'"},
+	} {
+		t.Run(fault.name, func(t *testing.T) {
+			s, before := recoveryServer(t)
+			for _, hash := range []string{"older-hash", before.PasswordHash} {
+				if err := s.store.AddPasswordHistory(before.ID, hash); err != nil {
+					t.Fatal(err)
+				}
+			}
+			ref := recoveryPasswordSecret(t, s, "SyntheticTemporary@1234")
+			change := prepareRecoveryPayload(t, s, model.SecurityChangePayload{Kind: "recovery", Recovery: &model.SecurityRecovery{UserID: before.ID, Operation: "password-reset", SecretRef: ref}})
+			managementServerExec(t, s, "CREATE TRIGGER approved_reset_history_fault "+fault.boundary+" BEGIN SELECT RAISE(ABORT,'synthetic approved reset history failure'); END")
+			proof, err := s.store.IssueStepup("recovery-officer", "officer-session", authorization.ActionApply, change.Digest, s.now())
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := s.securityService().Apply(context.Background(), change.ID, "recovery-officer", "officer-session", proof, s.securityTransition); err == nil {
+				t.Fatal("failed history write published an approved reset")
+			}
+			after, err := s.store.GetUserByID(before.ID)
+			if err != nil || !reflect.DeepEqual(before, after) {
+				t.Fatalf("failed approved reset changed credentials or MFA: %v", err)
+			}
+			var history, grants int
+			if err := s.store.DB().QueryRow("SELECT COUNT(*) FROM password_history WHERE user_id=? AND password_hash IN (?,?)", before.ID, "older-hash", before.PasswordHash).Scan(&history); err != nil || history != 2 {
+				t.Fatalf("failed approved reset changed prior history: count %d, error %v", history, err)
+			}
+			if err := s.store.DB().QueryRow("SELECT COUNT(*) FROM security_password_recoveries WHERE user_id=?", before.ID).Scan(&grants); err != nil || grants != 0 {
+				t.Fatalf("failed approved reset published a recovery grant: %v", err)
+			}
+			managementServerExec(t, s, "DROP TRIGGER approved_reset_history_fault")
+			if _, err := s.securityService().ReconcileChange(context.Background(), change.ID, s.securityTransition); err != nil {
+				t.Fatalf("restored history storage did not reconcile approved reset: %v", err)
+			}
+			var retained string
+			if err := s.store.DB().QueryRow("SELECT password_hash FROM password_history WHERE user_id=?", before.ID).Scan(&retained); err != nil || retained != before.PasswordHash {
+				t.Fatalf("reconciled approved reset lost the outgoing password: %v", err)
+			}
+			if err := s.store.DB().QueryRow("SELECT COUNT(*) FROM password_history WHERE user_id=?", before.ID).Scan(&history); err != nil || history != 1 {
+				t.Fatalf("reconciled reset exceeded history depth 1: count %d, error %v", history, err)
+			}
+		})
+	}
+}
 
 func TestApprovedRecoveryCompletionRollsBackCredentialAndRevocationWritesTogether(t *testing.T) {
 	h := newGovernanceHTTP(t)
@@ -133,6 +185,11 @@ func TestApprovedRecoveryAuditedStorageFailureRollsBackHistoryAndAuthority(t *te
 	if err != nil {
 		t.Fatal(err)
 	}
+	// Older versions seeded active temporary hashes. Exercise atomic cleanup
+	// while retaining the outgoing permanent hash captured by approved reset.
+	if err := s.store.AddPasswordHistory(target.ID, before.PasswordHash); err != nil {
+		t.Fatal(err)
+	}
 	replacement, err := auth.HashPassword("SyntheticReplacement@1234")
 	if err != nil {
 		t.Fatal(err)
@@ -140,7 +197,7 @@ func TestApprovedRecoveryAuditedStorageFailureRollsBackHistoryAndAuthority(t *te
 	snapshot := store.PasswordRecoverySnapshot{UserID: before.ID, PasswordHash: before.PasswordHash, SecurityRevision: before.SecurityRevision, TokenGeneration: before.TokenGeneration}
 	entry := model.AuditEntry{UserID: &target.ID, Target: &target.ID, Action: model.AuditUserPasswordChanged}
 	for _, fault := range []struct{ name, boundary string }{
-		{"password history", "BEFORE INSERT ON password_history"},
+		{"password history cleanup", "BEFORE DELETE ON password_history"},
 		{"durable session revocation", "BEFORE UPDATE OF ended_at ON sessions WHEN OLD.user_id='recovery-target'"},
 		{"atomic success audit", "BEFORE INSERT ON audit_logs WHEN NEW.action='user.password_changed'"},
 	} {
@@ -180,7 +237,7 @@ func assertApprovedCompletionRollback(t *testing.T, s *Server, before *model.Use
 			t.Fatal(err)
 		}
 	}
-	if grants != 1 || history != 0 || audits != 0 {
+	if grants != 1 || history != 2 || audits != 0 {
 		t.Fatal("failed completion consumed approval or retained history/success audit")
 	}
 	session, err := s.store.GetSession(sessionID)

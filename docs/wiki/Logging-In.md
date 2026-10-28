@@ -106,6 +106,10 @@ has two limits, both administrator-configurable in **Settings → Users → Acco
 Either limit can be turned off by an administrator (set to `0`), and each is enforced
 independently - reaching either one ends the session the same way.
 
+An established browser terminal also rechecks its original owning session every
+second and closes when that session expires or ends, including changes made by
+another Hub process. Terminal output alone does not refresh the idle clock.
+
 These limits govern authenticated session requests. An SSH command that is already running
 continues if its CLI session later expires from inactivity; the next CLI request requires a new
 sign-in. SSH command authorization and explicit account or access revocation remain separate.
@@ -161,13 +165,27 @@ administrators do not necessarily administer the directory.
 
 You cannot log in without your TOTP code. Ask an admin to disable your 2FA from the Settings > Users tab. Once an admin disables your 2FA, you can log in with just your password and will be prompted to set up a new authenticator.
 
+Disabling or resetting MFA revokes existing browser, API, application and SSH
+authority. Existing terminal shells close on credential revalidation, normally
+within about one second. Enroll MFA again and obtain a new SSH certificate before
+opening another SSH shell.
+
 If you are the only admin and you have lost your authenticator, someone with shell access to the server must run the break-glass reset command:
 
 ```bash
 ./bin/veyport admin reset-totp --username <your-username> --db veyport.db
 ```
 
-This resets your TOTP and sets a temporary password, which is printed to the terminal.
+For a local account, this resets TOTP and installs a temporary password using the
+configured expiry, which is printed to the terminal. Enroll TOTP and choose a fresh
+permanent password before it expires. Recent permanent passwords remain blocked,
+and existing sessions and credentials are revoked. LDAP accounts must recover
+their directory credentials through a directory administrator.
+
+For a protected account, the shell reset audit must remain available until
+recovery completes. Audit retention preserves this record while its recovery
+grant is unexpired, even when the audit retention period is shorter. If the
+record is directly deleted or invalidated, ask the shell operator to reset again.
 
 ### The code is being rejected even though it looks right
 

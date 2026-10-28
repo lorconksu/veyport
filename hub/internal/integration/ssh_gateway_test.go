@@ -216,6 +216,7 @@ func (h *sshGWHarness) seedAuthorizedUser(t *testing.T) string {
 		t.Fatalf("CreateServer: %v", err)
 	}
 
+	totpSecret := "JBSWY3DPEHPK3PXP"
 	user := &model.User{
 		ID:             uuid.NewString(),
 		Username:       sshGWUsername,
@@ -226,6 +227,8 @@ func (h *sshGWHarness) seedAuthorizedUser(t *testing.T) string {
 		LDAPDN:         "uid=" + sshGWUsername + ",ou=people,dc=example,dc=com",
 		ExternalID:     "entry-" + sshGWUsername,
 		TerminalAccess: true,
+		TOTPEnabled:    true,
+		TOTPSecret:     &totpSecret,
 	}
 	if err := h.store.CreateUser(user); err != nil {
 		t.Fatalf("CreateUser: %v", err)
@@ -455,7 +458,7 @@ func (h *sshGWHarness) dialSSH(t *testing.T) *ssh.Client {
 	if err != nil {
 		t.Fatalf("NewSignerFromKey: %v", err)
 	}
-	cert, err := h.userCA.SignUserCert(signer.PublicKey(), sshGWUsername, sshGWCertTTL)
+	cert, err := h.userCA.SignUserCertForAccount(signer.PublicKey(), sshGWUsername, mustSSHAccountID(t, h), sshGWCertTTL, 0)
 	if err != nil {
 		t.Fatalf("SignUserCert: %v", err)
 	}
@@ -693,4 +696,13 @@ func TestSSHGatewayEndToEndThroughRealGRPC(t *testing.T) {
 		model.AuditSSHSessionOpened, sessionID)
 	assertAuditOutcome(t, h.awaitAudit(t, model.AuditSSHSessionClosed, userID),
 		model.AuditSSHSessionClosed, sessionID)
+}
+
+func mustSSHAccountID(t *testing.T, h *sshGWHarness) string {
+	t.Helper()
+	user, err := h.store.GetUserByUsername(sshGWUsername)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return user.ID
 }

@@ -11,7 +11,11 @@ func executionForCredentialRevocationTest(t *testing.T, s *Server, actor string)
 	if s.terminalSessions == nil {
 		s.terminalSessions = grpcserver.NewTerminalSessions()
 	}
-	events, ok := s.terminalSessions.Register("node", "execution", actor, "", grpcserver.WithKind(grpcserver.TerminalKindExec))
+	user, err := s.store.GetUserByID(actor)
+	if err != nil {
+		t.Fatal(err)
+	}
+	events, ok := s.terminalSessions.Register("node", "execution", actor, "", grpcserver.WithKind(grpcserver.TerminalKindExec), grpcserver.WithCredentialGeneration(user.TokenGeneration, false))
 	if !ok {
 		t.Fatal("register execution")
 	}

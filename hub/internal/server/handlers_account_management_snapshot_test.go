@@ -29,7 +29,11 @@ func TestPasswordRecoveryRechecksAuthenticatedSnapshotAtCommit(t *testing.T) {
 				}
 				return
 			}
-			if response.Code != http.StatusConflict || !live.MustChangePassword || live.PasswordHash != before.PasswordHash || live.SSHCredentialGeneration != before.SSHCredentialGeneration {
+			expectedSSH := before.SSHCredentialGeneration
+			if mode == "MFA removed" || mode == "MFA replaced" {
+				expectedSSH++
+			}
+			if response.Code != http.StatusConflict || !live.MustChangePassword || live.PasswordHash != before.PasswordHash || live.SSHCredentialGeneration != expectedSSH {
 				t.Fatalf("revoked recovery changed credential authority: status=%d required_change=%v", response.Code, live.MustChangePassword)
 			}
 		})
@@ -61,7 +65,7 @@ func mutateManagementRecoveryAuthority(t *testing.T, f *lifecycleFixture, before
 		return
 	}
 	live := managementUser(t, f)
-	if live.TokenGeneration != before.TokenGeneration || live.SecurityRevision == before.SecurityRevision || live.PasswordHash != before.PasswordHash {
-		t.Fatal("MFA fixture did not isolate a security-revision-only change")
+	if live.TokenGeneration != before.TokenGeneration+1 || live.SSHCredentialGeneration != before.SSHCredentialGeneration+1 || live.SecurityRevision == before.SecurityRevision || live.PasswordHash != before.PasswordHash {
+		t.Fatal("MFA change did not revoke both credential epochs and retain the password")
 	}
 }

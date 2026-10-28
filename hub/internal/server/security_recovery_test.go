@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/wyiu/veyport/hub/internal/auditgate"
 	"github.com/wyiu/veyport/hub/internal/auditrecord"
@@ -45,6 +46,18 @@ func (e *recoveryEvidence) Anchor(_ context.Context, id string) (authorization.P
 // real HTTP routes. No staging identity or approval is represented here.
 func approveRecoveryPayload(t *testing.T, s *Server, payload model.SecurityChangePayload) {
 	t.Helper()
+	change := prepareRecoveryPayload(t, s, payload)
+	proof, err := s.store.IssueStepup("recovery-officer", "officer-session", authorization.ActionApply, change.Digest, s.now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.securityService().Apply(context.Background(), change.ID, "recovery-officer", "officer-session", proof, s.securityTransition); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func prepareRecoveryPayload(t *testing.T, s *Server, payload model.SecurityChangePayload) model.SecurityChange {
+	t.Helper()
 	service := s.securityService()
 	state, err := s.store.GetPolicyState()
 	if err != nil {
@@ -67,17 +80,22 @@ func approveRecoveryPayload(t *testing.T, s *Server, payload model.SecurityChang
 			t.Fatal(err)
 		}
 	}
-	proof, _ = s.store.IssueStepup("recovery-officer", "officer-session", authorization.ActionApply, change.Digest, s.now())
-	if _, err = service.Apply(context.Background(), change.ID, "recovery-officer", "officer-session", proof, s.securityTransition); err != nil {
-		t.Fatal(err)
-	}
+	return change
 }
 
-func recoveryServer(t *testing.T) (*Server, *model.User) {
+func recoveryServer(t *testing.T, actors ...string) (*Server, *model.User) {
 	t.Helper()
 	s := testServer(t)
+	setHistoryDepthOne(t, s)
 	for _, id := range []string{"recovery-officer", "recovery-approver-one", "recovery-approver-two", "recovery-target"} {
 		quickSecurityUser(t, s, id, model.RoleAdmin)
+		sid := id + "-session"
+		if id == "recovery-officer" {
+			sid = "officer-session"
+		}
+		if err := s.store.CreateSession(&model.Session{ID: sid, UserID: id, Kind: model.SessionKindWeb, CreatedAt: s.now(), LastSeenAt: s.now()}); err != nil {
+			t.Fatal(err)
+		}
 	}
 	hash, err := auth.HashPassword("SyntheticExisting@1234")
 	if err != nil || s.store.UpdateUserPassword("recovery-target", hash) != nil {
@@ -89,6 +107,7 @@ func recoveryServer(t *testing.T) (*Server, *model.User) {
 	}
 	s.securityTransition = authorization.TransitionConfig{Evidence: &recoveryEvidence{}, InstallationID: "test-recovery-installation", EnrollmentPath: filepath.Join(dir, "enhanced-enrollment.json"), ResolveSecret: s.resolveSecuritySecret}
 	policy := model.AuditPolicy{Profile: "enhanced", RuntimeSeconds: 3600, RetentionHours: 24, Destination: "https://audit.test.invalid", CredentialRef: "secret:qualified", TrustKeyIDs: []string{"qualified-key"}, QualificationSHA256: authorization.Digest([]byte("qualified"))}
+	policy.Actors = actors
 	nominations := []model.SecurityNomination{}
 	for i, id := range []string{"recovery-officer", "recovery-approver-one", "recovery-approver-two", "recovery-target"} {
 		role := model.RoleSecurityApprover
@@ -107,6 +126,12 @@ func recoveryServer(t *testing.T) (*Server, *model.User) {
 
 func installApprovedTemporaryPassword(t *testing.T, s *Server, temporary string) {
 	t.Helper()
+	ref := recoveryPasswordSecret(t, s, temporary)
+	approveRecoveryPayload(t, s, model.SecurityChangePayload{Kind: "recovery", Recovery: &model.SecurityRecovery{UserID: "recovery-target", Operation: "password-reset", SecretRef: ref}})
+}
+
+func recoveryPasswordSecret(t *testing.T, s *Server, temporary string) string {
+	t.Helper()
 	token, _, _ := sessionTokenPair(t, s, "recovery-officer")
 	response := securityCall(s, "POST", "/api/security/secrets", token, mustMarshal(t, map[string]string{"kind": "password", "value": temporary}))
 	var secret struct {
@@ -115,13 +140,15 @@ func installApprovedTemporaryPassword(t *testing.T, s *Server, temporary string)
 	if response.Code != 201 || json.Unmarshal(response.Body.Bytes(), &secret) != nil || secret.Ref == "" {
 		t.Fatalf("write-only temporary credential: %d %s", response.Code, response.Body.String())
 	}
-	approveRecoveryPayload(t, s, model.SecurityChangePayload{Kind: "recovery", Recovery: &model.SecurityRecovery{UserID: "recovery-target", Operation: "password-reset", SecretRef: secret.Ref}})
+	return secret.Ref
 }
 
 func TestSecurityApprovedPasswordRecoveryWithExistingMFA(t *testing.T) {
 	s, target := recoveryServer(t)
 	temporary, replacement := "SyntheticTemp@1234", "SyntheticReplacement@1234"
 	installApprovedTemporaryPassword(t, s, temporary)
+	installApprovedTemporaryPassword(t, s, temporary)
+	assertHistoryPassword(t, s, target.ID, "SyntheticExisting@1234", true)
 	login := securityCall(s, "POST", "/api/auth/login", "", mustMarshal(t, model.LoginRequest{Username: target.Username, Password: temporary}))
 	var stage model.LoginResponse
 	if login.Code != 202 || json.Unmarshal(login.Body.Bytes(), &stage) != nil {
@@ -141,6 +168,12 @@ func TestSecurityApprovedPasswordRecoveryWithExistingMFA(t *testing.T) {
 	if original.Code != 403 {
 		t.Fatalf("recovery challenge used original-reader authority: %d", original.Code)
 	}
+	for _, candidate := range []string{"SyntheticExisting@1234", temporary} {
+		rejected := securityCall(s, "POST", "/api/auth/password/recovery", recovered.RecoveryToken, mustMarshal(t, map[string]string{"new_password": candidate}))
+		if rejected.Code != 400 {
+			t.Fatalf("protected recovery reused a current or outgoing credential: %d", rejected.Code)
+		}
+	}
 	rotated := securityCall(s, "POST", "/api/auth/password/recovery", recovered.RecoveryToken, mustMarshal(t, map[string]string{"new_password": replacement}))
 	if rotated.Code != 200 {
 		t.Fatalf("approved completion status %d", rotated.Code)
@@ -150,6 +183,8 @@ func TestSecurityApprovedPasswordRecoveryWithExistingMFA(t *testing.T) {
 	if current.MustChangePassword || !auth.ComparePassword(current.PasswordHash, replacement) {
 		t.Fatal("approved temporary password did not rotate")
 	}
+	assertHistoryPassword(t, s, target.ID, "SyntheticExisting@1234", true)
+	assertHistoryPassword(t, s, target.ID, temporary, false)
 	if _, err := s.store.CompleteApprovedPasswordRecovery(target.ID, current.PasswordHash, current.SecurityRevision, target.PasswordHash, s.now()); !errors.Is(err, store.ErrProtectedChange) {
 		t.Fatalf("recovery grant reused: %v", err)
 	}
@@ -181,7 +216,16 @@ func TestSecurityApprovedPasswordAndMFARecoveryCompletesFreshSetup(t *testing.T)
 	if response.Code != 200 || json.Unmarshal(response.Body.Bytes(), &setup) != nil {
 		t.Fatalf("approved MFA re-enrollment: %d %s", response.Code, response.Body.String())
 	}
-	code, _ := auth.GenerateValidCode(setup.Secret)
+	for _, candidate := range []string{"SyntheticExisting@1234", temporary} {
+		code := validTOTPCode(t, setup.Secret, s.now())
+		rejected := securityCall(s, "POST", "/api/auth/totp/enable", stage.SetupToken, mustMarshal(t, model.TOTPEnableRequest{Code: code, NewPassword: candidate}))
+		if rejected.Code != 400 {
+			t.Fatalf("protected enrollment reused a current or outgoing credential: %d", rejected.Code)
+		}
+		now := s.now().Add(31 * time.Second)
+		s.SetClock(func() time.Time { return now })
+	}
+	code := validTOTPCode(t, setup.Secret, s.now())
 	response = securityCall(s, "POST", "/api/auth/totp/enable", stage.SetupToken, mustMarshal(t, model.TOTPEnableRequest{Code: code, NewPassword: replacement}))
 	var signed model.AuthResponse
 	if response.Code != 200 || json.Unmarshal(response.Body.Bytes(), &signed) != nil {
@@ -195,6 +239,8 @@ func TestSecurityApprovedPasswordAndMFARecoveryCompletesFreshSetup(t *testing.T)
 	if !current.TOTPEnabled || current.MustChangePassword || !auth.ComparePassword(current.PasswordHash, replacement) {
 		t.Fatal("recovery left incomplete credentials")
 	}
+	assertHistoryPassword(t, s, target.ID, "SyntheticExisting@1234", true)
+	assertHistoryPassword(t, s, target.ID, temporary, false)
 	response = securityCall(s, "POST", "/api/auth/totp/setup", stage.SetupToken, nil)
 	if response.Code != 401 {
 		t.Fatal("completed recovery reused setup credential")

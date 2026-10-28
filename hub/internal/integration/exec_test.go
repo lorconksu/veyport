@@ -44,7 +44,7 @@ func nativeExecCredentials(t *testing.T, h *sshGWHarness) []string {
 	if err != nil {
 		t.Fatal(err)
 	}
-	cert, err := h.userCA.SignUserCert(signer.PublicKey(), sshGWUsername, time.Hour)
+	cert, err := h.userCA.SignUserCertForAccount(signer.PublicKey(), sshGWUsername, mustSSHAccountID(t, h), time.Hour, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -316,7 +316,7 @@ func TestNativeSSHExecutionDisableCancelsRunningWork(t *testing.T) {
 		return n == 1
 	})
 	out, errout, code := nativeCommand(t, nativeExecCredentials(t, h), `touch '`+marker+`'`, nil)
-	if code == 0 || len(out) != 0 || !strings.Contains(string(errout), "access required") {
+	if code == 0 || len(out) != 0 || !strings.Contains(string(errout), "SSH credential revoked") {
 		t.Fatalf("disabled actor accepted: %q/%q/%d", out, errout, code)
 	}
 	time.Sleep(3500 * time.Millisecond)

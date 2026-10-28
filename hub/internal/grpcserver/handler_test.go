@@ -8,7 +8,9 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"crypto/x509/pkix"
+	"database/sql"
 	"net"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -157,14 +159,16 @@ func TestHandleRegister_InvalidToken(t *testing.T) {
 }
 
 func TestRouteAgentMessage_DeliversTerminalEvents(t *testing.T) {
-	h, _ := testHandler(t)
+	h, st := testHandler(t)
 	h.terminals = NewTerminalSessions()
-	ch, ok := h.terminals.Register("srv-1", "term-1", "user-1", "")
-	if !ok || ch == nil {
-		t.Fatal("register terminal session")
+	stream := &mockStream{}
+	h.connMgr.Register("srv-1", stream)
+	ch, _, err := h.terminals.RegisterInteractive(st, h.connMgr, "srv-1", "term-1", "user-1", func() (string, error) { return "", nil })
+	if err != nil || ch == nil {
+		t.Fatalf("register terminal session: %v", err)
 	}
 
-	err := h.routeAgentMessage("srv-1", &mockStream{}, &pb.AgentMessage{
+	err = h.routeAgentMessage("srv-1", stream, &pb.AgentMessage{
 		Payload: &pb.AgentMessage_TerminalData{
 			TerminalData: &pb.TerminalData{
 				SessionId: "term-1",
@@ -180,7 +184,7 @@ func TestRouteAgentMessage_DeliversTerminalEvents(t *testing.T) {
 		t.Fatalf("unexpected terminal data event: %+v", event)
 	}
 
-	err = h.routeAgentMessage("srv-1", &mockStream{}, &pb.AgentMessage{
+	err = h.routeAgentMessage("srv-1", stream, &pb.AgentMessage{
 		Payload: &pb.AgentMessage_TerminalExit{
 			TerminalExit: &pb.TerminalExit{
 				SessionId: "term-1",
@@ -195,6 +199,46 @@ func TestRouteAgentMessage_DeliversTerminalEvents(t *testing.T) {
 	exit := <-ch
 	if exit.Type != TerminalEventExit || exit.ExitCode != 7 || exit.Error != "boom" {
 		t.Fatalf("unexpected terminal exit event: %+v", exit)
+	}
+}
+
+func TestRouteAgentMessage_IgnoresTerminalEventsFromReplacedStream(t *testing.T) {
+	h, st := testHandler(t)
+	h.terminals = NewTerminalSessions()
+	h.pending = NewPendingRequests()
+	stale := &mockStream{}
+	current := &mockStream{}
+	h.connMgr.Register("srv-1", stale)
+	events, _, err := h.terminals.RegisterInteractive(st, h.connMgr, "srv-1", "term-1", "user-1", func() (string, error) { return "", nil })
+	if err != nil || events == nil {
+		t.Fatalf("register terminal session: %v", err)
+	}
+	openAck := h.pending.Register("srv-1", "term-1")
+	h.connMgr.Register("srv-1", current)
+
+	messages := []*pb.AgentMessage{
+		{Payload: &pb.AgentMessage_TerminalOpenAck{TerminalOpenAck: &pb.TerminalOpenAck{SessionId: "term-1"}}},
+		{Payload: &pb.AgentMessage_TerminalData{TerminalData: &pb.TerminalData{SessionId: "term-1", Data: []byte("stale")}}},
+		{Payload: &pb.AgentMessage_TerminalExit{TerminalExit: &pb.TerminalExit{SessionId: "term-1", ExitCode: 9}}},
+	}
+	for _, message := range messages {
+		if err := h.routeAgentMessage("srv-1", stale, message); err != nil {
+			t.Fatalf("route stale terminal message: %v", err)
+		}
+	}
+	if err := h.routeAgentMessage("srv-1", current, &pb.AgentMessage{Payload: &pb.AgentMessage_TerminalData{TerminalData: &pb.TerminalData{SessionId: "term-1", Data: []byte("replacement")}}}); err != nil {
+		t.Fatalf("route replacement terminal message: %v", err)
+	}
+
+	select {
+	case message := <-openAck:
+		t.Fatalf("stale stream delivered terminal open ack: %T", message)
+	default:
+	}
+	select {
+	case event := <-events:
+		t.Fatalf("unbound stream delivered terminal event: %+v", event)
+	default:
 	}
 }
 
@@ -482,5 +526,71 @@ func TestHandleStreamHeartbeat_NoConn(t *testing.T) {
 	err := h.handleStreamHeartbeat("s1", stream)
 	if err != nil {
 		t.Fatalf("handleStreamHeartbeat with no conn: %v", err)
+	}
+}
+
+func TestHeartbeatPersistenceDoesNotBlockConnectionDetach(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "heartbeat.db")
+	st, err := store.New(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	if err := st.CreateServer(&model.Server{ID: "s1", Name: "test", Status: "online", Labels: "{}"}); err != nil {
+		t.Fatal(err)
+	}
+	locker, err := sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer locker.Close()
+	if _, err := locker.Exec("BEGIN IMMEDIATE"); err != nil {
+		t.Fatal(err)
+	}
+	locked := true
+	defer func() {
+		if locked {
+			_, _ = locker.Exec("ROLLBACK")
+		}
+	}()
+
+	cm := connmgr.New()
+	stream := &mockStream{}
+	cm.Register("s1", stream)
+	coalescer := NewHeartbeatCoalescer(st, 0)
+	h := &Handler{store: st, connMgr: cm, hbCoalescer: coalescer}
+	heartbeatDone := make(chan error, 1)
+	go func() { heartbeatDone <- h.handleStreamHeartbeat("s1", stream) }()
+	deadline := time.Now().Add(time.Second)
+	for {
+		coalescer.mu.Lock()
+		_, started := coalescer.lastWritten["s1"]
+		coalescer.mu.Unlock()
+		if started {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("heartbeat persistence did not start")
+		}
+		time.Sleep(time.Millisecond)
+	}
+	detached := make(chan struct{})
+	go func() {
+		cm.Unregister("s1")
+		close(detached)
+	}()
+	select {
+	case <-detached:
+	case <-time.After(250 * time.Millisecond):
+		t.Fatal("durable heartbeat persistence held the connection delivery lock")
+	}
+	if _, err := locker.Exec("ROLLBACK"); err != nil {
+		t.Fatal(err)
+	}
+	locked = false
+	select {
+	case <-heartbeatDone:
+	case <-time.After(2 * time.Second):
+		t.Fatal("heartbeat did not finish after releasing SQLite writer")
 	}
 }

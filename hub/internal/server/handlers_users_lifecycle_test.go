@@ -1,7 +1,6 @@
 package server
 
 import (
-	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -27,14 +26,12 @@ const (
 	lifecycleUnlockSuffix    = "/unlock"
 	lifecycleExemptSuffix    = "/dormancy-exemption"
 	lifecycleSelfDisableMsg  = "cannot disable your own account"
-	lifecycleLastAdminMsg    = "cannot disable the last enabled administrator"
 	lifecycleNotAdminMsg     = "dormancy exemption applies to administrator accounts only"
 	lifecycleUserNotFoundMsg = "user not found"
 	lifecycleUnknownID       = "00000000-0000-0000-0000-000000000000"
 	lifecycleViewerName      = "lifecycleviewer"
 	lifecycleExpected403     = "expected 403, got %d: %s"
 	lifecycleExpected404     = "expected 404, got %d: %s"
-	lifecycleExpected409     = "expected 409, got %d: %s"
 	lifecycleGetUserErr      = "get user %s: %v"
 )
 
@@ -239,6 +236,7 @@ func assertAuditTarget(t *testing.T, entry model.AuditEntry, actorID, targetID s
 // records how many tokens went with it (FR-002, FR-003, FR-011).
 func TestUpdateUserStatus_DisableRevokesAccess(t *testing.T) {
 	f := newLifecycleFixture(t)
+	_, _, sessionID := sessionTokenPair(t, f.s, f.viewerID)
 
 	mintAPIToken(t, f.s, f.viewerID, "token-a")
 	mintAPIToken(t, f.s, f.viewerID, "token-b")
@@ -281,12 +279,26 @@ func TestUpdateUserStatus_DisableRevokesAccess(t *testing.T) {
 	}
 	var detail struct {
 		RevokedAPITokens int `json:"revoked_api_tokens"`
+		EndedSessions    int `json:"ended_sessions"`
 	}
 	if err := json.Unmarshal([]byte(*entry.Detail), &detail); err != nil {
 		t.Fatalf("decode user.disabled detail %q: %v", *entry.Detail, err)
 	}
 	if detail.RevokedAPITokens != 2 {
 		t.Fatalf("expected revoked_api_tokens 2, got %d", detail.RevokedAPITokens)
+	}
+	if detail.EndedSessions != 1 {
+		t.Fatalf("expected ended_sessions 1, got %d", detail.EndedSessions)
+	}
+	var fields map[string]any
+	if err := json.Unmarshal([]byte(*entry.Detail), &fields); err != nil {
+		t.Fatalf("decode user.disabled fields %q: %v", *entry.Detail, err)
+	}
+	if _, present := fields["closed_shells"]; present {
+		t.Fatal("user.disabled audit claimed a shell count before in-memory cleanup")
+	}
+	if session := reloadSession(t, f.s, sessionID); session.EndedAt == nil || session.EndReason != model.SessionEndRevokedDisable {
+		t.Fatalf("disable did not atomically end durable session: %+v", session)
 	}
 }
 
@@ -401,13 +413,11 @@ func TestUpdateUserStatus_SelfEnableAllowed(t *testing.T) {
 	}
 }
 
-// TestUpdateUserStatus_LastAdminRefused covers the guard that keeps a hub
-// administrable. The scenario is the one a concurrent pair of disables
-// produces: the caller's own account has already been disabled by the time
-// their request runs, leaving the target as the only enabled administrator.
-// It is driven through the handler directly because the middleware would
-// (correctly) refuse the caller's now-dead credential.
-func TestUpdateUserStatus_LastAdminRefused(t *testing.T) {
+// TestUpdateUserStatus_RevokedActorCannotDisableLastAdmin covers the
+// concurrent-pair outcome at the HTTP boundary. Once the first disable wins,
+// the losing administrator's request is refused before it can reach the
+// target's last-admin guard.
+func TestUpdateUserStatus_RevokedActorCannotDisableLastAdmin(t *testing.T) {
 	f := newLifecycleFixture(t)
 
 	secondAdminID, _ := createLifecycleUser(t, f.s, f.adminToken, "secondadmin", model.RoleAdmin)
@@ -415,18 +425,9 @@ func TestUpdateUserStatus_LastAdminRefused(t *testing.T) {
 		t.Fatalf("disable the first admin: %v", err)
 	}
 
-	req := httptest.NewRequest("PUT", testUsersPrefix+secondAdminID+lifecycleStatusSuffix,
-		mustJSON(t, model.UpdateUserStatusRequest{Disabled: true}))
-	req.SetPathValue("id", secondAdminID)
-	req = req.WithContext(context.WithValue(req.Context(), ctxUserID, f.adminID))
-	rec := httptest.NewRecorder()
-	f.s.handleUpdateUserStatus(rec, req)
-
-	if rec.Code != http.StatusConflict {
-		t.Fatalf(lifecycleExpected409, rec.Code, rec.Body.String())
-	}
-	if msg := errorMessage(t, rec); msg != lifecycleLastAdminMsg {
-		t.Fatalf("expected %q, got %q", lifecycleLastAdminMsg, msg)
+	rec := putStatus(t, f.s, f.adminToken, secondAdminID, true)
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("expected 401, got %d: %s", rec.Code, rec.Body.String())
 	}
 	if storedUser(t, f.s, secondAdminID).DisabledAt != nil {
 		t.Fatal("the last enabled administrator was disabled despite the guard")

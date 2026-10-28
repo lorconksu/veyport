@@ -94,9 +94,9 @@ the actions that apply to its current state, each behind a confirmation dialog:
 
 | Action | Shown when | What it does |
 |---|---|---|
-| **Disable** | account is not disabled | Immediately turns the account off: every one of the account's web and CLI sessions is ended and any open SSH shell is closed within seconds (feature 009 - same effect as **Log out everywhere** in **Sessions** below), every API token the account holds is revoked, and sign-in and SSH certificate issuance are refused. The row switches to **Disabled**. |
+| **Disable** | account is not disabled | Immediately turns the account off: every one of the account's web and CLI sessions is ended and any open SSH shell is closed within seconds (feature 009 - same effect as **Log out everywhere** in **Sessions** below), every API token the account holds is revoked, and sign-in and SSH certificate issuance are refused. Existing SSH certificates are permanently revoked. The row switches to **Disabled**. |
 | **Reactivate** | account is dormant | Restarts the dormancy clock without enabling a disabled account or clearing a separate lock. A dormant-and-locked account remains **Locked**. |
-| **Enable** | account is disabled | Turns the account back on: clears any lock and the failure count, restarts the dormancy clock, and lets the account sign in again. Its API tokens stay revoked - the user must mint new ones. |
+| **Enable** | account is disabled | Turns the account back on: clears any lock and the failure count, restarts the dormancy clock, and lets the account sign in again. Its API tokens and pre-disable SSH certificates stay revoked; the user must sign in and obtain new credentials. |
 | **Unlock** | account is locked | Clears the lock and the consecutive-failure count immediately, without waiting for the lock to expire. Restarts the dormancy clock. |
 | **Reset password** / **Password help** | ordinary local / LDAP account | Local recovery creates an expiring temporary password; LDAP credentials must be reset by a directory administrator. See **Password recovery** below. |
 | **Exempt from dormancy** / **Remove exemption** | account's role is Admin | Marks (or unmarks) the account as "never dormant" - see **Dormant accounts** below. Only administrator accounts can carry the exemption; it has no effect on locking or disabling. |
@@ -125,6 +125,10 @@ new reset. The request is not automatically retried. The user must replace the t
 before normal access. Existing TOTP remains enabled and is still required; completing the change
 ends the recovery flow and requires a fresh sign-in. For an account without TOTP, the existing
 first-login TOTP enrollment and password replacement flow remains in force.
+
+The password-history count retains that many prior permanent passwords, in addition to
+checking the active password. Temporary passwords do not consume history slots. Resetting
+or completing recovery preserves this history, including when the count is 1.
 
 Resetting a password does not enable, reactivate, or unlock the account. Review its Status and
 perform the separate applicable lifecycle action if needed. Recovery revokes existing sessions,
@@ -201,10 +205,9 @@ its last API-token use, its last admin enable or unlock, or its creation - which
 most recently. Using a token, not just signing in, counts as activity, so unattended automation
 that runs regularly does not go dormant while it is in use.
 
-Dormancy is evaluated when the account is actually used - at sign-in, at token authentication, at
-SSH certificate issuance, and at SSH shell establishment - not by a background schedule, so there
-is nothing to run and nothing to wait for. Between uses, the badge in the user list reflects the
-same rule computed live each time the list is loaded.
+Dormancy is evaluated at sign-in, token authentication, SSH certificate issuance,
+shell establishment, and periodic authorization checks for established browser and SSH shells.
+The badge in the user list reflects the same rule computed live each time the list is loaded.
 
 To review a dormant account, look at its status badge and, if appropriate, click **Reactivate**.
 This restarts its activity clock while preserving any separate lock. A disabled account uses
@@ -225,8 +228,14 @@ exemption if one is assigned to an LDAP-backed admin.
 
 Note: as of feature 009, disabling an account also closes any SSH shells it already has open (see
 **Sessions** above) - new shells, new certificate requests, and existing sign-in attempts were
-already refused before that. Going dormant on its own does not close open shells; a dormant
-account's existing sessions and shells keep working until they time out or an admin acts on them.
+already refused before that. Established browser and SSH shells also close when their account
+becomes dormant or loses the role, terminal grant, or root server assignment needed to use them.
+Browser shells also close when their original owning session expires or ends.
+Both transports observe policy recovery and Enhanced coverage changes made by
+other Hub processes through a one-second durable check. The read budget is
+250 ms; process scheduling and in-flight transport cancellation add latency.
+Queued private output is discarded at forced closure. Data already accepted by
+the network cannot be withdrawn.
 
 ### Creating a New User
 

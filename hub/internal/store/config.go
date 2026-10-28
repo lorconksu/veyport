@@ -3,6 +3,8 @@ package store
 import (
 	"database/sql"
 	"fmt"
+
+	"github.com/wyiu/veyport/hub/internal/lockout"
 )
 
 func (s *Store) LookupConfig(key string) (string, bool, error) {
@@ -26,6 +28,28 @@ func (s *Store) GetConfig(key string) (string, error) {
 		return "", fmt.Errorf("config key %q not found", key)
 	}
 	return value, nil
+}
+
+// AccountPolicy returns defaults for absent keys but propagates every storage
+// error. Authorization callers must use this method instead of lockout.Load
+// with GetConfig, which cannot distinguish a missing key from an unavailable
+// configuration store.
+func (s *Store) AccountPolicy() (lockout.Policy, error) {
+	var readErr error
+	policy := lockout.Load(func(key string) (string, error) {
+		value, ok, err := s.LookupConfig(key)
+		if err != nil && readErr == nil {
+			readErr = err
+		}
+		if !ok {
+			return "", nil
+		}
+		return value, err
+	})
+	if readErr != nil {
+		return lockout.Policy{}, readErr
+	}
+	return policy, nil
 }
 
 func (s *Store) SetConfig(key, value string) error {

@@ -25,7 +25,7 @@ type managementStorageBoundary struct {
 func TestAccountManagementMutationStorageFailuresRollBackAuthority(t *testing.T) {
 	boundaries := []managementStorageBoundary{
 		{"outgoing history", "BEFORE INSERT ON password_history WHEN NEW.password_hash='h'", 5},
-		{"replacement history", "BEFORE INSERT ON password_history WHEN NEW.password_hash='replacement-hash'", 5},
+		{"legacy history cleanup", "BEFORE DELETE ON password_history WHEN OLD.password_hash='h'", 5},
 		{"history retention", "BEFORE DELETE ON password_history", 0},
 		{"credential update", "BEFORE UPDATE OF password_hash ON users WHEN OLD.id='target'", 5},
 		{"API revocation", "BEFORE UPDATE OF revoked_at ON api_tokens WHEN OLD.user_id='target'", 5},
@@ -100,6 +100,11 @@ func readManagementMutationState(t *testing.T, s *store.Store, id string) manage
 func verifyManagementMutationRollback(t *testing.T, operation string, boundary managementStorageBoundary) {
 	t.Helper()
 	f := newManagementMutationFixture(t, operation)
+	if boundary.name == "legacy history cleanup" {
+		if err := f.s.AddPasswordHistory(f.user.ID, f.user.PasswordHash); err != nil {
+			t.Fatal(err)
+		}
+	}
 	before := readManagementMutationState(t, f.s, f.user.ID)
 	managementExec(t, f.s, "CREATE TRIGGER account_mutation_fault "+boundary.trigger+" BEGIN SELECT RAISE(ABORT,'synthetic account mutation storage failure'); END")
 	if _, err := f.apply(operation, boundary.history); err == nil {
@@ -129,7 +134,7 @@ func TestAccountManagementStoreRefusesMissingAndDirectoryTargets(t *testing.T) {
 	if _, err := f.s.ResetLocalPassword(store.PasswordResetTarget{UserID: missing.ID}, store.TemporaryPasswordCredential{Hash: managementReplacementHash, ExpiresAt: f.now.Add(time.Hour)}, f.now, 5, f.entry); err == nil {
 		t.Fatal("missing password-reset target accepted")
 	}
-	if _, _, err := f.s.ReactivateUser(missing.ID, f.now, 35, f.entry); err == nil {
+	if _, _, err := f.s.ReactivateUser(missing.ID, f.now, f.entry); err == nil {
 		t.Fatal("missing reactivation target accepted")
 	}
 	managementExec(t, f.s, "UPDATE users SET auth_provider='ldap' WHERE id=?", f.user.ID)
@@ -143,7 +148,7 @@ func TestAccountManagementReactivationStorageFailurePreservesDormancyAndLock(t *
 	managementExec(t, f.s, "UPDATE users SET created_at=?,locked_until=?,failed_login_count=7 WHERE id=?", f.now.Add(-60*24*time.Hour).Format("2006-01-02 15:04:05"), f.now.Add(time.Hour).Format("2006-01-02 15:04:05"), f.user.ID)
 	before := readManagementMutationState(t, f.s, f.user.ID)
 	managementExec(t, f.s, "CREATE TRIGGER account_reactivation_fault BEFORE UPDATE OF reactivated_at ON users BEGIN SELECT RAISE(ABORT,'synthetic reactivation failure'); END")
-	if _, _, err := f.s.ReactivateUser(f.user.ID, f.now, 35, f.entry); err == nil {
+	if _, _, err := f.s.ReactivateUser(f.user.ID, f.now, f.entry); err == nil {
 		t.Fatal("reactivation storage failure reported success")
 	}
 	if after := readManagementMutationState(t, f.s, f.user.ID); !reflect.DeepEqual(before, after) {
@@ -157,7 +162,7 @@ func TestAccountManagementRefusesUnavailableAdministratorAndMetadataStore(t *tes
 	if _, err := f.s.ResetLocalPassword(store.PasswordResetTarget{UserID: f.user.ID}, store.TemporaryPasswordCredential{Hash: managementReplacementHash, ExpiresAt: f.now.Add(time.Hour)}, f.now, 5, f.entry, actor); !errors.Is(err, store.ErrAccountManagementActor) {
 		t.Fatal("missing administrator accepted")
 	}
-	if _, _, err := f.s.ReactivateUser(f.user.ID, f.now, 35, f.entry, actor); !errors.Is(err, store.ErrAccountManagementActor) {
+	if _, _, err := f.s.ReactivateUser(f.user.ID, f.now, f.entry, actor); !errors.Is(err, store.ErrAccountManagementActor) {
 		t.Fatal("missing administrator reactivated target")
 	}
 	if err := f.s.Close(); err != nil {

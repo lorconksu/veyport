@@ -37,6 +37,14 @@ func (s *Server) accountStatus(u *model.User) account.Status {
 	return account.Evaluate(account.InputFromUser(u), s.now(), s.lockoutPolicy())
 }
 
+func (s *Server) accountStatusStrict(u *model.User) (account.Status, error) {
+	policy, err := s.strictLockoutPolicy()
+	if err != nil {
+		return "", err
+	}
+	return account.Evaluate(account.InputFromUser(u), s.now(), policy), nil
+}
+
 // accountRefuses reports whether st denies access at every path. It is the
 // predicate call sites branch on before calling refuseAccount.
 func accountRefuses(st account.Status) bool {
@@ -95,7 +103,10 @@ func (e *accountAccessError) Error() string { return e.Msg }
 // deliberately usable here: a lock is enforced at the two sign-in stages only
 // (FR-010), so it must not kill sessions that already exist.
 func (s *Server) accountAccessError(u *model.User) error {
-	st := s.accountStatus(u)
+	st, err := s.accountStatusStrict(u)
+	if err != nil {
+		return err
+	}
 	msg, refuse := account.Refusal(st)
 	if !refuse {
 		return nil

@@ -92,14 +92,14 @@ func TestExecutionPolicyValidatorImmutableBindingAllowsLocalReentry(t *testing.T
 	var calls atomic.Int32
 	var reentryErr atomic.Bool
 	const authority = "immutable-installation-and-private-directory"
-	if err := s.InstallExecutionPolicyValidator(authority, func(policy model.PolicyState) error {
+	if err := s.InstallExecutionPolicyValidator(authority, func(_ *store.Store, policy model.PolicyState) error {
 		calls.Add(1)
 		// Both reads and a same-key construction may reenter the store; no
 		// database transaction or binding mutex can be held around this call.
 		if _, err := s.GetPolicyState(); err != nil {
 			reentryErr.Store(true)
 		}
-		if err := s.InstallExecutionPolicyValidator(authority, func(model.PolicyState) error { panic("binding replaced") }); err != nil {
+		if err := s.InstallExecutionPolicyValidator(authority, func(*store.Store, model.PolicyState) error { panic("binding replaced") }); err != nil {
 			reentryErr.Store(true)
 		}
 		return nil
@@ -109,10 +109,10 @@ func TestExecutionPolicyValidatorImmutableBindingAllowsLocalReentry(t *testing.T
 	var wg sync.WaitGroup
 	for range 24 {
 		wg.Go(func() {
-			if err := s.InstallExecutionPolicyValidator(authority, func(model.PolicyState) error { panic("binding replaced") }); err != nil {
+			if err := s.InstallExecutionPolicyValidator(authority, func(*store.Store, model.PolicyState) error { panic("binding replaced") }); err != nil {
 				reentryErr.Store(true)
 			}
-			if err := s.InstallExecutionPolicyValidator("substituted-authority", func(model.PolicyState) error { panic("binding replaced") }); !errors.Is(err, store.ErrPolicyIntegrity) {
+			if err := s.InstallExecutionPolicyValidator("substituted-authority", func(*store.Store, model.PolicyState) error { panic("binding replaced") }); !errors.Is(err, store.ErrPolicyIntegrity) {
 				reentryErr.Store(true)
 			}
 			if err := s.ValidateExecutionPolicy(state); err != nil {

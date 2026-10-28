@@ -116,6 +116,21 @@ func TestAgentUpdateAuthorityUsesStoredCLISessionIdle(t *testing.T) {
 		})
 	}
 }
+
+func TestAgentUpdatePolicyReadFailureFailsClosed(t *testing.T) {
+	f := newUpdateFixture(t)
+	for _, query := range []string{
+		"ALTER TABLE _config RENAME TO unavailable_agent_update_config",
+		"CREATE VIEW _config AS SELECT key,value FROM missing_agent_update_config",
+	} {
+		if _, err := f.st.DB().Exec(query); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := f.u.authorizeAdmin("admin", "session"); !errors.Is(err, ErrAgentUpdateDenied) {
+		t.Fatalf("unavailable policy store authorized agent update: %v", err)
+	}
+}
 func (f *updateFixture) start(t *testing.T) model.AgentUpdate {
 	t.Helper()
 	op, _, err := f.u.Start(context.Background(), "admin", "session", "node", f.target.Version, f.target.Revision, f.idleAssertion())

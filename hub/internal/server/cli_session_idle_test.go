@@ -167,6 +167,7 @@ func TestCLITerminalRegistrationUsesStoredIdlePolicy(t *testing.T) {
 			}
 			req := httptest.NewRequest("POST", testServersPrefix+serverID+testTerminalSessionsSuffix, mustJSON(t, map[string]uint32{"cols": 80, "rows": 24}))
 			req.SetPathValue("id", serverID)
+			req.Header.Set("Authorization", testBearerPrefix+token)
 			ctx := context.WithValue(req.Context(), ctxUserID, claims.Subject)
 			ctx = context.WithValue(ctx, ctxSessionID, claims.SessionID)
 			rec := httptest.NewRecorder()

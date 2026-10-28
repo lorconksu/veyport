@@ -45,7 +45,9 @@ func (s *Server) accountManagementError(w http.ResponseWriter, err error) {
 
 func (s *Server) handleReactivateUser(w http.ResponseWriter, r *http.Request) {
 	actor, target := UserIDFromContext(r.Context()), r.PathValue("id")
-	user, changed, err := s.store.ReactivateUser(target, s.now(), s.lockoutPolicy().DormantDays, s.accountManagementAudit(r, actor, target, model.AuditUserReactivated), s.accountManagementActor(r))
+	authority := s.accountManagementActor(r)
+	entry := s.accountManagementAudit(r, actor, target, model.AuditUserReactivated)
+	user, changed, err := s.store.ReactivateUser(target, s.now(), entry, authority)
 	if err != nil {
 		s.auditAccountManagementRefusal(r, actor, target, model.AuditUserReactivated, err)
 		s.accountManagementError(w, err)
@@ -70,6 +72,7 @@ func (s *Server) auditAccountManagementRefusal(r *http.Request, actor, target, a
 func (s *Server) handleResetUserPassword(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set(accountManagementCacheHeader, accountManagementNoStore)
 	actor, target := UserIDFromContext(r.Context()), r.PathValue("id")
+	authority := s.accountManagementActor(r)
 	if actor == target {
 		respondError(w, http.StatusBadRequest, "use the self-service password change for your own account")
 		return
@@ -99,7 +102,6 @@ func (s *Server) handleResetUserPassword(w http.ResponseWriter, r *http.Request)
 		s.accountManagementError(w, store.ErrSecurityConflict)
 		return
 	}
-	authority := s.accountManagementActor(r)
 	password := auth.GenerateTemporaryPassword()
 	hash, err := auth.HashPassword(password)
 	if err != nil {
@@ -154,7 +156,7 @@ func (s *Server) handleCompletePasswordRecovery(w http.ResponseWriter, r *http.R
 	// must neither mask this bearer nor authorize recovery on their own.
 	token, hasBearer := strings.CutPrefix(r.Header.Get("Authorization"), bearerPrefix)
 	claims, err := auth.ValidateToken(s.jwtSecret, token)
-	if !hasBearer || err != nil || claims.TokenType != auth.TokenTypePasswordRecovery {
+	if !hasBearer || err != nil || claims.TokenType != auth.TokenTypePasswordRecovery || claims.ExpiresAt == nil {
 		respondError(w, http.StatusUnauthorized, "invalid recovery token")
 		return
 	}
@@ -171,6 +173,7 @@ func (s *Server) handleCompletePasswordRecovery(w http.ResponseWriter, r *http.R
 		respondError(w, http.StatusUnauthorized, err.Error())
 		return
 	}
+	authority := store.PasswordChangeAuthority{Snapshot: user, Generation: claims.TokenGeneration, ExpiresAt: claims.ExpiresAt.Time}
 	var req struct {
 		NewPassword string `json:"new_password"`
 	}
@@ -189,6 +192,9 @@ func (s *Server) handleCompletePasswordRecovery(w http.ResponseWriter, r *http.R
 		return
 	}
 	if matches || auth.ComparePassword(user.PasswordHash, req.NewPassword) {
+		entry := s.accountManagementAudit(r, user.ID, user.ID, model.AuditUserPasswordReuseRejected)
+		entry.Outcome = model.AuditOutcomeFailure
+		s.auditLogRequest(r, entry)
 		respondError(w, http.StatusBadRequest, "new password must not match a recent password")
 		return
 	}
@@ -203,9 +209,9 @@ func (s *Server) handleCompletePasswordRecovery(w http.ResponseWriter, r *http.R
 		return
 	}
 	if protected {
-		_, err = s.store.CompleteApprovedPasswordRecoveryAudited(store.PasswordRecoverySnapshot{UserID: user.ID, PasswordHash: user.PasswordHash, SecurityRevision: user.SecurityRevision, TokenGeneration: user.TokenGeneration}, hash, s.now(), settings.PasswordHistoryCount, s.accountManagementAudit(r, user.ID, user.ID, model.AuditUserPasswordChanged))
+		_, err = s.store.CompleteApprovedPasswordRecoveryAudited(store.PasswordRecoverySnapshot{UserID: user.ID, PasswordHash: user.PasswordHash, SecurityRevision: user.SecurityRevision, TokenGeneration: user.TokenGeneration}, hash, s.now(), settings.PasswordHistoryCount, s.accountManagementAudit(r, user.ID, user.ID, model.AuditUserPasswordChanged), authority)
 	} else {
-		_, err = s.store.ChangeLocalPassword(user, hash, s.now(), settings.PasswordHistoryCount, true, s.accountManagementAudit(r, user.ID, user.ID, model.AuditUserPasswordChanged))
+		_, err = s.store.ChangeLocalPassword(user, hash, s.now(), settings.PasswordHistoryCount, true, s.accountManagementAudit(r, user.ID, user.ID, model.AuditUserPasswordChanged), authority)
 	}
 	if err != nil {
 		s.accountManagementError(w, err)
@@ -218,13 +224,24 @@ func (s *Server) handleCompletePasswordRecovery(w http.ResponseWriter, r *http.R
 }
 
 func (s *Server) accountManagementActor(r *http.Request) store.AccountManagementActor {
+	userID := UserIDFromContext(r.Context())
+	user, err := s.store.GetUserByID(userID)
+	if err != nil {
+		return store.AccountManagementActor{}
+	}
+	if TokenTypeFromContext(r.Context()) == auth.TokenTypeAPIToken {
+		raw := readAccessToken(r)
+		if !auth.LooksLikeAPIToken(raw) {
+			return store.AccountManagementActor{}
+		}
+		return store.AccountManagementActor{UserID: userID, Generation: user.TokenGeneration, SecurityRevision: user.SecurityRevision, APITokenHash: auth.HashAPIToken(raw)}
+	}
 	claims, err := auth.ValidateToken(s.jwtSecret, readAccessToken(r))
-	if err != nil {
+	if err != nil || claims.ExpiresAt == nil {
 		return store.AccountManagementActor{}
 	}
-	user, err := s.store.GetUserByID(claims.Subject)
-	if err != nil {
+	if claims.Subject != userID {
 		return store.AccountManagementActor{}
 	}
-	return store.AccountManagementActor{UserID: claims.Subject, SessionID: claims.SessionID, Generation: claims.TokenGeneration, SecurityRevision: user.SecurityRevision}
+	return store.AccountManagementActor{UserID: claims.Subject, SessionID: claims.SessionID, Generation: claims.TokenGeneration, SecurityRevision: user.SecurityRevision, ExpiresAt: claims.ExpiresAt.Time}
 }

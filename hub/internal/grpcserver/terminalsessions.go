@@ -4,8 +4,10 @@ import (
 	"errors"
 	"sort"
 	"sync"
+	"sync/atomic"
 	"time"
 
+	"github.com/wyiu/veyport/hub/internal/connmgr"
 	"github.com/wyiu/veyport/hub/internal/store"
 )
 
@@ -41,6 +43,69 @@ type TerminalEvent struct {
 	Forced bool
 }
 
+// terminalOutput serializes forwarding with revocation for this exact
+// registration. A transport abort unblocks a write already in progress; queued
+// or dequeued data cannot start a write after the revocation boundary.
+type terminalOutput struct {
+	writeMu sync.Mutex
+	stateMu sync.Mutex
+	exit    atomic.Pointer[TerminalEvent]
+	writing bool
+	abort   func()
+}
+
+func (o *terminalOutput) forward(write func() error) (bool, error) {
+	o.writeMu.Lock()
+	defer o.writeMu.Unlock()
+	o.stateMu.Lock()
+	if o.exit.Load() != nil {
+		o.stateMu.Unlock()
+		return false, nil
+	}
+	o.writing = true
+	o.stateMu.Unlock()
+	defer func() { o.stateMu.Lock(); o.writing = false; o.stateMu.Unlock() }()
+	return true, write()
+}
+func (o *terminalOutput) revoke(exit TerminalEvent) {
+	o.stateMu.Lock()
+	o.exit.Store(&exit)
+	abort, writing := o.abort, o.writing
+	o.stateMu.Unlock()
+	if writing && abort != nil {
+		abort()
+	}
+	// Never retain stateMu while waiting for writeMu. forward acquires writeMu
+	// before stateMu, so releasing here prevents an inverse-lock cycle.
+	// The transport abort must release any in-flight data write before closure
+	// returns. Bytes already accepted by the transport cannot be recalled.
+	o.writeMu.Lock()
+	o.writeMu.Unlock()
+}
+
+func (i TerminalSessionInfo) ForwardData(write func() error) (bool, error) {
+	if i.output == nil {
+		return false, nil
+	}
+	return i.output.forward(write)
+}
+func (i TerminalSessionInfo) ForcedExit() (TerminalEvent, bool) {
+	if i.output != nil {
+		if exit := i.output.exit.Load(); exit != nil {
+			return *exit, true
+		}
+	}
+	return TerminalEvent{}, false
+}
+func (i TerminalSessionInfo) SetOutputAbort(abort func()) {
+	if i.output == nil {
+		return
+	}
+	i.output.stateMu.Lock()
+	i.output.abort = abort
+	i.output.stateMu.Unlock()
+}
+
 type terminalSession struct {
 	serverID      string
 	sessionID     string
@@ -57,9 +122,26 @@ type terminalSession struct {
 	lastActivity time.Time
 	ch           chan TerminalEvent
 	done         chan struct{}
-	streaming    bool
-	closed       bool
-	interactive  *interactiveAdmission
+	// removed is the registration lifetime. Agent-reported exit closes done,
+	// but the transport may still be draining buffered output; credential and
+	// authorization revalidation therefore continues until removal.
+	removed     chan struct{}
+	streaming   bool
+	closed      bool
+	interactive *interactiveAdmission
+	// interactiveLiveValidate is the authority check used after admission.
+	// When nil, RegisterInteractive reuses its admission validator. Browser
+	// terminals set this separately so the opening access token's expiry is an
+	// admission boundary, while the durable owning session remains the live
+	// authority after a normal token refresh.
+	interactiveLiveValidate func() (string, error)
+	credentialGeneration    *int
+	credentialWatchDone     chan struct{}
+	credentialInvalidated   chan struct{}
+	credentialWatchStopped  bool
+	credentialRevoked       bool
+	sshGeneration           bool
+	output                  terminalOutput
 }
 
 type TerminalSessionInfo struct {
@@ -75,6 +157,7 @@ type TerminalSessionInfo struct {
 	Closed        bool
 	Done          <-chan struct{}
 	AgentDone     <-chan struct{}
+	output        *terminalOutput
 }
 
 type TerminalSessions struct {
@@ -83,14 +166,17 @@ type TerminalSessions struct {
 	maintenance          map[string]string
 	interactiveStores    map[*store.Store]bool
 	interactiveObserveMu sync.Mutex
+	credentialWatchers   int
+	credentialChecks     chan struct{}
 	// nowFunc is swapped in tests to drive startedAt/lastActivity.
 	nowFunc func() time.Time
 }
 
 func NewTerminalSessions() *TerminalSessions {
 	return &TerminalSessions{
-		sessions: make(map[string]*terminalSession),
-		nowFunc:  time.Now,
+		sessions:         make(map[string]*terminalSession),
+		credentialChecks: make(chan struct{}, 8),
+		nowFunc:          time.Now,
 	}
 }
 
@@ -111,6 +197,18 @@ func WithSessionID(sid string) RegisterOption {
 	return func(s *terminalSession) { s.sid = sid }
 }
 
+// WithCredentialGeneration binds a shell to durable credential authority.
+func WithCredentialGeneration(generation int, ssh bool) RegisterOption {
+	return func(s *terminalSession) { s.credentialGeneration = &generation; s.sshGeneration = ssh }
+}
+
+// WithInteractiveLiveValidation supplies the authorization check retained by
+// an established interactive terminal. Admission still uses the validator
+// passed directly to RegisterInteractive.
+func WithInteractiveLiveValidation(validate func() (string, error)) RegisterOption {
+	return func(s *terminalSession) { s.interactiveLiveValidate = validate }
+}
+
 func (ts *TerminalSessions) Register(serverID, sessionID, userID, executionUser string, opts ...RegisterOption) (chan TerminalEvent, bool) {
 	key := makeKey(serverID, sessionID)
 	ts.mu.Lock()
@@ -127,10 +225,13 @@ func (ts *TerminalSessions) Register(serverID, sessionID, userID, executionUser 
 	}
 	// Reservation and registration share this lock so simultaneous web, SSH
 	// shell and execution submissions cannot exceed a common budget.
-	var actor, node, total int
+	var actor, node, total, interactive int
 	for _, active := range ts.sessions {
 		if active.closed {
 			continue
+		}
+		if active.kind != TerminalKindExec {
+			interactive++
 		}
 		if active.kind == TerminalKindExec {
 			total++
@@ -142,12 +243,18 @@ func (ts *TerminalSessions) Register(serverID, sessionID, userID, executionUser 
 			node++
 		}
 	}
-	if node >= 8 || (s.kind == TerminalKindExec && (actor >= 4 || total >= 32)) {
+	watchCredential := s.credentialGeneration != nil && s.kind != TerminalKindExec
+	if (watchCredential && ts.credentialWatchers >= 256) || (s.kind != TerminalKindExec && interactive >= 256) || node >= 8 || (s.kind == TerminalKindExec && (actor >= 4 || total >= 32)) {
 		return nil, false
 	}
 	ch := make(chan TerminalEvent, 256)
 	now := ts.nowFunc()
-	s.ch, s.done, s.startedAt, s.lastActivity = ch, make(chan struct{}), now, now
+	s.ch, s.done, s.removed, s.startedAt, s.lastActivity = ch, make(chan struct{}), make(chan struct{}), now, now
+	if watchCredential {
+		ts.credentialWatchers++
+		s.credentialWatchDone = make(chan struct{})
+		s.credentialInvalidated = make(chan struct{})
+	}
 	ts.sessions[key] = s
 	return ch, true
 }
@@ -218,6 +325,7 @@ func infoOf(s *terminalSession) TerminalSessionInfo {
 		Ch:            s.ch,
 		Closed:        s.closed,
 		Done:          s.done,
+		output:        &s.output,
 	}
 	if s.interactive != nil {
 		info.AgentDone = s.interactive.conn.Done()
@@ -254,22 +362,55 @@ func (ts *TerminalSessions) AttachStream(serverID, sessionID, userID string) (Te
 func (ts *TerminalSessions) DeliverData(serverID, sessionID string, data []byte) bool {
 	key := makeKey(serverID, sessionID)
 	ts.mu.Lock()
+	defer ts.mu.Unlock()
 	s, ok := ts.sessions[key]
 	if !ok || s.closed {
-		ts.mu.Unlock()
 		return false
 	}
+	return ts.deliverDataLocked(s, data)
+}
+
+// AcceptAgentConnection verifies that an inbound control message belongs to
+// the exact connection captured when this terminal was admitted.
+func (ts *TerminalSessions) AcceptAgentConnection(serverID, sessionID string, conn *connmgr.AgentConn) bool {
+	ts.mu.Lock()
+	defer ts.mu.Unlock()
+	s := ts.sessions[makeKey(serverID, sessionID)]
+	return s != nil && !s.closed && s.interactive != nil && s.interactive.conn == conn
+}
+
+func (ts *TerminalSessions) DeliverDataFrom(conn *connmgr.AgentConn, serverID, sessionID string, data []byte) bool {
+	ts.mu.Lock()
+	defer ts.mu.Unlock()
+	s := ts.sessions[makeKey(serverID, sessionID)]
+	if s == nil || s.closed || s.interactive == nil || s.interactive.conn != conn {
+		return false
+	}
+	return ts.deliverDataLocked(s, data)
+}
+
+func (ts *TerminalSessions) deliverDataLocked(s *terminalSession, data []byte) bool {
 	select {
 	case s.ch <- TerminalEvent{Type: TerminalEventData, Data: data}:
 		if now := ts.nowFunc(); now.Sub(s.lastActivity) >= activityThrottle {
 			s.lastActivity = now
 		}
-		ts.mu.Unlock()
 		return true
 	default:
-		ts.mu.Unlock()
 		return false
 	}
+}
+
+// EndFrom accepts an agent-reported exit only from the connection generation
+// that opened this exact terminal registration.
+func (ts *TerminalSessions) EndFrom(conn *connmgr.AgentConn, serverID, sessionID string, exitCode int32, err string) bool {
+	ts.mu.Lock()
+	defer ts.mu.Unlock()
+	s := ts.sessions[makeKey(serverID, sessionID)]
+	if s == nil || s.closed || s.interactive == nil || s.interactive.conn != conn {
+		return false
+	}
+	return endLocked(s, exitCode, err, false)
 }
 
 // End records an agent-reported exit for a session.
@@ -281,9 +422,17 @@ func (ts *TerminalSessions) End(serverID, sessionID string, exitCode int32, err 
 func (ts *TerminalSessions) endSession(serverID, sessionID string, exitCode int32, msg string, forced bool) bool {
 	key := makeKey(serverID, sessionID)
 	ts.mu.Lock()
-	defer ts.mu.Unlock()
 	s, ok := ts.sessions[key]
+	ts.mu.Unlock()
 	if !ok {
+		return false
+	}
+	if forced && s.interactive != nil {
+		return ts.endInteractiveAndClose(s, exitCode, msg)
+	}
+	ts.mu.Lock()
+	defer ts.mu.Unlock()
+	if ts.sessions[key] != s {
 		return false
 	}
 	return endLocked(s, exitCode, msg, forced)
@@ -293,16 +442,35 @@ func (ts *TerminalSessions) endSession(serverID, sessionID string, exitCode int3
 // whether it did anything. Already-closed sessions are left alone, which is
 // what makes every End* variant idempotent. ts.mu must be held.
 func endLocked(s *terminalSession, exitCode int32, msg string, forced bool) bool {
+	if s.closed && (!forced || s.output.exit.Load() != nil) {
+		return false
+	}
+	exit := TerminalEvent{Type: TerminalEventExit, ExitCode: exitCode, Error: msg, Forced: forced}
+	if forced {
+		stopCredentialWatchLocked(s)
+		s.output.revoke(exit)
+		discardTerminalQueue(s.ch)
+	}
 	if s.closed {
 		return false
 	}
-	deliverExit(s.ch, TerminalEvent{
-		Type: TerminalEventExit, ExitCode: exitCode, Error: msg, Forced: forced,
-	})
+	deliverExit(s.ch, exit)
 	close(s.ch)
 	close(s.done)
 	s.closed = true
 	return true
+}
+
+// stopCredentialWatchLocked wakes a registration's bounded revalidation
+// worker without implying that worker must send TerminalClose. The caller that
+// imposed a non-credential closure already owns agent cleanup. ts.mu must be
+// held by the caller.
+func stopCredentialWatchLocked(s *terminalSession) {
+	if s.credentialInvalidated == nil || s.credentialWatchStopped {
+		return
+	}
+	s.credentialWatchStopped = true
+	close(s.credentialInvalidated)
 }
 
 // ListByUser returns the user's live shells, oldest first.
@@ -329,13 +497,22 @@ func (ts *TerminalSessions) ListByUser(userID string) []TerminalSessionInfo {
 // closed. Used when an account is disabled or all its sessions are revoked.
 func (ts *TerminalSessions) EndByUser(userID string, exitCode int32, msg string) int {
 	ts.mu.Lock()
-	defer ts.mu.Unlock()
-	ended := 0
+	var sessions []*terminalSession
 	for _, s := range ts.sessions {
-		if s.userID != userID {
+		if s.userID == userID {
+			sessions = append(sessions, s)
+		}
+	}
+	ts.mu.Unlock()
+	ended := 0
+	for _, s := range sessions {
+		if s.interactive != nil {
+			if ts.endInteractiveAndClose(s, exitCode, msg) {
+				ended++
+			}
 			continue
 		}
-		if endLocked(s, exitCode, msg, true) {
+		if ts.endSession(s.serverID, s.sessionID, exitCode, msg, true) {
 			ended++
 		}
 	}
@@ -350,13 +527,22 @@ func (ts *TerminalSessions) EndBySession(sid string, exitCode int32, msg string)
 		return 0
 	}
 	ts.mu.Lock()
-	defer ts.mu.Unlock()
-	ended := 0
+	var sessions []*terminalSession
 	for _, s := range ts.sessions {
-		if s.sid != sid {
+		if s.sid == sid {
+			sessions = append(sessions, s)
+		}
+	}
+	ts.mu.Unlock()
+	ended := 0
+	for _, s := range sessions {
+		if s.interactive != nil {
+			if ts.endInteractiveAndClose(s, exitCode, msg) {
+				ended++
+			}
 			continue
 		}
-		if endLocked(s, exitCode, msg, true) {
+		if ts.endSession(s.serverID, s.sessionID, exitCode, msg, true) {
 			ended++
 		}
 	}
@@ -376,18 +562,24 @@ func (ts *TerminalSessions) EndOne(serverID, sessionID string, exitCode int32, m
 func (ts *TerminalSessions) RemoveIfHubInitiated(serverID, sessionID string) (bool, bool) {
 	key := makeKey(serverID, sessionID)
 	ts.mu.Lock()
-	defer ts.mu.Unlock()
 	s, ok := ts.sessions[key]
+	ts.mu.Unlock()
 	if !ok {
 		return false, false
 	}
-	alreadyClosed := s.closed
-	if !s.closed {
-		close(s.ch)
-		close(s.done)
-		s.closed = true
+	if s.interactive != nil {
+		s.interactive.controlMu.Lock()
+		defer s.interactive.controlMu.Unlock()
 	}
+	ts.mu.Lock()
+	defer ts.mu.Unlock()
+	if ts.sessions[key] != s {
+		return false, false
+	}
+	alreadyClosed := s.closed
+	removeLocked(s)
 	delete(ts.sessions, key)
+	close(s.removed)
 	return alreadyClosed, true
 }
 
@@ -443,37 +635,74 @@ func (ts *TerminalSessions) RemoveUnattached(serverID, sessionID string) bool {
 func (ts *TerminalSessions) RemoveUnattachedWithClose(serverID, sessionID string) (func(), bool) {
 	key := makeKey(serverID, sessionID)
 	ts.mu.Lock()
-	defer ts.mu.Unlock()
 	s, ok := ts.sessions[key]
 	if !ok || s.streaming {
+		ts.mu.Unlock()
 		return nil, false
 	}
-	if !s.closed {
-		close(s.ch)
-		close(s.done)
-		s.closed = true
+	ts.mu.Unlock()
+	if s.interactive != nil {
+		s.interactive.controlMu.Lock()
+		defer s.interactive.controlMu.Unlock()
 	}
+	ts.mu.Lock()
+	defer ts.mu.Unlock()
+	if ts.sessions[key] != s || s.streaming {
+		return nil, false
+	}
+	removeLocked(s)
 	var closeAgent func()
 	if s.interactive != nil {
 		closeAgent = s.interactive.close
 	}
 	delete(ts.sessions, key)
+	close(s.removed)
 	return closeAgent, true
 }
 
 func (ts *TerminalSessions) Remove(serverID, sessionID string) bool {
 	key := makeKey(serverID, sessionID)
 	ts.mu.Lock()
-	removed := false
-	if s, ok := ts.sessions[key]; ok {
-		if !s.closed {
-			close(s.ch)
-			close(s.done)
-			s.closed = true
-		}
-		delete(ts.sessions, key)
-		removed = true
-	}
+	s, ok := ts.sessions[key]
 	ts.mu.Unlock()
-	return removed
+	if !ok {
+		return false
+	}
+	if s.interactive != nil {
+		s.interactive.controlMu.Lock()
+		defer s.interactive.controlMu.Unlock()
+	}
+	ts.mu.Lock()
+	defer ts.mu.Unlock()
+	if ts.sessions[key] != s {
+		return false
+	}
+	removeLocked(s)
+	delete(ts.sessions, key)
+	close(s.removed)
+	return true
+}
+
+// Removal invalidates retained output handles without adding an event to a
+// removed channel. Active transports read the closure from their exact gate.
+func removeLocked(s *terminalSession) {
+	s.output.revoke(TerminalEvent{Type: TerminalEventExit, ExitCode: -1, Error: "Terminal closed by the hub.", Forced: true})
+	discardTerminalQueue(s.ch)
+	if !s.closed {
+		close(s.ch)
+		close(s.done)
+		s.closed = true
+	}
+}
+func discardTerminalQueue(ch chan TerminalEvent) {
+	for {
+		select {
+		case _, ok := <-ch:
+			if !ok {
+				return
+			}
+		default:
+			return
+		}
+	}
 }

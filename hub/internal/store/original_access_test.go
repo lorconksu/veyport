@@ -2,6 +2,7 @@ package store_test
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"path/filepath"
 	"sync"
@@ -74,6 +75,31 @@ func authorizeOriginal(t *testing.T, s *store.Store, a model.OriginalAccess, pro
 	manifest.Key = a.ID + ".intent.manifest"
 	if err := s.AuthorizeOriginalAccess(a.ID, "verified-intent-token", a.ExpiresAt, manifest, now, lockout.Policy{SessionIdle: 15 * time.Minute, CLISessionIdle: 15 * time.Minute}); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestOriginalAccessRejectsProofFromPriorCredentialGeneration(t *testing.T) {
+	s, err := store.New(":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	now := time.Now().UTC()
+	a, proof := originalFixture(t, s, "legacy-proof", now)
+	originalExec(t, s, "UPDATE stepup_proofs SET token_generation=-1 WHERE hash=?", store.SecurityDigest([]byte(proof)))
+	policy := lockout.Policy{SessionIdle: 15 * time.Minute, CLISessionIdle: 15 * time.Minute}
+	if err := s.CreateOriginalAccess(a, proof, now.Add(24*time.Hour), now, policy); !errors.Is(err, store.ErrStepup) {
+		t.Fatalf("legacy credential-generation proof was not rejected: %v", err)
+	}
+	if _, err := s.GetOriginalAccess(a.ID); err == nil {
+		t.Fatal("rejected proof created original-access state")
+	}
+	var consumed any
+	if err := s.DB().QueryRow("SELECT consumed_at FROM stepup_proofs WHERE hash=?", store.SecurityDigest([]byte(proof))).Scan(&consumed); err != nil {
+		t.Fatal(err)
+	}
+	if consumed != nil {
+		t.Fatal("rejected proof was consumed")
 	}
 }
 

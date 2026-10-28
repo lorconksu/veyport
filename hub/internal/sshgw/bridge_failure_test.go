@@ -48,12 +48,13 @@ func TestBridgeUnexpectedAckTypeRefuses(t *testing.T) {
 func TestBridgeAttachFailureRefuses(t *testing.T) {
 	f := newFixture(t, nil)
 	f.connectAgent()
-	f.agent.setOnOpen(func(sessionID string) {
-		f.terminals.Remove(testServerID, sessionID)
-	})
 
 	ch := newFakeChannel()
-	done, _ := f.startBridge(ch, nil)
+	done, _ := f.startBridge(ch, func(p *bridgeParams) {
+		p.afterOpen = func() {
+			f.terminals.Remove(testServerID, f.openSessionID())
+		}
+	})
 	waitForDone(t, done, "bridge refusal after a failed attach")
 
 	// Removing an interactive registration also closes its admission marker.

@@ -27,14 +27,14 @@ func TestReactivateUserPreservesLockAndNoopAnchor(t *testing.T) {
 	if _, err := s.DB().Exec("UPDATE users SET created_at=?,locked_until=?,failed_login_count=7 WHERE id=?", created.Format("2006-01-02 15:04:05"), locked.Format("2006-01-02 15:04:05"), u.ID); err != nil {
 		t.Fatal(err)
 	}
-	got, changed, err := s.ReactivateUser(u.ID, now, 35, managementAudit("actor", u.ID, model.AuditUserReactivated))
+	got, changed, err := s.ReactivateUser(u.ID, now, managementAudit("actor", u.ID, model.AuditUserReactivated))
 	if err != nil || !changed {
 		t.Fatalf("reactivate changed=%v err=%v", changed, err)
 	}
 	if got.ReactivatedAt == nil || !got.ReactivatedAt.Equal(now) || got.LockedUntil == nil || !got.LockedUntil.Equal(locked) || got.FailedLoginCount != 7 {
 		t.Fatal("reactivation lost independent lock state")
 	}
-	_, changed, err = s.ReactivateUser(u.ID, now.Add(time.Hour), 35, managementAudit("actor", u.ID, model.AuditUserReactivated))
+	_, changed, err = s.ReactivateUser(u.ID, now.Add(time.Hour), managementAudit("actor", u.ID, model.AuditUserReactivated))
 	if err != nil || changed {
 		t.Fatalf("noop changed=%v err=%v", changed, err)
 	}
@@ -45,7 +45,7 @@ func TestReactivateUserPreservesLockAndNoopAnchor(t *testing.T) {
 	if _, err := s.DisableUser(u.ID, "actor", now); err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := s.ReactivateUser(u.ID, now, 35, managementAudit("actor", u.ID, model.AuditUserReactivated)); !errors.Is(err, store.ErrAccountDisabled) {
+	if _, _, err := s.ReactivateUser(u.ID, now, managementAudit("actor", u.ID, model.AuditUserReactivated)); !errors.Is(err, store.ErrAccountDisabled) {
 		t.Fatalf("disabled refusal %v", err)
 	}
 }
@@ -75,7 +75,7 @@ func TestResetLocalPasswordAtomicRevocationAndRollback(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if got.PasswordHash != managementReplacementHash || live.TokenGeneration != 1 || !live.MustChangePassword || !live.TempPasswordExpiresAt.Equal(expires) || live.TOTPSecret == nil || *live.TOTPSecret != secret || !live.TOTPEnabled || counts.sessions != 0 || counts.anchors != 0 || counts.history != 2 || counts.audits != 1 {
+			if got.PasswordHash != managementReplacementHash || live.TokenGeneration != 1 || !live.MustChangePassword || !live.TempPasswordExpiresAt.Equal(expires) || live.TOTPSecret == nil || *live.TOTPSecret != secret || !live.TOTPEnabled || counts.sessions != 0 || counts.anchors != 0 || counts.history != 1 || counts.audits != 1 {
 				t.Fatal("reset did not preserve MFA or revoke durable authority atomically")
 			}
 			assertTokenActive(t, s, "tokenhash", false)
@@ -294,7 +294,7 @@ func TestAccountManagementProtectionIsReevaluatedInsideStore(t *testing.T) {
 	if _, err := s.ResetLocalPassword(store.PasswordResetTarget{UserID: u.ID, ExpectedGeneration: 0}, store.TemporaryPasswordCredential{Hash: "forbidden", ExpiresAt: now.Add(time.Hour)}, now, 5, managementAudit("actor", u.ID, model.AuditUserPasswordReset)); !errors.Is(err, store.ErrProtectedChange) {
 		t.Fatalf("protected reset accepted: %v", err)
 	}
-	if _, _, err := s.ReactivateUser(u.ID, now, 35, managementAudit("actor", u.ID, model.AuditUserReactivated)); !errors.Is(err, store.ErrProtectedChange) {
+	if _, _, err := s.ReactivateUser(u.ID, now, managementAudit("actor", u.ID, model.AuditUserReactivated)); !errors.Is(err, store.ErrProtectedChange) {
 		t.Fatalf("protected reactivate accepted: %v", err)
 	}
 	flags, err := s.ProtectedUsers()
@@ -326,7 +326,7 @@ func raceManagementDisableAction(t *testing.T, s *store.Store, u *model.User, ac
 		<-start
 		entry := managementAudit("actor", u.ID, model.AuditUserReactivated)
 		if action == "reactivate" {
-			_, _, err := s.ReactivateUser(u.ID, now, 35, entry)
+			_, _, err := s.ReactivateUser(u.ID, now, entry)
 			results <- err
 		} else {
 			_, err := s.ResetLocalPassword(store.PasswordResetTarget{UserID: u.ID, ExpectedGeneration: 0}, store.TemporaryPasswordCredential{Hash: "reset-hash", ExpiresAt: now.Add(time.Hour)}, now, 5, entry)

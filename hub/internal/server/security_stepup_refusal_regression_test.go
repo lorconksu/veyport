@@ -64,8 +64,8 @@ func TestGovernanceHTTPRefusedStepupCannotMintProofOrConsumeValidMFA(t *testing.
 			}
 		})
 	}
-	// Model MFA data becoming unavailable after an already authenticated login.
-	// Neither an absent secret nor damaged encrypted bytes is fresh MFA evidence.
+	// Inject damaged persisted MFA without the normal removal writer's epoch
+	// revocation, to independently exercise the handler's live factor checks.
 	original := *h.users["officer"].TOTPSecret
 	for _, test := range []struct {
 		name    string
@@ -77,7 +77,7 @@ func TestGovernanceHTTPRefusedStepupCannotMintProofOrConsumeValidMFA(t *testing.
 		{"encrypted_mfa_damaged", func() *string { value := "enc:00"; return &value }(), true},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			if err := h.s.store.UpdateUserTOTP("officer", test.secret, test.enabled); err != nil {
+			if _, err := h.s.store.DB().Exec("UPDATE users SET totp_secret=?,totp_enabled=? WHERE id='officer'", test.secret, test.enabled); err != nil {
 				t.Fatal(err)
 			}
 			// The existing access session remains authenticated. These cases must
@@ -95,7 +95,7 @@ func TestGovernanceHTTPRefusedStepupCannotMintProofOrConsumeValidMFA(t *testing.
 			assertNoRefusedStepupAuthority(t, h)
 		})
 	}
-	if err := h.s.store.UpdateUserTOTP("officer", &original, true); err != nil {
+	if _, err := h.s.store.DB().Exec("UPDATE users SET totp_secret=?,totp_enabled=1 WHERE id='officer'", original); err != nil {
 		t.Fatal(err)
 	}
 	proof := h.stepup(t, "officer", authorization.ActionRequest, preview.Digest, "")

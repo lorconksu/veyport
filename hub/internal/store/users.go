@@ -22,28 +22,40 @@ const userSelectColumns = `id, username, email, password_hash, role, auth_provid
         created_at, updated_at`
 
 func (s *Store) CreateUser(u *model.User) error {
+	normalizeUserForCreate(u)
+	_, err := s.db.Exec(
+		createUserStatement,
+		createUserArgs(u)...,
+	)
+	if err != nil {
+		return fmt.Errorf("create user: %w", err)
+	}
+	return nil
+}
+
+const createUserStatement = `INSERT INTO users (
+			id, username, email, password_hash, role, auth_provider, external_id,
+			ldap_dn, ldap_username, ldap_last_sync_at, terminal_access, totp_secret, totp_enabled,
+			avatar, token_generation, must_change_password, temp_password_expires_at, dormancy_exempt
+		)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+
+func normalizeUserForCreate(u *model.User) {
 	if u.AuthProvider == "" {
 		u.AuthProvider = model.AuthProviderLocal
 	}
 	if u.LDAPUsername == "" && u.AuthProvider == model.AuthProviderLDAP {
 		u.LDAPUsername = u.Username
 	}
-	_, err := s.db.Exec(
-		`INSERT INTO users (
-			id, username, email, password_hash, role, auth_provider, external_id,
-			ldap_dn, ldap_username, ldap_last_sync_at, terminal_access, totp_secret, totp_enabled,
-			avatar, token_generation, must_change_password, temp_password_expires_at, dormancy_exempt
-		)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+}
+
+func createUserArgs(u *model.User) []any {
+	return []any{
 		u.ID, u.Username, u.Email, u.PasswordHash, u.Role, u.AuthProvider, u.ExternalID,
 		u.LDAPDN, u.LDAPUsername, sqliteTimePtr(u.LDAPLastSyncAt), u.TerminalAccess,
 		u.TOTPSecret, u.TOTPEnabled, u.Avatar, u.TokenGeneration, u.MustChangePassword,
 		sqliteTimePtr(u.TempPasswordExpiresAt), u.DormancyExempt,
-	)
-	if err != nil {
-		return fmt.Errorf("create user: %w", err)
 	}
-	return nil
 }
 
 func (s *Store) GetUserByID(id string) (*model.User, error) {
@@ -258,42 +270,58 @@ func (s *Store) DeleteIncompleteUsers() error {
 
 func (s *Store) UpdateUserTOTP(userID string, secret *string, enabled bool, setupGeneration ...int) error {
 	return s.securityUserWrite(userID, len(setupGeneration) == 1, func(ctx context.Context, conn *sql.Conn) error {
-		if len(setupGeneration) == 1 {
-			var current int
-			var alreadyEnabled bool
-			if err := conn.QueryRowContext(ctx, "SELECT token_generation,totp_enabled FROM users WHERE id=?", userID).Scan(&current, &alreadyEnabled); err != nil {
-				return err
-			}
-			if current != setupGeneration[0] || alreadyEnabled {
-				return ErrSecurityConflict
-			}
-		}
-		_, err := conn.ExecContext(ctx,
-			"UPDATE users SET totp_secret = ?, totp_enabled = ?, updated_at = datetime('now') WHERE id = ?",
-			secret, enabled, userID,
-		)
-		if err != nil {
-			return fmt.Errorf("update totp: %w", err)
-		}
-		if enabled {
-			result, deleteErr := conn.ExecContext(ctx, "DELETE FROM security_mfa_recoveries WHERE user_id=?", userID)
-			if deleteErr != nil {
-				return deleteErr
-			}
-			consumed, err := result.RowsAffected()
-			if err != nil {
-				return err
-			}
-			if consumed > 0 {
-				if _, err := conn.ExecContext(ctx, "UPDATE users SET token_generation=token_generation+1 WHERE id=?", userID); err != nil {
-					return err
-				}
-			}
-		}
-		return err
-
+		return updateUserTOTPConn(ctx, conn, userID, secret, enabled, setupGeneration...)
 	})
 }
+
+func updateUserTOTPConn(ctx context.Context, conn *sql.Conn, userID string, secret *string, enabled bool, setupGeneration ...int) error {
+	var current int
+	var alreadyEnabled bool
+	var previousSecret *string
+	if err := conn.QueryRowContext(ctx, "SELECT token_generation,totp_enabled,totp_secret FROM users WHERE id=?", userID).Scan(&current, &alreadyEnabled, &previousSecret); err != nil {
+		return err
+	}
+	if len(setupGeneration) == 1 {
+		if current != setupGeneration[0] || alreadyEnabled {
+			return ErrSecurityConflict
+		}
+	}
+	// Staging an unenrolled factor preserves setup authority. Removing or
+	// replacing an enrolled factor must never bypass durable revocation.
+	if (!enabled && secret == nil) || (alreadyEnabled && (!enabled || secret == nil || previousSecret == nil || *secret != *previousSecret)) {
+		if err := removeUserTOTPConn(ctx, conn, userID, nil, time.Now().UTC()); err != nil {
+			return err
+		}
+	}
+	_, err := conn.ExecContext(ctx,
+		"UPDATE users SET totp_secret = ?, totp_enabled = ?, updated_at = datetime('now') WHERE id = ?",
+		secret, enabled, userID,
+	)
+	if err != nil {
+		return fmt.Errorf("update totp: %w", err)
+	}
+	if enabled {
+		if _, err := conn.ExecContext(ctx, "DELETE FROM local_break_glass_recoveries WHERE user_id=?", userID); err != nil {
+			return err
+		}
+		result, deleteErr := conn.ExecContext(ctx, "DELETE FROM security_mfa_recoveries WHERE user_id=?", userID)
+		if deleteErr != nil {
+			return deleteErr
+		}
+		consumed, err := result.RowsAffected()
+		if err != nil {
+			return err
+		}
+		if consumed > 0 {
+			if _, err := conn.ExecContext(ctx, "UPDATE users SET token_generation=token_generation+1 WHERE id=?", userID); err != nil {
+				return err
+			}
+		}
+	}
+	return err
+
+}
+
 func (s *Store) DeleteUser(userID string) error {
 	tx, err := s.db.Begin()
 	if err != nil {
@@ -517,4 +545,20 @@ func (s *Store) scanUserRow(rows *sql.Rows) (*model.User, error) {
 	u.TempPasswordExpiresAt = parseSQLiteTime(tempPasswordExpiresAt)
 	scanLifecycleColumns(&u, disabledAt, disabledBy, reactivatedAt, lastActivityAt)
 	return &u, nil
+}
+
+// TerminalCredentialLive reads durable authority, including CLI changes made
+// through another SQLite connection. Storage/deadline errors fail closed.
+func (s *Store) TerminalCredentialLive(ctx context.Context, user string, generation int, ssh bool) bool {
+	ctx, cancel := context.WithTimeout(ctx, TerminalCredentialTimeout)
+	defer cancel()
+	column := "token_generation"
+	mfa := ""
+	if ssh {
+		column = "ssh_credential_generation"
+		mfa = " AND totp_enabled AND totp_secret IS NOT NULL"
+	}
+	var live bool
+	err := s.credentialDB.QueryRowContext(ctx, "SELECT EXISTS(SELECT 1 FROM users WHERE id=? AND "+column+"=? AND disabled_at IS NULL AND NOT must_change_password"+mfa+")", user, generation).Scan(&live)
+	return err == nil && live
 }

@@ -526,6 +526,7 @@ func (s *Server) authenticate(conn ssh.ConnMetadata, key ssh.PublicKey, state *c
 			extUsername:                          username,
 			extTarget:                            target,
 			userca.CredentialGenerationExtension: key.(*ssh.Certificate).Extensions[userca.CredentialGenerationExtension],
+			userca.AccountIdentityExtension:      key.(*ssh.Certificate).Extensions[userca.AccountIdentityExtension],
 		},
 	}, nil
 }

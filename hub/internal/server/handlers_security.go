@@ -42,6 +42,9 @@ func decodeSecurity(r *http.Request, v any) error {
 func securityError(w http.ResponseWriter, err error) {
 	status := http.StatusBadRequest
 	switch {
+	case errors.Is(err, store.ErrLocalPasswordOnly):
+		respondError(w, http.StatusBadRequest, err.Error())
+		return
 	case errors.Is(err, authorization.ErrDenied), errors.Is(err, authorization.ErrIndependent), errors.Is(err, store.ErrProtectedChange), errors.Is(err, store.ErrStepup):
 		status = http.StatusForbidden
 	case errors.Is(err, store.ErrSecurityConflict):
@@ -124,6 +127,10 @@ func (s *Server) handleSecurityPreview(w http.ResponseWriter, r *http.Request) {
 	change, _ := json.Marshal(req.Change)
 	preview, err := authorization.Normalize(authorization.Proposal{Reason: req.Reason, ExpectedVersion: req.ExpectedVersion, Change: change})
 	if err != nil {
+		securityError(w, err)
+		return
+	}
+	if err := s.store.ValidateSecurityRecoveryTarget(req.Change); err != nil {
 		securityError(w, err)
 		return
 	}
@@ -267,10 +274,28 @@ func (s *Server) handleSecurityApply(w http.ResponseWriter, r *http.Request) {
 		securityError(w, err)
 		return
 	}
+	s.endRecoveryShells(c)
 	s.endNewlyCoveredShells()
 	s.auditSecurity(r, "security.change_applied", c.ID, c.Digest)
 	respondJSON(w, http.StatusOK, c)
 }
+func (s *Server) endRecoveryShells(c model.SecurityChange) {
+	if c.State != "applied" {
+		return
+	}
+	var proposal struct {
+		Change model.SecurityChangePayload `json:"change"`
+	}
+	if json.Unmarshal(c.ApprovedBytes, &proposal) == nil && proposal.Change.Kind == "recovery" && proposal.Change.Recovery != nil && s.terminalSessions != nil {
+		switch proposal.Change.Recovery.Operation {
+		case "password-reset", "mfa-reset":
+			// Replays may clean up stale registrations after a crash, but must
+			// preserve authority established after the actual durable transition.
+			s.terminalSessions.EndStaleCredentials(s.store, proposal.Change.Recovery.UserID)
+		}
+	}
+}
+
 func (s *Server) endNewlyCoveredShells() {
 	if s.terminalSessions == nil {
 		return
@@ -464,6 +489,7 @@ func (s *Server) handleSecurityReconcile(w http.ResponseWriter, r *http.Request)
 		securityError(w, err)
 		return
 	}
+	s.endRecoveryShells(c)
 	s.endNewlyCoveredShells()
 	respondJSON(w, http.StatusOK, c)
 }

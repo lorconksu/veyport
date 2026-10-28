@@ -41,7 +41,7 @@ func (s *Server) authorizeExec(conn *ssh.ServerConn) (execParams, error) {
 	if err != nil {
 		return execParams{}, errors.New("account is not available for command execution")
 	}
-	if !certificateAuthorityCurrent(conn, user) {
+	if !certificateAuthorityCurrent(conn, user) || !user.TOTPEnabled || user.TOTPSecret == nil {
 		return execParams{}, errors.New("SSH credential revoked; run vey ssh-cert after signing in again")
 	}
 	node, err := s.resolveServer(target)
@@ -95,7 +95,7 @@ func (s *Server) startExec(conn *ssh.ServerConn, ch ssh.Channel, req *ssh.Reques
 		}
 	}
 	id := uuid.NewString()
-	p.session, err = s.cfg.Executions.Register(p.serverID, id, p.userID, p.executionUser, []byte(payload.Command))
+	p.session, err = s.cfg.Executions.Register(p.serverID, id, p.userID, p.executionUser, []byte(payload.Command), grpcserver.WithCredentialGeneration(p.user.SSHCredentialGeneration, true))
 	if err != nil {
 		replyTo(req, true)
 		s.refuseShell(ch, p.userID, p.serverID, p.remoteIP, "reason=execution_capacity", err.Error())

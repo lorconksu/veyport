@@ -45,10 +45,10 @@ func (s *Store) PasswordMatchesRecent(userID, candidate string, limit int) (bool
 	rows, err := s.db.Query(
 		`SELECT password_hash
 		 FROM password_history
-		 WHERE user_id = ?
+		 WHERE user_id = ? AND password_hash != (SELECT password_hash FROM users WHERE id = ?)
 		 ORDER BY created_at DESC, rowid DESC
 		 LIMIT ?`,
-		userID, limit,
+		userID, userID, limit,
 	)
 	if err != nil {
 		return false, fmt.Errorf("query password history: %w", err)

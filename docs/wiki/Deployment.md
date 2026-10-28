@@ -602,12 +602,22 @@ docker exec veyport /app/veyport admin reset-totp --username <username> --db /da
 ./bin/veyport admin reset-totp --username <username> --db /var/lib/veyport/veyport.db
 ```
 
-This will:
-1. Clear the user's TOTP secret and mark TOTP as disabled
-2. Generate a new temporary password
-3. Print the temporary password to stdout
+For local accounts, including protected security principals, this atomically clears
+TOTP, installs an expiring temporary password, preserves completed initial setup,
+and records a system audit event. It retains the outgoing permanent password using
+the configured password history count; repeated resets replace the temporary
+credential without consuming history. The temporary password uses the configured
+TTL and is printed only after the transaction commits.
 
-The user must set up TOTP again on their next login. The operation is recorded in the audit log.
+The reset increments token and SSH credential generations and revokes sessions,
+API tokens, application login authority, application sessions, and launch tickets.
+Any storage failure rolls back the entire reset. LDAP accounts are refused;
+directory passwords must be recovered in the directory.
+
+The user must enroll TOTP and choose a fresh permanent password on their next
+login, before the temporary password expires. Protected local accounts receive
+authority limited to completing this recovery; ordinary protected-account changes
+still require governance approval.
 
 **If the database is locked (bare-metal only):**
 
@@ -943,3 +953,95 @@ systemctl enable veyport
 systemctl start veyport
 systemctl status veyport
 ```
+
+Established SSH gateway and browser terminal shells revalidate their captured
+credential generation and current terminal authorization from SQLite every second,
+including when the shell is silent or only receiving agent output. Each check
+requires an eligible account, the current administrator role or LDAP terminal
+grant and exact root (`/`) assignment for that server, an existing server, and
+the execution username captured at shell creation. Browser shells also require
+that their captured owning session still exists, belongs to that account, has
+well-formed timestamps, and remains within its absolute and idle limits. Both
+transports recheck current policy coverage and local policy continuity; recovery
+state, covered Enhanced execution, and unavailable decisions close the shell.
+This detects role downgrades,
+permission removal, directory authorization changes, and `veyport admin reset-totp`
+changes made by a separate process. A failed read closes the shell locally;
+each check has a 250 ms budget, including waiting for a query slot or connection.
+Credential reads use a separate pool capped at eight connections, with SQLite
+busy waits disabled during connection initialization and reads. WAL or rollback
+lock contention therefore fails closed immediately instead of inheriting the
+writer pool's five-second busy wait. Revocation is detected by the next polling check: one interval plus the read
+budget is 1.25 seconds, subject to process scheduling. The output gate is revoked
+before cancelling an in-flight write; completing transport cancellation can add
+latency. The Hub prioritizes an exit while the client transport remains writable,
+otherwise closes it, and sends `TerminalClose` to the captured agent connection
+(up to a five-second send deadline). Output may continue until the next revalidation; this is not a
+synchronous cross-process notification. Forced closure discards queued data and gates already-dequeued data against the
+exact registration. It aborts an in-flight transport write before closure returns;
+bytes already accepted by a network transport cannot be recalled. Browser data
+writes have a one-second deadline. An SSH data write in progress may require
+closing its whole retained SSH connection, including other channels. Further
+agent output and client input are refused. Account disable, MFA removal, and password reset
+atomically advance both browser and SSH credential generations. Re-enabling an
+account never restores its pre-disable SSH certificates. SSH admission and revalidation also
+require enrolled MFA. Governed password-reset and mfa-reset apply/reconcile
+immediately close registrations with revoked credential generations. Replaying an
+already applied recovery preserves shells authenticated after recovery completed;
+durable generation checks still clean up stale registrations after a crash.
+
+The terminal registry permits at most 256 interactive shells across the Hub,
+with the existing eight-per-node limit. At most 256 credential watchers may be
+active, including watchers finishing agent cleanup, with at most eight concurrent
+revalidation queries. Waiting for a query slot shares the 250 ms deadline; each watcher stops its ticker and
+releases its slot on registration removal/transport teardown. An agent-reported
+exit retains revalidation until buffered output is drained and the transport
+removes the registration. Agent output creates no extra database
+queries. These limits and the revalidation interval are fixed, with no new
+configuration keys. Capacity refusals use the existing terminal registration
+conflict response.
+
+Temporary-password rotation and TOTP enrollment now commit together with
+recovery-grant consumption, credential revocation, password history, setup state
+and success audits. A storage failure preserves the temporary password and
+recovery grant; retry with a fresh authenticator code before recovery expires.
+A governance change that revokes an MFA recovery grant requires a fresh approved
+MFA reset; a subsequent password reset cannot restore the revoked grant.
+
+Password changes capture the signed token generation, expiry, owning session,
+and account/MFA snapshot before reading the request body. The immediate write
+transaction rechecks that authority, session ownership and ended/absolute/idle
+state, and account eligibility before changing the password. Administrator reset
+and reactivation, password recovery, and combined password/TOTP enrollment also
+evaluate expiry after acquiring SQLite's write lock. Their injected clock advances
+by monotonic elapsed waiting time. Authority revoked or expired during body reads,
+password hashing, history checks, or writer contention causes refusal and leaves
+credentials, history, recovery grants, and success audits unchanged.
+
+Administrator TOTP disable commits factor removal, both credential generations,
+browser/API/application revocation and its success audit in one immediate
+transaction. Persistence failures return an opaque server error and roll back
+the entire operation, including the audit. Setup persistence failures likewise
+return HTTP 500; retry enrollment with a fresh TOTP code.
+The removal transaction revalidates the authenticated actor's enabled account,
+current administrator role, MFA revision, credential generation and live session
+against the snapshot used to verify the administrator's TOTP. Revocation while
+the write waits for SQLite causes refusal without changing the target or audit.
+
+Shell recovery grants reference the exact successful system `user.totp_reset`
+audit. Retention compares UTC instants and deletes only records strictly older
+than its cutoff. An audit linked to an unexpired shell recovery grant is retained
+even if audit retention is shorter than the temporary-password lifetime. Once
+the grant expires or is consumed, normal retention applies. Direct deletion of
+the audit still deletes its grant, and invalid provenance blocks protected-account
+MFA/password completion. Migration 033 also binds databases
+that ran the early migration 032, discarding orphaned or invalid grants.
+
+SSH certificates issued by this version include the immutable account ID and
+credential generation as signed extensions. Migration 035 reserves existing and
+future account IDs permanently, including after deletion. Recreating a username
+creates a different identity. Certificates lacking the identity extension are
+refused, including on retained connections and exec channels; after upgrading,
+users must sign in with MFA and run `vey ssh-cert` again. The CA and gateway host
+keys remain stable. Migration 036 also invalidates outstanding step-up proofs
+that predate credential-generation binding; obtain a fresh action-bound proof.

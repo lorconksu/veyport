@@ -418,6 +418,10 @@ curl - X POST https://hub.example.com/api/auth/totp/setup \
 
 Verify and enable TOTP by providing a valid code. For users created with a temporary password, this is also where the permanent password is set.
 
+Password replacement, history, factor enrollment, recovery-grant consumption,
+setup state and success audits commit atomically. A persistence failure preserves
+the original setup state; retry with a fresh authenticator code.
+
 | Property | Value |
 |---|---|
 | Auth | Setup token (Bearer) |
@@ -452,8 +456,12 @@ Verify and enable TOTP by providing a valid code. For users created with a tempo
 On success, the Hub also sets `__Host-veyport_access`, `__Host-veyport_refresh`, and `__Host-veyport_csrf` cookies for browser clients. This also counts as a successful sign-in: the account's failure count resets and `last_login_at` is stamped, same as a normal login.
 
 **Error Cases:**
+
 - `401` - Invalid TOTP code
 - `400` - TOTP not set up (call `/api/auth/totp/setup` first)
+- `409` - Setup snapshot changed or TOTP already enabled; sign in again
+- `403` - Recovery requires current governance or audited shell authority
+- `500` - Authentication change could not be persisted; details are withheld
 
 **cURL:**
 
@@ -603,6 +611,11 @@ curl - X PUT https://hub.example.com/api/auth/avatar \
 
 Admin-only: disable TOTP for another user. Requires the admin's own TOTP code for verification.
 
+Success confirms one committed transaction removing the factor, advancing token
+and SSH credential generations, revoking browser/API/application authority and
+recording the success audit. Previously issued SSH certificates remain revoked
+after MFA reenrollment. Protected principals require governed recovery.
+
 | Property | Value |
 |---|---|
 | Auth | Access token (Bearer), admin only |
@@ -626,9 +639,12 @@ Admin-only: disable TOTP for another user. Requires the admin's own TOTP code fo
 ```
 
 **Error Cases:**
+
 - `401` - Invalid admin TOTP code
 - `404` - Admin user not found
 - `403` - Not an admin
+- `403` - Target is a protected principal
+- `500` - Persistence failed; factor and authority changes were rolled back
 
 **cURL:**
 
@@ -987,6 +1003,10 @@ the client returns to sign-in. Password policy/history violations return `400`; 
 or replayed recovery authority returns `401` (a changed account state can return `409`). No normal
 access or refresh credential is issued by this endpoint.
 
+Active or recent password reuse also records a failed
+`user.password_reuse_rejected` audit event with request correlation and IP;
+credential values are never included.
+
 ### PUT /api/users/{id}/dormancy-exemption
 
 Assign or remove the "never dormant" exemption on an administrator account (feature 008).
@@ -1070,7 +1090,7 @@ Audit viewing and workflow endpoints are available to **admins and auditors**. A
 - `PUT /api/audit-logs/settings` (admin only)
 - `GET /api/audit-logs/export`
 - `GET /api/audit-logs/exports`
-- `POST /api/audit-logs/retention/run` (admin only)
+- `POST /api/audit-logs/retention/run` (admin only; scans at most 1,024 candidates in groups of 256 per call; repeat for large backlogs, and a zero deletion count does not prove a sweep is complete)
 - `GET /api/audit-logs/reviews`
 - `POST /api/audit-logs/reviews`
 - `GET /api/audit-logs/filters`
@@ -1109,6 +1129,11 @@ required. The baseline quorum is the requester and two approvers linked to
 distinct verified person identities. Editing a request invalidates prior votes;
 stale, expired, revoked, or digest-mismatched approvals do not count. The server
 rechecks live authority at approval and application.
+
+The `recovery` operation `password-reset` accepts local accounts only. LDAP
+targets are refused during preview and request, and checked again inside apply
+and password completion transactions. Directory passwords must be recovered in
+the directory.
 
 Bootstrap nominations include the requester as officer and two other people as
 approvers, all with verified person IDs, operator evidence, and completed MFA.
@@ -3341,3 +3366,11 @@ Application access is configured and managed in [[Application Access]]. These en
 | `DELETE /api/auth/application-sessions/{id}` | Session owner | Revoke one application session and cancel its streams. |
 
 Application grants and configuration changes revoke affected sessions. Application sessions use their own idle and absolute deadlines, separate from portal sessions. A browser-only unauthenticated application document request can be redirected to the fixed portal launch flow; API and non-browser requests receive `401`.
+
+Governance request, approval, and applier-claim writes revalidate a live actor-owned
+session and the proof's credential generation inside the SQLite writer
+transaction. Proof consumption and mutation commit together. Expiry decisions
+advance the caller's clock through writer-lock waits; revoked or expired session,
+proof, or request authority is refused without consuming the proof. Password and
+TOTP completion prepare settings before sampling the mutation clock, then include
+connection and writer-lock waits in the transactional authority check.

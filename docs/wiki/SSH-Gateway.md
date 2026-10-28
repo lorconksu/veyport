@@ -298,3 +298,12 @@ An invalid or unparseable stored value falls back to the next level (DB → flag
 ---
 
 *Related: [[CLI]] for the full `vey` command reference and exit-code taxonomy, [[API Reference]] for the `/api/ssh/*` and session endpoint contracts, [[Server Detail]] for the browser-based terminal alternative, [[Settings]] for viewing and terminating sessions and shells, [[Audit Logs]] for reviewing `ssh.*` events.*
+
+Certificates carry a signed immutable account identity as well as the username
+and SSH credential generation. Deleting and recreating a username cannot restore
+an old certificate. After upgrading to this format, sign in with MFA and run
+`vey ssh-cert` to replace identity-less certificates. Each shell and exec channel
+checks the identity again, including channels opened on an older connection.
+Established interactive shells also revalidate policy, continuity, and account
+access through SQLite every second. Forced closure drops queued output; a blocked
+SSH output write may close the entire SSH connection to stop forwarding.

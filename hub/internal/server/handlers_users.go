@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
 	"net/http"
 	"strings"
 	"time"
@@ -38,6 +39,7 @@ func (s *Server) handleListUsers(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleUpdateUserRole(w http.ResponseWriter, r *http.Request) {
 	targetID := r.PathValue("id")
+	authority := s.accountManagementActor(r)
 	if err := s.securityService().GuardMutation(targetID); err != nil {
 		securityError(w, err)
 		return
@@ -64,49 +66,14 @@ func (s *Server) handleUpdateUserRole(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Read the target before the write so the exemption side effect below can
-	// tell a real admin → non-admin demotion from a no-op role change.
-	previous, err := s.store.GetUserByID(targetID)
+	roleEntry := s.accountManagementAudit(r, adminID, targetID, model.AuditUserRoleUpdated)
+	detail := detailRoleChanged
+	exemptionEntry := s.accountManagementAudit(r, adminID, targetID, model.AuditUserDormancyExemptCleared)
+	exemptionEntry.Detail = &detail
+	user, _, err := s.store.UpdateUserRoleAudited(targetID, req.Role, s.now(), roleEntry, exemptionEntry, authority)
 	if err != nil {
-		respondError(w, http.StatusNotFound, userNotFoundMessage)
+		s.accountManagementError(w, err)
 		return
-	}
-
-	if err := s.store.UpdateUserRole(targetID, req.Role); err != nil {
-		respondError(w, http.StatusNotFound, userNotFoundMessage)
-		return
-	}
-
-	// Force re-authentication so the new role takes effect immediately instead
-	// of waiting up to 15 minutes for the existing access token to expire.
-	// Access tokens read the role from JWT claims, not the DB, so without this
-	// a demoted admin keeps admin authority until token expiry.
-	if _, err := s.store.IncrementTokenGeneration(targetID); err != nil {
-		respondError(w, http.StatusInternalServerError, "failed to invalidate sessions")
-		return
-	}
-
-	user, err := s.store.GetUserByID(targetID)
-	if err != nil {
-		respondError(w, http.StatusInternalServerError, "failed to fetch updated user")
-		return
-	}
-
-	ip := clientIP(r)
-	s.auditLogRequest(r, model.AuditEntry{
-		ID:        uuid.NewString(),
-		UserID:    &adminID,
-		Action:    model.AuditUserRoleUpdated,
-		Target:    &targetID,
-		IPAddress: &ip,
-	})
-
-	// The store clears the dormancy exemption as part of the role UPDATE
-	// (research R6), because an exemption only makes sense on an
-	// administrator. The audit trail must still show it happened and why,
-	// otherwise the flag would appear to vanish on its own.
-	if previous.DormancyExempt && req.Role != model.RoleAdmin {
-		s.auditDormancyExemption(r, adminID, targetID, false, stringPtr(detailRoleChanged))
 	}
 
 	user.Status = string(s.accountStatus(user))
@@ -115,6 +82,7 @@ func (s *Server) handleUpdateUserRole(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleDeleteUser(w http.ResponseWriter, r *http.Request) {
 	targetID := r.PathValue("id")
+	authority := s.accountManagementActor(r)
 	if err := s.securityService().GuardMutation(targetID); err != nil {
 		securityError(w, err)
 		return
@@ -143,24 +111,18 @@ func (s *Server) handleDeleteUser(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	if err := s.store.DeleteUser(targetID); err != nil {
-		respondError(w, http.StatusNotFound, "user not found")
+	entry := s.accountManagementAudit(r, adminID, targetID, model.AuditUserDeleted)
+	if err := s.store.DeleteUserAudited(targetID, s.now(), entry, authority); err != nil {
+		s.accountManagementError(w, err)
 		return
 	}
-
-	ip := clientIP(r)
-	s.auditLogRequest(r, model.AuditEntry{
-		ID:        uuid.NewString(),
-		UserID:    &adminID,
-		Action:    model.AuditUserDeleted,
-		Target:    &targetID,
-		IPAddress: &ip,
-	})
 
 	respondJSON(w, http.StatusOK, map[string]string{"status": "user deleted"})
 }
 
 func (s *Server) handleCreateUser(w http.ResponseWriter, r *http.Request) {
+	adminID := UserIDFromContext(r.Context())
+	authority := s.accountManagementActor(r)
 	var req model.CreateUserRequest
 	if err := decodeJSON(r, &req); err != nil {
 		respondError(w, http.StatusBadRequest, errInvalidRequestBody)
@@ -193,25 +155,20 @@ func (s *Server) handleCreateUser(w http.ResponseWriter, r *http.Request) {
 		MustChangePassword: true,
 	}
 	settings := s.store.GetAuditSettings()
-	tempExpiresAt := time.Now().UTC().Add(time.Duration(settings.TemporaryPasswordTTLHours) * time.Hour)
+	now := s.now().UTC()
+	tempExpiresAt := now.Add(time.Duration(settings.TemporaryPasswordTTLHours) * time.Hour)
 	user.TempPasswordExpiresAt = &tempExpiresAt
 
-	if err := s.store.CreateUser(user); err != nil {
-		respondError(w, http.StatusConflict, "user already exists")
+	entry := s.accountManagementAudit(r, adminID, user.ID, model.AuditUserCreated)
+	if err := s.store.CreateUserAudited(user, now, entry, authority); err != nil {
+		if errors.Is(err, store.ErrUserExists) {
+			respondError(w, http.StatusConflict, "user already exists")
+			return
+		}
+		s.auditAccountManagementRefusal(r, adminID, user.ID, model.AuditUserCreated, err)
+		s.accountManagementError(w, err)
 		return
 	}
-	_ = s.store.AddPasswordHistory(user.ID, hash)
-	_ = s.store.TrimPasswordHistory(user.ID, settings.PasswordHistoryCount)
-
-	adminID := UserIDFromContext(r.Context())
-	ip := clientIP(r)
-	s.auditLogRequest(r, model.AuditEntry{
-		ID:        uuid.NewString(),
-		UserID:    &adminID,
-		Action:    model.AuditUserCreated,
-		Target:    &user.ID,
-		IPAddress: &ip,
-	})
 	if s.notifier != nil {
 		s.notifier.Notify(model.NotifyUserCreated, map[string]string{
 			"username":  req.Username,
@@ -305,6 +262,7 @@ func (s *Server) respondUserWithStatus(w http.ResponseWriter, userID string) {
 // enable switch (FR-002, FR-003, FR-004).
 func (s *Server) handleUpdateUserStatus(w http.ResponseWriter, r *http.Request) {
 	targetID := r.PathValue("id")
+	authority := s.accountManagementActor(r)
 	if targetID == "" {
 		respondError(w, http.StatusBadRequest, errMissingUserID)
 		return
@@ -327,10 +285,10 @@ func (s *Server) handleUpdateUserStatus(w http.ResponseWriter, r *http.Request) 
 
 	adminID := UserIDFromContext(r.Context())
 	if *req.Disabled {
-		s.disableAccount(w, r, adminID, targetID)
+		s.disableAccount(w, r, adminID, targetID, authority)
 		return
 	}
-	s.enableAccount(w, r, adminID, targetID)
+	s.enableAccount(w, r, adminID, targetID, authority)
 }
 
 // disableAccount applies the disable transaction and its two guards.
@@ -339,17 +297,15 @@ func (s *Server) handleUpdateUserStatus(w http.ResponseWriter, r *http.Request) 
 // request, not the data: an administrator disabling themselves would revoke
 // their own session mid-request. The last-admin guard is the store's, checked
 // inside the write transaction, so it holds under concurrent disables.
-func (s *Server) disableAccount(w http.ResponseWriter, r *http.Request, adminID, targetID string) {
+func (s *Server) disableAccount(w http.ResponseWriter, r *http.Request, adminID, targetID string, authority store.AccountManagementActor) {
 	if adminID == targetID {
 		respondError(w, http.StatusBadRequest, selfDisableMessage)
 		return
 	}
 
-	revoked, err := s.store.DisableUser(targetID, adminID, s.now())
+	entry := s.accountManagementAudit(r, adminID, targetID, model.AuditUserDisabled)
+	result, err := s.store.DisableUserAudited(targetID, adminID, s.now(), entry, authority)
 	switch {
-	case errors.Is(err, store.ErrAlreadyDisabled):
-		// Idempotent: nothing was written, but the attempt is still audited so
-		// a retried request leaves the same trail as the original.
 	case errors.Is(err, store.ErrLastAdmin):
 		respondError(w, http.StatusConflict, lastAdminMessage)
 		return
@@ -357,62 +313,61 @@ func (s *Server) disableAccount(w http.ResponseWriter, r *http.Request, adminID,
 		respondError(w, http.StatusNotFound, userNotFoundMessage)
 		return
 	case err != nil:
-		respondError(w, http.StatusInternalServerError, "failed to disable user")
+		s.accountManagementError(w, err)
 		return
 	}
 
-	// A disabled account keeps nothing: its API tokens are revoked in the same
-	// transaction, and its sessions and open shells go here (feature 009,
-	// FR-008). The counts are audited alongside the token count so one entry
-	// says everything the disable took away.
-	endedSessions, closedShells := s.endDisabledUserSessions(r, adminID, targetID)
-
-	detail := lifecycleAuditDetail(struct {
-		RevokedAPITokens int `json:"revoked_api_tokens"`
-		EndedSessions    int `json:"ended_sessions"`
-		ClosedShells     int `json:"closed_shells"`
-	}{RevokedAPITokens: revoked, EndedSessions: endedSessions, ClosedShells: closedShells})
-	s.auditLifecycle(r, adminID, targetID, model.AuditUserDisabled, &detail)
+	// The durable disable, API-token revocation, session-row revocation and
+	// required success audit have committed together. Close the corresponding
+	// in-memory shells and emit the per-session/application records now.
+	s.finishDisabledUserSessions(r, adminID, targetID, result.EndedSessionIDs)
 
 	s.respondUserWithStatus(w, targetID)
 }
 
-// endDisabledUserSessions ends every session and shell of an account that has
-// just been disabled.
+// finishDisabledUserSessions completes the in-memory and secondary audit work
+// after DisableUserAudited atomically ended the durable session rows.
 //
 // A user whose row cannot be read back is still swept: the account was
 // disabled, and ending its sessions matters more than the display name the
 // audit helper would have used.
-func (s *Server) endDisabledUserSessions(r *http.Request, adminID, targetID string) (ended, shells int) {
+func (s *Server) finishDisabledUserSessions(r *http.Request, adminID, targetID string, endedIDs []string) (ended, shells int) {
 	target, err := s.store.GetUserByID(targetID)
 	if err != nil || target == nil {
 		target = &model.User{ID: targetID}
 	}
-	return s.endSessions(r, &adminID, target, nil, true, nil, model.SessionEndRevokedDisable)
+	now := s.now().UTC()
+	if err := s.store.RevokeUserApplications(targetID, "", model.SessionEndRevokedDisable, now); err != nil {
+		log.Printf("application revocation failed: %v", err)
+	}
+	defer s.auditApplicationSessionEnds()
+	message := shellCloseMessage(model.SessionEndRevokedDisable)
+	for _, id := range endedIDs {
+		s.auditSessionRevoked(r, &adminID, target, id, model.SessionEndRevokedDisable)
+		shells += s.endShellsBySession(id, message)
+	}
+	shells += s.endShellsByUser(targetID, message)
+	return len(endedIDs), shells
 }
 
 // enableAccount re-enables an account, clearing any lock and failure count with
 // it. Enabling one's own account is allowed: it can only widen access, and an
 // administrator whose account was disabled by a peer has no session to protect.
-func (s *Server) enableAccount(w http.ResponseWriter, r *http.Request, adminID, targetID string) {
+func (s *Server) enableAccount(w http.ResponseWriter, r *http.Request, adminID, targetID string, authority store.AccountManagementActor) {
 	if err := s.securityService().GuardMutation(targetID); err != nil {
 		securityError(w, err)
 		return
 	}
-	wasDisabled, err := s.store.EnableUser(targetID, s.now())
+	entry := s.accountManagementAudit(r, adminID, targetID, model.AuditUserEnabled)
+	_, err := s.store.EnableUserAudited(targetID, s.now(), entry, authority)
 	switch {
 	case userNotFound(err):
 		respondError(w, http.StatusNotFound, userNotFoundMessage)
 		return
 	case err != nil:
-		respondError(w, http.StatusInternalServerError, "failed to enable user")
+		s.accountManagementError(w, err)
 		return
 	}
-
-	detail := lifecycleAuditDetail(struct {
-		WasDisabled bool `json:"was_disabled"`
-	}{WasDisabled: wasDisabled})
-	s.auditLifecycle(r, adminID, targetID, model.AuditUserEnabled, &detail)
 
 	s.respondUserWithStatus(w, targetID)
 }
@@ -424,6 +379,7 @@ func (s *Server) enableAccount(w http.ResponseWriter, r *http.Request, adminID, 
 // action cannot be used to postpone dormancy.
 func (s *Server) handleUnlockUser(w http.ResponseWriter, r *http.Request) {
 	targetID := r.PathValue("id")
+	authority := s.accountManagementActor(r)
 	if err := s.securityService().GuardMutation(targetID); err != nil {
 		securityError(w, err)
 		return
@@ -433,21 +389,17 @@ func (s *Server) handleUnlockUser(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	wasLocked, err := s.store.UnlockUser(targetID, s.now())
+	adminID := UserIDFromContext(r.Context())
+	entry := s.accountManagementAudit(r, adminID, targetID, model.AuditUserUnlocked)
+	_, err := s.store.UnlockUserAudited(targetID, s.now(), entry, authority)
 	switch {
 	case userNotFound(err):
 		respondError(w, http.StatusNotFound, userNotFoundMessage)
 		return
 	case err != nil:
-		respondError(w, http.StatusInternalServerError, "failed to unlock user")
+		s.accountManagementError(w, err)
 		return
 	}
-
-	adminID := UserIDFromContext(r.Context())
-	detail := lifecycleAuditDetail(struct {
-		WasLocked bool `json:"was_locked"`
-	}{WasLocked: wasLocked})
-	s.auditLifecycle(r, adminID, targetID, model.AuditUserUnlocked, &detail)
 
 	s.respondUserWithStatus(w, targetID)
 }
@@ -458,6 +410,7 @@ func (s *Server) handleUnlockUser(w http.ResponseWriter, r *http.Request) {
 // administrator — including when a concurrent demotion lands first.
 func (s *Server) handleSetDormancyExempt(w http.ResponseWriter, r *http.Request) {
 	targetID := r.PathValue("id")
+	authority := s.accountManagementActor(r)
 	if err := s.securityService().GuardMutation(targetID); err != nil {
 		securityError(w, err)
 		return
@@ -479,7 +432,13 @@ func (s *Server) handleSetDormancyExempt(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	err := s.store.SetDormancyExempt(targetID, *req.Exempt)
+	adminID := UserIDFromContext(r.Context())
+	action := model.AuditUserDormancyExemptCleared
+	if *req.Exempt {
+		action = model.AuditUserDormancyExemptSet
+	}
+	entry := s.accountManagementAudit(r, adminID, targetID, action)
+	err := s.store.SetDormancyExemptAudited(targetID, *req.Exempt, s.now(), entry, authority)
 	switch {
 	case errors.Is(err, store.ErrNotAdmin):
 		respondError(w, http.StatusBadRequest, dormancyExemptRoleMessage)
@@ -488,12 +447,9 @@ func (s *Server) handleSetDormancyExempt(w http.ResponseWriter, r *http.Request)
 		respondError(w, http.StatusNotFound, userNotFoundMessage)
 		return
 	case err != nil:
-		respondError(w, http.StatusInternalServerError, "failed to update dormancy exemption")
+		s.accountManagementError(w, err)
 		return
 	}
-
-	adminID := UserIDFromContext(r.Context())
-	s.auditDormancyExemption(r, adminID, targetID, *req.Exempt, nil)
 
 	s.respondUserWithStatus(w, targetID)
 }

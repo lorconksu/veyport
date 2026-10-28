@@ -1,7 +1,9 @@
 package store
 
 import (
+	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"strings"
 	"sync"
@@ -13,18 +15,28 @@ import (
 )
 
 type Store struct {
-	db *sql.DB
+	db           *sql.DB
+	credentialDB *sql.DB
 
 	interactivePolicyMu        sync.Mutex
 	interactivePolicyObservers []func()
 	executionPolicyMu          sync.RWMutex
 	executionPolicyKey         string
-	executionPolicyValidator   func(model.PolicyState) error
+	executionPolicyValidator   func(*Store, model.PolicyState) error
+	policyReadContext          context.Context
+	policyReadDB               policyReader
 
-	auditStateMu    sync.Mutex
-	auditDegraded   bool
-	onAuditFailure  func(model.AuditHealth)
-	onAuditRecovery func(model.AuditHealth)
+	auditRetentionMu     sync.Mutex
+	auditRetentionEpoch  int64
+	auditRetentionID     string
+	auditRevisitEpoch    int64
+	auditRevisitID       string
+	auditRetentionCutoff string
+	auditRetentionCalls  uint64
+	auditStateMu         sync.Mutex
+	auditDegraded        bool
+	onAuditFailure       func(model.AuditHealth)
+	onAuditRecovery      func(model.AuditHealth)
 }
 
 // connectionPragmas are applied to every pooled connection via the
@@ -56,9 +68,7 @@ func New(dbPath string) (*Store, error) {
 	} else if !strings.HasPrefix(dbPath, "file:") {
 		dbPath = "file:" + dbPath
 	}
-	dbPath = appendConnectionPragmas(dbPath)
-
-	db, err := sql.Open("sqlite", dbPath)
+	db, err := sql.Open("sqlite", appendConnectionPragmas(dbPath))
 	if err != nil {
 		return nil, fmt.Errorf("open database: %w", err)
 	}
@@ -85,11 +95,16 @@ func New(dbPath string) (*Store, error) {
 	if health, err := st.GetAuditHealth(); err == nil {
 		st.auditDegraded = health.Degraded
 	}
+	st.credentialDB, err = openCredentialDB(dbPath)
+	if err != nil {
+		db.Close()
+		return nil, fmt.Errorf("open credential database: %w", err)
+	}
 	return st, nil
 }
 
 func (s *Store) Close() error {
-	return s.db.Close()
+	return errors.Join(s.credentialDB.Close(), s.db.Close())
 }
 
 func (s *Store) DB() *sql.DB {

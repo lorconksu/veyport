@@ -239,7 +239,9 @@ func newAuthzWorld(t *testing.T) *authzWorld {
 
 func (w *authzWorld) seedUser(t *testing.T, mu matrixUser) {
 	t.Helper()
+	secret := "synthetic-enrolled-mfa"
 	if err := w.store.CreateUser(&model.User{
+		TOTPEnabled: true, TOTPSecret: &secret,
 		ID: mu.id, Username: mu.username, Email: mu.username + "@example.test",
 		PasswordHash: "x", Role: mu.role, AuthProvider: mu.provider,
 		LDAPUsername: mu.ldapUsername, TerminalAccess: mu.terminalAccess,
@@ -286,12 +288,37 @@ func TestGatewayAuthorizationMatchesWebTerminal(t *testing.T) {
 	}
 }
 
+func TestGatewayPolicyReadFailureFailsClosed(t *testing.T) {
+	w := newAuthzWorld(t)
+	auth := certAuth(t, w.ca, testUsername, testCertTTL, testUserID)
+	for _, query := range []string{
+		"ALTER TABLE _config RENAME TO unavailable_ssh_account_config",
+		"CREATE VIEW _config AS SELECT key,value FROM missing_ssh_account_config",
+	} {
+		if _, err := w.store.DB().Exec(query); err != nil {
+			t.Fatal(err)
+		}
+	}
+	client, err := w.dial(testUsername+"+"+testServerName, auth, nil)
+	if err != nil {
+		t.Fatalf("SSH certificate handshake failed before live policy check: %v", err)
+	}
+	defer client.Close()
+	stderr, status := refusedShellBounded(t, client)
+	if !strings.Contains(stderr, "account policy is temporarily unavailable") || status == 0 {
+		t.Fatalf("policy outage refusal: stderr=%q status=%d", stderr, status)
+	}
+	if got := w.agent.messages(); len(got) != 0 {
+		t.Fatalf("policy outage reached agent with %d messages", len(got))
+	}
+}
+
 func (w *authzWorld) runCase(t *testing.T, c authzCase) {
 	t.Helper()
 
 	// Mint the certificate while the account still exists: the SC-009 case is
 	// specifically a VALID credential outliving the identity behind it.
-	auth := certAuth(t, w.ca, c.username, testCertTTL)
+	auth := certAuth(t, w.ca, c.username, testCertTTL, w.users[c.username])
 	userID := w.users[c.username]
 	if c.deleteFirst {
 		if err := w.store.DeleteUser(userID); err != nil {
@@ -454,7 +481,7 @@ func TestGatewayDeletedAccountRefusedWithinCertificateLifetime(t *testing.T) {
 	w := newAuthzWorld(t)
 	userID := w.users[authzDeleted]
 
-	auth := certAuth(t, w.ca, authzDeleted, testCertTTL)
+	auth := certAuth(t, w.ca, authzDeleted, testCertTTL, userID)
 	connUser := authzDeleted + "+" + testServerName
 
 	// Sanity: the same certificate authorizes a shell while the account lives.

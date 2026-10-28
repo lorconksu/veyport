@@ -50,10 +50,14 @@ func newClientKey(t *testing.T) ssh.Signer {
 
 // certAuth mints a user certificate from ca for principal and wraps it as an
 // SSH auth method, exactly as `vey ssh-cert` + `ssh -i` would.
-func certAuth(t *testing.T, ca *userca.UserCA, principal string, ttl time.Duration) ssh.AuthMethod {
+func certAuth(t *testing.T, ca *userca.UserCA, principal string, ttl time.Duration, identity ...string) ssh.AuthMethod {
 	t.Helper()
 	client := newClientKey(t)
-	cert, err := ca.SignUserCert(client.PublicKey(), principal, ttl)
+	accountID := testUserID
+	if len(identity) > 0 {
+		accountID = identity[0]
+	}
+	cert, err := ca.SignUserCertForAccount(client.PublicKey(), principal, accountID, ttl, 0)
 	if err != nil {
 		t.Fatalf("SignUserCert() error: %v", err)
 	}
@@ -443,16 +447,17 @@ func TestGatewayOfflineServerFails(t *testing.T) {
 // enforced on the SSH path too (FR-007).
 func TestGatewayUnauthorizedUserRefused(t *testing.T) {
 	f := newFixture(t, nil)
+	secret := "synthetic-enrolled-mfa"
 	if err := f.store.CreateUser(&model.User{
 		ID: testViewerID, Username: testViewerName, Email: "m@example.test",
-		PasswordHash: "x", Role: model.RoleViewer,
+		PasswordHash: "x", Role: model.RoleViewer, TOTPEnabled: true, TOTPSecret: &secret,
 	}); err != nil {
 		t.Fatalf(fmtCreateUser, err)
 	}
 	f.connectAgent()
 	f.start()
 
-	client, err := f.dial(testViewerName+"+"+testServerName, certAuth(t, f.ca, testViewerName, testCertTTL), nil)
+	client, err := f.dial(testViewerName+"+"+testServerName, certAuth(t, f.ca, testViewerName, testCertTTL, testViewerID), nil)
 	if err != nil {
 		t.Fatalf("ssh.Dial() error: %v", err)
 	}

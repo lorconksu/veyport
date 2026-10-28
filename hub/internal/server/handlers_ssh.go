@@ -100,7 +100,13 @@ func (s *Server) handleIssueSSHCertificate(w http.ResponseWriter, r *http.Reques
 	// A disabled or dormant account gets no new certificate: issuance is the
 	// one moment the hub can shorten the window in which a still-valid
 	// credential outlives the account's usability (008 FR-009).
-	if st := s.accountStatus(user); accountRefuses(st) {
+	st, policyErr := s.accountStatusStrict(user)
+	if policyErr != nil {
+		s.auditSSHCertRefused(r, userID, "account policy unavailable")
+		respondError(w, http.StatusServiceUnavailable, "account policy temporarily unavailable")
+		return
+	}
+	if accountRefuses(st) {
 		msg, _ := account.Refusal(st)
 		s.auditSSHCertRefused(r, userID, accountRefusalDetail(st))
 		respondError(w, http.StatusForbidden, msg)
@@ -122,7 +128,7 @@ func (s *Server) handleIssueSSHCertificate(w http.ResponseWriter, r *http.Reques
 		return
 	}
 	ttl := time.Duration(s.sshConfig.CertTTLHours) * time.Hour
-	cert, err := s.userCA.SignUserCert(clientPub, user.Username, ttl, user.SSHCredentialGeneration)
+	cert, err := s.userCA.SignUserCertForAccount(clientPub, user.Username, user.ID, ttl, user.SSHCredentialGeneration)
 	if err != nil {
 		log.Printf("ssh: sign user certificate for user %s: %v", userID, err)
 		s.auditSSHCertRefused(r, userID, "certificate signing failed")

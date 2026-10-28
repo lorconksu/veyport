@@ -344,7 +344,12 @@ type fixture struct {
 
 func newFixture(t *testing.T, mutate func(*Config)) *fixture {
 	t.Helper()
-	st, err := store.New(":memory:")
+	return newFixtureAt(t, mutate, ":memory:")
+}
+
+func newFixtureAt(t *testing.T, mutate func(*Config), path string) *fixture {
+	t.Helper()
+	st, err := store.New(path)
 	if err != nil {
 		t.Fatalf(fmtStoreNew, err)
 	}
@@ -364,6 +369,10 @@ func newFixture(t *testing.T, mutate func(*Config)) *fixture {
 		PasswordHash: "x", Role: model.RoleAdmin,
 	}); err != nil {
 		t.Fatalf(fmtCreateUser, err)
+	}
+	secret := "synthetic-enrolled-mfa"
+	if err := st.UpdateUserTOTP(testUserID, &secret, true); err != nil {
+		t.Fatal(err)
 	}
 	if err := st.CreateServer(&model.Server{
 		ID: testServerID, Name: testServerName, Status: "online", Labels: "{}",

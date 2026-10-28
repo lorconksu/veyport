@@ -51,7 +51,7 @@ func TestPasswordRecoveryPermanentlyRevokesOldSSHCertificatesAndConnections(t *t
 		t.Fatal(err)
 	}
 	signer := newClientKey(t)
-	cert, err := f.ca.SignUserCert(signer.PublicKey(), testUsername, time.Hour, live.SSHCredentialGeneration)
+	cert, err := f.ca.SignUserCertForAccount(signer.PublicKey(), testUsername, live.ID, time.Hour, live.SSHCredentialGeneration)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -75,7 +75,7 @@ func TestPresentedSSHCredentialEpochIsBoundToEachExecutionChannel(t *testing.T) 
 	if _, err := f.store.DB().Exec("UPDATE users SET ssh_credential_generation=2 WHERE id=?", testUserID); err != nil {
 		t.Fatal(err)
 	}
-	conn := &ssh.ServerConn{Permissions: &ssh.Permissions{Extensions: map[string]string{extUsername: testUsername, extTarget: testServerName, userca.CredentialGenerationExtension: "0"}}}
+	conn := &ssh.ServerConn{Permissions: &ssh.Permissions{Extensions: map[string]string{extUsername: testUsername, extTarget: testServerName, userca.AccountIdentityExtension: testUserID, userca.CredentialGenerationExtension: "0"}}}
 	if _, err := f.srv.authorizeExec(conn); err == nil || !strings.Contains(err.Error(), "credential revoked") {
 		t.Fatalf("old exec channel authority accepted: %v", err)
 	}
@@ -123,7 +123,7 @@ func TestSSHCredentialEpochRecheckedAtRegistryAdmission(t *testing.T) {
 func TestPresentedSSHCredentialEpochMissingMetadataKeepsRevocation(t *testing.T) {
 	for _, generation := range []int{0, 1} {
 		user := &model.User{SSHCredentialGeneration: generation}
-		legacyCurrent := generation == 0
+		legacyCurrent := false
 		if certificateAuthorityCurrent(nil, user) != legacyCurrent {
 			t.Fatal("missing connection metadata restored a revoked SSH epoch")
 		}

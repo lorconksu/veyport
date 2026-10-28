@@ -12,6 +12,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/wyiu/veyport/hub/internal/account"
+	"github.com/wyiu/veyport/hub/internal/lockout"
 	"github.com/wyiu/veyport/hub/internal/model"
 )
 
@@ -62,7 +64,7 @@ func (s *Store) GuardSecurityUserMutation(userID string) error {
 	return nil
 }
 func (s *Store) GovernanceEnrolled() (bool, error) {
-	return governanceEnrolled(context.Background(), s.db)
+	return governanceEnrolled(s.policyContext(), s.policyDB())
 }
 
 func governanceEnrolled(ctx context.Context, db interface {
@@ -93,7 +95,7 @@ func (s *Store) GetPolicyState() (model.PolicyState, error) {
 	var state model.PolicyState
 	var active uint64
 	var pending sql.NullInt64
-	err := s.db.QueryRow("SELECT active_version,state,pending_version,pending_change FROM audit_policy_state WHERE id=1").Scan(&active, &state.State, &pending, &state.PendingChange)
+	err := s.policyDB().QueryRowContext(s.policyContext(), "SELECT active_version,state,pending_version,pending_change FROM audit_policy_state WHERE id=1").Scan(&active, &state.State, &pending, &state.PendingChange)
 	if err != nil {
 		return state, err
 	}
@@ -108,7 +110,7 @@ func (s *Store) GetPolicyState() (model.PolicyState, error) {
 		}
 		state.Pending = &p
 		var previous uint64
-		if err := s.db.QueryRow("SELECT expected_version FROM security_changes WHERE id=?", state.PendingChange).Scan(&previous); err != nil {
+		if err := s.policyDB().QueryRowContext(s.policyContext(), "SELECT expected_version FROM security_changes WHERE id=?", state.PendingChange).Scan(&previous); err != nil {
 			return state, err
 		}
 		old, err := s.GetPolicyVersion(previous)
@@ -120,7 +122,7 @@ func (s *Store) GetPolicyState() (model.PolicyState, error) {
 	return state, nil
 }
 func (s *Store) GetPolicyVersion(version uint64) (model.PolicyVersion, error) {
-	return readPolicyVersion(s.db.QueryRow("SELECT payload,digest,request_id FROM audit_policy_versions WHERE version=?", version), version)
+	return readPolicyVersion(s.policyDB().QueryRowContext(s.policyContext(), "SELECT payload,digest,request_id FROM audit_policy_versions WHERE version=?", version), version)
 }
 
 func readPolicyVersion(row *sql.Row, version uint64) (model.PolicyVersion, error) {
@@ -153,7 +155,7 @@ func decodePolicyVersion(p *model.PolicyVersion, raw []byte) error {
 
 // InstallExecutionPolicyValidator binds this store to one immutable outside-DB
 // continuity authority. Later constructors cannot replace or clear that binding.
-func (s *Store) InstallExecutionPolicyValidator(key string, validate func(model.PolicyState) error) error {
+func (s *Store) InstallExecutionPolicyValidator(key string, validate func(*Store, model.PolicyState) error) error {
 	if key == "" || validate == nil {
 		return ErrPolicyIntegrity
 	}
@@ -177,7 +179,7 @@ func (s *Store) ValidateExecutionPolicy(state model.PolicyState) error {
 	validate := s.executionPolicyValidator
 	s.executionPolicyMu.RUnlock()
 	if validate != nil {
-		return validate(state)
+		return validate(s, state)
 	}
 	raw, err := json.Marshal(state.Active.Policy)
 	if err != nil || state.Active.Version != 1 || state.Active.RequestID != "" || string(raw) != initialStandardPolicy || state.Active.SHA256 != SecurityDigest([]byte(initialStandardPolicy)) {
@@ -200,14 +202,33 @@ func (s *Store) IssueStepup(user, session, action, digest string, now time.Time)
 		return "", err
 	}
 	handle := hex.EncodeToString(b)
-	_, err := s.db.Exec("INSERT INTO stepup_proofs(hash,user_id,session_id,action,digest,created_at,expires_at) VALUES(?,?,?,?,?,?,?)", SecurityDigest([]byte(handle)), user, session, action, digest, now.Unix(), now.Add(5*time.Minute).Unix())
+	_, err := s.db.Exec("INSERT INTO stepup_proofs(hash,user_id,session_id,action,digest,created_at,expires_at,token_generation) VALUES(?,?,?,?,?,?,?,COALESCE((SELECT token_generation FROM users WHERE id=?),-1))", SecurityDigest([]byte(handle)), user, session, action, digest, now.Unix(), now.Add(5*time.Minute).Unix(), user)
 	return handle, err
 }
-func consumeStepup(ctx context.Context, conn *sql.Conn, proof, user, session, action, digest string, now time.Time) error {
+func consumeStepupWithPolicy(ctx context.Context, conn *sql.Conn, proof, user, session, action, digest string, now time.Time, loadPolicy func() lockout.Policy) error {
+	clock := advancingClock(now)
+	if err := consumeStepupWithClock(ctx, conn, proof, user, session, action, digest, clock, loadPolicy); err != nil {
+		return err
+	}
+	return recheckStepupSession(ctx, conn, user, session, clock, loadPolicy)
+}
+
+func consumeStepupWithClock(ctx context.Context, conn *sql.Conn, proof, user, session, action, digest string, clock func() time.Time, loadPolicy func() lockout.Policy) error {
 	if proof == "" || session == "" {
 		return ErrStepup
 	}
-	result, err := conn.ExecContext(ctx, "UPDATE stepup_proofs SET consumed_at=? WHERE hash=? AND user_id=? AND session_id=? AND action=? AND digest=? AND consumed_at IS NULL AND created_at<=? AND expires_at>?", now.Unix(), SecurityDigest([]byte(proof)), user, session, action, digest, now.Unix(), now.Unix())
+	policy := loadPolicy()
+	// Policy loading is part of the authorization boundary. The owning session
+	// can expire while those reads are blocked, so carry that elapsed time into
+	// the session validator instead of restarting from the caller's timestamp.
+	if err := guardLiveSession(ctx, conn, session, user, clock(), policy); err != nil {
+		return ErrStepup
+	}
+
+	// The session and proof may expire while their final authority reads are in
+	// progress. Use one freshly sampled instant for the consuming mutation.
+	now := clock()
+	result, err := conn.ExecContext(ctx, "UPDATE stepup_proofs SET consumed_at=? WHERE hash=? AND user_id=? AND session_id=? AND action=? AND digest=? AND consumed_at IS NULL AND created_at<=? AND expires_at>? AND token_generation=(SELECT token_generation FROM users WHERE id=stepup_proofs.user_id)", now.Unix(), SecurityDigest([]byte(proof)), user, session, action, digest, now.Unix(), now.Unix())
 	if err != nil {
 		return err
 	}
@@ -220,18 +241,60 @@ func consumeStepup(ctx context.Context, conn *sql.Conn, proof, user, session, ac
 	}
 	return nil
 }
+
+func recheckStepupSession(ctx context.Context, conn *sql.Conn, user, session string, clock func() time.Time, loadPolicy func() lockout.Policy) error {
+	policy := loadPolicy()
+	// The writer transaction keeps the captured session stable. Re-read it and
+	// evaluate its deadlines after every later authority read and mutation so a
+	// request cannot commit merely because the session was live when its proof
+	// was consumed.
+	if err := guardLiveSession(ctx, conn, session, user, clock(), policy); err != nil {
+		return ErrStepup
+	}
+	return nil
+}
 func (s *Store) ConsumeStepup(proof, user, session, action, digest string, now time.Time) error {
-	return s.withImmediateTx(func(ctx context.Context, conn *sql.Conn) error {
-		return consumeStepup(ctx, conn, proof, user, session, action, digest, now)
+	return s.withImmediateTxClock(now, func(ctx context.Context, conn *sql.Conn, clock func() time.Time) error {
+		policy, err := accountManagementPolicyStrict(ctx, conn)
+		if err != nil {
+			return err
+		}
+		loadPolicy := func() lockout.Policy {
+			return policy
+		}
+		if err := consumeStepupWithClock(ctx, conn, proof, user, session, action, digest, clock, loadPolicy); err != nil {
+			return err
+		}
+		return recheckStepupSession(ctx, conn, user, session, clock, loadPolicy)
 	})
 }
 
 func (s *Store) CreateSecurityChange(c model.SecurityChange, nominations []model.SecurityNomination, session, proof string, now time.Time) error {
-	return s.withImmediateTx(func(ctx context.Context, conn *sql.Conn) error {
-		if err := checkSecurityPrincipal(ctx, conn, c, c.RequesterID, c.RequesterPersonID, c.RequesterGeneration, "security.request"); err != nil {
+	return s.withImmediateTxClock(now, func(ctx context.Context, conn *sql.Conn, clock func() time.Time) error {
+		if !clock().Before(c.ExpiresAt) {
+			return ErrSecurityConflict
+		}
+		var proposal struct {
+			Change model.SecurityChangePayload `json:"change"`
+		}
+		if err := json.Unmarshal(c.ApprovedBytes, &proposal); err != nil {
 			return err
 		}
-		if err := consumeStepup(ctx, conn, proof, c.RequesterID, session, "security.request", c.Digest, now); err != nil {
+		if err := validateSecurityRecoveryTarget(ctx, conn, proposal.Change); err != nil {
+			return err
+		}
+		principalGuard, err := checkSecurityPrincipal(ctx, conn, c, c.RequesterID, c.RequesterPersonID, c.RequesterGeneration, "security.request", clock)
+		if err != nil {
+			return err
+		}
+		policy, err := accountManagementPolicyStrict(ctx, conn)
+		if err != nil {
+			return err
+		}
+		loadPolicy := func() lockout.Policy {
+			return policy
+		}
+		if err := consumeStepupWithClock(ctx, conn, proof, c.RequesterID, session, "security.request", c.Digest, clock, loadPolicy); err != nil {
 			return err
 		}
 		var version uint64
@@ -251,7 +314,7 @@ func (s *Store) CreateSecurityChange(c model.SecurityChange, nominations []model
 				return ErrSecurityConflict
 			}
 		}
-		_, err := conn.ExecContext(ctx, `INSERT INTO security_changes(id,revision,requester_id,requester_person,requester_generation,expected_version,digest,reason,payload,state,created_at,expires_at) VALUES(?,?,?,?,?,?,?,?,?,'requested',?,?)`, c.ID, c.Revision, c.RequesterID, c.RequesterPersonID, c.RequesterGeneration, c.ExpectedVersion, c.Digest, c.Reason, c.ApprovedBytes, c.CreatedAt.Unix(), c.ExpiresAt.Unix())
+		_, err = conn.ExecContext(ctx, `INSERT INTO security_changes(id,revision,requester_id,requester_person,requester_generation,expected_version,digest,reason,payload,state,created_at,expires_at) VALUES(?,?,?,?,?,?,?,?,?,'requested',?,?)`, c.ID, c.Revision, c.RequesterID, c.RequesterPersonID, c.RequesterGeneration, c.ExpectedVersion, c.Digest, c.Reason, c.ApprovedBytes, c.CreatedAt.Unix(), c.ExpiresAt.Unix())
 		if err != nil {
 			return err
 		}
@@ -274,7 +337,22 @@ func (s *Store) CreateSecurityChange(c model.SecurityChange, nominations []model
 		if len(nominations) > 0 {
 			_, err = conn.ExecContext(ctx, "UPDATE audit_policy_state SET state='setup_pending' WHERE id=1 AND state='standard'")
 		}
-		return err
+		if err == nil && !clock().Before(c.ExpiresAt) {
+			return ErrSecurityConflict
+		}
+		if err != nil {
+			return err
+		}
+		if err := recheckStepupSession(ctx, conn, c.RequesterID, session, clock, loadPolicy); err != nil {
+			return err
+		}
+		if err := recheckSecurityPrincipalGuards(clock, principalGuard); err != nil {
+			return err
+		}
+		if !clock().Before(c.ExpiresAt) {
+			return ErrSecurityConflict
+		}
+		return nil
 	})
 }
 func scanSecurityChange(row interface{ Scan(...any) error }) (model.SecurityChange, error) {
@@ -299,11 +377,11 @@ func scanSecurityChange(row interface{ Scan(...any) error }) (model.SecurityChan
 const securityChangeColumns = "id,revision,requester_id,requester_person,requester_generation,expected_version,digest,reason,payload,state,created_at,expires_at,intent_ref,commit_ref,result_ref,applier_id,applier_person,applier_revision"
 
 func (s *Store) GetSecurityChange(id string) (model.SecurityChange, error) {
-	c, err := scanSecurityChange(s.db.QueryRow("SELECT "+securityChangeColumns+" FROM security_changes WHERE id=?", id))
+	c, err := scanSecurityChange(s.policyDB().QueryRowContext(s.policyContext(), "SELECT "+securityChangeColumns+" FROM security_changes WHERE id=?", id))
 	if err != nil {
 		return c, err
 	}
-	rows, err := s.db.Query("SELECT user_id,person_id,proof_sha256,token_generation,approved_at,invalidated_at FROM security_approvals WHERE request_id=? AND revision=? AND digest=? ORDER BY approved_at,user_id", id, c.Revision, c.Digest)
+	rows, err := s.policyDB().QueryContext(s.policyContext(), "SELECT user_id,person_id,proof_sha256,token_generation,approved_at,invalidated_at FROM security_approvals WHERE request_id=? AND revision=? AND digest=? ORDER BY approved_at,user_id", id, c.Revision, c.Digest)
 	if err != nil {
 		return c, err
 	}
@@ -348,11 +426,19 @@ func (s *Store) ListSecurityChanges(limit, offset int) ([]model.SecurityChange, 
 	return out, rows.Err()
 }
 func (s *Store) AddSecurityApproval(c model.SecurityChange, a model.SecurityApproval, session, proof string, now time.Time) error {
-	return s.withImmediateTx(func(ctx context.Context, conn *sql.Conn) error {
-		if err := checkSecurityPrincipal(ctx, conn, c, a.UserID, a.PersonID, a.TokenGeneration, "security.approve"); err != nil {
+	return s.withImmediateTxClock(now, func(ctx context.Context, conn *sql.Conn, clock func() time.Time) error {
+		principalGuard, err := checkSecurityPrincipal(ctx, conn, c, a.UserID, a.PersonID, a.TokenGeneration, "security.approve", clock)
+		if err != nil {
 			return err
 		}
-		if err := consumeStepup(ctx, conn, proof, a.UserID, session, "security.approve", c.Digest, now); err != nil {
+		policy, err := accountManagementPolicyStrict(ctx, conn)
+		if err != nil {
+			return err
+		}
+		loadPolicy := func() lockout.Policy {
+			return policy
+		}
+		if err := consumeStepupWithClock(ctx, conn, proof, a.UserID, session, "security.approve", c.Digest, clock, loadPolicy); err != nil {
 			return err
 		}
 		var digest, state string
@@ -363,7 +449,7 @@ func (s *Store) AddSecurityApproval(c model.SecurityChange, a model.SecurityAppr
 		}
 		// Freeze the first two independent votes. Later votes cannot change the
 		// archived quorum or revoke an otherwise complete decision.
-		if digest != c.Digest || expires <= now.Unix() || (state != "requested" && state != "partially_approved") {
+		if digest != c.Digest || expires <= clock().Unix() || (state != "requested" && state != "partially_approved") {
 			return ErrSecurityConflict
 		}
 		var active uint64
@@ -373,12 +459,33 @@ func (s *Store) AddSecurityApproval(c model.SecurityChange, a model.SecurityAppr
 		if active != version {
 			return ErrSecurityConflict
 		}
-		_, err := conn.ExecContext(ctx, "INSERT INTO security_approvals(request_id,revision,digest,user_id,person_id,proof_sha256,token_generation,approved_at) VALUES(?,?,?,?,?,?,?,?)", c.ID, c.Revision, c.Digest, a.UserID, a.PersonID, SecurityDigest([]byte(proof)), a.TokenGeneration, now.Unix())
+		now := clock()
+		if expires <= now.Unix() {
+			return ErrSecurityConflict
+		}
+		_, err = conn.ExecContext(ctx, "INSERT INTO security_approvals(request_id,revision,digest,user_id,person_id,proof_sha256,token_generation,approved_at) VALUES(?,?,?,?,?,?,?,?)", c.ID, c.Revision, c.Digest, a.UserID, a.PersonID, SecurityDigest([]byte(proof)), a.TokenGeneration, now.Unix())
 		if err != nil {
 			return fmt.Errorf("independent approval already recorded: %w", err)
 		}
-		_, err = conn.ExecContext(ctx, "UPDATE security_changes SET state=CASE WHEN (SELECT COUNT(*) FROM security_approvals WHERE request_id=? AND revision=? AND invalidated_at IS NULL)>=2 THEN 'approved' ELSE 'partially_approved' END WHERE id=?", c.ID, c.Revision, c.ID)
-		return err
+		now = clock()
+		result, err := conn.ExecContext(ctx, "UPDATE security_changes SET state=CASE WHEN (SELECT COUNT(*) FROM security_approvals WHERE request_id=? AND revision=? AND invalidated_at IS NULL)>=2 THEN 'approved' ELSE 'partially_approved' END WHERE id=? AND expires_at>?", c.ID, c.Revision, c.ID, now.Unix())
+		if err != nil {
+			return err
+		}
+		updated, err := result.RowsAffected()
+		if err != nil || updated != 1 {
+			return ErrSecurityConflict
+		}
+		if err := recheckStepupSession(ctx, conn, a.UserID, session, clock, loadPolicy); err != nil {
+			return err
+		}
+		if err := recheckSecurityPrincipalGuards(clock, principalGuard); err != nil {
+			return err
+		}
+		if expires <= clock().Unix() {
+			return ErrSecurityConflict
+		}
+		return nil
 	})
 }
 func (s *Store) InvalidateSecurityVotes(user string) error {
@@ -386,7 +493,7 @@ func (s *Store) InvalidateSecurityVotes(user string) error {
 	return err
 }
 func (s *Store) ExpireSecurityChanges(now time.Time) error {
-	return s.withImmediateTx(func(ctx context.Context, conn *sql.Conn) error {
+	return s.withImmediateTxAt(now, func(ctx context.Context, conn *sql.Conn, now time.Time) error {
 		if _, err := conn.ExecContext(ctx, "UPDATE security_changes SET state='expired' WHERE expires_at<=? AND state IN ('requested','partially_approved','approved')", now.Unix()); err != nil {
 			return err
 		}
@@ -395,23 +502,29 @@ func (s *Store) ExpireSecurityChanges(now time.Time) error {
 	})
 }
 
-// checkSecurityPrincipal executes inside the same writer transaction as the vote/CAS.
-func checkSecurityPrincipal(ctx context.Context, conn *sql.Conn, c model.SecurityChange, user, person string, generation int, action string) error {
+type securityPrincipalGuard func(time.Time) error
+
+// checkSecurityPrincipal executes inside the same writer transaction as the
+// vote/CAS and returns captured dormancy authority for a final commit check.
+func checkSecurityPrincipal(ctx context.Context, conn *sql.Conn, c model.SecurityChange, user, person string, generation int, action string, clock func() time.Time) (securityPrincipalGuard, error) {
 	var gen int
 	var enabled bool
 	var disabled sql.NullString
 	var mustChange bool
-	if err := conn.QueryRowContext(ctx, "SELECT security_revision,totp_enabled,disabled_at,must_change_password FROM users WHERE id=?", user).Scan(&gen, &enabled, &disabled, &mustChange); err != nil {
-		return err
+	var created string
+	var lastActivity, reactivated sql.NullString
+	var dormancyExempt bool
+	if err := conn.QueryRowContext(ctx, "SELECT security_revision,totp_enabled,disabled_at,must_change_password,created_at,last_activity_at,reactivated_at,dormancy_exempt FROM users WHERE id=?", user).Scan(&gen, &enabled, &disabled, &mustChange, &created, &lastActivity, &reactivated, &dormancyExempt); err != nil {
+		return nil, err
 	}
 	if gen != generation || !enabled || disabled.Valid || mustChange {
-		return ErrSecurityConflict
+		return nil, ErrSecurityConflict
 	}
 	var proposal struct {
 		Change model.SecurityChangePayload `json:"change"`
 	}
 	if err := json.Unmarshal(c.ApprovedBytes, &proposal); err != nil {
-		return err
+		return nil, err
 	}
 	role := "security-officer"
 	if action == "security.approve" {
@@ -425,38 +538,70 @@ func checkSecurityPrincipal(ctx context.Context, conn *sql.Conn, c model.Securit
 						if action != "security.approve" {
 							var count int
 							if err := conn.QueryRowContext(ctx, "SELECT COUNT(*) FROM user_roles WHERE user_id=? AND role='admin'", user).Scan(&count); err != nil || count != 1 {
-								return ErrSecurityConflict
+								return nil, ErrSecurityConflict
 							}
 						}
-						return nil
+						return checkSecurityPrincipalDormancy(ctx, conn, created, lastActivity, reactivated, dormancyExempt, clock)
 					}
 				}
 			}
 		}
-		return ErrSecurityConflict
+		return nil, ErrSecurityConflict
 	}
 	var actual string
 	if err := conn.QueryRowContext(ctx, "SELECT person_id FROM security_identity_links WHERE user_id=?", user).Scan(&actual); err != nil || actual != person {
-		return ErrSecurityConflict
+		return nil, ErrSecurityConflict
 	}
 	var count int
 	if err := conn.QueryRowContext(ctx, "SELECT COUNT(*) FROM user_roles WHERE user_id=? AND role=?", user, role).Scan(&count); err != nil {
-		return err
+		return nil, err
 	}
 	if count != 1 {
-		return ErrSecurityConflict
+		return nil, ErrSecurityConflict
+	}
+	return checkSecurityPrincipalDormancy(ctx, conn, created, lastActivity, reactivated, dormancyExempt, clock)
+}
+
+func checkSecurityPrincipalDormancy(ctx context.Context, conn *sql.Conn, created string, lastActivity, reactivated sql.NullString, exempt bool, clock func() time.Time) (securityPrincipalGuard, error) {
+	policy, err := accountManagementPolicyStrict(ctx, conn)
+	if err != nil {
+		return nil, err
+	}
+	input := account.Input{
+		CreatedAt:      parseSQLiteTimeValue(created),
+		LastActivityAt: parseSQLiteTime(lastActivity),
+		ReactivatedAt:  parseSQLiteTime(reactivated),
+		DormancyExempt: exempt,
+	}
+	guard := func(now time.Time) error {
+		if input.CreatedAt.IsZero() || account.IsDormant(input, now, policy.DormantDays) {
+			return ErrSecurityConflict
+		}
+		return nil
+	}
+	return guard, guard(clock())
+}
+
+func recheckSecurityPrincipalGuards(clock func() time.Time, guards ...securityPrincipalGuard) error {
+	now := clock()
+	for _, guard := range guards {
+		if guard == nil || guard(now) != nil {
+			return ErrSecurityConflict
+		}
 	}
 	return nil
 }
 func (s *Store) BeginSecurityApply(c model.SecurityChange, newPolicy model.AuditPolicy, intentRef string, now time.Time) error {
-	return s.changeInteractivePolicy(func() error { return s.beginSecurityApply(c, newPolicy, intentRef, now) })
+	clock := advancingClock(now)
+	return s.changeInteractivePolicy(func() error { return s.beginSecurityApply(c, newPolicy, intentRef, clock()) })
 }
 func (s *Store) beginSecurityApply(c model.SecurityChange, newPolicy model.AuditPolicy, intentRef string, now time.Time) error {
+	clock := advancingClock(now)
 	raw, err := json.Marshal(newPolicy)
 	if err != nil {
 		return err
 	}
-	return s.withImmediateTx(func(ctx context.Context, conn *sql.Conn) error {
+	return s.withImmediateTxClock(clock(), func(ctx context.Context, conn *sql.Conn, txClock func() time.Time) error {
 		if _, err := readPolicyVersion(conn.QueryRowContext(ctx, "SELECT payload,digest,request_id FROM audit_policy_versions WHERE version=?", c.ExpectedVersion), c.ExpectedVersion); err != nil {
 			return err
 		}
@@ -466,14 +611,23 @@ func (s *Store) beginSecurityApply(c model.SecurityChange, newPolicy model.Audit
 		if err := conn.QueryRowContext(ctx, "SELECT state,digest,expires_at,payload FROM security_changes WHERE id=?", c.ID).Scan(&state, &digest, &expires, &stored); err != nil {
 			return err
 		}
-		if state != "approved" || digest != c.Digest || SecurityDigest(stored) != c.Digest || expires <= now.Unix() || intentRef == "" {
+		if state != "approved" || digest != c.Digest || SecurityDigest(stored) != c.Digest || expires <= txClock().Unix() || intentRef == "" {
 			return ErrSecurityConflict
 		}
-		if err := checkSecurityPrincipal(ctx, conn, c, c.ApplierID, c.ApplierPersonID, c.ApplierRevision, "security.apply"); err != nil {
+		applierGuard, err := checkSecurityPrincipal(ctx, conn, c, c.ApplierID, c.ApplierPersonID, c.ApplierRevision, "security.apply", txClock)
+		if err != nil {
 			return err
 		}
-		if err := s.validateSecurityQuorumConn(ctx, conn, c); err != nil {
+		quorumGuards, err := s.validateSecurityQuorumConn(ctx, conn, c, txClock)
+		if err != nil {
 			return err
+		}
+		principalGuards := append([]securityPrincipalGuard{applierGuard}, quorumGuards...)
+		if err := recheckSecurityPrincipalGuards(txClock, principalGuards...); err != nil {
+			return err
+		}
+		if expires <= txClock().Unix() {
+			return ErrSecurityConflict
 		}
 		result, err := conn.ExecContext(ctx, "UPDATE audit_policy_state SET state='applying',pending_version=NULL,pending_change=? WHERE id=1 AND active_version=? AND state IN ('standard','enhanced','setup_pending') AND pending_change=''", c.ID, c.ExpectedVersion)
 		if err != nil {
@@ -489,8 +643,22 @@ func (s *Store) beginSecurityApply(c model.SecurityChange, newPolicy model.Audit
 		if _, err = conn.ExecContext(ctx, "UPDATE audit_policy_state SET pending_version=? WHERE id=1", c.ExpectedVersion+1); err != nil {
 			return err
 		}
-		_, err = conn.ExecContext(ctx, "UPDATE security_changes SET state='applying',intent_ref=? WHERE id=?", intentRef, c.ID)
-		return err
+		now := txClock()
+		result, err = conn.ExecContext(ctx, "UPDATE security_changes SET state='applying',intent_ref=? WHERE id=? AND state='approved' AND expires_at>?", intentRef, c.ID, now.Unix())
+		if err != nil {
+			return err
+		}
+		n, err = result.RowsAffected()
+		if err != nil || n != 1 {
+			return ErrSecurityConflict
+		}
+		if err := recheckSecurityPrincipalGuards(txClock, principalGuards...); err != nil {
+			return err
+		}
+		if expires <= txClock().Unix() {
+			return ErrSecurityConflict
+		}
+		return nil
 	})
 }
 func (s *Store) RecordSecurityCommit(id, reference string) error {
@@ -504,6 +672,7 @@ func (s *Store) ActivateSecurityChange(c model.SecurityChange, p model.SecurityC
 	return s.changeInteractivePolicy(func() error { return s.activateSecurityChange(c, p) })
 }
 func (s *Store) activateSecurityChange(c model.SecurityChange, p model.SecurityChangePayload) error {
+	clock := func() time.Time { return time.Now().UTC() }
 	return s.withImmediateTx(func(ctx context.Context, conn *sql.Conn) error {
 		var active uint64
 		var pending sql.NullInt64
@@ -529,17 +698,25 @@ func (s *Store) activateSecurityChange(c model.SecurityChange, p model.SecurityC
 		if err := conn.QueryRowContext(ctx, "SELECT commit_ref FROM security_changes WHERE id=? AND state='applying'", c.ID).Scan(&commit); err != nil || commit == "" {
 			return ErrSecurityConflict
 		}
-		if err := checkSecurityPrincipal(ctx, conn, c, c.ApplierID, c.ApplierPersonID, c.ApplierRevision, "security.apply"); err != nil {
+		applierGuard, err := checkSecurityPrincipal(ctx, conn, c, c.ApplierID, c.ApplierPersonID, c.ApplierRevision, "security.apply", clock)
+		if err != nil {
 			return err
 		}
-		if err := s.validateSecurityQuorumConn(ctx, conn, c); err != nil {
+		quorumGuards, err := s.validateSecurityQuorumConn(ctx, conn, c, clock)
+		if err != nil {
+			return err
+		}
+		principalGuards := append([]securityPrincipalGuard{applierGuard}, quorumGuards...)
+		if err := recheckSecurityPrincipalGuards(clock, principalGuards...); err != nil {
 			return err
 		}
 		if err := applySecurityPayload(ctx, conn, c, p); err != nil {
 			return err
 		}
-		_, err := conn.ExecContext(ctx, "UPDATE audit_policy_state SET active_version=? WHERE id=1 AND active_version=? AND pending_change=?", c.ExpectedVersion+1, c.ExpectedVersion, c.ID)
-		return err
+		if _, err := conn.ExecContext(ctx, "UPDATE audit_policy_state SET active_version=? WHERE id=1 AND active_version=? AND pending_change=?", c.ExpectedVersion+1, c.ExpectedVersion, c.ID); err != nil {
+			return err
+		}
+		return recheckSecurityPrincipalGuards(clock, principalGuards...)
 	})
 }
 func applySecurityPayload(ctx context.Context, conn *sql.Conn, c model.SecurityChange, p model.SecurityChangePayload) error {
@@ -612,18 +789,42 @@ func applySecurityPayload(ctx context.Context, conn *sql.Conn, c model.SecurityC
 		case "reenable":
 			_, err = conn.ExecContext(ctx, "UPDATE users SET disabled_at=NULL,disabled_by=NULL,locked_until=NULL,failed_login_count=0,reactivated_at=datetime('now') WHERE id=?", r.UserID)
 		case "mfa-reset":
-			_, err = conn.ExecContext(ctx, "UPDATE users SET totp_secret=NULL,totp_enabled=0 WHERE id=?", r.UserID)
+			err = removeUserTOTPConn(ctx, conn, r.UserID, &c.ApplierID, time.Now().UTC())
 		case "password-reset":
+			if err := validateSecurityRecoveryTarget(ctx, conn, p); err != nil {
+				return err
+			}
 			if len(r.PreparedPasswordHash) != 60 || !strings.HasPrefix(r.PreparedPasswordHash, "$2") {
 				return ErrSecurityConflict
+			}
+			var currentHash string
+			var temporary bool
+			if err := conn.QueryRowContext(ctx, "SELECT password_hash,must_change_password FROM users WHERE id=?", r.UserID).Scan(&currentHash, &temporary); err != nil {
+				return err
+			}
+			var history int
+			if err := conn.QueryRowContext(ctx, "SELECT COALESCE((SELECT value FROM _config WHERE key=?),?)", configAuthPasswordHistoryCount, defaultPasswordHistoryLimit).Scan(&history); err != nil {
+				return err
+			}
+			if err := appendPasswordHistoryConn(ctx, conn, r.UserID, currentHash, temporary, history, time.Now().UTC()); err != nil {
+				return err
 			}
 			_, err = conn.ExecContext(ctx, "UPDATE users SET password_hash=?,must_change_password=1,temp_password_expires_at=datetime('now','+24 hours'),ssh_credential_generation=ssh_credential_generation+1 WHERE id=?", r.PreparedPasswordHash, r.UserID)
 		}
 		if err != nil {
 			return err
 		}
-		if err := invalidate(r.UserID); err != nil {
-			return err
+		// Carry MFA authority across this exact password reset only if it was live
+		// before the reset. Revoked grants never cross an unrelated generation.
+		if r.Operation == "password-reset" {
+			if _, err := conn.ExecContext(ctx, `UPDATE security_mfa_recoveries SET token_generation=token_generation+1 WHERE user_id=? AND token_generation=(SELECT token_generation FROM users WHERE id=?)`, r.UserID, r.UserID); err != nil {
+				return err
+			}
+		}
+		if r.Operation != "mfa-reset" {
+			if err := invalidate(r.UserID); err != nil {
+				return err
+			}
 		}
 		if r.Operation == "password-reset" {
 			_, err = conn.ExecContext(ctx, "INSERT INTO security_password_recoveries(user_id,request_id,password_hash) VALUES(?,?,?) ON CONFLICT(user_id) DO UPDATE SET request_id=excluded.request_id,password_hash=excluded.password_hash", r.UserID, c.ID, r.PreparedPasswordHash)
@@ -700,6 +901,26 @@ type securityQuerier interface {
 	QueryRowContext(context.Context, string, ...any) *sql.Row
 }
 
+// ValidateSecurityRecoveryTarget supplies store-backed preview feedback. Request,
+// apply and completion independently enforce the same boundary in their writes.
+func (s *Store) ValidateSecurityRecoveryTarget(p model.SecurityChangePayload) error {
+	return validateSecurityRecoveryTarget(context.Background(), s.db, p)
+}
+
+func validateSecurityRecoveryTarget(ctx context.Context, q securityQuerier, p model.SecurityChangePayload) error {
+	if p.Kind != "recovery" || p.Recovery == nil || p.Recovery.Operation != "password-reset" {
+		return nil
+	}
+	var provider model.AuthProvider
+	if err := q.QueryRowContext(ctx, "SELECT auth_provider FROM users WHERE id=?", p.Recovery.UserID).Scan(&provider); err != nil {
+		return err
+	}
+	if provider != model.AuthProviderLocal {
+		return ErrLocalPasswordOnly
+	}
+	return nil
+}
+
 const protectedPersonSQL = `SELECT (SELECT COUNT(*) FROM user_roles r JOIN security_identity_links l ON l.user_id=r.user_id WHERE r.role IN ('security-officer','security-approver','original-reader') AND l.person_id=(SELECT person_id FROM security_identity_links WHERE user_id=?))+(SELECT COUNT(*) FROM security_nominations n JOIN security_changes c ON c.id=n.request_id WHERE (n.user_id=? OR n.person_id=(SELECT person_id FROM security_identity_links WHERE user_id=?)) AND c.state IN ('requested','partially_approved','approved','applying'))+(SELECT COUNT(*) FROM security_changes c WHERE c.state IN ('requested','partially_approved','approved','applying') AND (? IN (json_extract(c.payload,'$.change.role.user_id'),json_extract(c.payload,'$.change.person.user_id'),json_extract(c.payload,'$.change.recovery.user_id')) OR c.state='applying' AND ? IN (c.requester_id,c.applier_id)))`
 
 func guardSecurityPrincipal(ctx context.Context, q securityQuerier, user string) error {
@@ -714,71 +935,182 @@ func guardSecurityPrincipal(ctx context.Context, q securityQuerier, user string)
 }
 func (s *Store) securityUserWrite(user string, mfaSetup bool, fn func(context.Context, *sql.Conn) error) error {
 	return s.withImmediateTx(func(ctx context.Context, conn *sql.Conn) error {
-		guard := guardSecurityPrincipal(ctx, conn, user)
-		if guard != nil {
-			if !mfaSetup {
-				return guard
-			}
-			var allowed bool
-			if err := conn.QueryRowContext(ctx, "SELECT EXISTS(SELECT 1 FROM users u JOIN security_mfa_recoveries r ON r.user_id=u.id JOIN security_changes c ON c.id=r.request_id WHERE u.id=? AND NOT u.totp_enabled AND u.disabled_at IS NULL AND u.token_generation=r.token_generation AND c.state='applied' AND c.result_ref!='')", user).Scan(&allowed); err != nil || !allowed {
-				return guard
-			}
+		if err := guardMFASetup(ctx, conn, user, mfaSetup); err != nil {
+			return err
 		}
 		return fn(ctx, conn)
 	})
 }
 
-// CompleteApprovedPasswordRecovery consumes only the temporary credential
-// installed by an externally completed approved recovery. The HTTP caller must
-// authenticate the principal and its current credential/MFA before this CAS.
-func (s *Store) CompleteApprovedPasswordRecovery(user, currentHash string, revision int, newHash string, now time.Time) (int, error) {
-	return s.completeApprovedPasswordRecovery(PasswordRecoverySnapshot{UserID: user, PasswordHash: currentHash, SecurityRevision: revision, TokenGeneration: -1}, newHash, now, 0, nil)
-}
-
-func (s *Store) CompleteApprovedPasswordRecoveryAudited(snapshot PasswordRecoverySnapshot, newHash string, now time.Time, history int, entry model.AuditEntry) (int, error) {
-	return s.completeApprovedPasswordRecovery(snapshot, newHash, now, history, &entry)
-}
-
-func (s *Store) completeApprovedPasswordRecovery(snapshot PasswordRecoverySnapshot, newHash string, now time.Time, history int, entry *model.AuditEntry) (int, error) {
-	user, currentHash, revision, expectedGeneration := snapshot.UserID, snapshot.PasswordHash, snapshot.SecurityRevision, snapshot.TokenGeneration
-	var generation int
-	err := s.withImmediateTx(func(ctx context.Context, conn *sql.Conn) error {
+func guardMFASetup(ctx context.Context, conn *sql.Conn, user string, mfaSetup bool, boundary ...time.Time) error {
+	guard := guardSecurityPrincipal(ctx, conn, user)
+	if guard != nil {
+		if !errors.Is(guard, ErrProtectedChange) || !mfaSetup {
+			return guard
+		}
 		var allowed bool
-		if err := conn.QueryRowContext(ctx, "SELECT EXISTS(SELECT 1 FROM users u JOIN security_password_recoveries r ON r.user_id=u.id JOIN security_changes c ON c.id=r.request_id WHERE u.id=? AND u.password_hash=? AND r.password_hash=u.password_hash AND u.security_revision=? AND (?<0 OR u.token_generation=?) AND u.must_change_password AND u.disabled_at IS NULL AND unixepoch(u.temp_password_expires_at)>? AND c.state='applied' AND c.result_ref!='')", user, currentHash, revision, expectedGeneration, expectedGeneration, now.Unix()).Scan(&allowed); err != nil {
+		now := time.Now()
+		if len(boundary) != 0 {
+			now = boundary[0]
+		}
+		if err := conn.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM users u WHERE u.id=? AND NOT u.totp_enabled AND u.disabled_at IS NULL AND (
+		 EXISTS(SELECT 1 FROM security_mfa_recoveries r JOIN security_changes c ON c.id=r.request_id WHERE r.user_id=u.id AND u.token_generation=r.token_generation AND c.state='applied' AND c.result_ref!='') OR
+		 EXISTS(SELECT 1 FROM local_break_glass_recoveries r JOIN audit_logs a ON a.id=r.audit_id WHERE r.user_id=u.id AND u.auth_provider='local' AND r.token_generation=u.token_generation AND r.password_hash=u.password_hash AND unixepoch(r.expires_at)>? AND a.action='user.totp_reset' AND a.outcome='success' AND a.actor_type='system' AND a.user_id=u.id AND a.target=u.id)
+		))`, user, now.Unix()).Scan(&allowed); err != nil {
 			return err
 		}
 		if !allowed {
-			return ErrProtectedChange
+			return guard
 		}
-		if _, err := conn.ExecContext(ctx, "UPDATE users SET password_hash=?,must_change_password=0,temp_password_expires_at=NULL,token_generation=token_generation+1,ssh_credential_generation=ssh_credential_generation+1,updated_at=datetime('now') WHERE id=?", newHash, user); err != nil {
-			return err
-		}
-		if _, err := conn.ExecContext(ctx, "DELETE FROM security_password_recoveries WHERE user_id=?", user); err != nil {
-			return err
-		}
-		// MFA recovery can complete in the same authenticated setup flow.
-		if _, err := conn.ExecContext(ctx, "UPDATE security_mfa_recoveries SET token_generation=(SELECT token_generation FROM users WHERE id=?) WHERE user_id=?", user, user); err != nil {
-			return err
-		}
-		_, err := conn.ExecContext(ctx, "UPDATE api_tokens SET revoked_at=datetime('now') WHERE user_id=? AND revoked_at IS NULL", user)
+	}
+	return nil
+}
+
+// CompleteApprovedPasswordRecovery consumes only the temporary credential
+// installed by an externally completed approved recovery or atomic shell reset.
+// Shell authority is explicitly recorded separately from governance approvals.
+// The HTTP caller must
+// authenticate the principal and its current credential/MFA before this CAS.
+func (s *Store) CompleteApprovedPasswordRecovery(user, currentHash string, revision int, newHash string, now time.Time) (int, error) {
+	clock := advancingClock(now)
+	history := s.GetAuditSettings().PasswordHistoryCount
+	return s.completeApprovedPasswordRecovery(PasswordRecoverySnapshot{UserID: user, PasswordHash: currentHash, SecurityRevision: revision, TokenGeneration: -1}, newHash, clock(), history, nil)
+}
+
+func (s *Store) CompleteApprovedPasswordRecoveryAudited(snapshot PasswordRecoverySnapshot, newHash string, now time.Time, history int, entry model.AuditEntry, authority ...PasswordChangeAuthority) (int, error) {
+	return s.completeApprovedPasswordRecovery(snapshot, newHash, now, history, &entry, authority...)
+}
+
+func (s *Store) completeApprovedPasswordRecovery(snapshot PasswordRecoverySnapshot, newHash string, now time.Time, history int, entry *model.AuditEntry, authority ...PasswordChangeAuthority) (int, error) {
+	var generation int
+	err := s.withImmediateTxClock(now, func(ctx context.Context, conn *sql.Conn, clock func() time.Time) error {
+		recheck, err := s.guardPasswordChangeAuthority(ctx, conn, snapshot.UserID, authority, clock)
 		if err != nil {
 			return err
 		}
-		if entry != nil {
-			if err := appendPasswordHistoryConn(ctx, conn, user, currentHash, newHash, history, now); err != nil {
-				return err
-			}
-			if err := revokePasswordAuthorityConn(ctx, conn, user, entry.UserID, now); err != nil {
-				return err
-			}
-			if err := logAuditConn(ctx, conn, *entry); err != nil {
-				return err
-			}
+		now := clock()
+		deadline, err := s.completeApprovedPasswordRecoveryConn(ctx, conn, snapshot, newHash, now, history, entry)
+		if err != nil {
+			return err
 		}
-		return conn.QueryRowContext(ctx, "SELECT token_generation FROM users WHERE id=?", user).Scan(&generation)
+		if err := conn.QueryRowContext(ctx, "SELECT token_generation FROM users WHERE id=?", snapshot.UserID).Scan(&generation); err != nil {
+			return err
+		}
+		finalNow := clock()
+		if err := deadline(finalNow); err != nil {
+			return err
+		}
+		return recheck(finalNow)
 	})
 	return generation, err
 }
+
+func (s *Store) completeApprovedPasswordRecoveryConn(ctx context.Context, conn *sql.Conn, snapshot PasswordRecoverySnapshot, newHash string, now time.Time, history int, entry *model.AuditEntry) (func(time.Time) error, error) {
+	user, currentHash := snapshot.UserID, snapshot.PasswordHash
+	if err := validateSecurityRecoveryTarget(ctx, conn, model.SecurityChangePayload{Kind: "recovery", Recovery: &model.SecurityRecovery{UserID: user, Operation: "password-reset"}}); err != nil {
+		return nil, err
+	}
+	deadline, err := passwordRecoveryDeadlineRecheck(ctx, conn, snapshot, now)
+	if err != nil {
+		return nil, err
+	}
+	if _, err := conn.ExecContext(ctx, "UPDATE users SET password_hash=?,must_change_password=0,temp_password_expires_at=NULL,token_generation=token_generation+1,ssh_credential_generation=ssh_credential_generation+1,updated_at=datetime('now') WHERE id=?", newHash, user); err != nil {
+		return nil, err
+	}
+	if _, err := conn.ExecContext(ctx, "DELETE FROM security_password_recoveries WHERE user_id=?", user); err != nil {
+		return nil, err
+	}
+	// Advance only a still-live shell grant that authorized this credential.
+	// An independent approved completion must not revive revoked shell MFA.
+	if _, err := conn.ExecContext(ctx, `UPDATE local_break_glass_recoveries SET password_pending=0,password_hash=?,token_generation=(SELECT token_generation FROM users WHERE id=?) WHERE user_id=? AND password_hash=? AND token_generation=(SELECT token_generation-1 FROM users WHERE id=?) AND password_pending=1 AND unixepoch(expires_at)>?`, newHash, user, user, currentHash, user, now.Unix()); err != nil {
+		return nil, err
+	}
+	// MFA recovery can complete in the same authenticated setup flow.
+	if _, err := conn.ExecContext(ctx, "UPDATE security_mfa_recoveries SET token_generation=(SELECT token_generation FROM users WHERE id=?) WHERE user_id=? AND token_generation=(SELECT token_generation-1 FROM users WHERE id=?)", user, user, user); err != nil {
+		return nil, err
+	}
+	_, err = conn.ExecContext(ctx, "UPDATE api_tokens SET revoked_at=datetime('now') WHERE user_id=? AND revoked_at IS NULL", user)
+	if err != nil {
+		return nil, err
+	}
+	if err := appendPasswordHistoryConn(ctx, conn, user, currentHash, true, history, now); err != nil {
+		return nil, err
+	}
+	if entry != nil {
+		if err := revokePasswordAuthorityConn(ctx, conn, user, entry.UserID, now); err != nil {
+			return nil, err
+		}
+		if err := logAuditConn(ctx, conn, *entry); err != nil {
+			return nil, err
+		}
+	}
+	return deadline, nil
+}
+
+func passwordRecoveryDeadlineRecheck(ctx context.Context, conn *sql.Conn, snapshot PasswordRecoverySnapshot, now time.Time) (func(time.Time) error, error) {
+	var temporary string
+	var governed bool
+	var breakGlass sql.NullString
+	err := conn.QueryRowContext(ctx, `SELECT u.temp_password_expires_at,
+	 EXISTS(SELECT 1 FROM security_password_recoveries r JOIN security_changes c ON c.id=r.request_id WHERE r.user_id=u.id AND r.password_hash=u.password_hash AND c.state='applied' AND c.result_ref!=''),
+	 (SELECT r.expires_at FROM local_break_glass_recoveries r JOIN audit_logs a ON a.id=r.audit_id WHERE r.user_id=u.id AND r.password_hash=u.password_hash AND r.token_generation=u.token_generation AND r.password_pending=1 AND a.action='user.totp_reset' AND a.outcome='success' AND a.actor_type='system' AND a.user_id=u.id AND a.target=u.id LIMIT 1)
+	 FROM users u WHERE u.id=? AND u.auth_provider='local' AND u.password_hash=? AND u.security_revision=? AND (?<0 OR u.token_generation=?) AND u.must_change_password AND u.disabled_at IS NULL`, snapshot.UserID, snapshot.PasswordHash, snapshot.SecurityRevision, snapshot.TokenGeneration, snapshot.TokenGeneration).Scan(&temporary, &governed, &breakGlass)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, ErrProtectedChange
+		}
+		return nil, err
+	}
+	temporaryExpiry := parseSQLiteTimeValue(temporary)
+	breakGlassExpiry := parseSQLiteTime(breakGlass)
+	recheck := func(at time.Time) error {
+		if temporaryExpiry.IsZero() || !at.Before(temporaryExpiry) {
+			return ErrTemporaryPasswordExpired
+		}
+		if !governed && (breakGlassExpiry == nil || !at.Before(*breakGlassExpiry)) {
+			return ErrProtectedChange
+		}
+		return nil
+	}
+	if err := recheck(now); err != nil {
+		return nil, err
+	}
+	return recheck, nil
+}
+
+func mfaSetupDeadlineRecheck(ctx context.Context, conn *sql.Conn, user string, now time.Time) (func(time.Time) error, error) {
+	guard := guardSecurityPrincipal(ctx, conn, user)
+	if guard == nil {
+		return func(time.Time) error { return nil }, nil
+	}
+	if !errors.Is(guard, ErrProtectedChange) {
+		return nil, guard
+	}
+	var governed bool
+	var breakGlass sql.NullString
+	err := conn.QueryRowContext(ctx, `SELECT
+	 EXISTS(SELECT 1 FROM security_mfa_recoveries r JOIN security_changes c ON c.id=r.request_id WHERE r.user_id=u.id AND u.token_generation=r.token_generation AND c.state='applied' AND c.result_ref!=''),
+	 (SELECT r.expires_at FROM local_break_glass_recoveries r JOIN audit_logs a ON a.id=r.audit_id WHERE r.user_id=u.id AND r.token_generation=u.token_generation AND r.password_hash=u.password_hash AND a.action='user.totp_reset' AND a.outcome='success' AND a.actor_type='system' AND a.user_id=u.id AND a.target=u.id LIMIT 1)
+	 FROM users u WHERE u.id=? AND NOT u.totp_enabled AND u.disabled_at IS NULL`, user).Scan(&governed, &breakGlass)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, ErrProtectedChange
+		}
+		return nil, err
+	}
+	breakGlassExpiry := parseSQLiteTime(breakGlass)
+	recheck := func(at time.Time) error {
+		if !governed && (breakGlassExpiry == nil || !at.Before(*breakGlassExpiry)) {
+			return ErrProtectedChange
+		}
+		return nil
+	}
+	if err := recheck(now); err != nil {
+		return nil, err
+	}
+	return recheck, nil
+}
+
 func (s *Store) ProtectedLDAPPrincipals() (bool, error) {
 	return protectedLDAPPrincipals(context.Background(), s.db)
 }
@@ -808,14 +1140,27 @@ func (s *Store) UpdateLegacyLDAPConfig(values map[string]string) error {
 	})
 }
 func (s *Store) ClaimSecurityApplier(c model.SecurityChange, user, person string, revision int, session, proof string, now time.Time) error {
-	return s.withImmediateTx(func(ctx context.Context, conn *sql.Conn) error {
-		if err := checkSecurityPrincipal(ctx, conn, c, user, person, revision, "security.apply"); err != nil {
+	return s.withImmediateTxClock(now, func(ctx context.Context, conn *sql.Conn, clock func() time.Time) error {
+		principalGuard, err := checkSecurityPrincipal(ctx, conn, c, user, person, revision, "security.apply", clock)
+		if err != nil {
 			return err
 		}
-		if err := consumeStepup(ctx, conn, proof, user, session, "security.apply", c.Digest, now); err != nil {
+		policy, err := accountManagementPolicyStrict(ctx, conn)
+		if err != nil {
 			return err
 		}
-		result, err := conn.ExecContext(ctx, "UPDATE security_changes SET applier_id=?,applier_person=?,applier_revision=? WHERE id=? AND state='approved' AND (applier_id='' OR (applier_id=? AND applier_person=? AND applier_revision=?))", user, person, revision, c.ID, user, person, revision)
+		loadPolicy := func() lockout.Policy {
+			return policy
+		}
+		var expires int64
+		if err := conn.QueryRowContext(ctx, "SELECT expires_at FROM security_changes WHERE id=? AND state='approved'", c.ID).Scan(&expires); err != nil {
+			return err
+		}
+		if err := consumeStepupWithClock(ctx, conn, proof, user, session, "security.apply", c.Digest, clock, loadPolicy); err != nil {
+			return err
+		}
+		now := clock()
+		result, err := conn.ExecContext(ctx, "UPDATE security_changes SET applier_id=?,applier_person=?,applier_revision=? WHERE id=? AND expires_at>? AND state='approved' AND (applier_id='' OR (applier_id=? AND applier_person=? AND applier_revision=?))", user, person, revision, c.ID, now.Unix(), user, person, revision)
 		if err != nil {
 			return err
 		}
@@ -823,16 +1168,26 @@ func (s *Store) ClaimSecurityApplier(c model.SecurityChange, user, person string
 		if n != 1 {
 			return ErrSecurityConflict
 		}
+		if err := recheckStepupSession(ctx, conn, user, session, clock, loadPolicy); err != nil {
+			return err
+		}
+		if err := recheckSecurityPrincipalGuards(clock, principalGuard); err != nil {
+			return err
+		}
+		if expires <= clock().Unix() {
+			return ErrSecurityConflict
+		}
 		return nil
 	})
 }
-func (s *Store) validateSecurityQuorumConn(ctx context.Context, conn *sql.Conn, c model.SecurityChange) error {
-	if err := checkSecurityPrincipal(ctx, conn, c, c.RequesterID, c.RequesterPersonID, c.RequesterGeneration, "security.request"); err != nil {
-		return err
+func (s *Store) validateSecurityQuorumConn(ctx context.Context, conn *sql.Conn, c model.SecurityChange, clock func() time.Time) ([]securityPrincipalGuard, error) {
+	requesterGuard, err := checkSecurityPrincipal(ctx, conn, c, c.RequesterID, c.RequesterPersonID, c.RequesterGeneration, "security.request", clock)
+	if err != nil {
+		return nil, err
 	}
 	rows, err := conn.QueryContext(ctx, "SELECT user_id,person_id,token_generation FROM security_approvals WHERE request_id=? AND revision=? AND digest=? AND invalidated_at IS NULL", c.ID, c.Revision, c.Digest)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	type principal struct {
 		user, person string
@@ -843,29 +1198,35 @@ func (s *Store) validateSecurityQuorumConn(ctx context.Context, conn *sql.Conn, 
 		var p principal
 		if err := rows.Scan(&p.user, &p.person, &p.revision); err != nil {
 			rows.Close()
-			return err
+			return nil, err
 		}
 		people = append(people, p)
 	}
 	err = rows.Err()
 	rows.Close()
 	if err != nil {
-		return err
+		return nil, err
 	}
 	if len(people) < 2 {
-		return ErrSecurityConflict
+		return nil, ErrSecurityConflict
 	}
+	guards := []securityPrincipalGuard{requesterGuard}
 	seen := map[string]bool{c.RequesterPersonID: true}
 	for _, p := range people {
 		if seen[p.person] || p.user == c.RequesterID {
-			return ErrSecurityConflict
+			return nil, ErrSecurityConflict
 		}
 		seen[p.person] = true
-		if err := checkSecurityPrincipal(ctx, conn, c, p.user, p.person, p.revision, "security.approve"); err != nil {
-			return err
+		guard, err := checkSecurityPrincipal(ctx, conn, c, p.user, p.person, p.revision, "security.approve", clock)
+		if err != nil {
+			return nil, err
 		}
+		guards = append(guards, guard)
 	}
-	return nil
+	if err := recheckSecurityPrincipalGuards(clock, guards...); err != nil {
+		return nil, err
+	}
+	return guards, nil
 }
 func (s *Store) ResumeSecurityApplying(id string) error {
 	return s.changeInteractivePolicy(func() error { return s.resumeSecurityApplying(id) })
@@ -880,4 +1241,42 @@ func (s *Store) resumeSecurityApplying(id string) error {
 		return ErrSecurityConflict
 	}
 	return nil
+}
+
+// A scoped reader shares neither mutexes nor mutable observer state with its
+// parent. Every continuity query uses the same short cancellation deadline.
+func (s *Store) policyContext() context.Context {
+	if s.policyReadContext != nil {
+		return s.policyReadContext
+	}
+	return context.Background()
+}
+func (s *Store) terminalPolicyLive(ctx context.Context, db policyReader, actor, node string) bool {
+	s.executionPolicyMu.RLock()
+	validate := s.executionPolicyValidator
+	s.executionPolicyMu.RUnlock()
+	reader := &Store{db: s.credentialDB, policyReadDB: db, executionPolicyValidator: validate, policyReadContext: ctx}
+	state, err := reader.GetPolicyState()
+	if err != nil || state.State == "recovery_required" || reader.ValidateExecutionPolicy(state) != nil {
+		return false
+	}
+	if state.Active.Policy.Covers(actor, node) || state.Pending != nil && state.Pending.Policy.Covers(actor, node) || state.Previous != nil && state.Previous.Policy.Covers(actor, node) {
+		return false
+	}
+	return ctx.Err() == nil
+}
+
+// Policy readers are either the normal pool or the exact bounded connection
+// reserved for an established terminal check. A scoped reader never copies a
+// parent's locks and never opens more connections during continuity validation.
+type policyReader interface {
+	QueryRowContext(context.Context, string, ...any) *sql.Row
+	QueryContext(context.Context, string, ...any) (*sql.Rows, error)
+}
+
+func (s *Store) policyDB() policyReader {
+	if s.policyReadDB != nil {
+		return s.policyReadDB
+	}
+	return s.db
 }

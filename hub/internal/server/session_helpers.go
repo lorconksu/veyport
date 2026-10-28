@@ -138,6 +138,10 @@ func truncateUserAgent(ua string) string {
 // session must not hand out tokens bound to a session that does not exist.
 func (s *Server) newSession(r *http.Request, user *model.User) (*model.Session, error) {
 	now := s.now().UTC()
+	policy, err := s.strictLockoutPolicy()
+	if err != nil {
+		return nil, err
+	}
 	sess := &model.Session{
 		ID:         uuid.NewString(),
 		UserID:     user.ID,
@@ -147,7 +151,7 @@ func (s *Server) newSession(r *http.Request, user *model.User) (*model.Session, 
 		CreatedAt:  now,
 		LastSeenAt: now,
 	}
-	if maxLifetime := s.lockoutPolicy().SessionMax; maxLifetime > 0 {
+	if maxLifetime := policy.SessionMax; maxLifetime > 0 {
 		expiresAt := now.Add(maxLifetime)
 		sess.ExpiresAt = &expiresAt
 	}
@@ -224,7 +228,11 @@ func (s *Server) checkSessionAccess(claims *auth.Claims, touch bool) error {
 	}
 
 	now := s.now().UTC()
-	policy := s.lockoutPolicy()
+	policy, err := s.strictLockoutPolicy()
+	if err != nil {
+		log.Printf("warning: failed to read account policy for session %s: %v", claims.SessionID, err)
+		return &sessionAccessError{Msg: session.MsgExpired}
+	}
 	verdict := session.Evaluate(session.StateFromModel(sess), now, policy)
 	switch verdict {
 	case session.VerdictOK:
@@ -469,9 +477,9 @@ func (s *Server) endShellsByUser(userID, message string) int {
 //
 // Shells live in the terminal registry rather than the sessions table, so
 // their ids are synthesised with the shell: prefix and carry no expiry: they
-// are not subject to the idle or absolute timers in this stage, only to
-// revocation (spec Edge Cases). CreatedAt and LastSeenAt mirror the shell's
+// use their own activity timestamps in this listing. CreatedAt and LastSeenAt mirror the shell's
 // own start and activity times so a mixed list sorts and renders uniformly.
+// Browser shells additionally inherit the durable lifetime of their owning session.
 func (s *Server) shellRows(userID string) []model.Session {
 	if s.terminalSessions == nil {
 		return nil
@@ -530,7 +538,10 @@ func (s *Server) serverDisplayName(serverID string) string {
 // from the live policy, so it moves with both the session's activity and any
 // change to the limit, and is omitted entirely when the idle limit is off.
 func (s *Server) sessionsFor(userID, currentSID string, includeEnded bool) ([]model.Session, error) {
-	policy := s.lockoutPolicy()
+	policy, err := s.strictLockoutPolicy()
+	if err != nil {
+		return nil, err
+	}
 	since := s.now().UTC().Add(-sessionHistoryWindow)
 
 	stored, err := s.store.ListUserSessions(userID, includeEnded, since)

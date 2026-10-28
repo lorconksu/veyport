@@ -130,7 +130,19 @@ Principals with **audit.read** can use these workflow features. Before governanc
 enrollment, Standard admins can change retention and detection thresholds;
 enrolled installations require the protected change process. The local retention
 action remains an operations-admin action and does not change the immutable
-external archive's retention.
+external archive's retention. Each run examines at most 1,024 indexed candidates,
+releasing SQLite's writer lock after each group of at most 256. Large backlogs
+need repeated runs. The reported deletion count describes that run; zero can
+mean its candidate window contained only retained recovery provenance. The Hub
+keeps a continuation cursor in memory so subsequent runs advance past those
+rows, including as the cutoff moves forward. Every eighth run assigns one of
+the four bounded batches to a separate forward-moving rescan. That rescan
+revisits recovery provenance that has since expired without rewinding or
+starving the main cleanup sweep. Each cursor restarts after reaching the end;
+a Hub restart also begins new sweeps.
+Cutoffs compare exact instants, including offsets and subsecond timestamps.
+Unexpired recovery grants retain their audit provenance until completion or
+expiry; malformed provenance expiry is retained for review.
 
 ---
 
