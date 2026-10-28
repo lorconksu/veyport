@@ -42,10 +42,6 @@ func (s *Store) TerminalAuthorizationLive(ctx context.Context, user, server, exe
 		return false
 	}
 	defer conn.Close()
-	column, mfa := "token_generation", ""
-	if ssh {
-		column, mfa = "ssh_credential_generation", " AND u.totp_enabled AND u.totp_secret IS NOT NULL"
-	}
 	var authorized bool
 	var created, dormantDays string
 	var activity, reactivated sql.NullString
@@ -58,8 +54,13 @@ func (s *Store) TerminalAuthorizationLive(ctx context.Context, user, server, exe
 		CASE WHEN u.auth_provider='ldap' THEN COALESCE(NULLIF(u.ldap_username,''),u.username) ELSE '' END = ?,
 		u.created_at,u.last_activity_at,u.reactivated_at,u.dormancy_exempt,
 		COALESCE((SELECT value FROM _config WHERE key=?),'')
-		FROM users u WHERE u.id=? AND u.`+column+`=? AND u.disabled_at IS NULL AND NOT u.must_change_password`+mfa,
-		server, server, executionUser, lockout.KeyDormantDays, user, generation).Scan(&authorized, &created, &activity, &reactivated, &in.DormancyExempt, &dormantDays)
+		FROM users u WHERE u.id=?
+		AND ((? AND u.ssh_credential_generation=?) OR (NOT ? AND u.token_generation=?))
+		AND (NOT ? OR (u.totp_enabled AND u.totp_secret IS NOT NULL))
+		AND u.disabled_at IS NULL AND NOT u.must_change_password`,
+		server, server, executionUser, lockout.KeyDormantDays, user,
+		ssh, generation, ssh, generation, ssh,
+	).Scan(&authorized, &created, &activity, &reactivated, &in.DormancyExempt, &dormantDays)
 	if err != nil || ctx.Err() != nil || !authorized {
 		return false
 	}
