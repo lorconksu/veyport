@@ -1,7 +1,9 @@
 package store
 
 // WithInteractivePolicy serializes local authorization/registration with policy
-// mutations. Callbacks must not perform network I/O or reacquire this lock.
+// mutations. Callbacks must not reacquire this lock. An established terminal's
+// bounded ordered send may remain inside the callback so policy revocation
+// cannot commit between its final authorization check and agent delivery.
 func (s *Store) WithInteractivePolicy(fn func() error) error {
 	s.interactivePolicyMu.Lock()
 	defer s.interactivePolicyMu.Unlock()

@@ -12,11 +12,10 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/wyiu/veyport/hub/internal/account"
+	"github.com/wyiu/veyport/hub/internal/auth"
 	"github.com/wyiu/veyport/hub/internal/authorization"
 	"github.com/wyiu/veyport/hub/internal/grpcserver"
-	"github.com/wyiu/veyport/hub/internal/lockout"
 	"github.com/wyiu/veyport/hub/internal/model"
-	"github.com/wyiu/veyport/hub/internal/session"
 	"github.com/wyiu/veyport/hub/internal/store"
 	pb "github.com/wyiu/veyport/proto/veyport/v1"
 )
@@ -54,6 +53,16 @@ func (s *Server) handleCreateTerminalSession(w http.ResponseWriter, r *http.Requ
 		return
 	}
 
+	// Capture signed authority before the request body can block. A later user
+	// read may revoke this authority, but can never select a replacement epoch.
+	claims, err := auth.ValidateToken(s.jwtSecret, readAccessToken(r))
+	userID, sid := UserIDFromContext(r.Context()), SessionIDFromContext(r.Context())
+	if err != nil || claims.TokenType != auth.TokenTypeAccess || claims.Subject != userID || sid == "" || claims.SessionID != sid || claims.ExpiresAt == nil {
+		respondError(w, http.StatusForbidden, "terminal authorization changed")
+		return
+	}
+	generation, expires := claims.TokenGeneration, claims.ExpiresAt.Time
+
 	var req createTerminalSessionRequest
 	if err := decodeJSON(r, &req); err != nil {
 		respondError(w, http.StatusBadRequest, errInvalidRequestBody)
@@ -66,27 +75,50 @@ func (s *Server) handleCreateTerminalSession(w http.ResponseWriter, r *http.Requ
 		}
 	}
 
-	userID := UserIDFromContext(r.Context())
-	sid := SessionIDFromContext(r.Context())
 	executionUser, ok := s.resolveTerminalExecutionUser(w, r, serverID)
 	if !ok {
 		return
 	}
 	sessionID := uuid.NewString()
-	// The shell is tied to the session that opened it, so revoking that
-	// session closes the terminal with it (feature 009, FR-010).
-	_, executionUser, err := s.terminalSessions.RegisterInteractive(s.store, s.connMgr, serverID, sessionID, userID, func() (string, error) {
-		if sid != "" {
-			sess, err := s.store.GetSession(sid)
-			if err != nil || sess.UserID != userID || session.Evaluate(session.StateFromModel(sess), s.now(), s.lockoutPolicy()) != session.VerdictOK {
-				return "", ErrTerminalNotAuthorized
-			}
+	// Established shells are authorized by the durable credential generation,
+	// owning server-side session and current terminal policy. The access token
+	// that opened the shell is intentionally not a durable authority: browser
+	// refresh replaces it every 15 minutes without replacing the session.
+	validateLive := func() (string, error) {
+		live, err := s.store.GetUserByID(userID)
+		if err != nil || live.TokenGeneration != generation {
+			return "", ErrTerminalNotAuthorized
 		}
+		if !s.store.TerminalSessionLive(context.Background(), sid, userID, s.now()) {
+			return "", ErrTerminalNotAuthorized
+		}
+
 		if err := s.securityService().GuardInteractive(userID, serverID); err != nil {
 			return "", err
 		}
-		return AuthorizeTerminalExecution(s.store, userID, serverID)
-	}, grpcserver.WithKind(grpcserver.TerminalKindWeb), grpcserver.WithSessionID(SessionIDFromContext(r.Context())))
+		runAs, err := AuthorizeTerminalExecution(s.store, userID, serverID)
+		if err != nil {
+			return "", ErrTerminalNotAuthorized
+		}
+		return runAs, nil
+	}
+	validateAdmission := func() (string, error) {
+		if !s.now().Before(expires) {
+			return "", ErrTerminalNotAuthorized
+		}
+		runAs, err := validateLive()
+		if err != nil || !s.now().Before(expires) {
+			return "", ErrTerminalNotAuthorized
+		}
+		return runAs, nil
+	}
+	// The shell is tied to the session that opened it, so revoking that
+	// session closes the terminal with it (feature 009, FR-010).
+	_, executionUser, err = s.terminalSessions.RegisterInteractive(s.store, s.connMgr, serverID, sessionID, userID, validateAdmission,
+		grpcserver.WithKind(grpcserver.TerminalKindWeb),
+		grpcserver.WithSessionID(sid),
+		grpcserver.WithCredentialGeneration(generation, false),
+		grpcserver.WithInteractiveLiveValidation(validateLive))
 	if err != nil {
 		status := http.StatusForbidden
 		if errors.Is(err, grpcserver.ErrInteractiveRegistration) {
@@ -175,7 +207,7 @@ func (s *Server) handleTerminalStream(w http.ResponseWriter, r *http.Request) {
 	}
 
 	rc := http.NewResponseController(w)
-	_ = rc.SetWriteDeadline(time.Time{})
+	_ = rc.SetWriteDeadline(time.Now().Add(time.Second))
 
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-cache")
@@ -186,31 +218,61 @@ func (s *Server) handleTerminalStream(w http.ResponseWriter, r *http.Request) {
 
 	// A forced exit means the hub closed the shell under the person using it;
 	// the agent still has it running, so the teardown has to say so.
+	info.SetOutputAbort(func() { _ = rc.SetWriteDeadline(time.Now()) })
+	defer info.SetOutputAbort(nil)
 	forced := false
-	defer func() { s.closeTerminalSession(r, serverID, sessionID, forced) }()
+	defer func() {
+		if _, revoked := info.ForcedExit(); revoked {
+			forced = true
+		}
+		s.closeTerminalSession(r, serverID, sessionID, forced)
+	}()
 
+	writeExit := func(event grpcserver.TerminalEvent) {
+		_ = rc.SetWriteDeadline(time.Now().Add(time.Second))
+		forced = forced || event.Forced
+		payload, _ := json.Marshal(map[string]interface{}{"exit_code": event.ExitCode, "error": event.Error})
+		fmt.Fprintf(w, "event: exit\ndata: %s\n\n", payload)
+		flusher.Flush()
+	}
 	for {
+		if exit, revoked := info.ForcedExit(); revoked {
+			writeExit(exit)
+			return
+		}
 		select {
 		case <-r.Context().Done():
 			return
 		case event, ok := <-info.Ch:
+			if exit, revoked := info.ForcedExit(); revoked {
+				writeExit(exit)
+				return
+			}
 			if !ok {
 				return
 			}
-			forced = forced || event.Forced
 			switch event.Type {
 			case grpcserver.TerminalEventData:
-				fmt.Fprintf(w, "data: %s\n\n", base64.StdEncoding.EncodeToString(event.Data))
-			case grpcserver.TerminalEventExit:
-				payload, _ := json.Marshal(map[string]interface{}{
-					"exit_code": event.ExitCode,
-					"error":     event.Error,
+				// Set the bound before entering the gate so this cannot
+				// overwrite an abort installed concurrently by revocation.
+				_ = rc.SetWriteDeadline(time.Now().Add(time.Second))
+				_, err := info.ForwardData(func() error {
+					_, err := fmt.Fprintf(w, "data: %s\n\n", base64.StdEncoding.EncodeToString(event.Data))
+					if err == nil {
+						flusher.Flush()
+					}
+					return err
 				})
-				fmt.Fprintf(w, "event: exit\ndata: %s\n\n", payload)
+				if err != nil {
+					return
+				}
+			case grpcserver.TerminalEventExit:
+				writeExit(event)
+				return
 			}
-			flusher.Flush()
 		}
 	}
+
 }
 
 func (s *Server) expireUnattachedTerminalSession(serverID, sessionID, userID, ip, correlationID string) {
@@ -224,14 +286,6 @@ func (s *Server) expireUnattachedTerminalSession(serverID, sessionID, userID, ip
 		}
 		if close != nil {
 			close()
-		} else if s.connMgr != nil {
-			_ = s.connMgr.SendToAgent(serverID, &pb.HubMessage{
-				Payload: &pb.HubMessage_TerminalClose{
-					TerminalClose: &pb.TerminalClose{
-						SessionId: sessionID,
-					},
-				},
-			})
 		}
 		uid, srvID, addr := userID, serverID, ip
 		detail := terminalSessionIDDetailPrefix + sessionID + " expired_unattached"
@@ -376,7 +430,11 @@ func AuthorizeTerminalExecution(st *store.Store, userID, serverID string) (strin
 	if err != nil || user.MustChangePassword {
 		return "", ErrTerminalNotAuthorized
 	}
-	status := account.Evaluate(account.InputFromUser(user), time.Now().UTC(), lockout.Load(st.GetConfig))
+	policy, err := st.AccountPolicy()
+	if err != nil {
+		return "", ErrTerminalNotAuthorized
+	}
+	status := account.Evaluate(account.InputFromUser(user), time.Now().UTC(), policy)
 	if _, refuse := account.Refusal(status); refuse {
 		return "", ErrTerminalNotAuthorized
 	}
@@ -497,27 +555,17 @@ func (s *Server) closeTerminalSession(r *http.Request, serverID, sessionID strin
 		return
 	}
 	info, exists := s.terminalSessions.Get(serverID, sessionID)
-	handledClose := false
 	if exists && (!info.Closed || forced) {
-		handledClose = s.terminalSessions.CloseInteractive(serverID, sessionID)
+		s.terminalSessions.CloseInteractive(serverID, sessionID)
 	}
 	alreadyClosed, removed := s.terminalSessions.RemoveIfHubInitiated(serverID, sessionID)
 	alreadyClosed = alreadyClosed && info.Closed
 	if !removed {
 		return
 	}
-	// Suppress the TerminalClose gRPC send when the agent already reported
-	// its exit via End() — the session is already dead on the agent side.
-	if !handledClose && (!alreadyClosed || forced) && s.connMgr != nil {
-		_ = s.connMgr.SendToAgent(serverID, &pb.HubMessage{
-			Payload: &pb.HubMessage_TerminalClose{
-				TerminalClose: &pb.TerminalClose{
-					SessionId: sessionID,
-				},
-			},
-		})
-	}
-
+	// Production terminals always retain their exact admitted connection and
+	// close through CloseInteractive. Never redirect a stale shell close to a
+	// replacement generation; legacy unbound registrations are local-only.
 	userID := UserIDFromContext(r.Context())
 	ip := clientIP(r)
 	detail := terminalSessionIDDetailPrefix + sessionID

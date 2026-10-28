@@ -9,11 +9,12 @@ import (
 )
 
 const (
-	TokenTypeAccess   = "access"
-	TokenTypeRefresh  = "refresh"
-	TokenTypeSetup    = "setup"
-	TokenTypeTOTP     = "totp"
-	TokenTypeAPIToken = "api_token"
+	TokenTypeAccess           = "access"
+	TokenTypeRefresh          = "refresh"
+	TokenTypeSetup            = "setup"
+	TokenTypeTOTP             = "totp"
+	TokenTypeAPIToken         = "api_token"
+	TokenTypePasswordRecovery = "password_recovery"
 
 	AccessTokenExpiry  = 15 * time.Minute
 	RefreshTokenExpiry = 7 * 24 * time.Hour

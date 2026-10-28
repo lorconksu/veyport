@@ -20,7 +20,7 @@ deployment checkpoint records local Hub commit
 do not mean final release source or the eventual published artifact is deployed.
 
 After the reviewed backend checkpoint and patched dependency gates, build and
-deploy native binaries using Go 1.26.9:
+deploy native binaries using Go 1.26.10:
 
 ```sh
 python3 infra/audit-lab/execution/deploy.py

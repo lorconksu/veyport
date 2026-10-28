@@ -100,15 +100,35 @@ func (s *Server) handleIssueSSHCertificate(w http.ResponseWriter, r *http.Reques
 	// A disabled or dormant account gets no new certificate: issuance is the
 	// one moment the hub can shorten the window in which a still-valid
 	// credential outlives the account's usability (008 FR-009).
-	if st := s.accountStatus(user); accountRefuses(st) {
+	st, policyErr := s.accountStatusStrict(user)
+	if policyErr != nil {
+		s.auditSSHCertRefused(r, userID, "account policy unavailable")
+		respondError(w, http.StatusServiceUnavailable, "account policy temporarily unavailable")
+		return
+	}
+	if accountRefuses(st) {
 		msg, _ := account.Refusal(st)
 		s.auditSSHCertRefused(r, userID, accountRefusalDetail(st))
 		respondError(w, http.StatusForbidden, msg)
 		return
 	}
 
+	// A request body may arrive long after middleware authentication. Bind the
+	// epoch we are signing to that original interactive credential and session;
+	// never upgrade a revoked caller to a newer credential generation.
+	claims, claimErr := auth.ValidateToken(s.jwtSecret, readAccessToken(r))
+	if claimErr != nil || claims.TokenType != auth.TokenTypeAccess || claims.Subject != userID || claims.TokenGeneration != user.TokenGeneration || !user.TOTPEnabled {
+		s.auditSSHCertRefused(r, userID, "authentication credential changed")
+		respondError(w, http.StatusUnauthorized, "authentication credential changed; sign in again")
+		return
+	}
+	if err := s.checkSessionAccess(claims, false); err != nil {
+		s.auditSSHCertRefused(r, userID, "interactive session ended")
+		respondError(w, http.StatusUnauthorized, "interactive session ended; sign in again")
+		return
+	}
 	ttl := time.Duration(s.sshConfig.CertTTLHours) * time.Hour
-	cert, err := s.userCA.SignUserCert(clientPub, user.Username, ttl)
+	cert, err := s.userCA.SignUserCertForAccount(clientPub, user.Username, user.ID, ttl, user.SSHCredentialGeneration)
 	if err != nil {
 		log.Printf("ssh: sign user certificate for user %s: %v", userID, err)
 		s.auditSSHCertRefused(r, userID, "certificate signing failed")

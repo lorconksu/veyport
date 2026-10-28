@@ -4,15 +4,16 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"strconv"
 	"sync"
 	"time"
 
 	"golang.org/x/crypto/ssh"
 
 	"github.com/wyiu/veyport/hub/internal/account"
-	"github.com/wyiu/veyport/hub/internal/lockout"
 	"github.com/wyiu/veyport/hub/internal/model"
 	"github.com/wyiu/veyport/hub/internal/server"
+	"github.com/wyiu/veyport/hub/internal/userca"
 )
 
 // Default PTY geometry for a client that opens a shell without pty-req.
@@ -211,12 +212,24 @@ func (s *Server) runShell(sshConn *ssh.ServerConn, ch ssh.Channel, cols, rows ui
 		return
 	}
 
+	if !certificateAuthorityCurrent(sshConn, user) || !user.TOTPEnabled || user.TOTPSecret == nil {
+		s.refuseShell(ch, user.ID, "", ip, "reason=credential_revoked", "veyport: SSH credential revoked; run vey ssh-cert after signing in again")
+		return
+	}
+
 	// Live account status outranks a valid certificate, exactly as a deleted
 	// account does above: an operator disabled (or gone dormant) after their
 	// certificate was minted must not get a shell for its remaining lifetime
 	// (008 FR-009, SC-006). The gateway has no request-scoped clock or policy
 	// cache, so both are read here, per shell request.
-	st := account.Evaluate(account.InputFromUser(user), time.Now().UTC(), lockout.Load(s.cfg.Store.GetConfig))
+	policy, err := s.cfg.Store.AccountPolicy()
+	if err != nil {
+		s.refuseShell(ch, user.ID, "", ip,
+			fmt.Sprintf("ssh_user=%q target=%q reason=account_policy_unavailable", username, target),
+			"veyport: account policy is temporarily unavailable")
+		return
+	}
+	st := account.Evaluate(account.InputFromUser(user), time.Now().UTC(), policy)
 	if msg, refuse := account.Refusal(st); refuse {
 		s.refuseShell(ch, user.ID, "", ip,
 			fmt.Sprintf("ssh_user=%q target=%q reason=account_%s", username, target, st),
@@ -246,16 +259,18 @@ func (s *Server) runShell(sshConn *ssh.ServerConn, ch ssh.Channel, cols, rows ui
 	}
 
 	s.bridge(ch, bridgeParams{
-		serverID:      srv.ID,
-		serverName:    srv.Name,
-		userID:        user.ID,
-		username:      username,
-		executionUser: executionUser,
-		remoteIP:      ip,
-		cols:          cols,
-		rows:          rows,
-		win:           win,
-		clientGone:    clientGone,
+		abortOutput:          sshConn.Close,
+		serverID:             srv.ID,
+		serverName:           srv.Name,
+		userID:               user.ID,
+		credentialGeneration: user.SSHCredentialGeneration,
+		username:             username,
+		executionUser:        executionUser,
+		remoteIP:             ip,
+		cols:                 cols,
+		rows:                 rows,
+		win:                  win,
+		clientGone:           clientGone,
 	})
 }
 
@@ -377,4 +392,19 @@ func replyTo(req *ssh.Request, ok bool) {
 	if req.WantReply {
 		_ = req.Reply(ok, nil)
 	}
+}
+
+// Recheck the signed incarnation and epoch on every shell/exec channel,
+// including retained authenticated connections. Legacy identity-less certs are
+// refused across upgrade; reissuing after interactive MFA is the upgrade path.
+func certificateAuthorityCurrent(conn *ssh.ServerConn, user *model.User) bool {
+	if conn == nil || conn.Permissions == nil || user == nil {
+		return false
+	}
+	extensions := conn.Permissions.Extensions
+	if extensions[userca.AccountIdentityExtension] != user.ID || user.ID == "" {
+		return false
+	}
+	generation, err := strconv.Atoi(extensions[userca.CredentialGenerationExtension])
+	return err == nil && generation >= 0 && generation == user.SSHCredentialGeneration
 }

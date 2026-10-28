@@ -8,7 +8,7 @@ import { apiFetch } from '@/lib/api'
 import { getAvatarColor, setAvatarColor as persistAvatarColor, AVATAR_COLORS } from '@/lib/avatar'
 import { validatePassword } from '@/lib/password'
 import { formatRelative, isFuture, isNoAutoUnlock } from '@/lib/time'
-import type { ChangePasswordRequest, User, Role, TOTPDisableRequest, AccountStatus, Session, SessionListResponse, EndedCountResponse } from '@/types/api'
+import type { ChangePasswordRequest, User, Role, TOTPDisableRequest, AccountStatus, Session, SessionListResponse, EndedCountResponse, ReactivateUserResponse } from '@/types/api'
 import { CreateUserModal } from '@/pages/create-user-modal'
 import { NotificationsTab } from '@/pages/settings-notifications-tab'
 import { PreferencesTab } from '@/pages/settings-preferences-tab'
@@ -20,6 +20,8 @@ import { isShell } from '@/lib/sessions'
 import { firstMutationError, mutationErrorMessage } from '@/lib/mutation'
 import { getAuditPolicy } from '@/lib/security-api'
 import { SecurityWorkspace } from '@/pages/settings/security-workflow'
+import { AccountSourceBadge, DirectoryPasswordHelp } from '@/pages/account-password-help'
+import { ResetPasswordModal } from '@/pages/reset-password-modal'
 
 /** u.status when present; otherwise derives from `locked_until` (007 fallback, still exercised by pre-008 fixtures). */
 function effectiveStatus(u: User): AccountStatus {
@@ -28,7 +30,7 @@ function effectiveStatus(u: User): AccountStatus {
   return 'active'
 }
 
-type ConfirmActionType = 'disable' | 'enable' | 'unlock' | 'exempt' | 'unexempt'
+type ConfirmActionType = 'disable' | 'enable' | 'unlock' | 'exempt' | 'unexempt' | 'reactivate'
 
 interface ConfirmCopy {
   title: string
@@ -39,6 +41,12 @@ interface ConfirmCopy {
 
 function confirmCopyFor(type: ConfirmActionType, username: string): ConfirmCopy {
   switch (type) {
+    case 'reactivate':
+      return {
+        title: 'Reactivate account',
+        body: `Allow ${username} to sign in after inactivity? Password, MFA and permissions stay unchanged. Any separate lockout remains in place. This action is recorded in the audit log.`,
+        confirmLabel: 'Reactivate',
+      }
     case 'disable':
       return {
         title: 'Disable User',
@@ -447,7 +455,7 @@ function ProfileTab() {
   )
 }
 
-function UsersTab() {
+function UsersTab({ canOpenSecurity }: Readonly<{ canOpenSecurity: boolean }>) {
   const { user: currentUser } = useAuth()
   const queryClient = useQueryClient()
   const [showCreateModal, setShowCreateModal] = useState(false)
@@ -457,8 +465,11 @@ function UsersTab() {
   const [deleteUsername, setDeleteUsername] = useState('')
   const [confirmAction, setConfirmAction] = useState<{ type: ConfirmActionType; user: User } | null>(null)
   const [sessionsUser, setSessionsUser] = useState<User | null>(null)
+  const [directoryUser, setDirectoryUser] = useState<User | null>(null)
+  const [resetPasswordUser, setResetPasswordUser] = useState<{ user: User; actorId: string } | null>(null)
+  const [reactivationResult, setReactivationResult] = useState('')
 
-  const { data: usersData, isLoading } = useQuery({
+  const { data: usersData, isLoading, isError: usersError } = useQuery({
     queryKey: ['users'],
     queryFn: () => apiFetch<{ users: User[] }>('/users'),
   })
@@ -540,10 +551,27 @@ function UsersTab() {
     },
   })
 
+  const reactivateMutation = useMutation({
+    mutationFn: (userId: string) => apiFetch<ReactivateUserResponse>(`/users/${userId}/reactivate`, { method: 'POST' }),
+    onSuccess: response => {
+      void queryClient.invalidateQueries({ queryKey: ['users'] })
+      setConfirmAction(null)
+      let message = `${response.user.username} needed no reactivation. Current status: ${response.user.status ?? 'unknown'}.`
+      if (response.changed) {
+        message = `${response.user.username} is reactivated. Current status: ${response.user.status ?? 'unknown'}.`
+        if (response.user.status === 'locked') message = `${response.user.username} is reactivated but remains locked. Unlock the account separately.`
+      }
+      setReactivationResult(message)
+    },
+    onError: () => { void queryClient.invalidateQueries({ queryKey: ['users'] }); setConfirmAction(null) },
+  })
+
   const openConfirm = (type: ConfirmActionType, user: User) => {
     statusMutation.reset()
     unlockMutation.reset()
     exemptMutation.reset()
+    reactivateMutation.reset()
+    setReactivationResult('')
     setConfirmAction({ type, user })
   }
 
@@ -551,6 +579,9 @@ function UsersTab() {
     if (!confirmAction) return
     const { type, user } = confirmAction
     switch (type) {
+      case 'reactivate':
+        reactivateMutation.mutate(user.id)
+        break
       case 'disable':
         statusMutation.mutate({ userId: user.id, disabled: true })
         break
@@ -569,7 +600,7 @@ function UsersTab() {
     }
   }
 
-  const actionBannerError = firstMutationError(updateRoleMutation, statusMutation, unlockMutation, exemptMutation)
+  const actionBannerError = firstMutationError(updateRoleMutation, statusMutation, unlockMutation, exemptMutation, reactivateMutation)
 
   const handleDisableTotp = (e: React.SyntheticEvent<HTMLFormElement>) => {
     e.preventDefault()
@@ -620,13 +651,15 @@ function UsersTab() {
           {actionBannerError}
         </div>
       )}
+      {reactivationResult && <output className="block text-xs text-text-secondary mb-3">{reactivationResult}</output>}
 
-      <div className="border border-border rounded overflow-hidden">
+      <div className="border border-border rounded overflow-x-auto">
         <table className="w-full text-sm">
           <thead>
             <tr className="bg-surface border-b border-border">
               <th className="text-left px-4 py-2 text-text-muted font-medium text-xs uppercase tracking-wider">Username</th>
               <th className="text-left px-4 py-2 text-text-muted font-medium text-xs uppercase tracking-wider">Email</th>
+              <th className="text-left px-4 py-2 text-text-muted font-medium text-xs uppercase tracking-wider whitespace-nowrap">Account source</th>
               <th className="text-left px-4 py-2 text-text-muted font-medium text-xs uppercase tracking-wider">Role</th>
               <th className="text-left px-4 py-2 text-text-muted font-medium text-xs uppercase tracking-wider">2FA</th>
               <th className="text-left px-4 py-2 text-text-muted font-medium text-xs uppercase tracking-wider">Last login</th>
@@ -637,10 +670,11 @@ function UsersTab() {
           </thead>
           <tbody>
             {isLoading && (
-              <tr><td colSpan={8} className="px-4 py-8 text-center text-text-muted">Loading...</td></tr>
+              <tr><td colSpan={9} className="px-4 py-8 text-center text-text-muted">Loading...</td></tr>
             )}
-            {!isLoading && (!users || users.length === 0) && (
-              <tr><td colSpan={8} className="px-4 py-8 text-center text-text-muted">No users found.</td></tr>
+            {usersError && <tr><td colSpan={9} className="px-4 py-8 text-center text-status-error"><p role="alert">Failed to load users.</p></td></tr>}
+            {!isLoading && !usersError && (!users || users.length === 0) && (
+              <tr><td colSpan={9} className="px-4 py-8 text-center text-text-muted">No users found.</td></tr>
             )}
             {!isLoading && users && users.length > 0 && users.map(u => {
               const status = effectiveStatus(u)
@@ -653,6 +687,7 @@ function UsersTab() {
               <tr key={u.id} className={`border-b border-border last:border-b-0 hover:bg-surface/50 ${status === 'disabled' ? 'opacity-60' : ''}`}>
                 <td className="px-4 py-2 text-text-primary">{u.username}</td>
                 <td className="px-4 py-2 text-text-secondary">{u.email}</td>
+                <td className="px-4 py-2"><AccountSourceBadge provider={u.auth_provider} /></td>
                 <td className="px-4 py-2">
                   {u.id === currentUser?.id ? (
 	                    <span className={`text-xs px-2 py-0.5 rounded ${roleBadgeTone(u.role)}`}>
@@ -724,6 +759,12 @@ function UsersTab() {
                 <td className="px-4 py-2 text-text-muted text-xs">{formatDate(u.created_at)}</td>
                 <td className="px-4 py-2">
                   <div className="flex items-center gap-3 flex-wrap">
+                    {u.auth_provider === 'ldap' && <button type="button" onClick={() => setDirectoryUser(u)} className="text-xs text-accent hover:text-accent-hover whitespace-nowrap">Password help</button>}
+                    {u.id !== currentUser?.id && u.protected && (canOpenSecurity
+                      ? <a href="/settings?tab=security" className="text-xs text-accent whitespace-nowrap" title="Protected accounts require independently approved security recovery. Reenable has its own explicit lock-clearing semantics.">Security approval required</a>
+                      : <span className="text-xs text-text-muted">Protected account. Contact a security officer for independently approved recovery.</span>)}
+                    {u.id !== currentUser?.id && !u.protected && u.auth_provider === 'local' && u.credential_revision !== undefined && <button type="button" onClick={() => currentUser && setResetPasswordUser({ user: u, actorId: currentUser.id })} className="text-xs text-accent hover:text-accent-hover whitespace-nowrap">Reset password</button>}
+                    {u.id !== currentUser?.id && !u.protected && status === 'dormant' && <button type="button" onClick={() => openConfirm('reactivate', u)} className="bg-accent hover:bg-accent-hover text-white rounded px-3 py-1.5 text-xs">Reactivate</button>}
                     <button
                       type="button"
                       onClick={() => setSessionsUser(u)}
@@ -740,7 +781,7 @@ function UsersTab() {
                         Disable 2FA
                       </button>
                     )}
-                    {u.id !== currentUser?.id && status === 'locked' && (
+                    {u.id !== currentUser?.id && !u.protected && status === 'locked' && (
                       <button
                         type="button"
                         onClick={() => openConfirm('unlock', u)}
@@ -758,7 +799,7 @@ function UsersTab() {
                         Disable
                       </button>
                     )}
-                    {u.id !== currentUser?.id && status === 'disabled' && (
+                    {u.id !== currentUser?.id && !u.protected && status === 'disabled' && (
                       <button
                         type="button"
                         onClick={() => openConfirm('enable', u)}
@@ -793,6 +834,9 @@ function UsersTab() {
           </tbody>
         </table>
       </div>
+      <p className="text-xs text-text-muted mt-3">Local passwords are managed in Veyport. LDAP passwords are managed in your directory.</p>
+      {directoryUser && <DirectoryPasswordHelp user={directoryUser} onClose={() => setDirectoryUser(null)} />}
+      {resetPasswordUser && resetPasswordUser.actorId === currentUser?.id && <ResetPasswordModal key={`${resetPasswordUser.actorId}:${resetPasswordUser.user.id}`} user={resetPasswordUser.user} onClose={() => setResetPasswordUser(null)} />}
 
       {/* Create User Modal */}
       {showCreateModal && (
@@ -892,7 +936,7 @@ function UsersTab() {
             body={copy.body}
             confirmLabel={copy.confirmLabel}
             danger={copy.danger}
-            isPending={statusMutation.isPending || unlockMutation.isPending || exemptMutation.isPending}
+            isPending={statusMutation.isPending || unlockMutation.isPending || exemptMutation.isPending || reactivateMutation.isPending}
             onCancel={() => setConfirmAction(null)}
             onConfirm={handleConfirmAction}
           />
@@ -1026,7 +1070,7 @@ export function SettingsPage() {
 
       {/* Tab content */}
       {activeTab === 'profile' && <ProfileTab />}
-      {activeTab === 'users' && isAdmin && <UsersTab />}
+      {activeTab === 'users' && isAdmin && <UsersTab canOpenSecurity={showSecurity} />}
       {activeTab === 'directory' && isAdmin && <DirectoryTab />}
       {activeTab === 'notifications' && isAdmin && <NotificationsTab />}
       {activeTab === 'security' && (showSecurity || specificReview) && <SecurityWorkspace broadAccess={showSecurity} requestId={specificReview ? requestId : ''} onRequestId={id => setSearchParams({ tab: 'security', request: id }, { replace: true })} />}

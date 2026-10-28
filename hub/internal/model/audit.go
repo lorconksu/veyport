@@ -42,6 +42,8 @@ const (
 	AuditUserCreated               = "user.created"
 	AuditUserTOTPReset             = "user.totp_reset"
 	AuditUserPasswordChanged       = "user.password_changed"
+	AuditUserPasswordReset         = "user.password_reset"
+	AuditUserReactivated           = "user.reactivated"
 	AuditUserPasswordReuseRejected = "user.password_reuse_rejected"
 	AuditUserRoleUpdated           = "user.role_updated"
 	AuditUserDeleted               = "user.deleted"

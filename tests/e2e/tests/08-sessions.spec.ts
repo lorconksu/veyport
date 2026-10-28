@@ -219,7 +219,7 @@ function sessionRows(page: Page) {
 
 /** The ConfirmActionModal currently on screen, matched by its title. */
 function confirmDialog(page: Page, title: string) {
-  return page.locator('div.fixed.inset-0 > div.max-w-sm').filter({ hasText: title })
+  return page.getByRole('dialog', { name: title, exact: true })
 }
 
 async function confirmAction(page: Page, title: string, body: string, confirmLabel: string) {

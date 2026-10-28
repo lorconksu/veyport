@@ -49,6 +49,12 @@ func TestStepupCannotBeReusedOrChanged(t *testing.T) {
 	}
 	defer st.Close()
 	now := time.Now().UTC()
+	if err := st.CreateUser(&model.User{ID: "u", Username: "u", Email: "u@test", Role: model.RoleAdmin}); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.CreateSession(&model.Session{ID: "s", UserID: "u", Kind: model.SessionKindWeb, CreatedAt: now, LastSeenAt: now}); err != nil {
+		t.Fatal(err)
+	}
 	digest := Digest([]byte("exact"))
 	proof, err := st.IssueStepup("u", "s", "security.approve", digest, now)
 	if err != nil {
@@ -114,9 +120,13 @@ func (e *fakeEvidence) Anchor(_ context.Context, id string) (PolicyAnchor, error
 	}
 	return e.anchor, nil
 }
-func fixtureGovernance(t *testing.T) (*Service, authorizationFixture) {
+func fixtureGovernance(t *testing.T, paths ...string) (*Service, authorizationFixture) {
 	t.Helper()
-	st, err := store.New(":memory:")
+	path := ":memory:"
+	if len(paths) > 0 {
+		path = paths[0]
+	}
+	st, err := store.New(path)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -129,6 +139,9 @@ func fixtureGovernance(t *testing.T) (*Service, authorizationFixture) {
 	for _, id := range ids {
 		u := &model.User{ID: id, Username: id, Email: id + "@test.invalid", Role: model.RoleAdmin, TOTPEnabled: true, TOTPSecret: &secret}
 		if err := st.CreateUser(u); err != nil {
+			t.Fatal(err)
+		}
+		if err := st.CreateSession(&model.Session{ID: "session-" + id, UserID: id, Kind: model.SessionKindWeb, CreatedAt: now, LastSeenAt: now}); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -635,6 +648,11 @@ func TestArchiveOccurrenceUsesApplicationTimeAndFreezesRetries(t *testing.T) {
 	approveFixture(t, s, f, "approver-two")
 	applyTime := f.now.Add(time.Hour)
 	s.Now = func() time.Time { return applyTime }
+	// The applier authenticates again at application time; the prior session
+	// would otherwise correctly have expired from inactivity.
+	if err := s.Store.TouchSession("session-requester", applyTime, 0); err != nil {
+		t.Fatal(err)
+	}
 	f.evidence.fail = auditrecord.PolicyResult
 	if err := applyFixture(t, s, f); err == nil {
 		t.Fatal("result interruption ignored")

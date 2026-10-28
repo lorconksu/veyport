@@ -130,7 +130,19 @@ Principals with **audit.read** can use these workflow features. Before governanc
 enrollment, Standard admins can change retention and detection thresholds;
 enrolled installations require the protected change process. The local retention
 action remains an operations-admin action and does not change the immutable
-external archive's retention.
+external archive's retention. Each run examines at most 1,024 indexed candidates,
+releasing SQLite's writer lock after each group of at most 256. Large backlogs
+need repeated runs. The reported deletion count describes that run; zero can
+mean its candidate window contained only retained recovery provenance. The Hub
+keeps a continuation cursor in memory so subsequent runs advance past those
+rows, including as the cutoff moves forward. Every eighth run assigns one of
+the four bounded batches to a separate forward-moving rescan. That rescan
+revisits recovery provenance that has since expired without rewinding or
+starving the main cleanup sweep. Each cursor restarts after reaching the end;
+a Hub restart also begins new sweeps.
+Cutoffs compare exact instants, including offsets and subsecond timestamps.
+Unexpired recovery grants retain their audit provenance until completion or
+expiry; malformed provenance expiry is retained for review.
 
 ---
 
@@ -163,13 +175,15 @@ Actions follow a `resource.action` naming pattern.
 | `user.totp_disabled` | An admin disabled TOTP for a user |
 | `user.totp_reset` | TOTP was reset via the CLI break-glass command |
 | `user.created` | An admin created a new user account |
-| `user.password_changed` | A user changed their password |
+| `user.password_changed` | A user changed a password, including completion of a temporary-password recovery |
+| `user.password_reset` | An admin reset an ordinary local account's password; audit details never include the temporary password |
 | `user.password_reuse_rejected` | A password change was rejected because it reused a previous password |
 | `user.role_updated` | An admin changed a user's role |
 | `user.deleted` | An admin deleted a user account |
 | `user.locked` | An account was locked after too many consecutive failed sign-in attempts (system actor; detail includes the failure threshold, source IP, and lock expiry) |
 | `user.disabled` | An admin disabled a user account (detail includes the number of API tokens revoked as a side effect) |
 | `user.enabled` | An admin re-enabled a disabled user account |
+| `user.reactivated` | An admin requested dormancy reactivation (detail records whether the dormancy state changed; the audit outcome records success or refusal) |
 | `user.unlocked` | An admin cleared a locked account's lock and failure count before it expired on its own (detail `was_locked` records whether the account was actually locked at the time) |
 | `user.dormancy_exempt_set` | An admin marked an administrator account "never dormant" |
 | `user.dormancy_exempt_cleared` | An admin removed the dormancy exemption from an administrator account, or it was removed automatically because the account's role changed away from admin (detail `role changed` in that case) |

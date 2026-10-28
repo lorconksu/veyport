@@ -1,6 +1,7 @@
 package server
 
 import (
+	"context"
 	"crypto/hmac"
 	"crypto/sha256"
 	"encoding/hex"
@@ -37,13 +38,20 @@ func (s *Server) handleUnregisterServer(w http.ResponseWriter, r *http.Request) 
 			ch := s.pending.Register(serverID, requestID)
 			defer s.pending.Remove(serverID, requestID)
 
-			err := s.connMgr.SendToAgent(serverID, &pb.HubMessage{
+			sendCtx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
+			err := s.connMgr.SendToConnectionChecked(sendCtx, conn, &pb.HubMessage{
 				Payload: &pb.HubMessage_UnregisterRequest{
 					UnregisterRequest: &pb.UnregisterRequest{
 						RequestId: requestID,
 					},
 				},
+			}, func() error {
+				if s.connMgr.GetConn(serverID) != conn {
+					return context.Canceled
+				}
+				return nil
 			})
+			cancel()
 			if err == nil {
 				// Wait for ack (10s timeout) — don't fail if timeout, still delete from DB
 				ackTimer := time.NewTimer(10 * time.Second)

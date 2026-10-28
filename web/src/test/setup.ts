@@ -1,5 +1,10 @@
 import '@testing-library/jest-dom/vitest'
 
+// jsdom lacks native dialog lifecycle methods. Browser tests verify modal
+// focus containment and Escape behavior against the real implementation.
+HTMLDialogElement.prototype.showModal = function () { this.setAttribute('open', '') }
+HTMLDialogElement.prototype.close = function () { this.removeAttribute('open') }
+
 // Ensure localStorage is available in jsdom (Node.js 25 CI compatibility)
 const localStorageMock = (() => {
   let store: Record<string, string> = {}

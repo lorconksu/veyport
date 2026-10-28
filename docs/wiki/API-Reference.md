@@ -54,12 +54,13 @@ For browser sessions, successful login and refresh flows set auth cookies and ma
 
 ## Authentication Flow
 
-Veyport uses four JWT token types. In browser-driven flows, the resulting access and refresh tokens are set as secure cookies.
+Veyport uses five JWT token types. In browser-driven flows, the resulting access and refresh tokens are set as secure cookies.
 
 | Token Type | Purpose | Lifetime |
 |---|---|---|
 | **Setup** | Issued after first login when TOTP is not yet configured. Authorizes `/api/auth/totp/setup` and `/api/auth/totp/enable`. | Short-lived |
 | **TOTP** | Issued after password verification when TOTP is enabled. Authorizes `/api/auth/login/totp`. | Short-lived |
+| **Password recovery** | Issued after existing MFA for a temporary-password account. Authorizes only `/api/auth/password/recovery`; never becomes a normal session. | Short-lived, capped by temporary-password expiry |
 | **Access** | General-purpose API token. Required by most endpoints. | Short-lived |
 | **Refresh** | Long-lived token used to obtain a new access/refresh pair via `/api/auth/refresh`. | Long-lived |
 
@@ -92,6 +93,12 @@ curl -H "Authorization: Bearer adt_..." https://hub.example.com/api/auth/me
 ```
 
 API tokens can call normal access-token-protected API endpoints, but they are intentionally rejected on interactive account-management endpoints such as password changes, avatar updates, and TOTP disable.
+
+While a temporary password requires replacement, requests for normal access return a
+machine-readable `password_change_required` error. This does not grant partial CLI, API, SSH or
+application access: users with existing TOTP receive only a purpose-bound recovery token after
+TOTP verification, and that token accepts only the browser password-recovery operation. See
+[[Logging In]] and [[CLI]] for the recovery steps.
 
 ### Typical Login Flow
 
@@ -309,6 +316,14 @@ Complete login by providing a TOTP code (second factor).
 
 On success, the Hub also sets `__Host-veyport_access`, `__Host-veyport_refresh`, and `__Host-veyport_csrf` cookies for browser clients.
 
+For a user with an existing TOTP secret whose temporary password still requires replacement,
+this endpoint instead returns `{ "must_change_password": true, "recovery_token": "...",
+"expires_at": "..." }`. It sets no normal access or refresh cookies and returns no user profile.
+The purpose-bound recovery token permits only password replacement. After TOTP verification, the
+user completes the change in the browser; the `vey` CLI cannot use recovery authority to access
+commands. After replacement, the user signs in again with the new password and existing TOTP.
+Accounts without TOTP retain the existing TOTP enrollment flow.
+
 **Error Cases:**
 - `401` - Invalid or expired TOTP token, invalid TOTP code, user not found
 - `403` - Account disabled or dormant, same messages as login, returned before the code is validated; see [Account State Enforcement](#account-state-enforcement).
@@ -403,6 +418,10 @@ curl - X POST https://hub.example.com/api/auth/totp/setup \
 
 Verify and enable TOTP by providing a valid code. For users created with a temporary password, this is also where the permanent password is set.
 
+Password replacement, history, factor enrollment, recovery-grant consumption,
+setup state and success audits commit atomically. A persistence failure preserves
+the original setup state; retry with a fresh authenticator code.
+
 | Property | Value |
 |---|---|
 | Auth | Setup token (Bearer) |
@@ -437,8 +456,12 @@ Verify and enable TOTP by providing a valid code. For users created with a tempo
 On success, the Hub also sets `__Host-veyport_access`, `__Host-veyport_refresh`, and `__Host-veyport_csrf` cookies for browser clients. This also counts as a successful sign-in: the account's failure count resets and `last_login_at` is stamped, same as a normal login.
 
 **Error Cases:**
+
 - `401` - Invalid TOTP code
 - `400` - TOTP not set up (call `/api/auth/totp/setup` first)
+- `409` - Setup snapshot changed or TOTP already enabled; sign in again
+- `403` - Recovery requires current governance or audited shell authority
+- `500` - Authentication change could not be persisted; details are withheld
 
 **cURL:**
 
@@ -523,7 +546,7 @@ Change the authenticated user's password.
 }
 ```
 
-> **Note:** A successful password change invalidates all of the user's existing sessions (access and refresh tokens) except the one used to make the request. Other devices will need to log in again.
+> **Note:** A successful password change invalidates all of the user's existing sessions, including the requesting session, and revokes API tokens and existing SSH certificates. Sign in again; CLI users must also obtain a fresh certificate with `vey ssh-cert`.
 
 **Error Cases:**
 - `401` - Invalid current password
@@ -588,6 +611,11 @@ curl - X PUT https://hub.example.com/api/auth/avatar \
 
 Admin-only: disable TOTP for another user. Requires the admin's own TOTP code for verification.
 
+Success confirms one committed transaction removing the factor, advancing token
+and SSH credential generations, revoking browser/API/application authority and
+recording the success audit. Previously issued SSH certificates remain revoked
+after MFA reenrollment. Protected principals require governed recovery.
+
 | Property | Value |
 |---|---|
 | Auth | Access token (Bearer), admin only |
@@ -611,9 +639,12 @@ Admin-only: disable TOTP for another user. Requires the admin's own TOTP code fo
 ```
 
 **Error Cases:**
+
 - `401` - Invalid admin TOTP code
 - `404` - Admin user not found
 - `403` - Not an admin
+- `403` - Target is a protected principal
+- `500` - Persistence failed; factor and authority changes were rolled back
 
 **cURL:**
 
@@ -700,12 +731,17 @@ List all users.
 | `status` | Derived, computed at read time from the account lifecycle fields and the current policy. One of `active`, `locked`, `disabled`, `dormant`, with precedence `disabled > dormant > locked > active`. Always present. |
 | `disabled_at` | RFC 3339 UTC timestamp of the most recent admin disable. Absent when enabled. |
 | `disabled_by` | User id of the admin who disabled the account (informational). Absent when enabled. |
-| `reactivated_at` | RFC 3339 UTC timestamp of the most recent admin enable or unlock. Absent if never enabled or unlocked by an admin. Feeds the dormancy clock alongside sign-in and API-token activity. |
+| `reactivated_at` | RFC 3339 UTC timestamp of the most recent admin enable, unlock, or dormancy reactivation. Absent if none has occurred. Feeds the dormancy clock alongside sign-in and API-token activity. |
 | `dormancy_exempt` | `true` if the account (an administrator account) is marked "never dormant." Always present; meaningful only on admin accounts. |
 | `last_activity_at` | RFC 3339 UTC timestamp of the most recent interactive sign-in or API-token use (see the "Dormant accounts" note in [[Settings]]). Absent if the account has never been used. |
 
 The same fields appear on `GET /api/auth/me` and in the `user` object returned by login -- a
 non-admin only ever sees their own values there.
+
+The user object also includes `credential_revision` (a non-secret generation value used for
+conditional administrative password resets) and `protected` (whether the target is governed by
+the protected-principal workflow). `auth_provider` identifies `local` or `ldap`; clients must
+handle absent or unrecognized values as Unknown and must not assume Local.
 
 **cURL:**
 
@@ -863,7 +899,8 @@ Disable or enable a user account (feature 008). See [Account State Enforcement](
 ```
 
 **Response (200), enabling** (`{"disabled": false}`): the user object with `status: "active"` (or
-`"locked"`/`"dormant"` if still applicable) and `reactivated_at` set to now.
+`"locked"`/`"dormant"` if still applicable) and `reactivated_at` set on a real disabled-to-enabled
+transition.
 
 **Error Cases:**
 - `400` - `{"error":"cannot disable your own account"}` — target is the caller
@@ -918,6 +955,57 @@ curl - X POST https://hub.example.com/api/users/USER_UUID/unlock \
 ```
 
 ---
+
+### POST /api/users/{id}/reactivate
+
+Reset the dormancy clock for a dormant account without enabling a disabled account or clearing a
+separate lock. Requires an interactive administrator session and cookie CSRF validation; bearer
+API tokens are not accepted.
+
+There is no request body. Response `200` is `{ "user": { ... }, "changed": true|false }`. An
+already active account is an unchanged no-op. A dormant locked account remains Locked. A disabled
+account is refused with `409`; use Enable for disabled accounts. Protected targets return the
+existing structured security approval response (`403`). The operation is audited.
+
+### POST /api/users/{id}/password-reset
+
+Generate a temporary password for an ordinary Local account. Requires an interactive administrator
+session and cookie CSRF validation; API-token authentication is refused. The target's current
+`credential_revision` must be supplied to avoid resetting a changed account:
+
+```json
+{ "expected_revision": 12 }
+```
+
+On committed success, response `200` is `{ "user": { ... }, "temporary_password": "...",
+"expires_at": "2026-10-28T12:00:00Z" }` and the response carries `Cache-Control: no-store`.
+The temporary password is returned once and is not retrievable later. Do not automatically retry
+this credential-changing request after an uncertain response. The user must change the password
+before normal access; MFA remains enabled and required. Existing sessions, tokens and durable app
+authority are revoked. Account lifecycle status is unchanged.
+
+Errors: `400` for self-reset or LDAP/Unknown provider; `403` for a protected target; `409` for a
+stale revision; `404` for a missing target. The response never includes the temporary password
+unless the authoritative reset commits.
+
+### POST /api/auth/password/recovery
+
+Complete a required password replacement after password and any already-configured TOTP have been
+verified. The only accepted bearer is the short-lived `password_recovery` purpose token returned
+from `/api/auth/login/totp`; ordinary access tokens and API tokens are not accepted.
+
+```json
+{ "new_password": "N3wP@ssw0rd!" }
+```
+
+Success is `{ "status": "password updated", "requires_login": true }`; cookies are cleared and
+the client returns to sign-in. Password policy/history violations return `400`; invalid, expired,
+or replayed recovery authority returns `401` (a changed account state can return `409`). No normal
+access or refresh credential is issued by this endpoint.
+
+Active or recent password reuse also records a failed
+`user.password_reuse_rejected` audit event with request correlation and IP;
+credential values are never included.
 
 ### PUT /api/users/{id}/dormancy-exemption
 
@@ -1002,7 +1090,7 @@ Audit viewing and workflow endpoints are available to **admins and auditors**. A
 - `PUT /api/audit-logs/settings` (admin only)
 - `GET /api/audit-logs/export`
 - `GET /api/audit-logs/exports`
-- `POST /api/audit-logs/retention/run` (admin only)
+- `POST /api/audit-logs/retention/run` (admin only; scans at most 1,024 candidates in groups of 256 per call; repeat for large backlogs, and a zero deletion count does not prove a sweep is complete)
 - `GET /api/audit-logs/reviews`
 - `POST /api/audit-logs/reviews`
 - `GET /api/audit-logs/filters`
@@ -1041,6 +1129,11 @@ required. The baseline quorum is the requester and two approvers linked to
 distinct verified person identities. Editing a request invalidates prior votes;
 stale, expired, revoked, or digest-mismatched approvals do not count. The server
 rechecks live authority at approval and application.
+
+The `recovery` operation `password-reset` accepts local accounts only. LDAP
+targets are refused during preview and request, and checked again inside apply
+and password completion transactions. Directory passwords must be recovered in
+the directory.
 
 Bootstrap nominations include the requester as officer and two other people as
 approvers, all with verified person IDs, operator evidence, and completed MFA.
@@ -3273,3 +3366,11 @@ Application access is configured and managed in [[Application Access]]. These en
 | `DELETE /api/auth/application-sessions/{id}` | Session owner | Revoke one application session and cancel its streams. |
 
 Application grants and configuration changes revoke affected sessions. Application sessions use their own idle and absolute deadlines, separate from portal sessions. A browser-only unauthenticated application document request can be redirected to the fixed portal launch flow; API and non-browser requests receive `401`.
+
+Governance request, approval, and applier-claim writes revalidate a live actor-owned
+session and the proof's credential generation inside the SQLite writer
+transaction. Proof consumption and mutation commit together. Expiry decisions
+advance the caller's clock through writer-lock waits; revoked or expired session,
+proof, or request authority is refused without consuming the proof. Password and
+TOTP completion prepare settings before sampling the mutation clock, then include
+connection and writer-lock waits in the transactional authority check.

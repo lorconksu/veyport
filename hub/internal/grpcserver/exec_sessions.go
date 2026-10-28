@@ -153,7 +153,7 @@ func (es *ExecutionSessions) Supports(node string) bool {
 	return executionConnectionOpen(caps.connection)
 }
 
-func (es *ExecutionSessions) Register(node, id, actor, runAs string, command []byte) (*ExecutionSession, error) {
+func (es *ExecutionSessions) Register(node, id, actor, runAs string, command []byte, opts ...RegisterOption) (*ExecutionSession, error) {
 	if node == "" || id == "" || actor == "" || len(id) > 128 || len(command) == 0 || len(command) > MaxExecutionCommandBytes || !utf8.Valid(command) || strings.ContainsRune(string(command), '\x00') {
 		return nil, errors.New("invalid execution submission")
 	}
@@ -167,7 +167,8 @@ func (es *ExecutionSessions) Register(node, id, actor, runAs string, command []b
 	if _, exists := es.sessions[key]; exists {
 		return nil, errors.New("execution already registered")
 	}
-	marker, ok := es.terminals.Register(node, id, actor, runAs, WithKind(TerminalKindExec))
+	opts = append(opts, WithKind(TerminalKindExec))
+	marker, ok := es.terminals.Register(node, id, actor, runAs, opts...)
 	if !ok {
 		return nil, errors.New("shared terminal and execution capacity reached")
 	}

@@ -17,7 +17,6 @@ import (
 	"github.com/google/uuid"
 	"github.com/wyiu/veyport/hub/internal/authorization"
 	"github.com/wyiu/veyport/hub/internal/connmgr"
-	"github.com/wyiu/veyport/hub/internal/lockout"
 	"github.com/wyiu/veyport/hub/internal/model"
 	"github.com/wyiu/veyport/hub/internal/session"
 	"github.com/wyiu/veyport/hub/internal/store"
@@ -112,8 +111,12 @@ func (u *AgentUpdates) authorizeAdmin(actor, sid string) error {
 	if err != nil || !effective.HasRole(model.RoleAdmin) {
 		return ErrAgentUpdateDenied
 	}
+	policy, err := u.store.AccountPolicy()
+	if err != nil {
+		return ErrAgentUpdateDenied
+	}
 	sess, err := u.store.GetSession(sid)
-	if err != nil || sess.UserID != actor || session.Evaluate(session.StateFromModel(sess), u.now(), lockout.Load(u.store.GetConfig)) != session.VerdictOK {
+	if err != nil || sess.UserID != actor || session.Evaluate(session.StateFromModel(sess), u.now(), policy) != session.VerdictOK {
 		return ErrAgentUpdateDenied
 	}
 	return nil

@@ -97,10 +97,6 @@ func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
 		respondError(w, http.StatusConflict, "setup already completed")
 		return
 	}
-	settings := s.store.GetAuditSettings()
-	_ = s.store.AddPasswordHistory(user.ID, hash)
-	_ = s.store.TrimPasswordHistory(user.ID, settings.PasswordHistoryCount)
-
 	// Recheck: if another registration won the race with a different username, roll back
 	userCount, _ := s.store.UserCount()
 	if userCount > 1 {
@@ -146,7 +142,12 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 	// including the lock check and the directory branch (008 FR-009, R4): the
 	// account cannot sign in at all, so no credential work is warranted and no
 	// lock state should accrue on its behalf.
-	if st := s.accountStatus(user); accountRefuses(st) {
+	st, policyErr := s.accountStatusStrict(user)
+	if policyErr != nil {
+		respondError(w, http.StatusServiceUnavailable, "account policy temporarily unavailable")
+		return
+	}
+	if accountRefuses(st) {
 		s.refuseAccount(w, r, user, st)
 		return
 	}
@@ -170,7 +171,7 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if user.MustChangePassword && user.TempPasswordExpiresAt != nil && time.Now().UTC().After(*user.TempPasswordExpiresAt) {
+	if temporaryCredentialExpired(user, s.now()) {
 		detail := "temporary password expired"
 		s.recordLoginFailure(r, &user.ID, req.Username, &detail, false)
 		respondError(w, http.StatusUnauthorized, "temporary password expired — contact an administrator")
@@ -187,7 +188,12 @@ func (s *Server) handleUnknownUserLogin(w http.ResponseWriter, r *http.Request, 
 		// can return an existing shadow account under a name this hub does not
 		// index it by. Checking here keeps that route from becoming the one way
 		// into a disabled or dormant account (008 FR-009).
-		if st := s.accountStatus(ldapUser); accountRefuses(st) {
+		st, policyErr := s.accountStatusStrict(ldapUser)
+		if policyErr != nil {
+			respondError(w, http.StatusServiceUnavailable, "account policy temporarily unavailable")
+			return
+		}
+		if accountRefuses(st) {
 			s.refuseAccount(w, r, ldapUser, st)
 			return
 		}
@@ -205,7 +211,12 @@ func (s *Server) handleLDAPUserLogin(w http.ResponseWriter, r *http.Request, req
 	// behalf of an unusable or locked account, whatever route reaches this
 	// branch (007 FR-005, 008 FR-009). Without this the hub could be turned
 	// into a credential-stuffing proxy for accounts it has already refused.
-	if st := s.accountStatus(user); accountRefuses(st) {
+	st, policyErr := s.accountStatusStrict(user)
+	if policyErr != nil {
+		respondError(w, http.StatusServiceUnavailable, "account policy temporarily unavailable")
+		return
+	}
+	if accountRefuses(st) {
 		s.refuseAccount(w, r, user, st)
 		return
 	}
@@ -294,7 +305,7 @@ func (s *Server) handleLoginTOTP(w http.ResponseWriter, r *http.Request) {
 		respondError(w, http.StatusUnauthorized, errUserNotFound)
 		return
 	}
-	if claims.TokenGeneration != user.TokenGeneration {
+	if claims.TokenGeneration != user.TokenGeneration || temporaryCredentialExpired(user, s.now()) {
 		respondError(w, http.StatusUnauthorized, "password-stage credential was revoked")
 		return
 	}
@@ -302,7 +313,12 @@ func (s *Server) handleLoginTOTP(w http.ResponseWriter, r *http.Request) {
 	// An account disabled or gone dormant between the two stages is refused
 	// here too: a token minted by the password stage must not outlive the
 	// account's usability (008 FR-009).
-	if st := s.accountStatus(user); accountRefuses(st) {
+	st, policyErr := s.accountStatusStrict(user)
+	if policyErr != nil {
+		respondError(w, http.StatusServiceUnavailable, "account policy temporarily unavailable")
+		return
+	}
+	if accountRefuses(st) {
 		s.refuseAccount(w, r, user, st)
 		return
 	}
@@ -328,6 +344,12 @@ func (s *Server) handleLoginTOTP(w http.ResponseWriter, r *http.Request) {
 	if totpSecret == nil || !auth.ValidateTOTPWithReplayAt(s.totpCache, user.ID, *totpSecret, req.Code, s.now()) {
 		s.recordTOTPFailure(r, user)
 		respondError(w, http.StatusUnauthorized, "invalid TOTP code")
+		return
+	}
+
+	// Recovery preserves the existing MFA and never creates normal session authority.
+	if user.MustChangePassword {
+		s.respondPasswordRecovery(w, user)
 		return
 	}
 
@@ -392,6 +414,11 @@ func (s *Server) handleRefresh(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if user.MustChangePassword {
+		respondJSON(w, http.StatusForbidden, map[string]string{"error": errPasswordChangeRequired.Error(), "code": "password_change_required"})
+		return
+	}
+
 	// A refresh token issued before the account was disabled or went dormant
 	// must not mint a new pair. The generation bump performed by a disable
 	// would catch this one too, but dormancy bumps nothing, so the check has to
@@ -402,7 +429,7 @@ func (s *Server) handleRefresh(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Validate token generation matches DB (detect revoked/outdated refresh tokens)
-	if claims.TokenGeneration != user.TokenGeneration {
+	if claims.TokenGeneration != user.TokenGeneration || temporaryCredentialExpired(user, s.now()) {
 		respondError(w, http.StatusUnauthorized, "token has been revoked")
 		return
 	}
@@ -590,12 +617,6 @@ func (s *Server) handleTOTPSetup(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleTOTPEnable(w http.ResponseWriter, r *http.Request) {
-	var req model.TOTPEnableRequest
-	if err := decodeJSON(r, &req); err != nil {
-		respondError(w, http.StatusBadRequest, errInvalidRequestBody)
-		return
-	}
-
 	userID := UserIDFromContext(r.Context())
 	user, err := s.store.GetUserByID(userID)
 	if err != nil {
@@ -604,6 +625,21 @@ func (s *Server) handleTOTPEnable(w http.ResponseWriter, r *http.Request) {
 	}
 	if err := s.checkSetupGeneration(r, user); err != nil {
 		securityError(w, err)
+		return
+	}
+	authority, err := s.passwordChangeAuthority(r, user)
+	if err != nil {
+		securityError(w, err)
+		return
+	}
+	var req model.TOTPEnableRequest
+	if err := decodeJSON(r, &req); err != nil {
+		respondError(w, http.StatusBadRequest, errInvalidRequestBody)
+		return
+	}
+
+	if user.TOTPEnabled {
+		respondError(w, http.StatusConflict, "TOTP is already enabled")
 		return
 	}
 
@@ -623,35 +659,28 @@ func (s *Server) handleTOTPEnable(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := s.rotateTemporaryPasswordDuringTOTPEnable(r, user, req.NewPassword); err != nil {
-		status, message := totpEnablePasswordError(err)
-		respondError(w, status, message)
-		return
-	}
-
-	// Encrypt the TOTP secret before final storage
+	// Prepare every fallible cryptographic operation before any durable mutation.
 	encryptedSecret, err := s.encryptTOTPSecret(*totpSecretForValidation)
 	if err != nil {
 		respondError(w, http.StatusInternalServerError, "failed to encrypt TOTP secret")
 		return
 	}
-
-	if err := s.store.UpdateUserTOTP(userID, &encryptedSecret, true, user.TokenGeneration); err != nil {
-		securityError(w, err)
+	hash, err := s.prepareTOTPPassword(r, user, req.NewPassword)
+	if err != nil {
+		status, message := totpEnablePasswordError(err)
+		respondError(w, status, message)
 		return
 	}
-	if err := s.store.MarkInitialSetupComplete(); err != nil {
-		respondError(w, http.StatusInternalServerError, "failed to mark setup complete")
+	history := s.store.GetAuditSettings().PasswordHistoryCount
+	if err := s.store.CompleteTOTPSetup(user, encryptedSecret, hash, s.now(), history,
+		s.accountManagementAudit(r, userID, userID, model.AuditUserPasswordChanged),
+		s.accountManagementAudit(r, userID, userID, model.AuditUserTOTPEnabled), authority); err != nil {
+		totpPersistenceError(w, err)
 		return
 	}
-
-	ip := clientIP(r)
-	s.auditLogRequest(r, model.AuditEntry{
-		ID:        uuid.NewString(),
-		UserID:    &userID,
-		Action:    model.AuditUserTOTPEnabled,
-		IPAddress: &ip,
-	})
+	if hash != "" {
+		s.endShellsByUser(userID, shellMsgAdminRevoked)
+	}
 	if s.notifier != nil {
 		s.notifier.Notify(model.NotifyTOTPChanged, map[string]string{
 			"username": user.Username, "detail": "TOTP enabled",
@@ -706,22 +735,22 @@ func (s *Server) totpSecretForValidation(secret *string) (*string, error) {
 	return &decrypted, nil
 }
 
-func (s *Server) rotateTemporaryPasswordDuringTOTPEnable(r *http.Request, user *model.User, newPassword string) error {
+func (s *Server) prepareTOTPPassword(r *http.Request, user *model.User, newPassword string) (string, error) {
 	if !user.MustChangePassword {
-		return nil
+		return "", nil
 	}
 	settings := s.store.GetAuditSettings()
 	if newPassword == "" {
-		return fmt.Errorf("bad_request:new_password is required for temporary-password users")
+		return "", fmt.Errorf("bad_request:new_password is required for temporary-password users")
 	}
 	if err := auth.ValidatePasswordPolicy(newPassword); err != nil {
-		return fmt.Errorf("bad_request:%s", err.Error())
+		return "", fmt.Errorf("bad_request:%s", err.Error())
 	}
 	matchesRecent, err := s.store.PasswordMatchesRecent(user.ID, newPassword, settings.PasswordHistoryCount)
 	if err != nil {
-		return fmt.Errorf("internal:failed to validate password history")
+		return "", fmt.Errorf("internal:failed to validate password history")
 	}
-	if matchesRecent {
+	if matchesRecent || auth.ComparePassword(user.PasswordHash, newPassword) {
 		ip := clientIP(r)
 		s.auditLogRequest(r, model.AuditEntry{
 			ID:        uuid.NewString(),
@@ -730,21 +759,13 @@ func (s *Server) rotateTemporaryPasswordDuringTOTPEnable(r *http.Request, user *
 			IPAddress: &ip,
 			Outcome:   model.AuditOutcomeFailure,
 		})
-		return fmt.Errorf("bad_request:new password must not match a recent password")
+		return "", fmt.Errorf("bad_request:new password must not match a recent password")
 	}
 	hash, err := auth.HashPassword(newPassword)
 	if err != nil {
-		return fmt.Errorf("internal:%s", errFailedToHashPassword)
+		return "", fmt.Errorf("internal:%s", errFailedToHashPassword)
 	}
-	if err := s.updateAuthenticatedPassword(r, user, hash); err != nil {
-		return fmt.Errorf("internal:failed to update password")
-	}
-	_ = s.store.AddPasswordHistory(user.ID, hash)
-	_ = s.store.TrimPasswordHistory(user.ID, settings.PasswordHistoryCount)
-	user.PasswordHash = hash
-	user.MustChangePassword = false
-	user.TempPasswordExpiresAt = nil
-	return nil
+	return hash, nil
 }
 
 func totpEnablePasswordError(err error) (int, string) {
@@ -761,21 +782,43 @@ func totpEnablePasswordError(err error) (int, string) {
 	return http.StatusInternalServerError, "failed to update password"
 }
 
-func (s *Server) handleChangePassword(w http.ResponseWriter, r *http.Request) {
-	var req model.ChangePasswordRequest
-	if err := decodeJSON(r, &req); err != nil {
-		respondError(w, http.StatusBadRequest, errInvalidRequestBody)
-		return
+// Storage errors must never be classified by their text or exposed to clients.
+func totpPersistenceError(w http.ResponseWriter, err error) {
+	switch {
+	case errors.Is(err, store.ErrSecurityConflict):
+		respondError(w, http.StatusConflict, "authentication state changed; sign in again")
+	case errors.Is(err, store.ErrProtectedChange), errors.Is(err, store.ErrAccountManagementActor):
+		respondError(w, http.StatusForbidden, "authentication change requires current authority")
+	case errors.Is(err, store.ErrTemporaryPasswordExpired):
+		respondError(w, http.StatusUnauthorized, "temporary password expired")
+	case errors.Is(err, store.ErrLocalPasswordOnly):
+		respondError(w, http.StatusBadRequest, "password recovery is available for local accounts only")
+	default:
+		respondError(w, http.StatusInternalServerError, "failed to persist authentication change")
 	}
+}
 
+func (s *Server) handleChangePassword(w http.ResponseWriter, r *http.Request) {
 	userID := UserIDFromContext(r.Context())
 	user, err := s.store.GetUserByID(userID)
 	if err != nil {
 		respondError(w, http.StatusNotFound, errUserNotFound)
 		return
 	}
+	// Capture the original signed authority and account/MFA snapshot before any
+	// body read, history check or bcrypt work. The write transaction repeats it.
+	authority, err := s.passwordChangeAuthority(r, user)
+	if err != nil {
+		securityError(w, err)
+		return
+	}
 	if err := s.securityService().GuardMutation(userID); err != nil && !user.MustChangePassword {
 		securityError(w, err)
+		return
+	}
+	var req model.ChangePasswordRequest
+	if err := decodeJSON(r, &req); err != nil {
+		respondError(w, http.StatusBadRequest, errInvalidRequestBody)
 		return
 	}
 
@@ -794,7 +837,7 @@ func (s *Server) handleChangePassword(w http.ResponseWriter, r *http.Request) {
 		respondError(w, http.StatusInternalServerError, "failed to validate password history")
 		return
 	}
-	if matchesRecent {
+	if matchesRecent || auth.ComparePassword(user.PasswordHash, req.NewPassword) {
 		ip := clientIP(r)
 		s.auditLogRequest(r, model.AuditEntry{
 			ID:        uuid.NewString(),
@@ -807,38 +850,18 @@ func (s *Server) handleChangePassword(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	hash, err := auth.HashPassword(req.NewPassword)
+	hash, err := s.passwordHashFn(req.NewPassword)
 	if err != nil {
 		respondError(w, http.StatusInternalServerError, errFailedToHashPassword)
 		return
 	}
 
-	if err := s.updateAuthenticatedPassword(r, user, hash); err != nil {
+	if err := s.updateAuthenticatedPassword(r, user, hash, authority); err != nil {
 		securityError(w, err)
 		return
 	}
 	s.endShellsByUser(userID, "Authentication credentials changed; sign in again.")
-	_ = s.store.AddPasswordHistory(userID, hash)
-	_ = s.store.TrimPasswordHistory(userID, settings.PasswordHistoryCount)
 
-	// Invalidate all existing sessions by incrementing token generation
-	if _, err := s.store.IncrementTokenGeneration(userID); err != nil {
-		respondError(w, http.StatusInternalServerError, "failed to invalidate sessions")
-		return
-	}
-
-	// Revoke all API tokens — password change is a security event that should invalidate all credentials
-	if err := s.store.RevokeAllAPITokensByUserID(userID); err != nil {
-		log.Printf("warning: failed to revoke api tokens on password change for user %s: %v", userID, err)
-	}
-
-	ip := clientIP(r)
-	s.auditLogRequest(r, model.AuditEntry{
-		ID:        uuid.NewString(),
-		UserID:    &userID,
-		Action:    model.AuditUserPasswordChanged,
-		IPAddress: &ip,
-	})
 	if s.notifier != nil {
 		s.notifier.Notify(model.NotifyPasswordChanged, map[string]string{
 			"username":  user.Username,
@@ -849,18 +872,31 @@ func (s *Server) handleChangePassword(w http.ResponseWriter, r *http.Request) {
 	respondJSON(w, http.StatusOK, map[string]string{"status": "password updated"})
 }
 
-func (s *Server) updateAuthenticatedPassword(r *http.Request, user *model.User, hash string) error {
+func (s *Server) passwordChangeAuthority(r *http.Request, user *model.User) (store.PasswordChangeAuthority, error) {
+	claims, err := auth.ValidateToken(s.jwtSecret, readAccessToken(r))
+	if err != nil || claims.Subject != user.ID || claims.TokenGeneration != user.TokenGeneration || claims.ExpiresAt == nil {
+		return store.PasswordChangeAuthority{}, store.ErrSecurityConflict
+	}
+	return store.PasswordChangeAuthority{Snapshot: user, SessionID: claims.SessionID, Generation: claims.TokenGeneration, ExpiresAt: claims.ExpiresAt.Time}, nil
+}
+
+func (s *Server) updateAuthenticatedPassword(r *http.Request, user *model.User, hash string, authority store.PasswordChangeAuthority) error {
 	protected, err := s.store.IsProtectedUser(user.ID)
 	if err != nil {
 		return err
 	}
+	history := s.store.GetAuditSettings().PasswordHistoryCount
 	if !protected {
-		return s.store.UpdateUserPassword(user.ID, hash)
+		generation, err := s.store.ChangeLocalPassword(user, hash, s.now(), history, user.MustChangePassword, s.accountManagementAudit(r, user.ID, user.ID, model.AuditUserPasswordChanged), authority)
+		if err == nil {
+			user.TokenGeneration = generation
+		}
+		return err
 	}
 	if TokenTypeFromContext(r.Context()) == auth.TokenTypeAccess && SessionIDFromContext(r.Context()) == "" {
 		return store.ErrProtectedChange
 	}
-	generation, err := s.store.CompleteApprovedPasswordRecovery(user.ID, user.PasswordHash, user.SecurityRevision, hash, s.now())
+	generation, err := s.store.CompleteApprovedPasswordRecoveryAudited(store.PasswordRecoverySnapshot{UserID: user.ID, PasswordHash: user.PasswordHash, SecurityRevision: user.SecurityRevision, TokenGeneration: user.TokenGeneration}, hash, s.now(), history, s.accountManagementAudit(r, user.ID, user.ID, model.AuditUserPasswordChanged), authority)
 	if err == nil {
 		user.TokenGeneration = generation
 	}
@@ -883,7 +919,7 @@ func (s *Server) handleTOTPDisable(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := s.securityService().GuardMutation(req.UserID); err != nil {
-		securityError(w, err)
+		totpPersistenceError(w, err)
 		return
 	}
 	adminID := UserIDFromContext(r.Context())
@@ -898,6 +934,12 @@ func (s *Server) handleTOTPDisable(w http.ResponseWriter, r *http.Request) {
 		respondError(w, http.StatusNotFound, "admin user not found")
 		return
 	}
+	claims, err := auth.ValidateToken(s.jwtSecret, readAccessToken(r))
+	if err != nil || claims.TokenType != auth.TokenTypeAccess || claims.Subject != adminID || claims.TokenGeneration != admin.TokenGeneration || claims.ExpiresAt == nil || !admin.TOTPEnabled {
+		totpPersistenceError(w, store.ErrAccountManagementActor)
+		return
+	}
+	actor := store.AccountManagementActor{UserID: adminID, SessionID: claims.SessionID, Generation: claims.TokenGeneration, SecurityRevision: admin.SecurityRevision, ExpiresAt: claims.ExpiresAt.Time}
 
 	// Decrypt admin's TOTP secret if encrypted
 	adminTOTPSecret := admin.TOTPSecret
@@ -922,32 +964,14 @@ func (s *Server) handleTOTPDisable(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Disable target user's TOTP
-	if err := s.store.UpdateUserTOTP(req.UserID, nil, false); err != nil {
-		respondError(w, http.StatusInternalServerError, "failed to disable TOTP")
+	// Factor removal, durable authority revocation and success audit commit as one.
+	if err := s.store.DisableUserTOTP(req.UserID, s.now(), s.accountManagementAudit(r, adminID, req.UserID, model.AuditUserTOTPDisabled), actor); err != nil {
+		totpPersistenceError(w, err)
 		return
 	}
-	s.endShellsByUser(req.UserID, "Authentication credentials changed; sign in again.")
-
-	// Admin-initiated TOTP removal is a security-sensitive auth-factor change;
-	// invalidate the target user's existing sessions and API tokens so any
-	// pre-existing credentials can't ride through the 2FA removal.
-	if _, err := s.store.IncrementTokenGeneration(req.UserID); err != nil {
-		respondError(w, http.StatusInternalServerError, "failed to invalidate sessions")
-		return
+	if s.terminalSessions != nil {
+		s.terminalSessions.EndStaleCredentials(s.store, req.UserID)
 	}
-	if err := s.store.RevokeAllAPITokensByUserID(req.UserID); err != nil {
-		log.Printf("warning: failed to revoke api tokens on admin TOTP disable for user %s: %v", req.UserID, err)
-	}
-
-	ip := clientIP(r)
-	s.auditLogRequest(r, model.AuditEntry{
-		ID:        uuid.NewString(),
-		UserID:    &adminID,
-		Action:    model.AuditUserTOTPDisabled,
-		Target:    &req.UserID,
-		IPAddress: &ip,
-	})
 	if s.notifier != nil {
 		s.notifier.Notify(model.NotifyTOTPChanged, map[string]string{
 			"username": targetUser.Username, "detail": "TOTP disabled",

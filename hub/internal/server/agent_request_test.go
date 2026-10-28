@@ -107,7 +107,12 @@ func (m *mockGRPCStream) SetTrailer(metadata.MD) {
 // The mock stream auto-delivers responses for FileList and FileRead requests.
 func testServerWithAgent(t *testing.T) (s *Server, adminToken, serverID string) {
 	t.Helper()
-	st, err := store.New(testMemoryDB)
+	return testServerWithAgentAt(t, testMemoryDB)
+}
+
+func testServerWithAgentAt(t *testing.T, path string) (s *Server, adminToken, serverID string) {
+	t.Helper()
+	st, err := store.New(path)
 	if err != nil {
 		t.Fatalf(testCreateStoreErr, err)
 	}

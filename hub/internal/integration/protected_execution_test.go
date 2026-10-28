@@ -364,6 +364,9 @@ func activateNativeProtectedPolicy(t *testing.T, h *sshGWHarness, receipts *test
 		if err := h.store.CreateUser(&model.User{ID: id, Username: id, Email: id + "@synthetic.invalid", Role: role, AuthProvider: model.AuthProviderLocal, TOTPEnabled: true, TOTPSecret: &encoded}); err != nil {
 			t.Fatal(err)
 		}
+		if err := h.store.CreateSession(&model.Session{ID: "native-session-" + id, UserID: id, Kind: model.SessionKindCLI, CreatedAt: service.Now(), LastSeenAt: service.Now()}); err != nil {
+			t.Fatal(err)
+		}
 		nominations = append(nominations, model.SecurityNomination{UserID: id, PersonID: "synthetic-person-" + id, Roles: []model.Role{protectedRole}, Verification: "Synthetic native integration identity, never deployment approval"})
 	}
 	credential, err := json.Marshal(receipts.Credential)

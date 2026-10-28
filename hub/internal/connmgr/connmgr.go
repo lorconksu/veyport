@@ -16,6 +16,8 @@ type AgentConn struct {
 	Stream       pb.AgentService_ConnectServer
 	LastSeen     time.Time
 	SendMu       sync.Mutex
+	DeliveryMu   sync.Mutex
+	GenerationMu sync.Mutex
 	GenerationID string
 	done         chan struct{}
 	closeOnce    sync.Once
@@ -27,6 +29,7 @@ func (c *AgentConn) Close()                { c.closeOnce.Do(func() { close(c.don
 type ConnManager struct {
 	mu             sync.RWMutex
 	streams        map[string]*AgentConn
+	retiring       map[string]*AgentConn
 	maintenance    map[string]string
 	activities     map[activityKey]*activityRecord
 	uncertain      map[string]bool
@@ -37,6 +40,7 @@ type ConnManager struct {
 func New() *ConnManager {
 	return &ConnManager{
 		streams:        make(map[string]*AgentConn),
+		retiring:       make(map[string]*AgentConn),
 		maintenance:    make(map[string]string),
 		activities:     make(map[activityKey]*activityRecord),
 		uncertain:      make(map[string]bool),
@@ -48,12 +52,6 @@ func New() *ConnManager {
 // Register returns the exact installed generation, even if a concurrent
 // reconnect replaces it before the caller starts watching Done.
 func (cm *ConnManager) Register(serverID string, stream pb.AgentService_ConnectServer) *AgentConn {
-	cm.mu.Lock()
-	defer cm.mu.Unlock()
-	if previous := cm.streams[serverID]; previous != nil {
-		previous.Close()
-		cm.endActivitiesLocked(previous)
-	}
 	connection := &AgentConn{
 		ServerID:     serverID,
 		Stream:       stream,
@@ -61,45 +59,163 @@ func (cm *ConnManager) Register(serverID string, stream pb.AgentService_ConnectS
 		GenerationID: uuid.NewString(),
 		done:         make(chan struct{}),
 	}
-	cm.streams[serverID] = connection
-	return connection
+	for {
+		cm.mu.Lock()
+		previous := cm.streams[serverID]
+		retiring := cm.retiring[serverID]
+		if previous == nil && retiring == nil {
+			cm.streams[serverID] = connection
+			cm.mu.Unlock()
+			return connection
+		}
+		cm.mu.Unlock()
+
+		if retiring != nil {
+			// A closing generation remains installed until every send that was
+			// admitted before Close has left GenerationMu. This makes removal the
+			// exact retirement boundary while allowing its Connect handler to
+			// return immediately and cancel a flow-controlled transport.
+			retiring.GenerationMu.Lock()
+			cm.mu.Lock()
+			if cm.retiring[serverID] != retiring {
+				cm.mu.Unlock()
+				retiring.GenerationMu.Unlock()
+				continue
+			}
+			if cm.streams[serverID] == retiring {
+				delete(cm.streams, serverID)
+			}
+			delete(cm.retiring, serverID)
+			if cm.streams[serverID] == nil {
+				cm.streams[serverID] = connection
+				cm.mu.Unlock()
+				retiring.GenerationMu.Unlock()
+				return connection
+			}
+			cm.mu.Unlock()
+			retiring.GenerationMu.Unlock()
+			continue
+		}
+
+		if previous != nil {
+			// Detach first so the old Connect handler can return and cancel a
+			// flow-controlled Send. Installation still waits below until every
+			// ordered send on the retired generation has actually finished.
+			cm.detachIfCurrent(serverID, previous)
+			continue
+		}
+
+	}
 }
 
 func (cm *ConnManager) Unregister(serverID string) {
-	cm.mu.Lock()
-	defer cm.mu.Unlock()
-	if conn := cm.streams[serverID]; conn != nil {
-		conn.Close()
-		cm.endActivitiesLocked(conn)
+	cm.mu.RLock()
+	conn := cm.streams[serverID]
+	cm.mu.RUnlock()
+	if conn != nil {
+		cm.detachIfCurrent(serverID, conn)
 	}
-	delete(cm.streams, serverID)
 }
 
 func (cm *ConnManager) UnregisterIfCurrent(serverID string, stream pb.AgentService_ConnectServer) bool {
+	cm.mu.RLock()
+	conn := cm.streams[serverID]
+	cm.mu.RUnlock()
+	if conn == nil || conn.Stream != stream {
+		return false
+	}
+	return cm.detachIfCurrent(serverID, conn)
+}
+
+// detachIfCurrent starts closing a generation without waiting for an in-flight
+// Send. It stays installed but is hidden from callers until GenerationMu proves
+// every admitted Send has finished; only then is it retired and replaceable.
+func (cm *ConnManager) detachIfCurrent(serverID string, conn *AgentConn) bool {
+	conn.DeliveryMu.Lock()
+	defer conn.DeliveryMu.Unlock()
 	cm.mu.Lock()
-	defer cm.mu.Unlock()
-	conn, ok := cm.streams[serverID]
-	if !ok || conn.Stream != stream {
+	if cm.streams[serverID] != conn {
+		cm.mu.Unlock()
 		return false
 	}
 	conn.Close()
 	cm.endActivitiesLocked(conn)
-	delete(cm.streams, serverID)
+	cm.retiring[serverID] = conn
+	cm.mu.Unlock()
+	go cm.finishRetirement(conn)
 	return true
+}
+
+func (cm *ConnManager) finishRetirement(conn *AgentConn) {
+	conn.GenerationMu.Lock()
+	defer conn.GenerationMu.Unlock()
+	cm.mu.Lock()
+	if cm.retiring[conn.ServerID] == conn {
+		if cm.streams[conn.ServerID] == conn {
+			delete(cm.streams, conn.ServerID)
+		}
+		delete(cm.retiring, conn.ServerID)
+	}
+	cm.mu.Unlock()
 }
 
 func (cm *ConnManager) GetConn(serverID string) *AgentConn {
 	cm.mu.RLock()
-	defer cm.mu.RUnlock()
-	return cm.streams[serverID]
+	conn := cm.streams[serverID]
+	cm.mu.RUnlock()
+	if conn != nil {
+		select {
+		case <-conn.Done():
+			return nil
+		default:
+		}
+	}
+	return conn
+}
+
+// WithCurrentGeneration runs fn only while stream is the exact installed
+// connection generation. Replacement and unregister wait for fn to finish, so
+// a message that passed the check cannot be delivered after its generation was
+// retired.
+func (cm *ConnManager) WithCurrentGeneration(serverID string, stream pb.AgentService_ConnectServer, fn func(*AgentConn)) bool {
+	cm.mu.RLock()
+	conn := cm.streams[serverID]
+	cm.mu.RUnlock()
+	if conn == nil || conn.Stream != stream {
+		return false
+	}
+	select {
+	case <-conn.Done():
+		return false
+	default:
+	}
+	conn.DeliveryMu.Lock()
+	defer conn.DeliveryMu.Unlock()
+	cm.mu.RLock()
+	current := cm.streams[serverID] == conn && conn.Stream == stream
+	cm.mu.RUnlock()
+	select {
+	case <-conn.Done():
+		current = false
+	default:
+	}
+	if !current {
+		return false
+	}
+	fn(conn)
+	return true
 }
 
 func (cm *ConnManager) ActiveServerIDs() []string {
 	cm.mu.RLock()
 	defer cm.mu.RUnlock()
 	ids := make([]string, 0, len(cm.streams))
-	for id := range cm.streams {
-		ids = append(ids, id)
+	for id, conn := range cm.streams {
+		select {
+		case <-conn.Done():
+		default:
+			ids = append(ids, id)
+		}
 	}
 	return ids
 }
@@ -130,16 +246,12 @@ func (cm *ConnManager) SendToAgent(serverID string, msg *pb.HubMessage) error {
 	if conn == nil {
 		return fmt.Errorf("agent not connected: %s", serverID)
 	}
-	conn.SendMu.Lock()
-	defer conn.SendMu.Unlock()
-	if err := cm.prepareActivitySend(conn, msg); err != nil {
-		return err
-	}
-	err := conn.Stream.Send(msg)
-	if err != nil {
-		cm.abandonMessage(conn, msg)
-	}
-	return err
+	return cm.SendToConnectionChecked(context.Background(), conn, msg, func() error {
+		if cm.GetConn(serverID) != conn {
+			return fmt.Errorf("agent connection changed: %s", serverID)
+		}
+		return nil
+	})
 }
 
 // SendToAgentContext bounds a control send. Timeout closes the registered
@@ -153,6 +265,20 @@ func (cm *ConnManager) SendToAgentContext(ctx context.Context, serverID string, 
 // local check and send share that connection's send order with terminal closes;
 // the check releases any policy/registry locks before network I/O starts.
 func (cm *ConnManager) SendToConnectionChecked(ctx context.Context, conn *AgentConn, msg *pb.HubMessage, check func() error) error {
+	return cm.SendToConnectionGuarded(ctx, conn, msg, func(send func() error) error {
+		if check != nil {
+			if err := check(); err != nil {
+				return err
+			}
+		}
+		return send()
+	})
+}
+
+// SendToConnectionGuarded lets a caller hold its authorization boundary across
+// both the final decision and the ordered stream send. The guard runs while the
+// exact connection's SendMu is held; it must invoke send at most once.
+func (cm *ConnManager) SendToConnectionGuarded(ctx context.Context, conn *AgentConn, msg *pb.HubMessage, guard func(send func() error) error) error {
 	if conn == nil {
 		return fmt.Errorf("agent not connected")
 	}
@@ -160,6 +286,8 @@ func (cm *ConnManager) SendToConnectionChecked(ctx context.Context, conn *AgentC
 	go func() {
 		conn.SendMu.Lock()
 		defer conn.SendMu.Unlock()
+		conn.GenerationMu.Lock()
+		defer conn.GenerationMu.Unlock()
 		select {
 		case <-conn.Done():
 			result <- fmt.Errorf("agent disconnected: %s", conn.ServerID)
@@ -169,19 +297,21 @@ func (cm *ConnManager) SendToConnectionChecked(ctx context.Context, conn *AgentC
 			return
 		default:
 		}
-		if check != nil {
-			if err := check(); err != nil {
-				result <- err
-				return
+		send := func() error {
+			if err := cm.prepareActivitySend(conn, msg); err != nil {
+				return err
 			}
+			err := conn.Stream.Send(msg)
+			if err != nil {
+				cm.abandonMessage(conn, msg)
+			}
+			return err
 		}
-		if err := cm.prepareActivitySend(conn, msg); err != nil {
-			result <- err
-			return
-		}
-		err := conn.Stream.Send(msg)
-		if err != nil {
-			cm.abandonMessage(conn, msg)
+		var err error
+		if guard != nil {
+			err = guard(send)
+		} else {
+			err = send()
 		}
 		result <- err
 	}()

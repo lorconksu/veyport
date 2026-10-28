@@ -29,6 +29,13 @@ func (s *Server) lockoutPolicy() lockout.Policy {
 	return lockout.Load(s.store.GetConfig)
 }
 
+// strictLockoutPolicy preserves default values only for genuinely absent
+// keys. Authorization paths use it so an unavailable config store cannot
+// silently weaken the operator's account and session policy.
+func (s *Server) strictLockoutPolicy() (lockout.Policy, error) {
+	return s.store.AccountPolicy()
+}
+
 // refuseLocked answers a sign-in attempt against a locked account.
 //
 // It deliberately does not touch the failure counter: the attempt never reached

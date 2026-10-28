@@ -11,7 +11,6 @@ import (
 	"github.com/google/uuid"
 	"github.com/wyiu/veyport/hub/internal/account"
 	"github.com/wyiu/veyport/hub/internal/auditrecord"
-	"github.com/wyiu/veyport/hub/internal/lockout"
 	"github.com/wyiu/veyport/hub/internal/model"
 	"github.com/wyiu/veyport/hub/internal/store"
 )
@@ -44,7 +43,11 @@ func (s *Service) Effective(userID string) (model.EffectiveCapabilities, error) 
 	if err != nil {
 		return e, ErrDenied
 	}
-	state := account.Evaluate(account.InputFromUser(u), s.Now(), lockout.Load(s.Store.GetConfig))
+	policy, err := s.Store.AccountPolicy()
+	if err != nil {
+		return e, ErrDenied
+	}
+	state := account.Evaluate(account.InputFromUser(u), s.Now(), policy)
 	if _, refuse := account.Refusal(state); refuse {
 		return e, ErrDenied
 	}
@@ -307,6 +310,9 @@ func (s *Service) Request(user, session, proof string, proposal Proposal) (model
 		e.PersonID = nominationPerson(payload.Nominations, user)
 	} else if !e.Can(ActionRequest) {
 		return model.SecurityChange{}, ErrDenied
+	}
+	if err := s.Store.ValidateSecurityRecoveryTarget(payload); err != nil {
+		return model.SecurityChange{}, err
 	}
 	u, err := s.Store.GetUserByID(user)
 	if err != nil {

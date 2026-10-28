@@ -43,9 +43,24 @@ func (s *Store) LogAudit(entry model.AuditEntry) (err error) {
 		s.noteAuditSuccess()
 	}()
 
+	if err = logAuditConn(ctx, conn, entry); err != nil {
+		return err
+	}
+
+	if _, err = conn.ExecContext(ctx, "COMMIT"); err != nil {
+		err = fmt.Errorf("commit audit: %w", err)
+		return err
+	}
+	committed = true
+	return nil
+}
+
+// logAuditConn appends to the integrity chain within an existing write transaction.
+func logAuditConn(ctx context.Context, conn *sql.Conn, entry model.AuditEntry) error {
+	entry = normalizeAuditEntry(entry)
 	// Compute integrity hash chain: SHA-256(prev_hash + current entry fields)
 	var prevHash string
-	err = conn.QueryRowContext(ctx, "SELECT prev_hash FROM audit_logs ORDER BY rowid DESC LIMIT 1").Scan(&prevHash)
+	err := conn.QueryRowContext(ctx, "SELECT prev_hash FROM audit_logs ORDER BY rowid DESC LIMIT 1").Scan(&prevHash)
 	if err != nil && err != sql.ErrNoRows {
 		err = fmt.Errorf("query previous audit hash: %w", err)
 		return err
@@ -72,11 +87,6 @@ func (s *Store) LogAudit(entry model.AuditEntry) (err error) {
 		return err
 	}
 
-	if _, err = conn.ExecContext(ctx, "COMMIT"); err != nil {
-		err = fmt.Errorf("commit audit: %w", err)
-		return err
-	}
-	committed = true
 	return nil
 }
 
@@ -208,14 +218,123 @@ func deriveAuditResourceType(action string) string {
 	}
 }
 
+const auditRetentionBatch = 256
+const auditRetentionBatches = 4
+const auditRetentionRewindCalls = 8
+
+// DeleteAuditLogsBefore scans at most 1024 indexed candidates and releases the
+// writer after every 256 rows. Repeated calls resume past pinned provenance;
+// reaching the end resets the cursor for the next sweep. Every eighth call
+// gives one batch to an independent forward-moving rescan, so provenance that
+// became deletable is revisited without resetting or starving the main sweep.
+// Invalid timestamps are retained. A concurrent call on this Store yields to
+// the current sweep.
 func (s *Store) DeleteAuditLogsBefore(cutoff string) (int, error) {
-	result, err := s.db.Exec(`DELETE FROM audit_logs WHERE created_at < ?`, cutoff)
+	before, err := auditInstant(cutoff)
 	if err != nil {
-		return 0, fmt.Errorf("delete audit logs before cutoff: %w", err)
+		return 0, fmt.Errorf("invalid audit cutoff: %w", err)
 	}
-	rows, err := result.RowsAffected()
-	if err != nil {
-		return 0, fmt.Errorf("delete audit logs affected rows: %w", err)
+	if !s.auditRetentionMu.TryLock() {
+		return 0, nil
 	}
-	return int(rows), nil
+	defer s.auditRetentionMu.Unlock()
+	previous, previousErr := auditInstant(s.auditRetentionCutoff)
+	if previousErr != nil || before.Before(previous) {
+		s.auditRetentionEpoch, s.auditRetentionID = -1<<63, ""
+		s.auditRevisitEpoch, s.auditRevisitID = -1<<63, ""
+		s.auditRetentionCalls = 0
+	}
+	s.auditRetentionCutoff = cutoff
+	s.auditRetentionCalls++
+	total := 0
+	scan := func(startEpoch int64, startID string) (int64, string, int, error) {
+		count := 0
+		epoch, id := startEpoch, startID
+		err := s.withImmediateTx(func(ctx context.Context, conn *sql.Conn) error {
+			rows, err := conn.QueryContext(ctx, auditRetentionCandidates, epoch, id, before.Unix()+1, auditRetentionBatch)
+			if err != nil {
+				return err
+			}
+			type candidate struct {
+				id, stamp string
+				epoch     int64
+			}
+			candidates := []candidate{}
+			for rows.Next() {
+				var c candidate
+				if err := rows.Scan(&c.id, &c.stamp, &c.epoch); err != nil {
+					rows.Close()
+					return err
+				}
+				candidates = append(candidates, c)
+			}
+			err = rows.Err()
+			rows.Close()
+			if err != nil {
+				return err
+			}
+			count = len(candidates)
+			for _, c := range candidates {
+				epoch, id = c.epoch, c.id
+				instant, err := auditInstant(c.stamp)
+				if err != nil || !instant.Before(before) {
+					continue
+				}
+				// The live-grant decision and deletion share the writer transaction.
+				result, err := conn.ExecContext(ctx, `DELETE FROM audit_logs WHERE id=? AND NOT EXISTS(
+     SELECT 1 FROM local_break_glass_recoveries r WHERE r.audit_id=audit_logs.id
+     AND (unixepoch(r.expires_at)>unixepoch() OR unixepoch(r.expires_at) IS NULL))`, c.id)
+				if err != nil {
+					return err
+				}
+				n, err := result.RowsAffected()
+				if err != nil {
+					return err
+				}
+				total += int(n)
+			}
+			return nil
+		})
+		if err != nil {
+			return startEpoch, startID, count, fmt.Errorf("delete audit batch: %w", err)
+		}
+		return epoch, id, count, nil
+	}
+	batches := auditRetentionBatches
+	if s.auditRetentionCalls%auditRetentionRewindCalls == 0 {
+		epoch, id, count, err := scan(s.auditRevisitEpoch, s.auditRevisitID)
+		if err != nil {
+			return total, err
+		}
+		s.auditRevisitEpoch, s.auditRevisitID = epoch, id
+		if count < auditRetentionBatch {
+			s.auditRevisitEpoch, s.auditRevisitID = -1<<63, ""
+		}
+		batches--
+	}
+	for batch := 0; batch < batches; batch++ {
+		epoch, id, count, err := scan(s.auditRetentionEpoch, s.auditRetentionID)
+		if err != nil {
+			return total, err
+		}
+		s.auditRetentionEpoch, s.auditRetentionID = epoch, id
+		if count < auditRetentionBatch {
+			s.auditRetentionEpoch, s.auditRetentionID = -1<<63, ""
+			break
+		}
+	}
+	return total, nil
+}
+
+const auditRetentionCandidates = `SELECT id,created_at,created_at_epoch FROM audit_logs
+ WHERE (created_at_epoch,id)>(?,?) AND created_at_epoch<=?
+ ORDER BY created_at_epoch,id LIMIT ?`
+
+func auditInstant(raw string) (time.Time, error) {
+	for _, layout := range []string{time.RFC3339Nano, "2006-01-02 15:04:05.999999999Z07:00", "2006-01-02 15:04:05.999999999"} {
+		if t, err := time.Parse(layout, raw); err == nil {
+			return t, nil
+		}
+	}
+	return time.Time{}, fmt.Errorf("unrecognized timestamp")
 }

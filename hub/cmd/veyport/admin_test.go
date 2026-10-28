@@ -4,6 +4,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -124,6 +125,48 @@ func TestRunResetTOTP_Success(t *testing.T) {
 	}
 }
 
+func TestRunResetTOTP_RefusesLDAPWithoutPublishingCredential(t *testing.T) {
+	for _, protected := range []bool{false, true} {
+		t.Run(map[bool]string{false: "ordinary", true: "protected"}[protected], func(t *testing.T) {
+			dbPath, st := newAdminTestStore(t)
+			secret := "directory-mfa"
+			user := createAdminUser(t, st, "directory", model.RoleAdmin, &secret, true)
+			if _, err := st.DB().Exec("UPDATE users SET auth_provider='ldap' WHERE id=?", user.ID); err != nil {
+				t.Fatal(err)
+			}
+			if protected {
+				if _, err := st.DB().Exec("INSERT INTO user_roles(user_id,role) VALUES(?,'original-reader')", user.ID); err != nil {
+					t.Fatal(err)
+				}
+			}
+			before, err := st.GetUserByID(user.ID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			st.Close()
+			var resetErr error
+			output := captureStdout(t, func() { resetErr = runResetTOTP([]string{"--username", "directory", "--db", dbPath}) })
+			if resetErr == nil || !strings.Contains(resetErr.Error(), "local accounts only") || output != "" {
+				t.Fatalf("LDAP refusal published output or failed: %v", resetErr)
+			}
+			verify, err := store.New(dbPath)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer verify.Close()
+			after, err := verify.GetUserByID(user.ID)
+			if err != nil || !reflect.DeepEqual(before, after) {
+				t.Fatal("CLI LDAP refusal changed credentials")
+			}
+			action := model.AuditUserTOTPReset
+			_, n, err := verify.ListAuditLogs(model.AuditFilter{Action: &action, Limit: 10})
+			if err != nil || n != 0 {
+				t.Fatal("CLI LDAP refusal recorded successful reset")
+			}
+		})
+	}
+}
+
 // TestRunResetTOTP_InvalidatesCredentials verifies that the admin CLI break-glass
 // reset also invalidates the target user's existing refresh tokens (via
 // token_generation bump) and API tokens, so stolen sessions cannot survive the
@@ -199,7 +242,7 @@ func TestRunResetTOTP_InvalidatesCredentials(t *testing.T) {
 }
 
 // TestRunResetTOTP_IncrementTokenGenerationFailure exercises the error branch
-// where invalidating the user's existing sessions fails after the password reset.
+// where the atomic credential update fails.
 func TestRunResetTOTP_IncrementTokenGenerationFailure(t *testing.T) {
 	dbPath, st := newAdminTestStore(t)
 	secret := "totp-secret"
@@ -219,13 +262,13 @@ func TestRunResetTOTP_IncrementTokenGenerationFailure(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected session invalidation to fail")
 	}
-	if !strings.Contains(err.Error(), "invalidate sessions:") {
-		t.Fatalf("expected wrapped invalidate-sessions error, got %v", err)
+	if !strings.Contains(err.Error(), "reset TOTP:") {
+		t.Fatalf("expected wrapped reset error, got %v", err)
 	}
 }
 
 // TestRunResetTOTP_RevokeAPITokensFailure exercises the error branch where the
-// API-token revocation step fails after sessions were successfully invalidated.
+// atomic reset fails at API-token revocation.
 func TestRunResetTOTP_RevokeAPITokensFailure(t *testing.T) {
 	dbPath, st := newAdminTestStore(t)
 	secret := "totp-secret"
@@ -258,8 +301,8 @@ func TestRunResetTOTP_RevokeAPITokensFailure(t *testing.T) {
 
 	if err := runResetTOTP([]string{"--username", "resetme", "--db", dbPath}); err == nil {
 		t.Fatal("expected API token revocation to fail")
-	} else if !strings.Contains(err.Error(), "revoke api tokens:") {
-		t.Fatalf("expected wrapped revoke-api-tokens error, got %v", err)
+	} else if !strings.Contains(err.Error(), "reset TOTP:") {
+		t.Fatalf("expected wrapped reset error, got %v", err)
 	}
 }
 
@@ -283,8 +326,8 @@ func TestRunResetTOTP_MarkSetupCompleteFailure(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected setup state write to fail")
 	}
-	if !strings.Contains(err.Error(), `mark setup complete: set config "initial_setup_completed":`) {
-		t.Fatalf("expected wrapped setup completion error, got %v", err)
+	if !strings.Contains(err.Error(), "reset TOTP:") {
+		t.Fatalf("expected wrapped reset error, got %v", err)
 	}
 }
 

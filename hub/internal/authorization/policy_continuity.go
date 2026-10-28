@@ -8,6 +8,7 @@ import (
 
 	"github.com/wyiu/veyport/hub/internal/auditrecord"
 	"github.com/wyiu/veyport/hub/internal/model"
+	"github.com/wyiu/veyport/hub/internal/store"
 )
 
 // ConfigureExecutionPolicy installs one immutable local continuity binding for
@@ -23,8 +24,9 @@ func (s *Service) ConfigureExecutionPolicy(cfg TransitionConfig) (err error) {
 	}
 	local := TransitionConfig{InstallationID: cfg.InstallationID, EnrollmentPath: filepath.Clean(cfg.EnrollmentPath)}
 	key := local.InstallationID + "\x00" + local.EnrollmentPath
-	return s.Store.InstallExecutionPolicyValidator(key, func(state model.PolicyState) error {
-		return s.validateLocalExecutionPolicy(state, local)
+	return s.Store.InstallExecutionPolicyValidator(key, func(reader *store.Store, state model.PolicyState) error {
+		validator := &Service{Store: reader}
+		return validator.validateLocalExecutionPolicy(state, local)
 	})
 }
 

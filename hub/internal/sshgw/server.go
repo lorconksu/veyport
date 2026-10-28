@@ -523,8 +523,10 @@ func (s *Server) authenticate(conn ssh.ConnMetadata, key ssh.PublicKey, state *c
 	// store state when the shell is requested (FR-007).
 	return &ssh.Permissions{
 		Extensions: map[string]string{
-			extUsername: username,
-			extTarget:   target,
+			extUsername:                          username,
+			extTarget:                            target,
+			userca.CredentialGenerationExtension: key.(*ssh.Certificate).Extensions[userca.CredentialGenerationExtension],
+			userca.AccountIdentityExtension:      key.(*ssh.Certificate).Extensions[userca.AccountIdentityExtension],
 		},
 	}, nil
 }

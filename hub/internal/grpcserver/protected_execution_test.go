@@ -80,7 +80,7 @@ func TestProtectedDispatchRequiresCurrentReceiptExpiry(t *testing.T) {
 	}
 }
 
-func TestHandlerBlockedDisconnectPreservesReplacementExecutionRevocations(t *testing.T) {
+func TestHandlerAsyncDisconnectPreservesReplacementExecutionRevocations(t *testing.T) {
 	h, st := testHandler(t)
 	h.notifier = nil
 	if err := st.CreateServer(&model.Server{ID: "node", Name: "node", Status: "online", Labels: "{}"}); err != nil {
@@ -98,6 +98,9 @@ func TestHandlerBlockedDisconnectPreservesReplacementExecutionRevocations(t *tes
 	}
 	defer h.executions.Remove("node", "old")
 	st.DB().SetMaxOpenConns(1)
+	if _, err := st.DB().Exec(`CREATE TABLE disconnect_markers (id INTEGER PRIMARY KEY); CREATE TRIGGER mark_disconnect AFTER UPDATE OF status ON servers WHEN NEW.status='offline' BEGIN INSERT INTO disconnect_markers(id) VALUES(NULL); END`); err != nil {
+		t.Fatal(err)
+	}
 	blocked, err := st.DB().Conn(context.Background())
 	if err != nil {
 		t.Fatal(err)
@@ -114,8 +117,8 @@ func TestHandlerBlockedDisconnectPreservesReplacementExecutionRevocations(t *tes
 	}
 	select {
 	case <-finished:
-		t.Fatal("disconnect did not wait on blocked store")
-	default:
+	case <-time.After(time.Second):
+		t.Fatal("disconnect cleanup waited on blocked durable bookkeeping")
 	}
 	newStream := &mockStream{}
 	h.connMgr.Register("node", newStream)
@@ -126,10 +129,18 @@ func TestHandlerBlockedDisconnectPreservesReplacementExecutionRevocations(t *tes
 	}
 	defer h.executions.Remove("node", "new")
 	_ = blocked.Close()
-	select {
-	case <-finished:
-	case <-time.After(time.Second):
-		t.Fatal("disconnect did not finish after store unblocked")
+	deadline = time.Now().Add(time.Second)
+	for {
+		var markers int
+		server, serverErr := st.GetServerByID("node")
+		markerErr := st.DB().QueryRow("SELECT COUNT(*) FROM disconnect_markers").Scan(&markers)
+		if serverErr == nil && markerErr == nil && markers == 1 && server.Status == "online" {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("asynchronous disconnect bookkeeping did not reconcile replacement: markers=%d server=%+v server_err=%v marker_err=%v", markers, server, serverErr, markerErr)
+		}
+		time.Sleep(time.Millisecond)
 	}
 	if !h.executions.SupportsProtected("node") {
 		t.Fatal("old handler cleanup erased replacement capability")

@@ -213,6 +213,10 @@ func (h *Handler) onAgentConnected(serverID, peerAddr string) {
 
 // onAgentDisconnected unregisters the connection, flushes heartbeats, and logs the disconnect event.
 func (h *Handler) onAgentDisconnected(serverID string, stream pb.AgentService_ConnectServer) {
+	// Durable disconnect bookkeeping must never delay Connect's return. An EOF
+	// can race a flow-controlled Send just like a locally closed generation;
+	// returning is what lets gRPC cancel that Send and release any SQLite
+	// authorization boundary it still holds.
 	if h.applications != nil {
 		h.applications.EndConnection(serverID, stream)
 	}
@@ -230,8 +234,12 @@ func (h *Handler) onAgentDisconnected(serverID string, stream pb.AgentService_Co
 		return
 	}
 	if endTerminals != nil {
-		defer endTerminals()
+		endTerminals()
 	}
+	go h.finishAgentDisconnected(serverID)
+}
+
+func (h *Handler) finishAgentDisconnected(serverID string) {
 	if h.hbCoalescer != nil {
 		h.hbCoalescer.Flush(serverID)
 	}
@@ -489,11 +497,23 @@ func (h *Handler) routeAgentMessage(serverID string, stream pb.AgentService_Conn
 	case *pb.AgentMessage_ReenrollRequest, *pb.AgentMessage_ReenrollProof:
 		return status.Error(codes.FailedPrecondition, "re-enrollment requires a separate bootstrap stream")
 	case *pb.AgentMessage_TerminalOpenAck:
-		h.deliverPending(serverID, p.TerminalOpenAck.SessionId, p.TerminalOpenAck)
+		h.connMgr.WithCurrentGeneration(serverID, stream, func(conn *connmgr.AgentConn) {
+			if h.terminals != nil && h.terminals.AcceptAgentConnection(serverID, p.TerminalOpenAck.SessionId, conn) {
+				h.deliverPending(serverID, p.TerminalOpenAck.SessionId, p.TerminalOpenAck)
+			}
+		})
 	case *pb.AgentMessage_TerminalData:
-		h.deliverTerminalData(serverID, p.TerminalData.SessionId, p.TerminalData.Data)
+		h.connMgr.WithCurrentGeneration(serverID, stream, func(conn *connmgr.AgentConn) {
+			if h.terminals != nil {
+				h.terminals.DeliverDataFrom(conn, serverID, p.TerminalData.SessionId, p.TerminalData.Data)
+			}
+		})
 	case *pb.AgentMessage_TerminalExit:
-		h.deliverTerminalExit(serverID, p.TerminalExit.SessionId, p.TerminalExit.ExitCode, p.TerminalExit.Error)
+		h.connMgr.WithCurrentGeneration(serverID, stream, func(conn *connmgr.AgentConn) {
+			if h.terminals != nil {
+				h.terminals.EndFrom(conn, serverID, p.TerminalExit.SessionId, p.TerminalExit.ExitCode, p.TerminalExit.Error)
+			}
+		})
 	case *pb.AgentMessage_ExecutionCapabilities:
 		if h.executions != nil {
 			if node, err := h.executionNode(stream.Context()); err == nil && node == serverID {
@@ -547,40 +567,39 @@ func (h *Handler) deliverLogChunk(serverID, requestID string, data []byte) {
 	}
 }
 
-func (h *Handler) deliverTerminalData(serverID, sessionID string, data []byte) {
-	if h.terminals != nil {
-		h.terminals.DeliverData(serverID, sessionID, data)
-	}
-}
-
-func (h *Handler) deliverTerminalExit(serverID, sessionID string, exitCode int32, terminalError string) {
-	if h.terminals != nil {
-		h.terminals.End(serverID, sessionID, exitCode, terminalError)
-	}
-}
-
 // handleStreamHeartbeat processes an in-stream heartbeat, updates last-seen, and sends an ack.
 func (h *Handler) handleStreamHeartbeat(serverID string, stream pb.AgentService_ConnectServer) error {
-	h.connMgr.UpdateHeartbeat(serverID)
+	var conn *connmgr.AgentConn
+	if !h.connMgr.WithCurrentGeneration(serverID, stream, func(current *connmgr.AgentConn) {
+		conn = current
+		h.connMgr.UpdateHeartbeat(serverID)
+	}) {
+		return nil
+	}
+	// Durable heartbeat persistence must not hold the inbound generation's
+	// delivery lock. A SQLite writer can be blocked by a flow-controlled
+	// terminal send; disconnect must still detach this connection promptly so
+	// returning Connect cancels that send. The exact-generation check below
+	// prevents an acknowledgement from crossing a replacement connection.
 	if h.hbCoalescer != nil {
 		h.hbCoalescer.RecordHeartbeat(serverID)
 	} else {
 		_ = h.store.UpdateServerLastSeen(serverID, nil)
 	}
-	conn := h.connMgr.GetConn(serverID)
-	if conn == nil {
-		return nil
-	}
-	conn.SendMu.Lock()
-	err := stream.Send(&pb.HubMessage{
+	ctx, cancel := context.WithTimeout(stream.Context(), 5*time.Second)
+	defer cancel()
+	return h.connMgr.SendToConnectionChecked(ctx, conn, &pb.HubMessage{
 		Payload: &pb.HubMessage_HeartbeatAck{
 			HeartbeatAck: &pb.HeartbeatAck{
 				Timestamp: time.Now().Unix(),
 			},
 		},
+	}, func() error {
+		if h.connMgr.GetConn(serverID) != conn || conn.Stream != stream {
+			return fmt.Errorf("agent connection changed")
+		}
+		return nil
 	})
-	conn.SendMu.Unlock()
-	return err
 }
 
 // handleRegister validates the registration token and enrols the agent.

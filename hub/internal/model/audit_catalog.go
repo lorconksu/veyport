@@ -44,6 +44,8 @@ var AuditCatalog = []AuditCatalogEntry{
 	{Action: AuditUserTOTPDisabled, Label: "TOTP disabled", Category: "Authentication", Outcome: AuditOutcomeSuccess, ActorType: AuditActorTypeUser, ResourceType: "user"},
 	{Action: AuditUserCreated, Label: "User created", Category: auditCategoryUserManagement, Outcome: AuditOutcomeSuccess, ActorType: AuditActorTypeUser, ResourceType: "user"},
 	{Action: AuditUserTOTPReset, Label: "TOTP reset", Category: auditCategoryUserManagement, Outcome: AuditOutcomeSuccess, ActorType: AuditActorTypeSystem, ResourceType: "user"},
+	{Action: AuditUserPasswordReset, Label: "Password reset", Category: auditCategoryUserManagement, Outcome: AuditOutcomeSuccess, ActorType: AuditActorTypeUser, ResourceType: "user"},
+	{Action: AuditUserReactivated, Label: "Account reactivated", Category: auditCategoryUserManagement, Outcome: AuditOutcomeSuccess, ActorType: AuditActorTypeUser, ResourceType: "user"},
 	{Action: AuditUserPasswordChanged, Label: "Password changed", Category: "Authentication", Outcome: AuditOutcomeSuccess, ActorType: AuditActorTypeUser, ResourceType: "user"},
 	{Action: AuditUserPasswordReuseRejected, Label: "Password reuse rejected", Category: "Authentication", Outcome: AuditOutcomeFailure, ActorType: AuditActorTypeUser, ResourceType: "user"},
 	{Action: AuditUserRoleUpdated, Label: "User role updated", Category: auditCategoryUserManagement, Outcome: AuditOutcomeSuccess, ActorType: AuditActorTypeUser, ResourceType: "user"},

@@ -2,6 +2,7 @@ package sshgw
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -52,15 +53,21 @@ type windowSize struct {
 // bridgeParams is everything the relay needs about an already-authorized
 // session.
 type bridgeParams struct {
-	serverID      string
-	serverName    string
-	userID        string
-	username      string
-	executionUser string
-	remoteIP      string
-	cols          uint32
-	rows          uint32
-	win           <-chan windowSize
+	abortOutput          func() error
+	serverID             string
+	serverName           string
+	userID               string
+	credentialGeneration int
+	username             string
+	executionUser        string
+	remoteIP             string
+	cols                 uint32
+	rows                 uint32
+	win                  <-chan windowSize
+	// afterOpen is an in-process boundary hook used by tests to exercise the
+	// real post-ack/pre-attach window without mutating registry state from
+	// inside the serialized gRPC Send call.
+	afterOpen func()
 	// clientGone closes when the SSH session channel is finished. It is the
 	// authoritative end-of-session signal: a client that merely half-closes
 	// its stdin (`ssh ... < /dev/null`) must keep the remote shell running,
@@ -89,11 +96,15 @@ func (s *Server) bridge(ch ssh.Channel, p bridgeParams) {
 	sessionID := uuid.NewString()
 
 	events, executionUser, err := s.cfg.Terminals.RegisterInteractive(s.cfg.Store, s.cfg.ConnMgr, p.serverID, sessionID, p.userID, func() (string, error) {
+		live, err := s.cfg.Store.GetUserByID(p.userID)
+		if err != nil || live.SSHCredentialGeneration != p.credentialGeneration || !live.TOTPEnabled || live.TOTPSecret == nil {
+			return "", errors.New("SSH credential revoked; run vey ssh-cert after signing in again")
+		}
 		if err := s.securityService().GuardInteractive(p.userID, p.serverID); err != nil {
 			return "", err
 		}
 		return server.AuthorizeTerminalExecution(s.cfg.Store, p.userID, p.serverID)
-	}, grpcserver.WithKind(grpcserver.TerminalKindSSH))
+	}, grpcserver.WithKind(grpcserver.TerminalKindSSH), grpcserver.WithCredentialGeneration(p.credentialGeneration, true))
 	if err != nil {
 		s.refuseBridge(ch, p, sessionID, err.Error())
 		return
@@ -105,6 +116,9 @@ func (s *Server) bridge(ch ssh.Channel, p bridgeParams) {
 		s.cfg.Terminals.Remove(p.serverID, sessionID)
 		s.refuseBridge(ch, p, sessionID, err.Error())
 		return
+	}
+	if p.afterOpen != nil {
+		p.afterOpen()
 	}
 
 	// Flip streaming on so the unattached-session reaper cannot claim it. The
@@ -189,16 +203,36 @@ func (s *Server) openAgentTerminal(sessionID string, p bridgeParams) error {
 // channel holds 256 slots and TerminalSessions.DeliverData DROPS on a full
 // buffer, so any extra work on this path would silently lose output.
 func (s *Server) relay(ch ssh.Channel, events <-chan grpcserver.TerminalEvent, sessionID string, p bridgeParams) exitInfo {
+	info, exists := s.cfg.Terminals.Get(p.serverID, sessionID)
+	if !exists {
+		return exitInfo{code: exitAborted}
+	}
+	abort := p.abortOutput
+	if abort == nil {
+		abort = ch.Close
+	}
+	info.SetOutputAbort(func() { _ = abort() })
+	defer info.SetOutputAbort(nil)
+
 	for {
+		if exit, revoked := info.ForcedExit(); revoked {
+			return agentExit(exit)
+		}
 		select {
 		case event, ok := <-events:
+			if exit, revoked := info.ForcedExit(); revoked {
+				return agentExit(exit)
+			}
 			if !ok {
 				// The session was closed underneath us without an exit event.
 				return exitInfo{code: exitAborted, message: "the session was closed by the hub", agentInitiated: true}
 			}
 			switch event.Type {
 			case grpcserver.TerminalEventData:
-				if _, err := ch.Write(event.Data); err != nil {
+				if _, err := info.ForwardData(func() error { _, err := ch.Write(event.Data); return err }); err != nil {
+					if exit, revoked := info.ForcedExit(); revoked {
+						return agentExit(exit)
+					}
 					return exitInfo{code: exitAborted}
 				}
 			case grpcserver.TerminalEventExit:
@@ -283,25 +317,16 @@ func (s *Server) sendResize(sessionID string, p bridgeParams, size windowSize) {
 // mirroring the web terminal's closeTerminalSession.
 func (s *Server) teardown(ch ssh.Channel, p bridgeParams, sessionID string, exit exitInfo) {
 	info, exists := s.cfg.Terminals.Get(p.serverID, sessionID)
-	handledClose := false
+	if forced, revoked := info.ForcedExit(); revoked {
+		exit = agentExit(forced)
+	}
 	if exists && (!info.Closed || exit.forced) {
-		handledClose = s.cfg.Terminals.CloseInteractive(p.serverID, sessionID)
+		s.cfg.Terminals.CloseInteractive(p.serverID, sessionID)
 	}
-	alreadyClosed, removed := s.cfg.Terminals.RemoveIfHubInitiated(p.serverID, sessionID)
-	// A forced close closes the registry entry before the relay ever sees the
-	// exit, so alreadyClosed says nothing about the agent there: its shell is
-	// still running and has to be told to stop.
-	if removed && !handledClose && (!alreadyClosed || exit.forced) {
-		err := s.cfg.ConnMgr.SendToAgent(p.serverID, &pb.HubMessage{
-			Payload: &pb.HubMessage_TerminalClose{
-				TerminalClose: &pb.TerminalClose{SessionId: sessionID},
-			},
-		})
-		if err != nil {
-			log.Printf("SSH gateway: close session %s on agent: %v", sessionID, err)
-		}
-	}
-
+	s.cfg.Terminals.RemoveIfHubInitiated(p.serverID, sessionID)
+	// Interactive terminals close only through their captured AgentConn.
+	// Redirecting a stale close to a replacement generation could leave the old
+	// shell running while affecting an unrelated new one.
 	// An abnormal end must be visible to the operator, never a silent freeze
 	// (FR-011).
 	if exit.message != "" {

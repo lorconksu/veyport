@@ -78,6 +78,7 @@ type Server struct {
 	logTailMu                 sync.Mutex
 	logTailSessions           map[string]int
 	totpCache                 *auth.TOTPUsedCodes
+	passwordHashFn            func(string) (string, error)
 	tokenBlacklist            *auth.TokenBlacklist
 	notifier                  *notify.Notifier
 	ldapAuthenticator         LDAPAuthenticator
@@ -202,6 +203,7 @@ func New(cfg Config) *Server {
 		sshHostKey:                cfg.SSHHostKey,
 		sshConfig:                 cfg.SSHConfig,
 		nowFn:                     func() time.Time { return time.Now().UTC() },
+		passwordHashFn:            auth.HashPassword,
 	}
 
 	s.securityTransition.ResolveSecret = s.resolveSecuritySecret

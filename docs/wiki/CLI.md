@@ -537,6 +537,15 @@ For Hub API and CLI preflight errors, codes are stable and intended for
 scripting: distinguish "re-authenticate" (3) from "you don't have access" (4)
 from "try again later" (7).
 
+If the Hub reports `password_change_required` after an administrator reset your Local password,
+`vey` cannot use its session to reach normal commands or complete recovery. Open the Hub in a
+browser, sign in with the temporary password and your existing TOTP, replace the password, then
+run `vey login` again with the new password and the same TOTP. Then run `vey ssh-cert` to obtain a
+fresh SSH certificate before `vey ssh`; certificates issued before recovery are refused even if
+they have not expired. Do not put the temporary password in a script or retry an administrator
+reset whose response was lost; ask the administrator to perform a new explicit reset if necessary.
+LDAP password changes must be completed in the directory.
+
 A `423` response from the Hub during `vey login` (the account is temporarily locked after too
 many failed attempts) maps to exit code `3`, with the Hub's message printed verbatim to stderr,
 e.g. `account temporarily locked — try again later`.

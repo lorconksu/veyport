@@ -127,6 +127,9 @@ func Login(ctx context.Context, opts LoginOptions) (*api.TokenPair, error) {
 		// credential for the 60 s it lives).
 		return nil, scrubSecret(scrubSecret(err, code), totpToken)
 	}
+	if pair.MustChangePassword {
+		return nil, cmdutil.NewAuthError(errors.New("password change required: open the Veyport web UI, sign in with your temporary password and existing authenticator, replace the password, then run vey login again"))
+	}
 	if pair.RefreshToken == "" || pair.AccessToken == "" {
 		return nil, cmdutil.NewCodedError(cmdutil.ExitError,
 			errors.New("hub accepted the one-time code but returned an incomplete token pair"))

@@ -3,7 +3,8 @@ import { useState, useEffect } from 'react'
 import { useLocation, useNavigate } from 'react-router-dom'
 import { apiFetch } from '@/lib/api'
 import { useAuth } from '@/hooks/use-auth'
-import type { LoginTOTPRequest, AuthResponse } from '@/types/api'
+import type { LoginTOTPRequest, AuthResponse, PasswordRecoveryResponse } from '@/types/api'
+import { PasswordRecoveryForm } from '@/pages/password-recovery'
 import { useTOTPDigits, TOTPDigitInput } from '@/components/totp-digit-input'
 
 export function LoginTOTPPage() {
@@ -15,17 +16,25 @@ export function LoginTOTPPage() {
 
   const [error, setError] = useState('')
   const [loading, setLoading] = useState(false)
+  const [recovery, setRecovery] = useState<PasswordRecoveryResponse | null>(null)
+  const { digits, inputRefs, handleDigitChange, handlePaste, handleKeyDown, reset } = useTOTPDigits(submitCode)
 
-  const submitCode = async (code: string) => {
+  async function submitCode(code: string) {
     if (!totpToken) return
     setError('')
     setLoading(true)
 
     try {
-      const resp = await apiFetch<AuthResponse>('/auth/login/totp', {
+      const resp = await apiFetch<AuthResponse | PasswordRecoveryResponse>('/auth/login/totp', {
         method: 'POST',
         body: JSON.stringify({ totp_token: totpToken, code } satisfies LoginTOTPRequest),
       })
+
+      if ('recovery_token' in resp) {
+        reset()
+        setRecovery(resp)
+        return
+      }
 
       login(resp.user)
       navigate(safeApplicationReturn((location.state as { returnTo?: unknown } | null)?.returnTo), { replace: true })
@@ -37,14 +46,17 @@ export function LoginTOTPPage() {
     }
   }
 
-  const { digits, inputRefs, handleDigitChange, handlePaste, handleKeyDown, reset } = useTOTPDigits(submitCode)
-
   useEffect(() => {
     if (!totpToken) navigate('/login')
   }, [totpToken, navigate])
 
   /* c8 ignore next */
   const handleVerifyClick = () => submitCode(digits.join(''))
+
+  if (recovery) {
+    const returnToSignIn = () => { setRecovery(null); navigate('/login', { replace: true, state: null }) }
+    return <PasswordRecoveryForm recovery={recovery} onComplete={returnToSignIn} onCancel={returnToSignIn} />
+  }
 
   return (
     <div>

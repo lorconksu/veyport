@@ -31,6 +31,14 @@ func recoveryCommandLogin(t *testing.T, s *Server, target *model.User, password 
 	}
 	var signed model.AuthResponse
 	decodeResult(t, second.Body.Bytes(), &signed)
+	var recovered model.LoginResponse
+	decodeResult(t, second.Body.Bytes(), &recovered)
+	if recovered.MustChangePassword {
+		if recovered.RecoveryToken == "" {
+			t.Fatal("missing purpose-bound recovery")
+		}
+		signed.AccessToken = recovered.RecoveryToken
+	}
 	return signed
 }
 
@@ -74,18 +82,18 @@ func TestApprovedPasswordRecoveryBlocksCertificateAndExistingCommandAuthorityUnt
 		t.Errorf("existing certificate/command authorization allowed unfinished recovery: %v", err)
 	}
 	signed := recoveryCommandLogin(t, s, target, temporary, clock)
-	if !signed.User.MustChangePassword {
-		t.Fatal("approved temporary credential did not require password completion")
+	if signed.AccessToken == "" {
+		t.Fatal("approved temporary credential did not issue a recovery challenge")
 	}
 	denied := postSSHCert(t, s.routes(), signed.AccessToken, map[string]string{"public_key": publicKey})
 	if denied.Code != http.StatusForbidden {
 		t.Errorf("unfinished recovery issued certificate: status=%d", denied.Code)
 	}
-	if count := countSSHAuditAction(t, s, model.AuditSSHCertIssueRefused); count != 1 {
-		t.Errorf("recovery certificate denial audit count=%d want1", count)
+	if count := countSSHAuditAction(t, s, model.AuditSSHCertIssueRefused); count != 0 {
+		t.Errorf("recovery certificate denial audit count=%d want0", count)
 	}
 
-	completed := securityCall(s, "PUT", "/api/auth/password", signed.AccessToken, mustMarshal(t, model.ChangePasswordRequest{CurrentPassword: temporary, NewPassword: replacement}))
+	completed := securityCall(s, "POST", "/api/auth/password/recovery", signed.AccessToken, mustMarshal(t, map[string]string{"new_password": replacement}))
 	if completed.Code != http.StatusOK {
 		t.Fatalf("approved password completion status=%d", completed.Code)
 	}

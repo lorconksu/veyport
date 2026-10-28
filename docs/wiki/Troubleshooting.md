@@ -138,7 +138,10 @@ Someone with shell access to the Veyport server must run the CLI break-glass com
 ./bin/veyport admin reset-totp --username <your-username> --db veyport.db
 ```
 
-This resets your TOTP and prints a temporary password to the terminal. Log in with the temporary password and you will be prompted to set up a new authenticator.
+For local accounts, this resets TOTP and prints an expiring temporary password to
+the terminal. Log in before it expires, enroll a new authenticator, and choose a
+fresh permanent password. Existing credentials are revoked and recent permanent
+passwords remain blocked. LDAP accounts must recover passwords in the directory.
 
 ---
 

@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"encoding/pem"
 	"github.com/google/uuid"
@@ -277,34 +278,46 @@ type applicationZeroReader struct{}
 
 func (applicationZeroReader) Read(p []byte) (int, error) { clear(p); return len(p), nil }
 func TestApplicationStreams64MiBUploadAndDownload(t *testing.T) {
+	const payloadSize = 64 << 20
+	expected := sha256.New()
+	if n, err := io.Copy(expected, io.LimitReader(applicationZeroReader{}, payloadSize)); err != nil || n != payloadSize {
+		t.Fatalf("prepare payload digest: bytes=%d err=%v", n, err)
+	}
+	wantDigest := expected.Sum(nil)
 	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		n, e := io.Copy(w, r.Body)
-		if e != nil || n != 64<<20 {
-			t.Errorf("backend streamed%d bytes: %v", n, e)
+		received := sha256.New()
+		n, err := io.Copy(io.MultiWriter(w, received), r.Body)
+		if err != nil || n != payloadSize || !bytes.Equal(received.Sum(nil), wantDigest) {
+			t.Errorf("backend streamed%d bytes SHA256%x: %v", n, received.Sum(nil), err)
 		}
 	}))
 	defer backend.Close()
 	s, a, c := applicationFixture(t, backend.URL)
 	gateway := httptest.NewServer(s.routes())
 	defer gateway.Close()
-	r, e := http.NewRequest("POST", gateway.URL+"/large", io.LimitReader(applicationZeroReader{}, 64<<20))
-	if e != nil {
-		t.Fatal(e)
+	r, err := http.NewRequestWithContext(t.Context(), "POST", gateway.URL+"/large", io.LimitReader(applicationZeroReader{}, payloadSize))
+	if err != nil {
+		t.Fatal(err)
 	}
-	r.ContentLength = 64 << 20
+	r.ContentLength = payloadSize
 	r.Host = a.PublicHostname
 	r.Header.Set("Origin", "https://"+a.PublicHostname)
 	r.AddCookie(&http.Cookie{Name: applicationCookie, Value: c})
-	resp, e := (&http.Client{Timeout: 30 * time.Second}).Do(r)
-	if e != nil {
-		t.Fatal(e)
+	// Race detection and package-wide atomic coverage can slow a correct bulk
+	// transfer on shared CI CPUs. Bound the integrity check at two minutes;
+	// separate stalled-upload and revocation tests retain their short bounds.
+	resp, err := (&http.Client{Timeout: 2 * time.Minute}).Do(r)
+	if err != nil {
+		t.Fatal(err)
 	}
 	defer resp.Body.Close()
-	n, e := io.Copy(io.Discard, resp.Body)
-	if e != nil || n != 64<<20 || resp.StatusCode != 200 {
-		t.Fatalf("streamed%d bytes HTTP%d: %v", n, resp.StatusCode, e)
+	received := sha256.New()
+	n, err := io.Copy(received, resp.Body)
+	if err != nil || n != payloadSize || resp.StatusCode != http.StatusOK || !bytes.Equal(received.Sum(nil), wantDigest) {
+		t.Fatalf("streamed%d bytes HTTP%d SHA256%x: %v", n, resp.StatusCode, received.Sum(nil), err)
 	}
 }
+
 func TestApplicationWebSocketRevocationClosesBothSockets(t *testing.T) {
 	backendClosed := make(chan struct{})
 	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

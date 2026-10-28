@@ -104,7 +104,7 @@ func (s *Store) CreateOriginalAccess(a model.OriginalAccess, proof string, retai
 	if err = tx.QueryRow("SELECT COUNT(*) FROM original_access").Scan(&count); err != nil || count >= MaxOriginalAccess {
 		return ErrOriginalAccess
 	}
-	res, err := tx.Exec(`UPDATE stepup_proofs SET consumed_at=? WHERE hash=? AND user_id=? AND session_id=? AND action=? AND digest=? AND consumed_at IS NULL AND created_at<=? AND expires_at>?`, now.Unix(), SecurityDigest([]byte(proof)), a.UserID, a.SessionID, model.OriginalReadAction, a.Digest, now.Unix(), now.Unix())
+	res, err := tx.Exec(`UPDATE stepup_proofs SET consumed_at=? WHERE hash=? AND user_id=? AND session_id=? AND action=? AND digest=? AND consumed_at IS NULL AND created_at<=? AND expires_at>? AND token_generation=(SELECT token_generation FROM users WHERE id=stepup_proofs.user_id)`, now.Unix(), SecurityDigest([]byte(proof)), a.UserID, a.SessionID, model.OriginalReadAction, a.Digest, now.Unix(), now.Unix())
 	if err = executionUpdated(res, err); err != nil {
 		return ErrStepup
 	}

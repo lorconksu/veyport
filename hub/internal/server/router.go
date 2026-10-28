@@ -36,6 +36,10 @@ func (s *Server) routes() http.Handler {
 	mux.Handle("POST /api/auth/totp/setup", loggingMiddleware(s.authMiddleware(auth.TokenTypeSetup, http.HandlerFunc(s.handleTOTPSetup))))
 	mux.Handle("POST /api/auth/totp/enable", loggingMiddleware(s.authMiddleware(auth.TokenTypeSetup, http.HandlerFunc(s.handleTOTPEnable))))
 
+	// Recovery validates only its explicit purpose-bound bearer; stale browser
+	// cookies must not choose the credential for this endpoint.
+	mux.Handle("POST /api/auth/password/recovery", loggingMiddleware(loginLimiter.middleware(http.HandlerFunc(s.handleCompletePasswordRecovery))))
+
 	// Access-token-protected endpoints
 	mux.Handle("GET /api/auth/me", loggingMiddleware(s.authMiddleware(auth.TokenTypeAccess, http.HandlerFunc(s.handleMe))))
 	mux.Handle("PUT /api/auth/password", loggingMiddleware(s.authMiddleware(auth.TokenTypeAccess, s.interactiveOnly(http.HandlerFunc(s.handleChangePassword)))))
@@ -69,6 +73,8 @@ func (s *Server) routes() http.Handler {
 	mux.Handle("POST /api/users", loggingMiddleware(s.authMiddleware(auth.TokenTypeAccess, s.adminOnly(http.HandlerFunc(s.handleCreateUser)))))
 	mux.Handle("PUT /api/users/{id}/role", loggingMiddleware(s.authMiddleware(auth.TokenTypeAccess, s.adminOnly(http.HandlerFunc(s.handleUpdateUserRole)))))
 	mux.Handle("DELETE /api/users/{id}", loggingMiddleware(s.authMiddleware(auth.TokenTypeAccess, s.adminOnly(http.HandlerFunc(s.handleDeleteUser)))))
+	mux.Handle("POST /api/users/{id}/reactivate", loggingMiddleware(s.authMiddleware(auth.TokenTypeAccess, s.interactiveOnly(s.adminOnly(http.HandlerFunc(s.handleReactivateUser))))))
+	mux.Handle("POST /api/users/{id}/password-reset", loggingMiddleware(s.authMiddleware(auth.TokenTypeAccess, s.interactiveOnly(s.adminOnly(http.HandlerFunc(s.handleResetUserPassword))))))
 	// Account lifecycle (008): administrator-only, and deliberately not
 	// step-up protected — an administrator locked out of a colleague's account
 	// must be able to act with the session they already hold.

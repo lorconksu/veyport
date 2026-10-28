@@ -27,8 +27,9 @@ password is even checked:
 - **"account disabled — contact an administrator"** - an administrator has turned this account
   off. Only an administrator can turn it back on.
 - **"account dormant — contact an administrator"** - the account has gone unused (no sign-in and
-  no API-token use) for longer than the hub's dormancy policy. An administrator can restore it
-  with **Enable**.
+  no API-token use) for longer than the hub's dormancy policy. An administrator can use
+  **Reactivate** to restart its dormancy clock. If the account is locked too, it remains locked
+  until separately unlocked; disabled accounts use **Enable**.
 
 ---
 
@@ -43,6 +44,13 @@ Open your authenticator app and find the Veyport entry. Enter the current 6-digi
 The code changes every 30 seconds. If the code is rejected, check that the time on your phone is correct (TOTP codes are time-based) and try the next code when the timer resets.
 
 Click **Verify** to complete login.
+
+If an administrator issued you a temporary password for an existing account, enter that password
+and your existing TOTP code. Veyport then allows only the required password replacement or
+cancellation; it does not issue normal access while the temporary password is in effect. Complete
+the replacement in the browser, then sign in again with the new password and the same TOTP. The
+`vey` CLI cannot finish this browser recovery step. Accounts that do not yet have TOTP continue
+through the first-login enrollment flow.
 
 ---
 
@@ -98,6 +106,10 @@ has two limits, both administrator-configurable in **Settings → Users → Acco
 Either limit can be turned off by an administrator (set to `0`), and each is enforced
 independently - reaching either one ends the session the same way.
 
+An established browser terminal also rechecks its original owning session every
+second and closes when that session expires or ends, including changes made by
+another Hub process. Terminal output alone does not refresh the idle clock.
+
 These limits govern authenticated session requests. An SSH command that is already running
 continues if its CLI session later expires from inactivity; the next CLI request requires a new
 sign-in. SSH command authorization and explicit account or access revocation remain separate.
@@ -142,11 +154,21 @@ a recurring inconvenience; sessions created after the upgrade behave exactly as 
 
 ### I forgot my password
 
-Veyport does not have a "forgot password" email flow. Ask an admin to reset your account. Admins can delete your account and create a new one, or (if the admin has server access) use the CLI break-glass command to reset your credentials.
+Veyport does not have a "forgot password" email flow. For a Local account, ask an administrator
+to issue a temporary password in Settings > Users and share it with you privately. Use it with
+your existing TOTP, complete the required password replacement in a browser, then sign in again.
+For an LDAP account, contact a directory administrator to reset the password in the directory and
+complete any required directory password change there before signing in to Veyport. Veyport
+administrators do not necessarily administer the directory.
 
 ### I lost access to my authenticator app
 
 You cannot log in without your TOTP code. Ask an admin to disable your 2FA from the Settings > Users tab. Once an admin disables your 2FA, you can log in with just your password and will be prompted to set up a new authenticator.
+
+Disabling or resetting MFA revokes existing browser, API, application and SSH
+authority. Existing terminal shells close on credential revalidation, normally
+within about one second. Enroll MFA again and obtain a new SSH certificate before
+opening another SSH shell.
 
 If you are the only admin and you have lost your authenticator, someone with shell access to the server must run the break-glass reset command:
 
@@ -154,7 +176,16 @@ If you are the only admin and you have lost your authenticator, someone with she
 ./bin/veyport admin reset-totp --username <your-username> --db veyport.db
 ```
 
-This resets your TOTP and sets a temporary password, which is printed to the terminal.
+For a local account, this resets TOTP and installs a temporary password using the
+configured expiry, which is printed to the terminal. Enroll TOTP and choose a fresh
+permanent password before it expires. Recent permanent passwords remain blocked,
+and existing sessions and credentials are revoked. LDAP accounts must recover
+their directory credentials through a directory administrator.
+
+For a protected account, the shell reset audit must remain available until
+recovery completes. Audit retention preserves this record while its recovery
+grant is unexpired, even when the audit retention period is shorter. If the
+record is directly deleted or invalidated, ask the shell operator to reset again.
 
 ### The code is being rejected even though it looks right
 
