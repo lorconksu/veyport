@@ -257,9 +257,17 @@ func runServer() error {
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
-	installShutdownHandler(ctx, stopHeartbeat, sshSrv, grpcSrv, srv)
+	shutdownDone := installShutdownHandler(ctx, stopHeartbeat, sshSrv, grpcSrv, srv)
 
-	return srv.Start()
+	startErr := srv.Start()
+	// ListenAndServe can fail before an operator signal (for example, an
+	// invalid or already-bound address). Cancel and wait for the same complete
+	// shutdown path before runServer's deferred database close runs. Without
+	// this join, background server workers can race the closed store and leave
+	// files behind after runServer has returned.
+	stop()
+	<-shutdownDone
+	return startErr
 }
 
 // checkLegacyDB detects a legacy aerodocs.db sitting beside a not-yet-created
@@ -350,8 +358,11 @@ func startServers(grpcSrv *grpcserver.Server, sshSrv *sshgw.Server) {
 // once ctx is done, in the same order runServer used inline: stop the
 // heartbeat monitor, stop the SSH gateway, stop gRPC, then shut down the HTTP
 // server.
-func installShutdownHandler(ctx context.Context, stopHeartbeat chan struct{}, sshSrv *sshgw.Server, grpcSrv *grpcserver.Server, srv *server.Server) {
+
+func installShutdownHandler(ctx context.Context, stopHeartbeat chan struct{}, sshSrv *sshgw.Server, grpcSrv *grpcserver.Server, srv *server.Server) <-chan struct{} {
+	done := make(chan struct{})
 	go func() {
+		defer close(done)
 		<-ctx.Done()
 		fmt.Println("\nShutting down...")
 		close(stopHeartbeat)
@@ -363,4 +374,5 @@ func installShutdownHandler(ctx context.Context, stopHeartbeat chan struct{}, ss
 		grpcSrv.Stop()
 		srv.Shutdown(shutdownCtx)
 	}()
+	return done
 }
