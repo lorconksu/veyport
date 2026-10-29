@@ -1,0 +1,11 @@
+[Unit]
+Description=Check for published Veyport SBOMs every ten minutes
+
+[Timer]
+OnBootSec=3min
+OnUnitInactiveSec=10min
+RandomizedDelaySec=30s
+Unit=veyport-dependency-track.service
+
+[Install]
+WantedBy=timers.target

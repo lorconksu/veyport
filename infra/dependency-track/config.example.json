@@ -1,0 +1,6 @@
+{
+  "repository": "lorconksu/veyport",
+  "dependency_track_url": "https://dependencytrack-lab.yiucloud.com",
+  "not_before": "2026-10-28T00:00:00Z",
+  "syft": "/opt/veyport-dependency-track/bin/syft"
+}

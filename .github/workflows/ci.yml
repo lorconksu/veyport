@@ -87,6 +87,9 @@ jobs:
       - name: Release helper tests
         run: python3 -m unittest discover -s scripts/release -p "test_*.py"
 
+      - name: Dependency-Track integration tests
+        run: python3 -m unittest discover -s infra/dependency-track -p "test_*.py"
+
       - name: Application fixture lab guards and streaming compatibility
         run: |
           python3 -m unittest discover -s infra/application-access -p "test_*.py"
