@@ -11,7 +11,7 @@ WORKFLOW = Path(__file__).resolve().parents[2] / ".github/workflows/ci.yml"
 REVISION = "${{ github.event.pull_request.head.sha || github.sha }}"
 SOURCE_JOBS = {
     "unit", "server-tests", "test", "integration", "smoke", "e2e",
-    "sonarcloud", "sast", "secret-scan", "vulnerability-scan",
+    "dast", "sonarcloud", "sast", "secret-scan", "vulnerability-scan",
 }
 
 
