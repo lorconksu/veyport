@@ -27,4 +27,3 @@ RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
 CapabilityBoundingSet=
 MemoryMax=1G
 CPUQuota=100%
-
