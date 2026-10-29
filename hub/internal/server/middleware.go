@@ -409,7 +409,7 @@ func securityHeaders(next http.Handler) http.Handler {
 		if r.URL.Path == "/" || !strings.HasPrefix(r.URL.Path, "/api/") {
 			// CSP for HTML pages only, not API responses
 			w.Header().Set("Content-Security-Policy",
-				"default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'")
+				"default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; frame-ancestors 'none'; form-action 'self'; object-src 'none'; base-uri 'self'")
 		}
 		next.ServeHTTP(w, r)
 	})

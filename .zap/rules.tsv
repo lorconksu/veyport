@@ -1,0 +1,7 @@
+10027	INFO	Bundled minified dependency comments; reviewed 2026-10-29
+10049	INFO	Intentional no-store API responses and cacheable immutable assets; reviewed 2026-10-29
+10055	INFO	Inline style attributes remain required by the current React UI; reviewed 2026-10-29
+10094	INFO	Bundled asset identifiers are not application secrets; reviewed 2026-10-29
+10109	INFO	Expected modern single-page application signal; reviewed 2026-10-29
+90004	INFO	Cross-origin isolation is not required by the current application; reviewed 2026-10-29
+90005	INFO	ZAP spider requests do not send browser Fetch Metadata headers; reviewed 2026-10-29

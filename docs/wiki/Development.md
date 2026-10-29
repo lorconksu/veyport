@@ -145,6 +145,32 @@ cd web && npx vitest run
 
 The CI pipeline also runs integration, smoke, and e2e suites on pull requests.
 
+### Security gates
+
+Pull requests and pushes to `main` must pass these separate security checks:
+
+- **SAST** runs Semgrep against the reviewed Go and TypeScript source.
+- **Secret scan** runs Gitleaks over repository history.
+- **SCA** runs `govulncheck` against every production Go module and the
+  application-access fixture, plus `npm audit` against the locked frontend
+  dependency tree. The check uploads its complete text evidence as the
+  `sca-results` workflow artifact.
+- **DAST** builds the reviewed source into a disposable, uninitialized Hub and
+  runs an OWASP ZAP baseline scan against that isolated instance. The scanner
+  receives no staging URL, account, cookie, API token, or persistent volume.
+  ZAP findings fail the check, and the HTML, Markdown, and JSON reports are
+  retained in the `zap-dast-results` workflow artifact.
+
+The pull-request DAST gate is intentionally unauthenticated and passive: it
+covers the public/setup surface, response behavior, browser security headers,
+and routes discoverable by the traditional and AJAX spiders without sending
+attack payloads. Authenticated or active testing requires a separately isolated
+test environment and must never be pointed at production data.
+
+Release delivery adds artifact-level SCA: Grype scans the exact public binaries
+and OCI images, Syft records SPDX SBOMs, and `govulncheck` verifies the embedded
+Go binaries before any digest is published.
+
 ---
 
 ## Building the Agent

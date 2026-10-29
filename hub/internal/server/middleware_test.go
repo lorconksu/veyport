@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -501,6 +502,11 @@ func TestSecurityHeaders(t *testing.T) {
 
 		if rec.Header().Get(testCSPHeader) == "" {
 			t.Error("expected Content-Security-Policy on root path, got empty")
+		}
+		for _, directive := range []string{"frame-ancestors 'none'", "form-action 'self'", "object-src 'none'", "base-uri 'self'"} {
+			if !strings.Contains(rec.Header().Get(testCSPHeader), directive) {
+				t.Errorf("Content-Security-Policy missing %q", directive)
+			}
 		}
 	})
 
