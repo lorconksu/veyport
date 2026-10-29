@@ -47,7 +47,7 @@ Findings need triage: source lockfile packages may be development-only, and a pa
 
 The owner retained Dependency-Track on VM 128, `10.10.1.68`, at `https://dependencytrack-lab.yiucloud.com`. The importer runs on that VM. The existing Traefik proxy terminates TLS and permits private clients only. No private GitHub runner, public DNS record, or inbound internet route was added.
 
-Cloud-init initially mapped the UI's FQDN to `127.0.1.1` on this host. That FQDN was removed from `/etc/hosts`, while retaining the short hostname, and `/etc/cloud/cloud.cfg.d/99-dependencytrack-hosts.cfg` disables rewriting that file. The UI FQDN now resolves through internal DNS to the TLS proxy. The original file is backed up at `/etc/hosts.pre-dtrack-sync`.
+Cloud-init initially mapped the UI's FQDN to `127.0.1.1` on this host. That FQDN was removed from `/etc/hosts`, while retaining the short hostname. Proxmox user-data overrides the local `manage_etc_hosts: false` setting, so `/etc/cloud/templates/hosts.debian.tmpl` also maps only the short hostname to loopback. The UI FQDN resolves through internal DNS to the TLS proxy even when cloud-init regenerates hosts. Originals are backed up at `/etc/hosts.pre-dtrack-sync` and `/etc/cloud/templates/hosts.debian.tmpl.pre-dtrack-sync`.
 
 ## Operate and troubleshoot
 
