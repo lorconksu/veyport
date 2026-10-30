@@ -78,3 +78,8 @@ These guides cover features available to every user (admin, auditor, and viewer)
 ## Need Help?
 
 Check the [[Troubleshooting]] page for solutions to common issues.
+
+## Security tooling support
+
+Thanks to [Snyk](https://snyk.io/) for supporting Veyport through its
+[Secure Developer Program](https://snyk.io/open-source/).
