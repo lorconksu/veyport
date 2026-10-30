@@ -26,6 +26,7 @@
 - [[Deployment GCP]]
 - [[Proxy Configuration]]
 - [[Development]]
+- [[Dependency Track]]
 - [[API Reference]]
 
 **Help**
