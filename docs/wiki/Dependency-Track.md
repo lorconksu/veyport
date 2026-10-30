@@ -1,6 +1,14 @@
 # Dependency-Track
 
-Dependency-Track provides the visual dependency and vulnerability inventory for published Veyport releases. The owner's private dashboard is at [dependencytrack-lab.yiucloud.com](https://dependencytrack-lab.yiucloud.com); access requires the local network or permitted VPN route and a Dependency-Track login.
+Dependency-Track provides the visual dependency and vulnerability inventory for published Veyport releases. The owner's private dashboard is at [dependencytrack-lab.yiucloud.com](https://dependencytrack-lab.yiucloud.com); access requires the local network or permitted VPN route.
+
+## Sign in with Keycloak
+
+Choose **Sign in with Keycloak** and use your existing Keycloak account. If your browser already has a Keycloak session, it can be reused without entering another password. The integration uses the existing `master` realm and a dedicated `dependency-track` client with authorization code and S256 PKCE.
+
+The Keycloak group `dependency-track-admins` grants Dependency-Track administrator access; `wyiu` is the initial member. Other users require an explicit group-to-team mapping before they can access the dashboard. Account creation at first login does not grant permissions automatically. Group changes take effect at the next login; urgent removal also requires revoking active sessions.
+
+The local recovery administrator login is available under **More options**. Normal users do not need a separate Dependency-Track password. Logging out of Dependency-Track does not log the browser out of Keycloak. The scheduled SBOM importer uses its own API key and runs independently of SSO.
 
 ## What appears in the dashboard
 

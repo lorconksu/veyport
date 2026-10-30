@@ -49,6 +49,44 @@ The owner retained Dependency-Track on VM 128, `10.10.1.68`, at `https://depende
 
 Cloud-init initially mapped the UI's FQDN to `127.0.1.1` on this host. That FQDN was removed from `/etc/hosts`, while retaining the short hostname. Proxmox user-data overrides the local `manage_etc_hosts: false` setting, so `/etc/cloud/templates/hosts.debian.tmpl` also maps only the short hostname to loopback. The UI FQDN resolves through internal DNS to the TLS proxy even when cloud-init regenerates hosts. Originals are backed up at `/etc/hosts.pre-dtrack-sync` and `/etc/cloud/templates/hosts.debian.tmpl.pre-dtrack-sync`.
 
+### Keycloak single sign-on
+
+The local deployment uses `https://keycloak.yiucloud.com/realms/master`, matching the owner's existing SSO services. Open the dashboard and choose **Sign in with Keycloak**. An existing Keycloak browser session can be reused; otherwise Keycloak prompts for the user's normal credentials and any required authentication steps. No separate Dependency-Track password is needed for this path.
+
+The `dependency-track` Keycloak client is a public OpenID Connect client using authorization code with required **S256 PKCE**. Its only redirect URI is `https://dependencytrack-lab.yiucloud.com/static/oidc-callback.html`; its only web origin is `https://dependencytrack-lab.yiucloud.com`. Implicit flow, direct access grants, service accounts, and full scope are disabled. Default client scopes are `profile` and `email`; the frontend requests `openid profile email`. A client-local Group Membership mapper emits the `groups` claim with full group paths in ID tokens, access tokens, and userinfo. No client secret is required or exposed to the browser.
+
+Dependency-Track 5.2.1 needs settings on both Compose services:
+
+```yaml
+services:
+  apiserver:
+    environment:
+      DT_OIDC_ENABLED: "true"
+      DT_OIDC_ISSUER: "https://keycloak.yiucloud.com/realms/master"
+      DT_OIDC_CLIENT_ID: "dependency-track"
+      DT_OIDC_USERNAME_CLAIM: "preferred_username"
+      DT_OIDC_USER_PROVISIONING: "true"
+      DT_OIDC_TEAM_SYNCHRONIZATION: "true"
+      DT_OIDC_TEAMS_CLAIM: "groups"
+  frontend:
+    environment:
+      OIDC_ISSUER: "https://keycloak.yiucloud.com/realms/master"
+      OIDC_CLIENT_ID: "dependency-track"
+      OIDC_SCOPE: "openid profile email"
+      OIDC_FLOW: "code"
+      OIDC_LOGIN_BUTTON_TEXT: "Sign in with Keycloak"
+```
+
+Merge these environment entries into the existing services; this excerpt does not replace their images, database settings, or volumes. API-server discovery must reach the issuer over trusted HTTPS. `GET /api/v1/oidc/available` should return `true`, and `/static/config.json` should report the same issuer and client ID.
+
+In Keycloak, the dedicated group `/dependency-track-admins` initially contains only `wyiu`. In Dependency-Track **Administration → Access Management → OpenID Connect Groups**, that exact group name is mapped to the **Administrators** team. Account provisioning alone grants no team or portfolio permissions. New users need an explicitly mapped group; membership in an unrelated Keycloak group does not grant dashboard access. To add a future read-only audience, create a separate Keycloak group and map it to a Dependency-Track team with only the required view permissions.
+
+Team membership synchronizes at login, not continuously during an existing session. For urgent access removal, remove the Keycloak group membership and also revoke the user's active Dependency-Track and Keycloak sessions. Dependency-Track logout ends the application session; it does not sign the browser out of Keycloak, so the SSO button can sign the user back in without another password prompt.
+
+The existing local `admin` account remains available through **More options** for recovery if Keycloak is unavailable. Its credential remains in the private operator credential store, outside Git. The release importer keeps using its dedicated API key and does not depend on a browser SSO session. The temporary Keycloak administrator credential used during setup is not a runtime dependency.
+
+The live Compose file is `/opt/sca-evaluation/compose.yml`; its pre-SSO backup is `/opt/sca-evaluation/compose.pre-keycloak.yml`. To roll back SSO, restore that backup and recreate only `apiserver` and `frontend` with Compose project name `dependencytrack-lab`. Preserve database volumes and importer state. Disabling the Keycloak client prevents new client logins but does not by itself revoke existing Dependency-Track sessions.
+
 ## Operate and troubleshoot
 
 ```sh
@@ -65,4 +103,4 @@ Back up both the Dependency-Track database and the import state. The state preve
 
 Run tests with `python3 -m unittest discover -s infra/dependency-track -p 'test_*.py'`; CI runs the same suite.
 
-References: [Dependency-Track upload and completion semantics](https://dependencytrack.github.io/docs/next/guides/user/uploading-boms/) and [vulnerability-source configuration](https://dependencytrack.github.io/docs/next/guides/administration/configuring-vulnerability-sources/).
+References: [Dependency-Track upload and completion semantics](https://dependencytrack.github.io/docs/next/guides/user/uploading-boms/), [vulnerability-source configuration](https://dependencytrack.github.io/docs/next/guides/administration/configuring-vulnerability-sources/), and [OpenID Connect configuration](https://dependencytrack.github.io/docs/next/guides/administration/configuring-oidc/).
