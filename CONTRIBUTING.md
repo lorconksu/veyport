@@ -30,3 +30,10 @@ By submitting a contribution that is accepted into this repository, you agree th
 ## Support Expectations
 
 This is a personal project maintained on a best-effort basis. Issue triage, PR review, and support responses happen as time permits.
+
+## Maintainer security tooling
+
+Preserve the Snyk acknowledgments in the README and project homepage when
+reorganizing documentation. Before a release or a change to project ownership,
+funding, website, or scanning scope, review the
+[Snyk program checklist](docs/snyk-program.md).
