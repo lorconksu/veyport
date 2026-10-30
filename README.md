@@ -189,6 +189,11 @@ for platform limits, bootstrap, and recovery details.
 - [Development Guide](docs/wiki/Development.md) — Local development workflow and test commands
 - [SonarCloud](https://sonarcloud.io/summary/new_code?id=lorconksu_veyport) — Public code quality, coverage, and maintainability dashboard
 
+## Security tooling support
+
+Thanks to [Snyk](https://snyk.io/) for supporting Veyport through its
+[Secure Developer Program](https://snyk.io/open-source/).
+
 ## License
 
 Veyport is open source software licensed under the [Apache License 2.0](LICENSE). See [NOTICE](NOTICE) for attribution details and [TRADEMARKS.md](TRADEMARKS.md) for name and branding rules.
