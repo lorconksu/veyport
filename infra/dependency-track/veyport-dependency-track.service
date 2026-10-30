@@ -1,0 +1,29 @@
+[Unit]
+Description=Import published Veyport SBOMs into private Dependency-Track
+After=network-online.target docker.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+DynamicUser=yes
+StateDirectory=veyport-dependency-track
+StateDirectoryMode=0700
+LoadCredential=api-key:/etc/veyport-dependency-track/api-key
+ExecStart=/usr/bin/python3 /opt/veyport-dependency-track/sync.py --config /etc/veyport-dependency-track/config.json --state-directory /var/lib/veyport-dependency-track
+Environment=SYFT_CHECK_FOR_APP_UPDATE=false
+Environment=XDG_CACHE_HOME=/var/lib/veyport-dependency-track/cache
+TimeoutStartSec=3600
+UMask=0077
+NoNewPrivileges=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectSystem=strict
+ProtectHome=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictSUIDSGID=yes
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+CapabilityBoundingSet=
+MemoryMax=1G
+CPUQuota=100%
