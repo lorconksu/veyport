@@ -7,6 +7,10 @@ on:
     branches: [main]
   workflow_call:
     inputs:
+      defer_semgrep_to_delivery:
+        description: Internal release caller runs the identical required Semgrep gate once in private delivery
+        type: boolean
+        default: false
       sonar_pull_request_required:
         description: Require an exact open PR context for a prototype scan
         type: boolean
@@ -71,7 +75,7 @@ jobs:
         run: cd web && npm run build
 
       - name: Frontend tests with coverage
-        run: cd web && npx vitest run --coverage
+        run: python3 scripts/release/capture_step.py --name frontend -- bash -c 'cd web && npx vitest run --coverage --reporter=json'
 
       - name: Embed production frontend
         run: mkdir -p hub/web/dist && cp -a web/dist/. hub/web/dist/
@@ -83,41 +87,64 @@ jobs:
         run: |
           bash scripts/release/install_tools.sh actionlint "$RUNNER_TEMP/release-tools"
           "$RUNNER_TEMP/release-tools/actionlint"
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq age python3-venv
 
       - name: Release helper tests
-        run: python3 -m unittest discover -s scripts/release -p "test_*.py"
+        run: python3 scripts/release/capture_step.py --name release-helpers -- python3 -m unittest discover -s scripts/release -p "test_*.py"
+
+      - name: Private evidence transport tests
+        run: |
+          python3 scripts/release/capture_step.py --name evidence-collector -- python3 -m unittest discover -s infra/evidence-collector -p "test_*.py"
+          python3 scripts/release/capture_step.py --name candidate-coordinator -- python3 -m unittest discover -s infra/candidate-coordinator -p "test_*.py"
+
+      - name: Security scanner evidence tests
+        run: python3 scripts/release/capture_step.py --name security-scanners -- python3 -m unittest discover -s scripts/security -p "test_*.py"
+
+      - name: Native candidate harness tests
+        run: python3 scripts/release/capture_step.py --name native-candidate-harness -- python3 -m unittest discover -s scripts/native-candidate -p "test_*.py"
+
+      - name: Backup crypto compatibility with pinned dependencies
+        env:
+          PIP_CACHE_DIR: ${{ runner.temp }}/ssdf-backup-compat-pip-cache
+        run: |
+          set -euo pipefail
+          backup_venv="$RUNNER_TEMP/ssdf-backup-compat-venv"
+          python3 -m venv "$backup_venv"
+          python3 scripts/release/capture_step.py --name backup-compat-install -- "$backup_venv/bin/python" -m pip install --disable-pip-version-check -r infra/audit-lab/storage/requirements.txt
+          python3 scripts/release/capture_step.py --name backup-compat -- "$backup_venv/bin/python" -m unittest discover -s infra/audit-lab/storage -p "test_backup_crypto.py"
 
       - name: Dependency-Track integration tests
-        run: python3 -m unittest discover -s infra/dependency-track -p "test_*.py"
+        run: python3 scripts/release/capture_step.py --name dependency-track -- python3 -m unittest discover -s infra/dependency-track -p "test_*.py"
 
       - name: Application fixture lab guards and streaming compatibility
         run: |
-          python3 -m unittest discover -s infra/application-access -p "test_*.py"
+          python3 scripts/release/capture_step.py --name application-access -- python3 -m unittest discover -s infra/application-access -p "test_*.py"
           cd infra/application-access/fixture
           go vet ./...
-          go test -race ./...
+          python3 ../../../scripts/release/capture_step.py --name application-fixture -- go test -json -race ./...
 
       - name: Hub tests outside the separately sharded server package
         run: |
           cd hub
           listed="$(go list ./internal/...)"
           mapfile -t packages < <(printf '%s\n' "$listed" | awk '!/\/internal\/(integration|server)$/')
-          go test -race "${packages[@]}" -timeout 30m -coverprofile=../coverage-hub.out -covermode=atomic -coverpkg=./internal/...
+          python3 ../scripts/release/capture_step.py --name hub -- go test -json -race "${packages[@]}" -timeout 30m -coverprofile=../coverage-hub.out -covermode=atomic -coverpkg=./internal/...
 
       - name: Hub command tests with coverage
-        run: cd hub && go test -race ./cmd/... -coverprofile=../coverage-hub-cmd.out -covermode=atomic
+        run: cd hub && python3 ../scripts/release/capture_step.py --name hub-command -- go test -json -race ./cmd/... -coverprofile=../coverage-hub-cmd.out -covermode=atomic
 
       - name: Agent tests with coverage
-        run: cd agent && go test -race ./... -coverprofile=../coverage-agent.out -covermode=atomic
+        run: cd agent && python3 ../scripts/release/capture_step.py --name agent -- go test -json -race ./... -coverprofile=../coverage-agent.out -covermode=atomic
 
       - name: CLI vet
         run: cd cli && go vet ./...
 
       - name: CLI tests with coverage
-        run: cd cli && go test -race ./... -coverprofile=../coverage-cli.out -covermode=atomic
+        run: cd cli && python3 ../scripts/release/capture_step.py --name cli -- go test -json -race ./... -coverprofile=../coverage-cli.out -covermode=atomic
 
       - name: Handwritten shared protocol tests with coverage
-        run: cd proto && go test -race ./... -coverprofile=../coverage-proto.out -covermode=atomic
+        run: cd proto && python3 ../scripts/release/capture_step.py --name proto -- go test -json -race ./... -coverprofile=../coverage-proto.out -covermode=atomic
 
       - name: Build CLI binary (linux/amd64)
         run: cd cli && go build -o ../bin/vey-linux-amd64 ./cmd/vey
@@ -136,6 +163,29 @@ jobs:
             coverage-cli.out
             coverage-proto.out
             web/coverage/lcov.info
+
+      - name: Encrypt available private job evidence
+        if: always()
+        env:
+          EVIDENCE_JOB: unit
+          JOB_STATUS: ${{ job.status }}
+          AGE_RECIPIENT: ${{ vars.SSDF_AGE_RECIPIENT }}
+          EXPECTED_SOURCE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          set -euo pipefail
+          if ! command -v age >/dev/null; then
+            sudo apt-get update -qq
+            sudo apt-get install -y -qq age
+          fi
+          python3 scripts/release/ci_evidence.py --output "$RUNNER_TEMP/ssdf-job-$EVIDENCE_JOB" --recipient "$AGE_RECIPIENT" --job "$EVIDENCE_JOB" --status "$JOB_STATUS" --revision "$EXPECTED_SOURCE_SHA" --workflow "$GITHUB_WORKFLOW_REF" --runner-results "$RUNNER_TEMP/ssdf-results" --path "coverage-*.out" --path "web/coverage/*.json" --path "web/coverage/lcov.info"
+      - name: Transfer only encrypted job evidence
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: ssdf-job-v1-${{ github.run_id }}-${{ github.run_attempt }}-unit
+          path: ${{ runner.temp }}/ssdf-job-unit/chunk-*.age
+          if-no-files-found: error
+          retention-days: 7
 
   server-tests:
     runs-on: ubuntu-latest
@@ -186,6 +236,29 @@ jobs:
 
   # Keep the required test status dependent on every matrix runner. An omitted,
   # failed or skipped prerequisite must fail this job, rather than skip the gate.
+      - name: Encrypt available private job evidence
+        if: always()
+        env:
+          EVIDENCE_JOB: server-${{ matrix.shard }}
+          JOB_STATUS: ${{ job.status }}
+          AGE_RECIPIENT: ${{ vars.SSDF_AGE_RECIPIENT }}
+          EXPECTED_SOURCE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          set -euo pipefail
+          if ! command -v age >/dev/null; then
+            sudo apt-get update -qq
+            sudo apt-get install -y -qq age
+          fi
+          python3 scripts/release/ci_evidence.py --output "$RUNNER_TEMP/ssdf-job-$EVIDENCE_JOB" --recipient "$AGE_RECIPIENT" --job "$EVIDENCE_JOB" --status "$JOB_STATUS" --revision "$EXPECTED_SOURCE_SHA" --workflow "$GITHUB_WORKFLOW_REF" --runner-results "$RUNNER_TEMP/ssdf-results" --path "coverage-server/shard-${EVIDENCE_JOB#server-}/"
+      - name: Transfer only encrypted job evidence
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: ssdf-job-v1-${{ github.run_id }}-${{ github.run_attempt }}-server-${{ matrix.shard }}
+          path: ${{ runner.temp }}/ssdf-job-server-${{ matrix.shard }}/chunk-*.age
+          if-no-files-found: error
+          retention-days: 7
+
   test:
     needs: [unit, server-tests]
     if: always()
@@ -236,6 +309,29 @@ jobs:
             coverage-proto.out
             web/coverage/lcov.info
 
+      - name: Encrypt available private job evidence
+        if: always()
+        env:
+          EVIDENCE_JOB: test
+          JOB_STATUS: ${{ job.status }}
+          AGE_RECIPIENT: ${{ vars.SSDF_AGE_RECIPIENT }}
+          EXPECTED_SOURCE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          set -euo pipefail
+          if ! command -v age >/dev/null; then
+            sudo apt-get update -qq
+            sudo apt-get install -y -qq age
+          fi
+          python3 scripts/release/ci_evidence.py --output "$RUNNER_TEMP/ssdf-job-$EVIDENCE_JOB" --recipient "$AGE_RECIPIENT" --job "$EVIDENCE_JOB" --status "$JOB_STATUS" --revision "$EXPECTED_SOURCE_SHA" --workflow "$GITHUB_WORKFLOW_REF" --runner-results "$RUNNER_TEMP/ssdf-results" --path "coverage-*.out" --path "web/coverage/lcov.info"
+      - name: Transfer only encrypted job evidence
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: ssdf-job-v1-${{ github.run_id }}-${{ github.run_attempt }}-test
+          path: ${{ runner.temp }}/ssdf-job-test/chunk-*.age
+          if-no-files-found: error
+          retention-days: 7
+
   integration:
     needs: test
     runs-on: ubuntu-latest
@@ -262,7 +358,7 @@ jobs:
       - name: Create frontend embed stub
         run: mkdir -p hub/web/dist && touch hub/web/dist/index.html
       - name: Integration tests with coverage
-        run: cd hub && go test -race ./internal/integration/ -v -timeout 10m -coverprofile=../coverage-integration.out -covermode=atomic -coverpkg=./internal/...
+        run: cd hub && python3 ../scripts/release/capture_step.py --name integration -- go test -json -race ./internal/integration/ -v -timeout 10m -coverprofile=../coverage-integration.out -covermode=atomic -coverpkg=./internal/...
 
       - name: Report agent binary coverage
         if: always()
@@ -281,6 +377,29 @@ jobs:
           path: |
             coverage-integration.out
             coverage-agent-integration.out
+
+      - name: Encrypt available private job evidence
+        if: always()
+        env:
+          EVIDENCE_JOB: integration
+          JOB_STATUS: ${{ job.status }}
+          AGE_RECIPIENT: ${{ vars.SSDF_AGE_RECIPIENT }}
+          EXPECTED_SOURCE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          set -euo pipefail
+          if ! command -v age >/dev/null; then
+            sudo apt-get update -qq
+            sudo apt-get install -y -qq age
+          fi
+          python3 scripts/release/ci_evidence.py --output "$RUNNER_TEMP/ssdf-job-$EVIDENCE_JOB" --recipient "$AGE_RECIPIENT" --job "$EVIDENCE_JOB" --status "$JOB_STATUS" --revision "$EXPECTED_SOURCE_SHA" --workflow "$GITHUB_WORKFLOW_REF" --runner-results "$RUNNER_TEMP/ssdf-results" --path "coverage-integration.out" --path "coverage-agent-integration.out"
+      - name: Transfer only encrypted job evidence
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: ssdf-job-v1-${{ github.run_id }}-${{ github.run_attempt }}-integration
+          path: ${{ runner.temp }}/ssdf-job-integration/chunk-*.age
+          if-no-files-found: error
+          retention-days: 7
 
   smoke:
     needs: test
@@ -308,9 +427,32 @@ jobs:
           password: ${{ secrets.DOCKERHUB_TOKEN }}
 
       - name: Run smoke tests
-        run: bash tests/smoke/smoke_test.sh
+        run: python3 scripts/release/capture_step.py --name smoke -- bash tests/smoke/smoke_test.sh
         env:
           BUILD_ARGS: "--build-arg NODE_IMAGE=node:25-slim --build-arg GO_IMAGE=golang:1.26.10-bookworm"
+
+      - name: Encrypt available private job evidence
+        if: always()
+        env:
+          EVIDENCE_JOB: smoke
+          JOB_STATUS: ${{ job.status }}
+          AGE_RECIPIENT: ${{ vars.SSDF_AGE_RECIPIENT }}
+          EXPECTED_SOURCE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          set -euo pipefail
+          if ! command -v age >/dev/null; then
+            sudo apt-get update -qq
+            sudo apt-get install -y -qq age
+          fi
+          python3 scripts/release/ci_evidence.py --output "$RUNNER_TEMP/ssdf-job-$EVIDENCE_JOB" --recipient "$AGE_RECIPIENT" --job "$EVIDENCE_JOB" --status "$JOB_STATUS" --revision "$EXPECTED_SOURCE_SHA" --workflow "$GITHUB_WORKFLOW_REF" --runner-results "$RUNNER_TEMP/ssdf-results" --path "tests/smoke/results/" --path "smoke-results/"
+      - name: Transfer only encrypted job evidence
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: ssdf-job-v1-${{ github.run_id }}-${{ github.run_attempt }}-smoke
+          path: ${{ runner.temp }}/ssdf-job-smoke/chunk-*.age
+          if-no-files-found: error
+          retention-days: 7
 
   e2e:
     needs: test
@@ -348,14 +490,30 @@ jobs:
         run: docker build --build-arg NODE_IMAGE=node:25-slim --build-arg GO_IMAGE=golang:1.26.10-bookworm -t veyport-e2e:test .
 
       - name: Run E2E tests
-        run: cd tests/e2e && E2E_IMAGE=veyport-e2e:test npx playwright test
+        run: python3 scripts/release/capture_step.py --name e2e -- bash -c 'cd tests/e2e && E2E_IMAGE=veyport-e2e:test npx playwright test --reporter=json'
 
-      - name: Upload artifacts on failure
-        if: failure()
+      - name: Encrypt available private job evidence
+        if: always()
+        env:
+          EVIDENCE_JOB: e2e
+          JOB_STATUS: ${{ job.status }}
+          AGE_RECIPIENT: ${{ vars.SSDF_AGE_RECIPIENT }}
+          EXPECTED_SOURCE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          set -euo pipefail
+          if ! command -v age >/dev/null; then
+            sudo apt-get update -qq
+            sudo apt-get install -y -qq age
+          fi
+          python3 scripts/release/ci_evidence.py --output "$RUNNER_TEMP/ssdf-job-$EVIDENCE_JOB" --recipient "$AGE_RECIPIENT" --job "$EVIDENCE_JOB" --status "$JOB_STATUS" --revision "$EXPECTED_SOURCE_SHA" --workflow "$GITHUB_WORKFLOW_REF" --runner-results "$RUNNER_TEMP/ssdf-results" --path "tests/e2e/test-results/" --path "tests/e2e/playwright-report/"
+      - name: Transfer only encrypted job evidence
+        if: always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
-          name: playwright-report
-          path: tests/e2e/test-results/
+          name: ssdf-job-v1-${{ github.run_id }}-${{ github.run_attempt }}-e2e
+          path: ${{ runner.temp }}/ssdf-job-e2e/chunk-*.age
+          if-no-files-found: error
+          retention-days: 7
 
   sonarcloud:
     needs: [test, integration]
@@ -400,7 +558,38 @@ jobs:
           SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
           FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
+      - name: Capture completed Sonar provider evidence without rescanning
+        if: always()
+        env:
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+          SONAR_CONTEXT_ARGS: ${{ steps.sonar-context.outputs.args }}
+          EXPECTED_SOURCE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: python3 scripts/release/sonar_job_evidence.py --public-project-results --report-task .scannerwork/report-task.txt --context "$SONAR_CONTEXT_ARGS" --revision "$EXPECTED_SOURCE_SHA" --output sonar-evidence
+      - name: Encrypt available private job evidence
+        if: always()
+        env:
+          EVIDENCE_JOB: sonar
+          JOB_STATUS: ${{ job.status }}
+          AGE_RECIPIENT: ${{ vars.SSDF_AGE_RECIPIENT }}
+          EXPECTED_SOURCE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          set -euo pipefail
+          if ! command -v age >/dev/null; then
+            sudo apt-get update -qq
+            sudo apt-get install -y -qq age
+          fi
+          python3 scripts/release/ci_evidence.py --output "$RUNNER_TEMP/ssdf-job-$EVIDENCE_JOB" --recipient "$AGE_RECIPIENT" --job "$EVIDENCE_JOB" --status "$JOB_STATUS" --revision "$EXPECTED_SOURCE_SHA" --workflow "$GITHUB_WORKFLOW_REF" --runner-results "$RUNNER_TEMP/ssdf-results" --path ".scannerwork/report-task.txt" --path "sonar-evidence/"
+      - name: Transfer only encrypted job evidence
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: ssdf-job-v1-${{ github.run_id }}-${{ github.run_attempt }}-sonar
+          path: ${{ runner.temp }}/ssdf-job-sonar/chunk-*.age
+          if-no-files-found: error
+          retention-days: 7
+
   sast:
+    if: ${{ !inputs.defer_semgrep_to_delivery }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
@@ -425,17 +614,31 @@ jobs:
       - name: Semgrep SAST gate
         run: |
           set -euo pipefail
-          semgrep scan --strict --timeout 30 --config p/golang --config p/typescript --config p/owasp-top-ten --sarif -o semgrep.sarif . 2>&1 | tee semgrep-output.txt
+          semgrep scan --strict --timeout 30 --config p/golang --config p/typescript --config p/owasp-top-ten --sarif -o semgrep.sarif . > semgrep-output.txt 2>&1
           python3 scripts/release/check_scan.py semgrep semgrep.sarif
 
-      - name: Upload SAST evidence
+      - name: Encrypt available private job evidence
+        if: always()
+        env:
+          EVIDENCE_JOB: sast
+          JOB_STATUS: ${{ job.status }}
+          AGE_RECIPIENT: ${{ vars.SSDF_AGE_RECIPIENT }}
+          EXPECTED_SOURCE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          set -euo pipefail
+          if ! command -v age >/dev/null; then
+            sudo apt-get update -qq
+            sudo apt-get install -y -qq age
+          fi
+          python3 scripts/release/ci_evidence.py --output "$RUNNER_TEMP/ssdf-job-$EVIDENCE_JOB" --recipient "$AGE_RECIPIENT" --job "$EVIDENCE_JOB" --status "$JOB_STATUS" --revision "$EXPECTED_SOURCE_SHA" --workflow "$GITHUB_WORKFLOW_REF" --runner-results "$RUNNER_TEMP/ssdf-results" --path "semgrep.sarif" --path "semgrep-output.txt"
+      - name: Transfer only encrypted job evidence
         if: always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
-          name: semgrep-results
-          path: |
-            semgrep.sarif
-            semgrep-output.txt
+          name: ssdf-job-v1-${{ github.run_id }}-${{ github.run_attempt }}-sast
+          path: ${{ runner.temp }}/ssdf-job-sast/chunk-*.age
+          if-no-files-found: error
+          retention-days: 7
 
   secret-scan:
     runs-on: ubuntu-latest
@@ -461,14 +664,30 @@ jobs:
       - name: Gitleaks secret scan
         env:
           GITLEAKS_LICENSE: ${{ secrets.GITLEAKS_LICENSE }}
-        run: gitleaks git . --redact --report-format sarif --report-path gitleaks-results.sarif --exit-code 1
+        run: gitleaks git . --redact --report-format sarif --report-path gitleaks-results.sarif --exit-code 1 > gitleaks-output.txt 2>&1
 
-      - name: Upload Gitleaks artifact
+      - name: Encrypt available private job evidence
+        if: always()
+        env:
+          EVIDENCE_JOB: secrets
+          JOB_STATUS: ${{ job.status }}
+          AGE_RECIPIENT: ${{ vars.SSDF_AGE_RECIPIENT }}
+          EXPECTED_SOURCE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          set -euo pipefail
+          if ! command -v age >/dev/null; then
+            sudo apt-get update -qq
+            sudo apt-get install -y -qq age
+          fi
+          python3 scripts/release/ci_evidence.py --output "$RUNNER_TEMP/ssdf-job-$EVIDENCE_JOB" --recipient "$AGE_RECIPIENT" --job "$EVIDENCE_JOB" --status "$JOB_STATUS" --revision "$EXPECTED_SOURCE_SHA" --workflow "$GITHUB_WORKFLOW_REF" --runner-results "$RUNNER_TEMP/ssdf-results" --path "gitleaks-results.sarif" --path "gitleaks-output.txt"
+      - name: Transfer only encrypted job evidence
         if: always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
-          name: gitleaks-results
-          path: gitleaks-results.sarif
+          name: ssdf-job-v1-${{ github.run_id }}-${{ github.run_attempt }}-secrets
+          path: ${{ runner.temp }}/ssdf-job-secrets/chunk-*.age
+          if-no-files-found: error
+          retention-days: 7
 
   vulnerability-scan:
     needs: test
@@ -509,25 +728,43 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p source-vulnerability-results
+          failed=0
           for module in hub agent cli proto infra/application-access/fixture; do
             report="${module//\//-}"
-            (cd "$module" && govulncheck -show verbose ./...) 2>&1 | tee "source-vulnerability-results/$report.txt"
+            (cd "$module" && govulncheck -show verbose ./...) > "source-vulnerability-results/$report.txt" 2> "source-vulnerability-results/$report.stderr" || failed=1
           done
-
-      - name: Upload source vulnerability evidence
-        if: always()
-        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
-        with:
-          name: source-vulnerability-results
-          path: source-vulnerability-results/
+          exit "$failed"
 
       - name: npm audit (Frontend)
         run: |
           set -euo pipefail
-          echo "### npm audit - Frontend" >> "$GITHUB_STEP_SUMMARY"
-          echo '```' >> "$GITHUB_STEP_SUMMARY"
-          cd web && npm ci --ignore-scripts && npm audit --audit-level=high 2>&1 | tee -a "$GITHUB_STEP_SUMMARY"
-          echo '```' >> "$GITHUB_STEP_SUMMARY"
+          mkdir -p source-vulnerability-results
+          cd web
+          npm ci --ignore-scripts > ../source-vulnerability-results/npm-install.log 2>&1
+          npm audit --json --audit-level=high > ../source-vulnerability-results/npm-audit.json 2> ../source-vulnerability-results/npm-audit.stderr
+
+      - name: Encrypt available private job evidence
+        if: always()
+        env:
+          EVIDENCE_JOB: vulnerability
+          JOB_STATUS: ${{ job.status }}
+          AGE_RECIPIENT: ${{ vars.SSDF_AGE_RECIPIENT }}
+          EXPECTED_SOURCE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          set -euo pipefail
+          if ! command -v age >/dev/null; then
+            sudo apt-get update -qq
+            sudo apt-get install -y -qq age
+          fi
+          python3 scripts/release/ci_evidence.py --output "$RUNNER_TEMP/ssdf-job-$EVIDENCE_JOB" --recipient "$AGE_RECIPIENT" --job "$EVIDENCE_JOB" --status "$JOB_STATUS" --revision "$EXPECTED_SOURCE_SHA" --workflow "$GITHUB_WORKFLOW_REF" --runner-results "$RUNNER_TEMP/ssdf-results" --path "source-vulnerability-results/"
+      - name: Transfer only encrypted job evidence
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: ssdf-job-v1-${{ github.run_id }}-${{ github.run_attempt }}-vulnerability
+          path: ${{ runner.temp }}/ssdf-job-vulnerability/chunk-*.age
+          if-no-files-found: error
+          retention-days: 7
 
   auto-release:
     needs: [integration, smoke, e2e, sonarcloud, sast, secret-scan, vulnerability-scan]
