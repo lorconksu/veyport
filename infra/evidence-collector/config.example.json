@@ -57,7 +57,8 @@
     "scripts/release/ci_evidence.py",
     "scripts/release/capture_step.py",
     "scripts/release/sonar_job_evidence.py",
-    "scripts/release/publication.py"
+    "scripts/release/publication.py",
+    "infra/evidence-collector/providers.py"
   ],
   "allowed_job_chunks": [
     "unit",
@@ -114,5 +115,15 @@
     ]
   },
   "collect_terminal_logs": true,
-  "audited_release_publications": []
+  "audited_release_publications": [],
+  "collect_codeql_provider": true,
+  "codeql_pages_per_poll": 3,
+  "codeql_retry_seconds": 300,
+  "collect_snyk_statuses": true,
+  "required_collector_token_permissions": [
+    "Actions: read",
+    "Contents: read",
+    "Commit statuses: read/write",
+    "Code scanning alerts: read"
+  ]
 }

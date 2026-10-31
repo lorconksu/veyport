@@ -1,6 +1,6 @@
 # SSDF-aligned security pipeline implementation plan
 
-Status: implementation and collector prototype are in progress on `feat/ssdf-pipeline`, reserved for PR #115. No release, merge, risk-acceptance approval, scanner retirement or Dependency-Track cutover has occurred. Collector and candidate coordinator are deployed in personal infrastructure, but their timers are disabled and publication gates are not active. Final-head staging rehearsal and reviews remain pending. DAST is deferred at the owner's request pending Snyk support; it is a future design only.
+Status (2026-10-31): the implementation and personal collector prototype are in draft PR #115. Local validation includes 92 release-helper and 71 collector tests. The isolated native rehearsal at `c9d35d63` passed 18 cases with `release_qualified:false`; normal staging remains v2.0.57 and disposable candidates were removed. CI on that revision passed functional tests and scanner quality gates but failed a transient Sonar evidence export; the follow-up adds bounded read-only retries with unchanged source-identity checks. Final commit CI and independent code/security reviews are recorded on PR #115. No merge, release, risk acceptance, scanner retirement or Dependency-Track cutover has occurred. Collector and candidate timers remain disabled pending scoped credentials and rollout verification. DAST remains deferred. CodeQL diagnostic archival and Snyk status/reference snapshots export existing results without adding scans; Snyk snapshots are not full SCM reports.
 
 ## Objective and agreed decisions
 
@@ -31,8 +31,8 @@ Improve security coverage and retain reviewable SSDF evidence without adding unn
 | Snyk API & Web entitlement/provisioning | Owner receives “The account is not accessible”; support confirmation pending | DAST integration activation |
 | DAST-specific API credential | Not available until provisioning is resolved | Target configuration and scan execution |
 | Private evidence store and workload access | The dedicated collector has a dedicated NFS child dataset. Payloads are age-encrypted; NAS dataset encryption is not enabled. Exact mount/source/sentinel checks, fsync readback, decrypt tests and key-recovery roundtrip passed. Daily snapshots retain 7 days and restore was tested; snapshots are recovery protection, not WORM, and expiration may retain data up to 7 extra days. | Collector activation and publication gate |
-| Collector and coordinator | Deployed; collector and candidate timers remain OFF. Candidate firewall egress and host isolation were tested. Normal staging v2.0.57 remains unchanged. | Final-head review, credentials and rehearsal |
-| GitHub collection credential | Repository-scoped token not yet supplied (Actions read; Contents read; commit statuses read/write) | Authenticated collection and receipt |
+| Collector and coordinator | Deployed; collector and candidate timers remain OFF. Candidate firewall egress and host isolation were tested. Normal staging v2.0.57 remains unchanged. | Final CI completion, credentials and full release qualification |
+| GitHub collection credential | Repository-scoped token not yet supplied (Actions read; Code scanning alerts read; Contents read; commit statuses read/write) | Authenticated collection and receipt |
 | Separate deletion credential | Not provisioned | Exact-ID temporary artifact cleanup |
 
 The main Snyk API returned `licenses`, `reports`, and `fullVulnDB` entitlements. Those values do not confirm or exclude DAST. Do not silently substitute a different scanner, purchase a plan, or start a trial. The owner has explicitly deferred DAST; the current phase must declare that coverage gap and its active gate set. Once DAST is activated under a reviewed policy, an outage or provisioning problem must not silently bypass its gate.
@@ -197,23 +197,23 @@ This is a contribution to an SSDF assessment, not a claim of certification or fu
 
 Task tiers follow the owner's provider policy. On 2026-10-31 the official OpenAI model catalog (https://developers.openai.com/api/docs/models), local model cache, and callable collaboration runtime agree on `gpt-6.1-sol` for complex work and `gpt-6-luna` for standard work. Complex implementation was dispatched to three `gpt-6.1-sol` agents with supported `high` reasoning: collector/archive, release enforcement, and scanner/native coverage. Standard operator documentation used `gpt-6-luna` with `medium` reasoning. These choices do not change the owner's main conversation model.
 
-| ID | Tier | Task | Depends on | Exit evidence |
-| --- | --- | --- | --- | --- |
-| P01 | standard | Record current workflow graph, gates, manifests, scan triggers/project identities, timings, and access | None | Baseline report with exact revisions, duplicate-work inventory and blockers |
-| P02 | complex | Compare Snyk Code, SonarQube, CodeQL and Semgrep; validate the proposed two-platform target | P01 | Security/quality coverage comparison, runtime and unresolved limits |
-| P03 | complex | Design trusted candidate transfer, coordinator lease, private evidence and promotion binding | P01 | Reviewed trust boundaries, failure cases and least-privilege access |
-| P04 | standard | Create isolated candidate deployment/configuration and disposable data lifecycle | P03 | Independent volumes/keys/ports, isolation and reset verification |
-| P05 | complex | Validate candidate hostname, login/TOTP/CSRF and network confinement | P04 | Positive/negative authentication and isolation checks |
-| P06 | complex | Close Snyk SCA gaps, assign scan ownership, verify exact-artifact coverage and retire Veyport Dependency-Track imports after migration | P01, access | Complete inventories, no redundant scan/project creation, archived history, baseline triage and failure behavior |
-| P07 | complex | Deferred: configure and integrate authenticated DAST | P05, owner resumes DAST review, provisioning/key | External scan coverage, role evidence, failure-mode verification |
-| P08 | complex | Fill verified gRPC/SSH security-test gaps | P01, P04 | Candidate-bound protocol evidence and negative tests |
-| P09 | complex | Implement exception schema, verified approval binding and evaluator | P03 | Tampering/expiry/scope/bypass regression checks |
-| P10 | standard | Document risk policy/template, maintainer and operator procedures | P09 | Public-safe docs and usable approval workflow |
-| P11 | complex | Integrate gated promotion, personal NAS archival, per-run reconciliation and shared-evidence retention | P03, P06, P08, P09; P07 only in the later DAST phase | No-publication failure tests, complete run manifests, safe deduplication/cleanup and identical tested/published digests |
-| P12 | complex | Apply supported scanner consolidation and required-check migration | P02, P11 | No uncovered checks; branch protection and constitution synchronized |
-| P13 | standard | Publish SSDF evidence mapping and measure PR/release completion | P10-P12 | Comparison against baseline, retained readable evidence |
-| P14 | complex | Code review, then security review; resolve findings and re-qualify | P11-P13 | Reviewed exact final head with no unresolved blocking findings |
-| P15 | complex | Candidate rehearsal, rollback drill and final monitoring | P14 | Complete passing run, intentional blocking cases, verified rollback |
+| ID | Tier | Task | Depends on | Exit evidence | Current status |
+| --- | --- | --- | --- | --- | --- |
+| P01 | standard | Record current workflow graph, gates, manifests, scan triggers/project identities, timings, and access | None | Baseline report with exact revisions, duplicate-work inventory and blockers | Baseline and one-run timing documented; complete access/artifact inventory remains in progress |
+| P02 | complex | Compare Snyk Code, SonarQube, CodeQL and Semgrep; validate the proposed two-platform target | P01 | Security/quality coverage comparison, runtime and unresolved limits | Same-revision sample collected; coverage/quality and historical finding review incomplete; no retirement decision |
+| P03 | complex | Design trusted candidate transfer, coordinator lease, private evidence and promotion binding | P01 | Reviewed trust boundaries, failure cases and least-privilege access | Prototype implemented and locally validated; activation and credentialed collection pending |
+| P04 | standard | Create isolated candidate deployment/configuration and disposable data lifecycle | P03 | Independent volumes/keys/ports, isolation and reset verification | Isolated native staging rehearsal and cleanup proven; complete candidate application lifecycle pending |
+| P05 | complex | Validate candidate hostname, login/TOTP/CSRF and network confinement | P04 | Positive/negative authentication and isolation checks | Pending |
+| P06 | complex | Close Snyk SCA gaps, assign scan ownership, verify exact-artifact coverage and retire Veyport Dependency-Track imports after migration | P01, access | Complete inventories, no redundant scan/project creation, archived history, baseline triage and failure behavior | Partial: SCA records identify unresolved frontend highs; first-seen history, full export, owner baseline coverage and risk disposition pending. No cutover |
+| P07 | complex | Deferred: configure and integrate authenticated DAST | P05, owner resumes DAST review, provisioning/key | External scan coverage, role evidence, failure-mode verification | Deferred by owner; not implemented or run |
+| P08 | complex | Fill verified gRPC/SSH security-test gaps | P01, P04 | Candidate-bound protocol evidence and negative tests | 18-case native harness passed in isolated rehearsal; complete release-bound evidence pending |
+| P09 | complex | Implement exception schema, verified approval binding and evaluator | P03 | Tampering/expiry/scope/bypass regression checks | Implementation and local tests passed; final CI is tracked on PR #115, no operational approval or release decision |
+| P10 | standard | Document risk policy/template, maintainer and operator procedures | P09 | Public-safe docs and usable approval workflow | Plan and operator status documented; operational adoption and evidence-backed procedure remain pending |
+| P11 | complex | Integrate gated promotion, personal NAS archival, per-run reconciliation and shared-evidence retention | P03, P06, P08, P09; P07 only in the later DAST phase | No-publication failure tests, complete run manifests, safe deduplication/cleanup and identical tested/published digests | Prototype implementation and native rehearsal passed; collection token, deletion credential, final CI validation and end-to-end release evidence pending; gates off |
+| P12 | complex | Apply supported scanner consolidation and required-check migration | P02, P11 | No uncovered checks; branch protection and constitution synchronized | Deferred pending P02/P11 evidence; current scanners remain active |
+| P13 | standard | Publish SSDF evidence mapping and measure PR/release completion | P10-P12 | Comparison against baseline, retained readable evidence | Mapping documented; post-change completion comparison awaits an activated, qualified pipeline |
+| P14 | complex | Code review, then security review; resolve findings and re-qualify | P11-P13 | Reviewed exact final head with no unresolved blocking findings | Independent code and security reviews recorded privately and summarized on PR #115; complete credentialed release qualification pending |
+| P15 | complex | Candidate rehearsal, rollback drill and final monitoring | P14 | Complete passing run, intentional blocking cases, verified rollback | 18-case isolated native rehearsal passed and candidate cleaned; full publication/staging promotion and rollback qualification pending |
 
 Keep the work in PR #115 unmerged until reviewed. PR #112 is the earlier paused scanner proposal; do not merge or activate it. Reconcile reusable ideas deliberately rather than stacking unreviewed workflow changes.
 

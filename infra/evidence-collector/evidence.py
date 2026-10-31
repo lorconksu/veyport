@@ -8,6 +8,7 @@ import datetime as dt
 import fcntl
 import hashlib
 import io
+import importlib.util
 import json
 import os
 from pathlib import Path, PurePosixPath
@@ -31,6 +32,9 @@ MAX_FILES = 256
 MAX_WIRE = MAX_TOTAL + MAX_MANIFEST + 2 * 1024 * 1024
 MAX_JOB_WIRE = 512 << 20
 MAX_JOB_CHUNKS = 64
+CODEQL_WORKFLOW = 'dynamic/github-code-scanning/codeql'
+PLATFORM_DIAGNOSTIC_KINDS = {'codeql-analysis', 'codeql-summary', 'platform-outcome', 'job-logs', 'job-logs-missing', 'provider-status'}
+_PROVIDER_EXPORTS = None
 PUBLICATION_WORKFLOWS = ('.github/workflows/release.yml', '.github/workflows/staging.yml')
 PUBLICATION_STEP = 'Publish disclosure-safe binary release assets'
 REQUIRED_RELEASE_JOBS = ['unit'] + ['server-' + str(x) for x in range(6)] + ['test', 'integration', 'smoke', 'e2e', 'sonar', 'secrets', 'vulnerability']
@@ -111,7 +115,9 @@ def safe_name(name):
 def manifest_valid(m):
     require(isinstance(m, dict) and m.get('schema') == 1, 'unsupported manifest')
     require(isinstance(m.get('repository'), str) and re.fullmatch(r'[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+', m['repository']), 'invalid repository')
-    require(isinstance(m.get('workflow'), str) and re.fullmatch(r'\.github/workflows/[A-Za-z0-9_.-]+\.ya?ml', m['workflow']), 'invalid workflow')
+    details = m.get('details')
+    platform_diagnostic = m.get('workflow') == CODEQL_WORKFLOW and m.get('complete') is False and isinstance(details, dict) and details.get('kind') in PLATFORM_DIAGNOSTIC_KINDS and details.get('source_trusted') is False
+    require(isinstance(m.get('workflow'), str) and (re.fullmatch(r'\.github/workflows/[A-Za-z0-9_.-]+\.ya?ml', m['workflow']) or platform_diagnostic), 'invalid workflow or platform diagnostic authority')
     require(type(m.get('run_id')) is int and m['run_id'] > 0 and type(m.get('run_attempt')) is int and m['run_attempt'] > 0, 'invalid run identity')
     require(isinstance(m.get('revision'), str) and SHA.fullmatch(m['revision']), 'invalid revision')
     require(isinstance(m.get('candidate_id'), str) and 0 < len(m['candidate_id']) <= 128, 'invalid candidate identity')
@@ -254,10 +260,12 @@ class GitHub:
             raise APIBudgetExceeded('per-poll GitHub API budget exhausted; backlog retained')
         self.calls += 1
 
-    def request(self, path, method='GET', value=None, raw=False):
+    def request(self, path, method='GET', value=None, raw=False, accept='application/vnd.github+json', max_bytes=None, allow_storage_redirect=True):
         self.charge()
         require(path.startswith(self.prefix + '/'), 'API path outside repository')
-        headers = {'Authorization': 'Bearer ' + self.token, 'Accept': 'application/vnd.github+json', 'X-GitHub-Api-Version': '2022-11-28', 'User-Agent': 'veyport-evidence-collector'}
+        response_bound = max_bytes if max_bytes is not None else (MAX_WIRE if raw else 8 * 1024 * 1024)
+        require(type(response_bound) is int and 0 < response_bound <= MAX_WIRE and accept in ('application/vnd.github+json', 'application/sarif+json'), 'invalid API representation/bound')
+        headers = {'Authorization': 'Bearer ' + self.token, 'Accept': accept, 'X-GitHub-Api-Version': '2022-11-28', 'User-Agent': 'veyport-evidence-collector'}
         data = None if value is None else canonical(value)
         if data is not None:
             headers['Content-Type'] = 'application/json'
@@ -267,19 +275,19 @@ class GitHub:
                 remaining = response.headers.get('X-RateLimit-Remaining')
                 if remaining is not None and int(remaining) < 5:
                     raise APIBudgetExceeded('GitHub API reserve reached; backlog retained')
-                body = response.read((MAX_WIRE if raw else 8 * 1024 * 1024) + 1)
-                require(len(body) <= (MAX_WIRE if raw else 8 * 1024 * 1024), 'API response exceeds bound')
+                body = response.read(response_bound + 1)
+                require(len(body) <= response_bound, 'API response exceeds bound')
                 return body if raw else (parse_json(body) if body else None)
         except urllib.error.HTTPError as exc:
-            if raw and exc.code == 302:
+            if raw and allow_storage_redirect and exc.code == 302:
                 url = exc.headers.get('Location', '')
                 parsed = urllib.parse.urlparse(url)
                 require(parsed.scheme == 'https' and parsed.hostname and not parsed.username and not parsed.password and parsed.port in (None, 443) and (parsed.hostname.endswith('.blob.core.windows.net') or parsed.hostname.endswith('.actions.githubusercontent.com')), 'untrusted artifact redirect')
                 # Never forward GitHub credentials to signed blob storage URL or redirects.
                 try:
                     with urllib.request.build_opener(NoRedirect()).open(urllib.request.Request(url), timeout=60) as response:
-                        body = response.read(MAX_WIRE + 1)
-                        require(len(body) <= MAX_WIRE, 'artifact exceeds bound')
+                        body = response.read(response_bound + 1)
+                        require(len(body) <= response_bound, 'artifact exceeds bound')
                         return body
                 except urllib.error.URLError as error:
                     raise EvidenceError('artifact download failed') from error
@@ -342,6 +350,7 @@ def artifact_name(run, attempt):
 
 
 def trusted_run(run, config):
+    require(run.get('path') != CODEQL_WORKFLOW and run.get('event') != 'dynamic', 'platform diagnostics cannot grant repository workflow authority')
     require(run.get('repository', {}).get('full_name') == config['repository'], 'run repository mismatch')
     require(run.get('head_repository', {}).get('full_name') == config['repository'], 'fork run forbidden')
     require(run.get('event') in config['allowed_events'], 'untrusted run event')
@@ -1075,7 +1084,10 @@ def complete_ci_closure(config, api, archive, run, manifest):
 
 
 def outcome_manifest(run, config, trusted):
-    return {'schema': 1, 'repository': config['repository'], 'workflow': run['path'], 'run_id': run['id'], 'run_attempt': run['run_attempt'], 'revision': run['head_sha'], 'candidate_id': f"run-{run['id']}-{run['run_attempt']}", 'complete': False, 'files': [], 'details': {'conclusion': run.get('conclusion'), 'missing': ['encrypted-evidence-artifact'] if trusted else ['trusted-source'], 'source_trusted': trusted, 'dast': 'deferred'}}
+    result = {'schema': 1, 'repository': config['repository'], 'workflow': run['path'], 'run_id': run['id'], 'run_attempt': run['run_attempt'], 'revision': run['head_sha'], 'candidate_id': f"run-{run['id']}-{run['run_attempt']}", 'complete': False, 'files': [], 'details': {'conclusion': run.get('conclusion'), 'missing': ['encrypted-evidence-artifact'] if trusted else ['trusted-source'], 'source_trusted': trusted, 'dast': 'deferred'}}
+    if run['path'] == CODEQL_WORKFLOW:
+        result['details'].update({'kind': 'platform-outcome', 'platform_diagnostic': True, 'release_authority': False})
+    return result
 
 
 def accept_publication_manifest(config, api, archive, run, artifact, manifest):
@@ -1115,8 +1127,45 @@ def accept_publication_manifest(config, api, archive, run, artifact, manifest):
     return record
 
 
+def provider_exports():
+    global _PROVIDER_EXPORTS
+    if _PROVIDER_EXPORTS is None:
+        path = Path(__file__).with_name('providers.py')
+        require(path.is_file() and not path.is_symlink(), 'trusted provider exporter unavailable')
+        spec = importlib.util.spec_from_file_location('veyport_provider_exports', path)
+        _PROVIDER_EXPORTS = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(_PROVIDER_EXPORTS)
+    return _PROVIDER_EXPORTS
+
+
+def collect_platform_codeql(config, api, archive, run):
+    module = provider_exports()
+    ref = module.diagnostic_run(module.engine(globals()), config, run)
+    path = module.state_path(archive, run)
+    state = parse_json(path.read_bytes()) if path.exists() else {}
+    expected = {'repository': config['repository'], 'run_id': run['id'], 'run_attempt': run['run_attempt'], 'revision': run['head_sha'], 'ref': ref}
+    require(not state or state.get('identity') == expected, 'CodeQL diagnostic checkpoint source mismatch')
+    if not state.get('done') and state.get('next_retry_at') and timestamp(state['next_retry_at']) > now():
+        return False
+    if run['status'] == 'completed':
+        archive.save(outcome_manifest(run, config, False), {}, run, {'id': None, 'digest': None}, config, source_trusted=False)
+    if config.get('collect_terminal_logs', True):
+        collect_job_logs(config, api, archive, run, False)
+    if config.get('collect_snyk_statuses', False):
+        module.collect_snyk_statuses(globals(), config, api, archive, run)
+    if not config.get('collect_codeql_provider', True):
+        module.save(module.engine(globals()), config, api, archive, run, 'codeql-summary', {}, {'provider': 'CodeQL', 'status': 'disabled', 'missing': ['provider-export-disabled'], 'provider_asserts_run_id': False}, 'summary')
+        return True
+    return module.collect_codeql(globals(), config, api, archive, run)
+
+
 def collect_attempt(config, api, archive, run):
     require(run.get('repository', {}).get('full_name') == config['repository'], 'run repository mismatch')
+    if run.get('path') == CODEQL_WORKFLOW:
+        return collect_platform_codeql(config, api, archive, run)
+    if config.get('collect_snyk_statuses', False):
+        require(isinstance(run.get('head_sha'), str) and SHA.fullmatch(run['head_sha']), 'invalid commit status source')
+        provider_exports().collect_snyk_statuses(globals(), config, api, archive, run)
     try:
         trusted_run(run, config)
         trusted = True
@@ -1153,6 +1202,7 @@ def collect_attempt(config, api, archive, run):
 
 
 def discover_runs(config, api, archive):
+    api.deferred_provider_pending = []
     state_path = archive.root / 'state' / 'discovery.json'
     state = parse_json(state_path.read_bytes()) if state_path.exists() else {}
     end = now()
@@ -1190,6 +1240,14 @@ def discover_runs(config, api, archive):
     for run_id in state.get('pending', []):
         require(type(run_id) is int and run_id > 0, 'invalid pending run identity')
         if run_id not in runs:
+            checkpoints = list((archive.root / 'state').glob('codeql-' + str(run_id) + '-*.json'))
+            require(len(checkpoints) <= 100, 'CodeQL pending attempt inventory exceeds bound')
+            outstanding = [parse_json(checkpoint.read_bytes()) for checkpoint in checkpoints]
+            outstanding = [item for item in outstanding if not item.get('done')]
+            deferred = bool(outstanding) and all(item.get('next_retry_at') and timestamp(item['next_retry_at']) > now() for item in outstanding)
+            if deferred:
+                api.deferred_provider_pending.append(run_id)
+                continue
             runs[run_id] = api.get('/actions/runs/' + str(run_id))
     backlog_path = archive.root / 'state/backlog.json'
     backlog = parse_json(backlog_path.read_bytes()).get('run_ids', []) if backlog_path.exists() else []
@@ -1203,11 +1261,11 @@ def discover_runs(config, api, archive):
 
 def collect(config, api, archive):
     # Checkpoints only advance when all discovered work is reconciled. Completed results are cached.
-    api.verified_sources, api.run_cache, api.job_cache = set(), {}, {}
+    api.verified_sources, api.run_cache, api.job_cache, api.deferred_provider_pending = set(), {}, {}, []
     runs, discovered_at = discover_runs(config, api, archive)
     processed_path = archive.root / 'state/completed-polls.json'
     processed = parse_json(processed_path.read_bytes()) if processed_path.exists() else {}
-    errors, pending, backlog = 0, [], []
+    errors, pending, backlog = 0, list(api.deferred_provider_pending), []
     for index, candidate in enumerate(runs):
         try:
             latest = candidate  # Authenticated list/get response already contains the complete run identity.
@@ -1218,11 +1276,13 @@ def collect(config, api, archive):
             fingerprint = [latest['run_attempt'], latest.get('updated_at'), latest['status']]
             if latest['status'] == 'completed' and previous.get('fingerprint') == fingerprint and timestamp(previous['checked_at']) + dt.timedelta(minutes=15) > now():
                 continue
+            provider_pending = False
             for attempt in range(1, latest['run_attempt'] + 1):
                 run = latest if attempt == latest['run_attempt'] else api.get('/actions/runs/' + str(latest['id']) + '/attempts/' + str(attempt))
                 api.run_cache[(run['id'], attempt)] = run
-                collect_attempt(config, api, archive, run)
-            if latest['status'] != 'completed':
+                if collect_attempt(config, api, archive, run) is False:
+                    provider_pending = True
+            if latest['status'] != 'completed' or provider_pending:
                 pending.append(latest['id'])
             else:
                 processed[key] = {'fingerprint': fingerprint, 'checked_at': iso(now())}
@@ -1269,8 +1329,11 @@ def cleanup(config, api, archive):
     deadlines = release_deadlines(api, archive, config)
     require_publication_identity_resolved(deadlines)
     for record in archive.records():
+        # Provider/log/child records have no upstream artifact; they consume no deletion-role API budget.
+        if not record['artifact_id'] or record['deleted'] or not record['acknowledged']:
+            continue
         run = reconcile_record(api, archive, record, config, deadlines)
-        if not record['artifact_id'] or record['deleted'] or not record['acknowledged'] or run['status'] != 'completed':
+        if run['status'] != 'completed':
             continue
         verify_signature(canonical(record['receipt']['payload']), record['receipt']['signature'], config['signing_public_key_file'])
         require(record['receipt']['payload'] == receipt_payload(record), 'stored acknowledgement binding mismatch')
