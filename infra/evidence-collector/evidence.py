@@ -31,6 +31,8 @@ MAX_FILES = 256
 MAX_WIRE = MAX_TOTAL + MAX_MANIFEST + 2 * 1024 * 1024
 MAX_JOB_WIRE = 512 << 20
 MAX_JOB_CHUNKS = 64
+PUBLICATION_WORKFLOWS = ('.github/workflows/release.yml', '.github/workflows/staging.yml')
+PUBLICATION_STEP = 'Publish disclosure-safe binary release assets'
 REQUIRED_RELEASE_JOBS = ['unit'] + ['server-' + str(x) for x in range(6)] + ['test', 'integration', 'smoke', 'e2e', 'sonar', 'secrets', 'vulnerability']
 HEX = re.compile(r'^[a-f0-9]{64}$')
 SHA = re.compile(r'^[a-f0-9]{40}$')
@@ -129,14 +131,14 @@ def manifest_valid(m):
     return m
 
 
-def crypto(args, data, limit=MAX_WIRE):
+def crypto(args, data, limit=MAX_WIRE, pass_fds=()):
     # File-backed bounded output avoids buffering an untrusted age decompression stream.
     with tempfile.TemporaryFile() as source, tempfile.TemporaryFile() as output:
         source.write(data)
         source.seek(0)
         def restrict_output():
             resource.setrlimit(resource.RLIMIT_FSIZE, (limit, limit))
-        proc = subprocess.Popen(args, stdin=source, stdout=output, stderr=subprocess.DEVNULL, preexec_fn=restrict_output)
+        proc = subprocess.Popen(args, stdin=source, stdout=output, stderr=subprocess.DEVNULL, preexec_fn=restrict_output, pass_fds=pass_fds)
         end = time.monotonic() + 90
         while proc.poll() is None:
             if time.monotonic() > end or output.tell() > limit:
@@ -158,11 +160,21 @@ def age_decrypt(data, identity):
 
 
 def sign(data, key):
-    # OpenSSL's one-shot Ed25519 requires a named regular input file, even when stdin is seekable.
-    with tempfile.TemporaryDirectory() as directory:
-        path = Path(directory) / 'message'
-        path.write_bytes(data)
-        return base64.b64encode(crypto(['openssl', 'pkeyutl', '-sign', '-rawin', '-inkey', str(key), '-in', str(path)], b'', 256)).decode()
+    # Ed25519 one-shot input needs a seekable regular file; a sealed Linux memfd never touches disk.
+    require(callable(getattr(os, 'memfd_create', None)) and len(data) <= MAX_MANIFEST, 'memory-only signature input unavailable or exceeds bound')
+    descriptor = os.memfd_create('veyport-evidence-signature', os.MFD_CLOEXEC | os.MFD_ALLOW_SEALING)
+    try:
+        with os.fdopen(os.dup(descriptor), 'wb') as message:
+            message.write(data)
+            message.flush()
+        os.lseek(descriptor, 0, os.SEEK_SET)
+        seals = fcntl.F_SEAL_WRITE | fcntl.F_SEAL_GROW | fcntl.F_SEAL_SHRINK | fcntl.F_SEAL_SEAL
+        fcntl.fcntl(descriptor, fcntl.F_ADD_SEALS, seals)
+        signature = crypto(['openssl', 'pkeyutl', '-sign', '-rawin', '-inkey', str(key), '-in', '/proc/self/fd/' + str(descriptor)], b'', 256, pass_fds=(descriptor,))
+        require(len(signature) == 64, 'invalid Ed25519 signature output')
+        return base64.b64encode(signature).decode()
+    finally:
+        os.close(descriptor)
 
 
 def verify_signature(data, signature, key):
@@ -288,9 +300,11 @@ class GitHub:
                 return result
         raise EvidenceError('API pagination bound reached')
 
-    def artifact(self, run_id, attempt):
+    def artifact(self, run_id, attempt, kind="evidence"):
         artifacts = self.pages('/actions/runs/' + str(run_id) + '/artifacts', 'artifacts')
-        selected = [x for x in artifacts if x['name'] == artifact_name(run_id, attempt)]
+        require(kind in ('evidence', 'publication'), 'unknown evidence artifact kind')
+        expected = artifact_name(run_id, attempt) if kind == 'evidence' else f'ssdf-publication-v1-{run_id}-{attempt}'
+        selected = [x for x in artifacts if x['name'] == expected]
         require(len(selected) <= 1, 'ambiguous evidence artifacts')
         return selected[0] if selected else None
 
@@ -512,7 +526,7 @@ class Archive:
                 return existing
             completed = timestamp(run['updated_at']) if run.get('status') == 'completed' else None
             initial_deadline = (completed or now()) + dt.timedelta(days=180)
-            record = {'record_name': record_name, 'collector_kind': collector_kind, 'job_log_id': m['details'].get('job_id') if collector_kind == 'job-logs' else None, 'ci_jobs': ci_jobs or {}, 'source_trusted': source_trusted, 'repository': m['repository'], 'run_id': m['run_id'], 'run_attempt': m['run_attempt'], 'revision': m['revision'], 'manifest_sha256': manifest_hash, 'complete': m['complete'], 'blobs': sorted(all_refs), 'archived_at': iso(now()), 'completed_at': iso(completed) if completed else None, 'conclusion': run.get('conclusion') if completed else None, 'retain_until': iso(initial_deadline), 'artifact_id': artifact['id'], 'artifact_name': artifact.get('name'), 'artifact_digest': artifact['digest'], 'acknowledged': False, 'deleted': False}
+            record = {'record_name': record_name, 'collector_kind': collector_kind, 'job_log_id': m['details'].get('job_id') if collector_kind == 'job-logs' else None, 'ci_jobs': ci_jobs or {}, 'source_trusted': source_trusted, 'workflow': run['path'], 'repository': m['repository'], 'run_id': m['run_id'], 'run_attempt': m['run_attempt'], 'revision': m['revision'], 'manifest_sha256': manifest_hash, 'complete': m['complete'], 'blobs': sorted(all_refs), 'archived_at': iso(now()), 'completed_at': iso(completed) if completed else None, 'conclusion': run.get('conclusion') if completed else None, 'retain_until': iso(initial_deadline), 'artifact_id': artifact['id'], 'artifact_name': artifact.get('name'), 'artifact_digest': artifact['digest'], 'acknowledged': False, 'deleted': False}
             record['storage_digests'] = {'manifest': digest(path.read_bytes()), 'blobs': {sha: digest((self.root / 'blobs' / (sha + '.age')).read_bytes()) for sha in all_refs}}
             self.write('runs/' + record_name, canonical(record))
             return record
@@ -631,30 +645,201 @@ def reconcile_record(api, archive, record, config, releases, refresh=True):
     return run
 
 
-def release_deadlines(api, archive=None):
-    by_revision = {}
-    cache_path = archive.root / 'state' / 'releases.json' if archive else None
+class PublicationDeadlines(dict):
+    """Verified publication deadlines plus a repository-wide deletion hold."""
+    def __init__(self, values, unresolved):
+        super().__init__(values)
+        self.unresolved = tuple(unresolved)
+
+
+def publication_key(release_id, published_at):
+    require(type(release_id) is int and release_id > 0, 'invalid publication identity')
+    timestamp(published_at)
+    return str(release_id) + ':' + published_at
+
+
+def audited_publications(config):
+    rows = config.get('audited_release_publications', [])
+    require(isinstance(rows, list) and len(rows) <= 10000, 'invalid audited publication inventory')
+    audited = {}
+    for row in rows:
+        required = {'release_id', 'published_at', 'revision', 'provenance', 'audit_reference', 'audited_at'}
+        require(isinstance(row, dict) and required <= set(row) <= required | {'run_id', 'run_attempt'} and ('run_id' in row) == ('run_attempt' in row), 'invalid audited publication record')
+        if 'run_id' in row:
+            require(type(row['run_id']) is int and row['run_id'] > 0 and type(row['run_attempt']) is int and row['run_attempt'] > 0, 'invalid audited publication run binding')
+        key = publication_key(row['release_id'], row['published_at'])
+        require(key not in audited and isinstance(row['revision'], str) and SHA.fullmatch(row['revision']), 'conflicting or invalid audited publication revision')
+        require(row['provenance'] == 'operator-audit', 'unknown publication provenance')
+        reference = row['audit_reference']
+        require(isinstance(reference, str) and 0 < len(reference) <= 200 and all(ord(x) >= 32 for x in reference), 'missing publication audit reference')
+        audited_at = timestamp(row['audited_at'])
+        require(timestamp(row['published_at']) <= audited_at <= now() + dt.timedelta(minutes=5), 'invalid publication audit time')
+        audited[key] = row
+    return audited
+
+
+def read_publication_catalog(cache_path, repository):
     cached = parse_json(cache_path.read_bytes()) if cache_path and cache_path.exists() else {}
-    changed = False
+    catalog = {}
+    require(isinstance(cached, dict), 'invalid publication catalog')
+    if cached.get('schema') == 2:
+        require(set(cached) == {'schema', 'repository', 'publications'} and cached['repository'] == repository, 'invalid publication catalog provenance')
+        require(isinstance(cached['publications'], dict), 'invalid publication catalog')
+        catalog = cached['publications']
+    else:
+        # Legacy mappings were first observed through mutable tags and are not historical proof.
+        require(isinstance(cached, dict), 'invalid legacy publication catalog')
+        for key, item in cached.items():
+            require(isinstance(item, dict) and set(item) == {'revision', 'published_at'} and isinstance(item['revision'], str) and SHA.fullmatch(item['revision']), 'invalid legacy publication binding')
+            prefix, separator, published_at = key.partition(':')
+            require(separator and prefix.isdecimal() and item['published_at'] == published_at, 'invalid legacy publication identity')
+            release_id = int(prefix)
+            require(publication_key(release_id, published_at) == key, 'invalid legacy publication key')
+            catalog[key] = {'release_id': release_id, 'published_at': published_at, 'tag_name': None, 'legacy_tag_revision': item['revision']}
+    for key, item in catalog.items():
+        require(isinstance(item, dict) and set(item) <= {'release_id', 'published_at', 'tag_name', 'legacy_tag_revision'} and {'release_id', 'published_at', 'tag_name'} <= set(item), 'invalid publication catalog record')
+        require(publication_key(item['release_id'], item['published_at']) == key, 'publication catalog identity mismatch')
+        require(item['tag_name'] is None or isinstance(item['tag_name'], str) and len(item['tag_name']) <= 200, 'invalid observed publication tag')
+        require('legacy_tag_revision' not in item or isinstance(item['legacy_tag_revision'], str) and SHA.fullmatch(item['legacy_tag_revision']), 'invalid legacy tag observation')
+    return catalog
+
+
+def verified_publication_proofs(archive, config):
+    proofs = {}
+    directory = archive.root / 'publications'
+    if not directory.exists():
+        return proofs
+    require(not directory.is_symlink(), 'publication proof directory symlink forbidden')
+    for path in directory.glob('*.json'):
+        require(len(proofs) < 10000 and not path.is_symlink() and path.stat().st_size <= 16384, 'publication proof inventory exceeds bound')
+        envelope = parse_json(path.read_bytes())
+        require(isinstance(envelope, dict) and set(envelope) == {'payload', 'signature'}, 'invalid publication proof')
+        payload = envelope['payload']
+        required = {'schema', 'kind', 'repository', 'workflow', 'run_id', 'run_attempt', 'revision', 'release_id', 'published_at', 'tag', 'archive_manifest_sha256', 'publication_manifest_sha256', 'source_artifact_sha256'}
+        require(isinstance(payload, dict) and set(payload) == required and payload['schema'] == 1 and payload['kind'] == 'publication' and payload['repository'] == config['repository'] and payload['workflow'] in PUBLICATION_WORKFLOWS, 'invalid publication proof identity')
+        require(type(payload['run_id']) is int and payload['run_id'] > 0 and type(payload['run_attempt']) is int and payload['run_attempt'] > 0 and SHA.fullmatch(payload['revision']) and all(HEX.fullmatch(payload[x]) for x in ('archive_manifest_sha256', 'publication_manifest_sha256', 'source_artifact_sha256')), 'invalid publication proof source')
+        key = publication_key(payload['release_id'], payload['published_at'])
+        require(path.name == str(payload['release_id']) + '-' + digest(payload['published_at'].encode()) + '.json' and key not in proofs, 'conflicting publication proof identity')
+        verify_signature(canonical(payload), envelope['signature'], config['signing_public_key_file'])
+        proofs[key] = payload
+    return proofs
+
+
+def publication_run_ledger(api, archive, config):
+    path = archive.root / 'state/publication-runs.json'
+    ledger = parse_json(path.read_bytes()) if path.exists() else {}
+    require(isinstance(ledger, dict) and len(ledger) <= 100000, 'invalid publication run ledger')
+    grouped = {}
+    for record in archive.records():
+        if record.get('source_trusted') and record.get('completed_at'):
+            grouped.setdefault((record['run_id'], record['run_attempt']), record)
+    for (run_id, attempt), record in grouped.items():
+        key = str(run_id) + ':' + str(attempt)
+        if key in ledger:
+            prior = ledger[key]
+            require(isinstance(prior, dict) and prior.get('run_id') == run_id and prior.get('run_attempt') == attempt and prior.get('revision') == record['revision'], 'publication run ledger identity mismatch')
+            continue
+        workflow = record.get('workflow')
+        if workflow is None:
+            # Old indexes lack workflow identity; resolve once through authenticated immutable-attempt metadata.
+            cache = getattr(api, 'run_cache', {})
+            run = cache.get((run_id, attempt)) if isinstance(cache, dict) else None
+            if run is None:
+                run = api.get(f'/actions/runs/{run_id}/attempts/{attempt}')
+            require(run.get('id') == run_id and run.get('run_attempt') == attempt and run.get('head_sha') == record['revision'] and run.get('repository', {}).get('full_name') == config['repository'], 'historical publication run source unavailable')
+            workflow = run['path']
+        if workflow not in PUBLICATION_WORKFLOWS:
+            continue
+        possible = workflow == '.github/workflows/release.yml' and record.get('conclusion') == 'success'
+        if not possible:
+            jobs = attempt_jobs(api, {'id': run_id, 'run_attempt': attempt})
+            possible = any(step.get('name') == PUBLICATION_STEP and step.get('conclusion') != 'skipped' and (step.get('started_at') or step.get('conclusion') == 'success') for job in jobs for step in job.get('steps', []))
+        ledger[key] = {'run_id': run_id, 'run_attempt': attempt, 'revision': record['revision'], 'workflow': workflow, 'possible_publication': bool(possible)}
+    archive.write('state/publication-runs.json', canonical(ledger), replace=True)
+    return ledger
+
+
+def unresolved_publication_runs(ledger, proofs, audited):
+    bindings = list(proofs.values()) + list(audited.values())
+    unresolved = []
+    for key, run in ledger.items():
+        require(key == str(run.get('run_id')) + ':' + str(run.get('run_attempt')) and type(run.get('possible_publication')) is bool and isinstance(run.get('revision'), str) and SHA.fullmatch(run['revision']), 'invalid durable publication run identity')
+        if run['possible_publication'] and not any(item.get('run_id') == run['run_id'] and item.get('run_attempt') == run['run_attempt'] and item['revision'] == run['revision'] for item in bindings):
+            unresolved.append({'run_id': run['run_id'], 'run_attempt': run['run_attempt'], 'revision': run['revision'], 'workflow': run['workflow']})
+    return unresolved
+
+
+def release_deadlines_locked(api, archive=None, config=None):
+    # Current tag targets and target_commitish are mutable: neither proves publication identity.
+    config = config if config is not None else archive.config if archive else {}
+    cache_path = archive.root / 'state/releases.json' if archive else None
+    catalog = read_publication_catalog(cache_path, config.get('repository') or api.repository)
     for release in api.pages('/releases', None):
         if release.get('draft') or not release.get('published_at'):
             continue
-        key = str(release['id']) + ':' + release['published_at']
-        if key not in cached:
-            tag = urllib.parse.quote(release['tag_name'], safe='')
-            commit = api.get('/commits/' + tag)
-            revision = commit['sha']
-            require(SHA.fullmatch(revision), 'invalid released revision')
-            cached[key] = {'revision': revision, 'published_at': release['published_at']}
-            changed = True
-    # Preserve observed publication identity even if a tag/release is subsequently moved/deleted.
-    for item in cached.values():
-        require(SHA.fullmatch(item['revision']), 'invalid cached released revision')
-        by_revision.setdefault(item['revision'], []).append(timestamp(item['published_at']))
-    if archive and changed:
+        key = publication_key(release['id'], release['published_at'])
+        tag = release.get('tag_name')
+        require(isinstance(tag, str) and 0 < len(tag) <= 200, 'invalid observed publication metadata')
+        item = catalog.setdefault(key, {'release_id': release['id'], 'published_at': release['published_at'], 'tag_name': tag})
+        item['tag_name'] = tag  # Display metadata only; never used to derive a revision.
+    require(len(catalog) <= 10000, 'publication catalog exceeds bound')
+    audited = audited_publications(config)
+    proofs = verified_publication_proofs(archive, config) if archive else {}
+    ledger = publication_run_ledger(api, archive, config) if archive else {}
+    for key, proof in proofs.items():
+        catalog.setdefault(key, {'release_id': proof['release_id'], 'published_at': proof['published_at'], 'tag_name': proof['tag']})
+        if key in audited:
+            require(audited[key]['revision'] == proof['revision'] and ('run_id' not in audited[key] or (audited[key]['run_id'], audited[key]['run_attempt']) == (proof['run_id'], proof['run_attempt'])), 'publication audit conflicts with signed workflow proof')
+    # Explicit operator audit can also preserve historical publications already removed upstream.
+    for key, row in audited.items():
+        catalog.setdefault(key, {'release_id': row['release_id'], 'published_at': row['published_at'], 'tag_name': None})
+    by_revision, unresolved, resolved = {}, [], []
+    for key, item in sorted(catalog.items()):
+        row = proofs.get(key) or audited.get(key)
+        if row is None:
+            unresolved.append({'release_id': item['release_id'], 'published_at': item['published_at']})
+            continue
+        by_revision.setdefault(row['revision'], []).append(timestamp(row['published_at']))
+        resolved.append({'release_id': row['release_id'], 'published_at': row['published_at'], 'revision': row['revision'], 'provenance': 'trusted-run-attestation' if key in proofs else 'operator-audit'})
+    unresolved.extend(unresolved_publication_runs(ledger, proofs, audited))
+    if archive:
+        archive.write('state/releases.json', canonical({'schema': 2, 'repository': config['repository'], 'publications': catalog}), replace=True)
+        archive.write('state/publication-hold.json', canonical({'schema': 1, 'scope': 'repository-deletion', 'status': 'hold' if unresolved else 'resolved', 'checked_at': iso(now()), 'unresolved': unresolved, 'audited': resolved}), replace=True)
+    return PublicationDeadlines(by_revision, unresolved)
+
+
+def release_deadlines(api, archive=None, config=None):
+    if archive:
+        # Serialize reads as well as writes: a stale snapshot must never erase a newly observed release.
         with archive.lock():
-            archive.write('state/releases.json', canonical(cached), replace=True)
-    return by_revision
+            return release_deadlines_locked(api, archive, config)
+    return release_deadlines_locked(api, None, config)
+
+
+def require_durable_publication_identity_resolved(archive, config, api):
+    # Caller holds archive.lock, including all subsequent DELETE/unlink operations.
+    path = archive.root / 'state/releases.json'
+    require(path.is_file() and not path.is_symlink(), 'durable publication inventory unavailable; deletion held')
+    catalog = read_publication_catalog(path, config['repository'])
+    audited = audited_publications(config)
+    proofs = verified_publication_proofs(archive, config)
+    require(all(key in audited or key in proofs for key in catalog), 'new unresolved publication identity detected; deletion held')
+    run_path = archive.root / 'state/publication-runs.json'
+    require(run_path.is_file() and not run_path.is_symlink(), 'durable publication run inventory unavailable; deletion held')
+    ledger = publication_run_ledger(api, archive, config)
+    require(not unresolved_publication_runs(ledger, proofs, audited), 'new unresolved publication run detected; deletion held')
+    current = {}
+    for key, proof in proofs.items():
+        if key in audited:
+            row = audited[key]
+            require(row['revision'] == proof['revision'] and ('run_id' not in row or (row['run_id'], row['run_attempt']) == (proof['run_id'], proof['run_attempt'])), 'publication audit conflicts with signed workflow proof')
+    for row in list(proofs.values()) + list(audited.values()):
+        current.setdefault(row['revision'], []).append(timestamp(row['published_at']))
+    return current
+
+
+def require_publication_identity_resolved(deadlines):
+    require(not getattr(deadlines, 'unresolved', ()), 'published release identity is unresolved; deletion remains on hold')
 
 
 def bind_source_metadata(m, run, config):
@@ -893,6 +1078,43 @@ def outcome_manifest(run, config, trusted):
     return {'schema': 1, 'repository': config['repository'], 'workflow': run['path'], 'run_id': run['id'], 'run_attempt': run['run_attempt'], 'revision': run['head_sha'], 'candidate_id': f"run-{run['id']}-{run['run_attempt']}", 'complete': False, 'files': [], 'details': {'conclusion': run.get('conclusion'), 'missing': ['encrypted-evidence-artifact'] if trusted else ['trusted-source'], 'source_trusted': trusted, 'dast': 'deferred'}}
 
 
+def accept_publication_manifest(config, api, archive, run, artifact, manifest):
+    bind_manifest(manifest, run, config)
+    verify_trust_anchor(api, run, config)
+    require(run['path'] in PUBLICATION_WORKFLOWS and manifest['complete'] is False and not manifest['files'], 'invalid publication attestation manifest')
+    require(artifact['name'] == f"ssdf-publication-v1-{run['id']}-{run['run_attempt']}" and type(artifact.get('id')) is int and artifact['id'] > 0 and re.fullmatch(r'sha256:[a-f0-9]{64}', artifact.get('digest', '')) and artifact.get('workflow_run', {}).get('id') == run['id'] and artifact.get('workflow_run', {}).get('head_sha') == run['head_sha'], 'publication artifact source/name mismatch')
+    details = manifest['details']
+    fields = {'kind', 'release_id', 'published_at', 'tag', 'archive_manifest_sha256'}
+    require(fields <= set(details) <= fields | {'candidate_id', 'candidate_manifest_sha256'} and details['kind'] == 'publication', 'invalid publication attestation details')
+    key = publication_key(details['release_id'], details['published_at'])
+    require(timestamp(details['published_at']) <= now() + dt.timedelta(minutes=5) and isinstance(details['tag'], str) and 0 < len(details['tag']) <= 200 and HEX.fullmatch(details['archive_manifest_sha256']), 'invalid publication attestation metadata')
+    found = [x for x in archive.records() if x['manifest_sha256'] == details['archive_manifest_sha256'] and x['run_id'] == run['id'] and x['run_attempt'] == run['run_attempt'] and x['revision'] == run['head_sha'] and x.get('source_trusted') and x.get('complete') and x.get('acknowledged')]
+    require(len(found) == 1, 'publication lacks exact complete archived qualification')
+    before = found[0]
+    verify_signature(canonical(before['receipt']['payload']), before['receipt']['signature'], config['signing_public_key_file'])
+    require(before['receipt']['payload'] == receipt_payload(before), 'prepublication archive acknowledgement mismatch')
+    verify_storage(archive, before)
+    require(timestamp(details['published_at']) + dt.timedelta(minutes=5) >= timestamp(before['archived_at']), 'publication predates its complete archive qualification')
+    raw = age_decrypt((archive.root / 'manifests' / (before['manifest_sha256'] + '.age')).read_bytes(), config['identity_file'])
+    require(digest(raw) == before['manifest_sha256'], 'prepublication manifest integrity mismatch')
+    original = manifest_valid(parse_json(raw))
+    bind_manifest(original, run, config)
+    require(original['candidate_id'] == manifest['candidate_id'], 'publication candidate identity mismatch')
+    if 'candidate_id' in details:
+        require(details['candidate_id'] == manifest['candidate_id'], 'publication candidate reference mismatch')
+    if 'candidate_manifest_sha256' in details:
+        require(HEX.fullmatch(details['candidate_manifest_sha256']) and any(x['name'] == 'candidate.json' and x['sha256'] == details['candidate_manifest_sha256'] for x in original['files']), 'publication candidate inventory reference mismatch')
+    record = archive.save(manifest, {before['manifest_sha256']: raw}, run, artifact, config, extra_refs=before['blobs'], collector_kind='publication')
+    if not record['acknowledged']:
+        publish_receipt(api, archive, record, config, public=False)
+    payload = {'schema': 1, 'kind': 'publication', 'repository': config['repository'], 'workflow': run['path'], 'run_id': run['id'], 'run_attempt': run['run_attempt'], 'revision': run['head_sha'], 'release_id': details['release_id'], 'published_at': details['published_at'], 'tag': details['tag'], 'archive_manifest_sha256': before['manifest_sha256'], 'publication_manifest_sha256': record['manifest_sha256'], 'source_artifact_sha256': record['receipt']['payload']['source_artifact_sha256']}
+    envelope = {'payload': payload, 'signature': sign(canonical(payload), config['signing_key_file'])}
+    with archive.lock():
+        name = str(details['release_id']) + '-' + digest(details['published_at'].encode()) + '.json'
+        archive.write('publications/' + name, canonical(envelope))
+    return record
+
+
 def collect_attempt(config, api, archive, run):
     require(run.get('repository', {}).get('full_name') == config['repository'], 'run repository mismatch')
     try:
@@ -923,6 +1145,11 @@ def collect_attempt(config, api, archive, run):
             publish_receipt(api, archive, record, config)
     elif run['status'] == 'completed':
         archive.save(outcome_manifest(run, config, True), {}, run, {'id': None, 'digest': None}, config)
+    if run['path'] in PUBLICATION_WORKFLOWS:
+        publication = api.artifact(run['id'], run['run_attempt'], kind='publication')
+        if publication:
+            manifest, _ = unpack(age_decrypt(encrypted_artifact(api, publication, run), config['identity_file']))
+            accept_publication_manifest(config, api, archive, run, publication, manifest)
 
 
 def discover_runs(config, api, archive):
@@ -1012,7 +1239,9 @@ def collect(config, api, archive):
         archive.write('state/backlog.json', canonical({'status': 'backlog' if errors else 'processing', 'run_ids': sorted(set(backlog)), 'checked_at': iso(now()), 'checkpoint_advanced': False}), replace=True)
     require(errors == 0, 'one or more runs require reconciliation; checkpoint retained')
     try:
-        deadlines = release_deadlines(api, archive)
+        deadlines = release_deadlines(api, archive, config)
+        if deadlines.unresolved:
+            print('published release identity unresolved; archival continues and deletion is held', file=sys.stderr)
         for record in archive.records():
             reconcile_record(api, archive, record, config, deadlines, refresh=False)
     except EvidenceError:
@@ -1037,7 +1266,8 @@ def verify_storage(archive, record):
 
 def cleanup(config, api, archive):
     # The independent deletion token is never loaded by collection.
-    deadlines = release_deadlines(api, archive)
+    deadlines = release_deadlines(api, archive, config)
+    require_publication_identity_resolved(deadlines)
     for record in archive.records():
         run = reconcile_record(api, archive, record, config, deadlines)
         if not record['artifact_id'] or record['deleted'] or not record['acknowledged'] or run['status'] != 'completed':
@@ -1056,16 +1286,18 @@ def cleanup(config, api, archive):
                 raise
             # A previous DELETE may have committed before the durable index update, or upstream expired.
             with archive.lock():
+                require_durable_publication_identity_resolved(archive, config, api)
                 verify_storage(archive, record)
                 record['deleted'] = True
                 record['cleanup_outcome'] = 'upstream-already-absent'
                 archive.update(record)
             continue
         expected_name = record.get('artifact_name') or artifact_name(record['run_id'], record['run_attempt'])
-        allowed = {artifact_name(record['run_id'], record['run_attempt']), f"ssdf-ci-v1-{record['run_id']}-{record['run_attempt']}"} | {f"ssdf-job-v1-{record['run_id']}-{record['run_attempt']}-{job}" for job in config.get('allowed_job_chunks', [])}
+        allowed = {artifact_name(record['run_id'], record['run_attempt']), f"ssdf-ci-v1-{record['run_id']}-{record['run_attempt']}", f"ssdf-publication-v1-{record['run_id']}-{record['run_attempt']}"} | {f"ssdf-job-v1-{record['run_id']}-{record['run_attempt']}-{job}" for job in config.get('allowed_job_chunks', [])}
         require(expected_name in allowed and current['name'] == expected_name and current.get('digest') == record['artifact_digest'] and current.get('workflow_run', {}).get('id') == record['run_id'], 'cleanup artifact identity mismatch')
         # Check archive contents again before deleting the upstream recovery source.
         with archive.lock():
+            require_durable_publication_identity_resolved(archive, config, api)
             verify_storage(archive, record)
             api.request(api.prefix + '/actions/artifacts/' + str(record['artifact_id']), 'DELETE')
             record['deleted'] = True
@@ -1076,11 +1308,20 @@ def cleanup(config, api, archive):
 def retain(config, api, archive):
     # Retention role deliberately has no age identity or receipt signing key requirement.
     require(config.get('retention_enabled') is True, 'retention role is not enabled')
-    deadlines = release_deadlines(api, archive)  # outage fails closed before any unlink
+    deadlines = release_deadlines(api, archive, config)  # outage fails closed before any unlink
+    require_publication_identity_resolved(deadlines)
     for record in archive.records():
         reconcile_record(api, archive, record, config, deadlines, refresh=False)
     with archive.lock():
+        current = require_durable_publication_identity_resolved(archive, config, api)
         records = archive.records()
+        for record in records:
+            deadline = timestamp(record['retain_until'])
+            for published in current.get(record['revision'], []):
+                deadline = max(deadline, year_after(published))
+            if deadline != timestamp(record['retain_until']):
+                record['retain_until'] = iso(deadline)
+                archive.update(record)
         live = [x for x in records if not x['completed_at'] or timestamp(x['retain_until']) > now()]
         protected_blobs = {sha for record in live for sha in record['blobs']}
         protected_manifests = {record['manifest_sha256'] for record in live}

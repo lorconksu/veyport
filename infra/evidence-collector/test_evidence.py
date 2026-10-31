@@ -30,6 +30,25 @@ def concurrent_save(config, manifest, blobs, run, artifact):
     os.close(archive.root_fd)
 
 
+def publication_discovery_worker(config, releases, entered, proceed, results):
+    archive = LocalArchive(config)
+    class API:
+        repository = config['repository']
+        def pages(self, _route, _key):
+            entered.set()
+            if not proceed.wait(10):
+                raise RuntimeError('publication test synchronization timed out')
+            return releases
+    try:
+        result = e.release_deadlines(API(), archive, config)
+        results.put(('ok', list(result.unresolved)))
+    except BaseException as exc:
+        results.put(('error', type(exc).__name__))
+        raise
+    finally:
+        os.close(archive.root_fd)
+
+
 class EvidenceTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
@@ -55,11 +74,11 @@ class EvidenceTests(unittest.TestCase):
         self.directory = tempfile.TemporaryDirectory()
         self.addCleanup(self.directory.cleanup)
         self.root = Path(self.directory.name)
-        self.config = {'repository': 'owner/repo', 'archive_root': str(self.root), 'mount_source': 'nas:/archive', 'archive_id': 'test', 'allowed_workflows': ['.github/workflows/release.yml'], 'allowed_branches': ['main'], 'allowed_events': ['push'], 'identity_file': str(self.identity), 'recipient_file': str(self.recipients), 'signing_key_file': str(self.signing), 'signing_public_key_file': str(self.public), 'retention_enabled': True}
-        self.run = {'id': 123, 'run_attempt': 1, 'repository': {'full_name': 'owner/repo'}, 'head_repository': {'full_name': 'owner/repo'}, 'head_sha': 'a' * 40, 'head_branch': 'main', 'path': '.github/workflows/release.yml', 'event': 'push', 'status': 'completed', 'conclusion': 'success', 'updated_at': e.iso(e.now())}
+        self.config = {'repository': 'owner/repo', 'archive_root': str(self.root), 'mount_source': 'nas:/archive', 'archive_id': 'test', 'allowed_workflows': ['.github/workflows/ci.yml', '.github/workflows/release.yml', '.github/workflows/staging.yml'], 'allowed_branches': ['main'], 'allowed_events': ['push'], 'identity_file': str(self.identity), 'recipient_file': str(self.recipients), 'signing_key_file': str(self.signing), 'signing_public_key_file': str(self.public), 'retention_enabled': True}
+        self.run = {'id': 123, 'run_attempt': 1, 'repository': {'full_name': 'owner/repo'}, 'head_repository': {'full_name': 'owner/repo'}, 'head_sha': 'a' * 40, 'head_branch': 'main', 'path': '.github/workflows/ci.yml', 'event': 'push', 'status': 'completed', 'conclusion': 'success', 'updated_at': e.iso(e.now())}
         self.payload = b'{"private_findings":["fixture"]}'
         self.sha = e.digest(self.payload)
-        self.manifest = {'schema': 1, 'repository': 'owner/repo', 'workflow': '.github/workflows/release.yml', 'run_id': 123, 'run_attempt': 1, 'revision': 'a' * 40, 'candidate_id': 'release-123-1', 'complete': True, 'files': [{'name': 'report.json', 'sha256': self.sha, 'size': len(self.payload)}], 'details': {'dast': 'deferred', 'policy_sha256': 'b' * 64}}
+        self.manifest = {'schema': 1, 'repository': 'owner/repo', 'workflow': '.github/workflows/ci.yml', 'run_id': 123, 'run_attempt': 1, 'revision': 'a' * 40, 'candidate_id': 'release-123-1', 'complete': True, 'files': [{'name': 'report.json', 'sha256': self.sha, 'size': len(self.payload)}], 'details': {'dast': 'deferred', 'policy_sha256': 'b' * 64}}
         self.blobs = {self.sha: self.payload}
         self.artifact = {'id': 42, 'name': e.artifact_name(123, 1), 'digest': 'sha256:' + 'b' * 64, 'workflow_run': {'id': 123, 'head_sha': 'a' * 40}}
         self.archive = LocalArchive(self.config)
@@ -470,6 +489,7 @@ class EvidenceTests(unittest.TestCase):
         self.api.request.assert_called_once_with('/repos/owner/repo/actions/artifacts/84', 'DELETE')
 
     def test_release_receipt_requires_independent_success_and_complete_ci_payload_closure(self):
+        self.run['path'] = self.manifest['workflow'] = '.github/workflows/release.yml'
         m = copy.deepcopy(self.manifest)
         m['details']['expected_ci_jobs'] = ['unit']
         self.api.pages.return_value = [{'id': 99, 'run_id': 123, 'head_sha': self.run['head_sha'], 'name': 'required-ci / unit', 'status': 'completed', 'conclusion': 'success'}]
@@ -499,6 +519,7 @@ class EvidenceTests(unittest.TestCase):
                 e.complete_ci_closure(dict(self.config, required_complete_jobs={self.run['path']: []}), self.api, self.archive, self.run, m)
 
     def test_complete_release_cannot_accept_partial_ci_reports_or_untrusted_archive(self):
+        self.run['path'] = self.manifest['workflow'] = '.github/workflows/release.yml'
         m = copy.deepcopy(self.manifest)
         m['details']['expected_ci_jobs'] = ['unit']
         self.api.pages.return_value = [{'name': 'unit', 'status': 'completed', 'conclusion': 'success'}]
@@ -625,6 +646,252 @@ class EvidenceTests(unittest.TestCase):
         e.verify_trust_anchor(api, self.run, config)
         api.get.assert_called_once_with('/git/ref/heads/main')
         self.assertIn((self.run['head_sha'], self.run['path']), api.verified_sources)
+
+    def publication_fixture(self):
+        published = e.now() - dt.timedelta(days=220)
+        self.run['updated_at'] = e.iso(published)
+        self.run['path'] = self.manifest['workflow'] = '.github/workflows/release.yml'
+        first = self.save()
+        other_run = dict(self.run, id=124, head_sha='b' * 40, path='.github/workflows/ci.yml')
+        other_manifest = dict(self.manifest, run_id=124, revision='b' * 40, workflow='.github/workflows/ci.yml')
+        second = self.save(other_manifest, other_run)
+        release = {'id': 7, 'tag_name': 'v1.2.3', 'draft': False, 'published_at': e.iso(published), 'target_commitish': 'main'}
+        self.api.pages.return_value = [release]
+        # The mutable tag now resolves to B before the collector first sees publication of A.
+        self.api.get.return_value = {'sha': 'b' * 40}
+        audit = {'release_id': 7, 'published_at': release['published_at'], 'revision': 'a' * 40, 'provenance': 'operator-audit', 'audit_reference': 'private-audit-7-original-publication', 'audited_at': e.iso(e.now()), 'run_id': 123, 'run_attempt': 1}
+        return first, second, release, audit
+
+    def test_tag_moved_before_first_observation_holds_all_deletion_without_inventing_binding(self):
+        first, second, release, _ = self.publication_fixture()
+        before = {x['record_name']: x['retain_until'] for x in self.archive.records()}
+        deadlines = e.release_deadlines(self.api, self.archive, self.config)
+        self.assertEqual(dict(deadlines), {})
+        self.assertIn({'release_id': 7, 'published_at': release['published_at']}, deadlines.unresolved)
+        self.assertTrue(any(x.get('run_id') == 123 for x in deadlines.unresolved))
+        self.api.get.assert_not_called()  # Never infer history from /commits/<current-tag>.
+        self.api.request.reset_mock()
+        with self.assertRaises(e.EvidenceError):
+            e.retain(self.config, self.api, self.archive)
+        with self.assertRaises(e.EvidenceError):
+            e.cleanup(self.config, self.api, self.archive)
+        self.api.request.assert_not_called()
+        self.assertEqual({x['record_name']: x['retain_until'] for x in self.archive.records()}, before)
+        hold = e.parse_json((self.root / 'state/publication-hold.json').read_bytes())
+        self.assertEqual(hold['status'], 'hold')
+        self.assertEqual(hold['audited'], [])
+        self.assertEqual({x['revision'] for x in self.archive.records()}, {'a' * 40, 'b' * 40})
+
+    def test_audited_original_publication_extends_A_not_current_tag_B(self):
+        first, second, release, audit = self.publication_fixture()
+        config = dict(self.config, audited_release_publications=[audit])
+        deadlines = e.release_deadlines(self.api, self.archive, config)
+        self.assertEqual(set(deadlines), {'a' * 40})
+        self.assertEqual(deadlines.unresolved, ())
+        e.retain(config, self.api, self.archive)
+        records = self.archive.records()
+        self.assertEqual([x['revision'] for x in records], ['a' * 40])
+        self.assertEqual(e.timestamp(records[0]['retain_until']), e.year_after(e.timestamp(release['published_at'])))
+        self.api.get.assert_not_called()
+        # A release removed upstream remains protected by the independently audited identity.
+        self.api.pages.return_value = []
+        self.assertIn('a' * 40, e.release_deadlines(self.api, self.archive, config))
+
+    def test_legacy_tag_cache_preserves_existing_extensions_but_is_not_verified_history(self):
+        first, _, release, _ = self.publication_fixture()
+        previous = e.iso(e.year_after(e.timestamp(release['published_at'])))
+        first['retain_until'] = previous
+        with self.archive.lock():
+            self.archive.update(first)
+            self.archive.write('state/releases.json', e.canonical({'7:' + release['published_at']: {'revision': 'b' * 40, 'published_at': release['published_at']}}), replace=True)
+        deadlines = e.release_deadlines(self.api, self.archive, self.config)
+        self.assertEqual(dict(deadlines), {})
+        self.assertTrue(deadlines.unresolved)
+        e.reconcile_record(self.api, self.archive, first, self.config, deadlines, refresh=False)
+        self.assertEqual(next(x for x in self.archive.records() if x['revision'] == 'a' * 40)['retain_until'], previous)
+        catalog = e.parse_json((self.root / 'state/releases.json').read_bytes())
+        self.assertEqual(catalog['publications']['7:' + release['published_at']]['legacy_tag_revision'], 'b' * 40)
+        with self.assertRaises(e.EvidenceError):
+            e.retain(self.config, self.api, self.archive)
+
+    def test_publication_audit_rejects_conflicts_unknown_provenance_and_invalid_timestamps(self):
+        _, _, _, audit = self.publication_fixture()
+        for rows in ([audit, dict(audit, revision='b' * 40)], [dict(audit, provenance='current-tag')], [dict(audit, published_at='invalid')], [dict(audit, revision='main')], [dict(audit, audited_at=e.iso(e.now() - dt.timedelta(days=300)))]):
+            with self.subTest(rows=rows), self.assertRaises(e.EvidenceError):
+                e.release_deadlines(self.api, self.archive, dict(self.config, audited_release_publications=rows))
+        self.assertEqual(len(self.archive.records()), 2)
+
+    def test_unresolved_publication_does_not_stop_archiving_cancelled_run_metadata(self):
+        release = {'id': 7, 'tag_name': 'v1.2.3', 'draft': False, 'published_at': e.iso(e.now() - dt.timedelta(days=1))}
+        self.api.pages.return_value = [release]
+        cancelled = dict(self.run, head_repository={'full_name': 'fork/repo'}, conclusion='cancelled')
+        config = dict(self.config, collect_terminal_logs=False)
+        with mock.patch.object(e, 'discover_runs', return_value=([cancelled], e.now())), mock.patch('sys.stderr', new=io.StringIO()):
+            e.collect(config, self.api, self.archive)
+        self.assertEqual(len(self.archive.records()), 1)
+        self.assertFalse(self.archive.records()[0]['complete'])
+        self.assertEqual(e.parse_json((self.root / 'state/backlog.json').read_bytes())['status'], 'complete')
+        self.assertEqual(e.parse_json((self.root / 'state/publication-hold.json').read_bytes())['status'], 'hold')
+
+    def test_publication_catalog_serializes_discovery_without_stale_overwrite(self):
+        observed = {'id': 7, 'tag_name': 'v1.2.3', 'draft': False, 'published_at': e.iso(e.now() - dt.timedelta(days=1))}
+        empty_entered, empty_continue = multiprocessing.Event(), multiprocessing.Event()
+        observer_entered, observer_continue = multiprocessing.Event(), multiprocessing.Event()
+        observer_continue.set()
+        results = multiprocessing.Queue()
+        first = multiprocessing.Process(target=publication_discovery_worker, args=(self.config, [], empty_entered, empty_continue, results))
+        second = multiprocessing.Process(target=publication_discovery_worker, args=(self.config, [observed], observer_entered, observer_continue, results))
+        first.start()
+        self.assertTrue(empty_entered.wait(5))
+        second.start()
+        try:
+            self.assertFalse(observer_entered.wait(.2))  # The second discovery cannot read a stale catalog under the first lease.
+        finally:
+            empty_continue.set()
+            first.join(10)
+            second.join(10)
+        self.assertEqual(first.exitcode, 0)
+        self.assertEqual(second.exitcode, 0)
+        outcomes = [results.get(timeout=2), results.get(timeout=2)]
+        self.assertTrue(all(status == 'ok' for status, _ in outcomes))
+        self.api.pages.return_value = []  # Later upstream removal must not erase the observed publication.
+        self.assertEqual(e.release_deadlines(self.api, self.archive, self.config).unresolved, ({'release_id': 7, 'published_at': observed['published_at']},))
+
+    def test_stale_resolved_snapshot_cannot_authorize_delete_after_new_durable_publication(self):
+        record = self.acknowledge(self.save())
+        old = e.now() - dt.timedelta(days=200)
+        record['completed_at'], record['retain_until'] = e.iso(old), e.iso(old + dt.timedelta(days=180))
+        with self.archive.lock():
+            self.archive.write('runs/' + record['record_name'], e.canonical(record), replace=True)
+        self.cleanup_api()
+        real_discovery = e.release_deadlines
+        publication = {'release_id': 7, 'published_at': e.iso(old), 'tag_name': 'v1.2.3'}
+        def newly_observed(api, archive, config):
+            resolved = real_discovery(api, archive, config)
+            with archive.lock():
+                # Model collector recording a publication after deletion-role discovery, even if hold-marker write crashes.
+                archive.write('state/releases.json', e.canonical({'schema': 2, 'repository': config['repository'], 'publications': {'7:' + publication['published_at']: publication}}), replace=True)
+            return resolved
+        for operation in (e.cleanup, e.retain):
+            with self.subTest(operation=operation.__name__):
+                with self.archive.lock():
+                    self.archive.write('state/releases.json', e.canonical({'schema': 2, 'repository': self.config['repository'], 'publications': {}}), replace=True)
+                self.api.request.reset_mock()
+                with mock.patch.object(e, 'release_deadlines', side_effect=newly_observed), self.assertRaises(e.EvidenceError):
+                    operation(self.config, self.api, self.archive)
+                self.api.request.assert_not_called()
+                self.assertEqual(len(self.archive.records()), 1)
+                self.assertFalse(self.archive.records()[0]['deleted'])
+
+    def test_signing_uses_only_rewound_sealed_memfd_and_no_named_message_file(self):
+        message = b'disclosure-safe signed fixture'
+        original = e.crypto
+        def inspect_fd(args, data, limit, pass_fds=()):
+            self.assertEqual(len(pass_fds), 1)
+            descriptor = pass_fds[0]
+            self.assertEqual(os.lseek(descriptor, 0, os.SEEK_CUR), 0)
+            self.assertEqual(os.fstat(descriptor).st_size, len(message))
+            with self.assertRaises(OSError):
+                os.write(descriptor, b'cannot mutate sealed input')
+            self.assertIn('/proc/self/fd/' + str(descriptor), args)
+            return original(args, data, limit, pass_fds=pass_fds)
+        with mock.patch.object(e.Path, 'write_bytes', side_effect=AssertionError('named plaintext signing file')), mock.patch.object(e, 'crypto', side_effect=inspect_fd):
+            signature = e.sign(message, self.signing)
+        e.verify_signature(message, signature, self.public)
+        with mock.patch.object(e.os, 'memfd_create', None), self.assertRaises(e.EvidenceError):
+            e.sign(message, self.signing)
+
+    def publication_attestation_fixture(self):
+        self.run['path'] = self.manifest['workflow'] = '.github/workflows/release.yml'
+        before = self.acknowledge(self.save())
+        self.api.verified_sources = {(self.run['head_sha'], self.run['path'])}
+        manifest = dict(self.manifest, complete=False, files=[], details={'kind': 'publication', 'release_id': 7, 'published_at': e.iso(e.now()), 'tag': 'v1.2.3', 'archive_manifest_sha256': before['manifest_sha256']})
+        artifact = dict(self.artifact, id=99, name='ssdf-publication-v1-123-1')
+        return before, manifest, artifact
+
+    def test_signed_postpublication_attestation_resolves_deleted_before_first_poll_automatically(self):
+        before, manifest, artifact = self.publication_attestation_fixture()
+        record = e.accept_publication_manifest(self.config, self.api, self.archive, self.run, artifact, manifest)
+        self.assertTrue(set(before['blobs']) <= set(record['blobs']))
+        self.assertIn(before['manifest_sha256'], record['blobs'])
+        self.assertTrue(record['acknowledged'])
+        self.api.pages.return_value = []  # Release and tag disappeared before first catalog observation.
+        self.api.get.reset_mock()
+        deadlines = e.release_deadlines(self.api, self.archive, self.config)
+        self.assertEqual(set(deadlines), {'a' * 40})
+        self.assertEqual(deadlines.unresolved, ())
+        e.retain(self.config, self.api, self.archive)
+        self.assertTrue(all(e.timestamp(row['retain_until']) >= e.year_after(e.timestamp(manifest['details']['published_at'])) for row in self.archive.records()))
+        public_only = {key: value for key, value in self.config.items() if key not in ('identity_file', 'signing_key_file', 'recipient_file')}
+        self.assertEqual(e.release_deadlines(self.api, self.archive, public_only).unresolved, ())
+        self.api.get.assert_not_called()
+        hold = e.parse_json((self.root / 'state/publication-hold.json').read_bytes())
+        self.assertEqual(hold['audited'][0]['provenance'], 'trusted-run-attestation')
+
+    def test_successful_release_run_without_marker_holds_even_when_release_list_is_empty(self):
+        self.run['path'] = self.manifest['workflow'] = '.github/workflows/release.yml'
+        self.run['updated_at'] = e.iso(e.now() - dt.timedelta(days=200))
+        self.save()
+        self.api.pages.return_value = []
+        deadlines = e.release_deadlines(self.api, self.archive, self.config)
+        self.assertEqual(dict(deadlines), {})
+        self.assertTrue(any(item.get('run_id') == 123 for item in deadlines.unresolved))
+        with self.assertRaises(e.EvidenceError):
+            e.retain(self.config, self.api, self.archive)
+        self.assertEqual(len(self.archive.records()), 1)
+
+    def test_private_staging_rehearsal_is_distinguished_from_actual_publication_step(self):
+        self.run['path'] = self.manifest['workflow'] = '.github/workflows/staging.yml'
+        self.save()
+        def pages(route, _key):
+            if route == '/releases':
+                return []
+            return [{'steps': [{'name': e.PUBLICATION_STEP, 'status': 'completed', 'conclusion': 'skipped', 'started_at': None}]}]
+        self.api.pages.side_effect = pages
+        self.assertEqual(e.release_deadlines(self.api, self.archive, self.config).unresolved, ())
+        # A distinct publishing attempt explicitly entered the publishing step.
+        next_run = dict(self.run, run_attempt=2)
+        next_manifest = dict(self.manifest, run_attempt=2)
+        self.save(next_manifest, next_run)
+        self.api.job_cache.clear()
+        self.api.pages.side_effect = lambda route, key: [] if route == '/releases' else [{'steps': [{'name': e.PUBLICATION_STEP, 'status': 'completed', 'conclusion': 'success', 'started_at': e.iso(e.now())}]}]
+        deadlines = e.release_deadlines(self.api, self.archive, self.config)
+        self.assertEqual([row['run_attempt'] for row in deadlines.unresolved if row.get('run_id') == 123], [2])
+
+    def test_publication_attestation_rejects_wrong_archive_source_candidate_or_chronology(self):
+        _, manifest, artifact = self.publication_attestation_fixture()
+        alternatives = [dict(manifest, run_attempt=2), dict(manifest, candidate_id='other-candidate'), dict(manifest, details=dict(manifest['details'], archive_manifest_sha256='f' * 64)), dict(manifest, details=dict(manifest['details'], published_at=e.iso(e.now() - dt.timedelta(days=1))))]
+        for value in alternatives:
+            with self.subTest(value=value), self.assertRaises(e.EvidenceError):
+                e.accept_publication_manifest(self.config, self.api, self.archive, self.run, artifact, value)
+        self.assertFalse((self.root / 'publications').exists())
+
+    def test_tampered_automatic_publication_proof_cannot_authorize_deletion(self):
+        _, manifest, artifact = self.publication_attestation_fixture()
+        e.accept_publication_manifest(self.config, self.api, self.archive, self.run, artifact, manifest)
+        path = next((self.root / 'publications').glob('*.json'))
+        envelope = e.parse_json(path.read_bytes())
+        envelope['payload']['revision'] = 'b' * 40
+        path.write_bytes(e.canonical(envelope))
+        self.api.pages.return_value = []
+        with self.assertRaises(e.EvidenceError):
+            e.retain(self.config, self.api, self.archive)
+        self.assertEqual(len(self.archive.records()), 2)
+
+    def test_new_successful_release_record_is_detected_inside_deletion_critical_section(self):
+        self.run['updated_at'] = e.iso(e.now() - dt.timedelta(days=200))
+        self.save()
+        self.api.pages.return_value = []
+        original = e.release_deadlines
+        def after_snapshot(api, archive, config):
+            resolved = original(api, archive, config)
+            run = dict(self.run, id=124, path='.github/workflows/release.yml')
+            manifest = dict(self.manifest, run_id=124, workflow=run['path'])
+            archive.save(manifest, self.blobs, run, self.artifact, config)
+            return resolved
+        with mock.patch.object(e, 'release_deadlines', side_effect=after_snapshot), self.assertRaises(e.EvidenceError):
+            e.retain(self.config, self.api, self.archive)
+        self.assertEqual(len(self.archive.records()), 2)
 
     def test_leap_day_year_deadline(self):
         self.assertEqual(e.year_after(dt.datetime(2024, 2, 29, tzinfo=e.UTC)), dt.datetime(2025, 2, 28, tzinfo=e.UTC))

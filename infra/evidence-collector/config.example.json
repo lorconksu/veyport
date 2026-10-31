@@ -56,7 +56,8 @@
     ".github/workflows/ci.yml",
     "scripts/release/ci_evidence.py",
     "scripts/release/capture_step.py",
-    "scripts/release/sonar_job_evidence.py"
+    "scripts/release/sonar_job_evidence.py",
+    "scripts/release/publication.py"
   ],
   "allowed_job_chunks": [
     "unit",
@@ -112,5 +113,6 @@
       "vulnerability"
     ]
   },
-  "collect_terminal_logs": true
+  "collect_terminal_logs": true,
+  "audited_release_publications": []
 }

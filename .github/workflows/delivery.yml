@@ -191,6 +191,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: bash scripts/release/publish_delivery.sh "$RUNNER_TEMP/delivery" "$TAG" "$VERSION" "$PROTOTYPE" "$GITHUB_SHA"
       - name: Publish disclosure-safe binary release assets
+        id: publish_release
         if: inputs.publish
         env:
           GH_TOKEN: ${{ github.token }}
@@ -199,9 +200,20 @@ jobs:
           set -euo pipefail
           bash scripts/release/authorize_publication.sh "$RUNNER_TEMP"
           python3 scripts/release/public_summary.py --delivery "$RUNNER_TEMP/delivery" --decision "$RUNNER_TEMP/security/decision.json" --receipt "$RUNNER_TEMP/archive-receipt.json" --version "$VERSION"
-          args=()
-          if [ "$PROTOTYPE" = true ]; then args+=(--prerelease); fi
-          assets=()
-          while IFS= read -r name; do assets+=("$RUNNER_TEMP/delivery/bin/$name" "$RUNNER_TEMP/delivery/bin/$name.sha256"); done < <(python3 -c 'import sys;sys.path.insert(0,"scripts/release");from artifacts import BINARIES;print("\n".join(BINARIES))')
-          python3 scripts/release/git_tag.py check "$TAG" "$GITHUB_SHA" "$GITHUB_REPOSITORY"
-          gh release create "$TAG" --verify-tag --title "$VERSION" --notes-file "$RUNNER_TEMP/delivery/release-notes.md" "${args[@]}" "${assets[@]}" "$RUNNER_TEMP/delivery/bin/SHA256SUMS" "$RUNNER_TEMP/delivery/bin/artifact-manifest.json" "$RUNNER_TEMP/delivery/release-summary.json"
+          python3 scripts/release/publication.py publish --delivery "$RUNNER_TEMP/delivery" --candidate "$RUNNER_TEMP/candidate.json" --archive "$RUNNER_TEMP/evidence-manifest.json" --tag "$TAG" --version "$VERSION" --prototype "$PROTOTYPE" --result "$RUNNER_TEMP/publication-result.json"
+      - name: Seal exact publication response and signed-archive binding
+        id: publication_provenance
+        if: inputs.publish && steps.publish_release.outcome == 'success'
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/publication-transport"
+          python3 scripts/release/publication.py manifest --result "$RUNNER_TEMP/publication-result.json" --manifest "$RUNNER_TEMP/publication-manifest.json"
+          python3 infra/evidence-collector/evidence.py seal --manifest "$RUNNER_TEMP/publication-manifest.json" --source "$RUNNER_TEMP/evidence-files" --recipient "$RUNNER_TEMP/ssdf-keys/recipient.txt" --output "$RUNNER_TEMP/publication-transport/evidence.age" > /dev/null
+      - name: Transfer encrypted immutable publication provenance
+        if: inputs.publish && steps.publication_provenance.outcome == 'success'
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: ssdf-publication-v1-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/publication-transport/evidence.age
+          if-no-files-found: error
+          retention-days: 7

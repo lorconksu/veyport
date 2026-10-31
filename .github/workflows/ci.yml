@@ -88,7 +88,7 @@ jobs:
           bash scripts/release/install_tools.sh actionlint "$RUNNER_TEMP/release-tools"
           "$RUNNER_TEMP/release-tools/actionlint"
           sudo apt-get update -qq
-          sudo apt-get install -y -qq age
+          sudo apt-get install -y -qq age python3-venv
 
       - name: Release helper tests
         run: python3 scripts/release/capture_step.py --name release-helpers -- python3 -m unittest discover -s scripts/release -p "test_*.py"
@@ -97,6 +97,22 @@ jobs:
         run: |
           python3 scripts/release/capture_step.py --name evidence-collector -- python3 -m unittest discover -s infra/evidence-collector -p "test_*.py"
           python3 scripts/release/capture_step.py --name candidate-coordinator -- python3 -m unittest discover -s infra/candidate-coordinator -p "test_*.py"
+
+      - name: Security scanner evidence tests
+        run: python3 scripts/release/capture_step.py --name security-scanners -- python3 -m unittest discover -s scripts/security -p "test_*.py"
+
+      - name: Native candidate harness tests
+        run: python3 scripts/release/capture_step.py --name native-candidate-harness -- python3 -m unittest discover -s scripts/native-candidate -p "test_*.py"
+
+      - name: Backup crypto compatibility with pinned dependencies
+        env:
+          PIP_CACHE_DIR: ${{ runner.temp }}/ssdf-backup-compat-pip-cache
+        run: |
+          set -euo pipefail
+          backup_venv="$RUNNER_TEMP/ssdf-backup-compat-venv"
+          python3 -m venv "$backup_venv"
+          python3 scripts/release/capture_step.py --name backup-compat-install -- "$backup_venv/bin/python" -m pip install --disable-pip-version-check -r infra/audit-lab/storage/requirements.txt
+          python3 scripts/release/capture_step.py --name backup-compat -- "$backup_venv/bin/python" -m unittest discover -s infra/audit-lab/storage -p "test_backup_crypto.py"
 
       - name: Dependency-Track integration tests
         run: python3 scripts/release/capture_step.py --name dependency-track -- python3 -m unittest discover -s infra/dependency-track -p "test_*.py"

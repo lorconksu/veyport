@@ -132,9 +132,13 @@ def extract_stream(source, destination, deadline, retained=None):
                             output.write(block)
                         h.update(block)
                         remaining -= len(block)
-                e.require(h.hexdigest() == item['sha256'], 'candidate file digest mismatch')
-                if keep and item['name'] in ('bin/veyport-agent-linux-amd64', 'bin/vey-linux-amd64'):
-                    os.chmod(target, 0o700)  # Ignore supplied TAR modes; grant only reviewed native execution.
+                    e.require(h.hexdigest() == item['sha256'], 'candidate file digest mismatch')
+                    if keep and item['name'] in ('bin/veyport-agent-linux-amd64', 'bin/vey-linux-amd64'):
+                        # Change only the verified open file, never a path that could be replaced.
+                        owner_permissions = stat.S_IRUSR | stat.S_IWUSR | stat.S_IXUSR
+                        os.fchmod(output.fileno(), owner_permissions)
+                        actual = os.fstat(output.fileno())
+                        e.require(stat.S_IMODE(actual.st_mode) == owner_permissions and actual.st_uid == os.geteuid(), 'native executable ownership/permissions mismatch')
         e.require(manifest is not None and seen == set(expected) | {'candidate.json'}, 'candidate inventory incomplete')
         # Consume all ciphertext and require age's final authentication check before deployment.
         while reader.read(MAX_METADATA):

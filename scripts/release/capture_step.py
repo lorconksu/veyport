@@ -11,7 +11,7 @@ import subprocess
 import time
 
 
-def capture(name, command, timeout):
+def capture(name, command, timeout, child_umask=-1):
     if not re.fullmatch(r"[A-Za-z0-9_-]{1,64}", name) or not command or not 1 <= timeout <= 5400:
         raise ValueError("bounded test command required")
     root = Path(os.environ["RUNNER_TEMP"]) / "ssdf-results"
@@ -20,7 +20,7 @@ def capture(name, command, timeout):
     clock = time.monotonic()
     code, timed_out = 1, False
     with (root / (name + ".stdout")).open("xb") as stdout, (root / (name + ".stderr")).open("xb") as stderr:
-        process = subprocess.Popen(command, stdout=stdout, stderr=stderr, start_new_session=True)
+        process = subprocess.Popen(command, stdout=stdout, stderr=stderr, start_new_session=True, umask=child_umask)
         try:
             code = process.wait(timeout=timeout)
         except subprocess.TimeoutExpired:
@@ -46,10 +46,10 @@ def main():
     parser.add_argument("--timeout", type=int, default=2700)
     parser.add_argument("command", nargs=argparse.REMAINDER)
     args = parser.parse_args()
-    os.umask(0o077)
+    original_umask = os.umask(0o077)
     command = args.command[1:] if args.command[:1] == ["--"] else args.command
     try:
-        parser.exit(capture(args.name, command, args.timeout))
+        parser.exit(capture(args.name, command, args.timeout, child_umask=original_umask))
     except (ValueError, OSError, subprocess.SubprocessError):
         parser.exit(1, "private diagnostic capture failed\n")
 

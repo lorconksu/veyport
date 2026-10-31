@@ -20,9 +20,12 @@ evidence locations intentionally remain in operator configuration.
   WORM protection. NAS expiration behavior can retain expired data for up to
   seven additional days.
 - The candidate coordinator's firewall egress restrictions and host isolation
-  were tested. Its 18-case harness passed against released revision
-  `dfce2e6f584f27dec54f51be4992550bbf8d370a` using local Docker only. It has not
-  yet completed a final-head rehearsal on the staging host or review. Normal staging remains
+  were tested. Its 18-case harness passed against the released baseline locally and
+  against implementation revision `a861fed` on the isolated staging host. The
+  latter exercised the installed coordinator and exact built native artifacts;
+  its disposable containers were removed. This is a manual native rehearsal,
+  not full release qualification. Final PR checks and review results are
+  recorded on PR #115. Normal staging remains
   on v2.0.57 and was not changed by the prototype.
 - Collector and candidate timers are OFF. No release gate is active, and no
   publication, merge, approval, scanner retirement or Dependency-Track cutover
@@ -51,7 +54,7 @@ separate DAST provisioning and policy review are complete.
 
 ## Operator pending checklist
 
-1. Complete final-head rehearsal on the staging host and code/security reviews. Confirm that
+1. Verify the final PR checks, review reports, and native rehearsal record. Confirm that
    the tested candidate, source revision and evidence all identify the same
    immutable bytes.
 2. Obtain and verify the repository-scoped collection token with Actions read,
@@ -65,7 +68,10 @@ separate DAST provisioning and policy review are complete.
    Confirm complete final-revision SCA/SAST and exact-artifact scans.
 5. Review the public `go-test.jsonl` artifact's privacy handling and ensure
    published records describe its synthetic-fixture scope accurately.
-6. Exercise authenticated collection, signed receipt verification, failure
+6. Reconcile the supervised encrypted CI transport backups retained on the NAS
+   while the service credential is pending. They are recovery copies, not
+   release-authorizing archive receipts. Exercise authenticated collection,
+   signed receipt verification, failure
    behavior, exact-ID artifact deletion and cancellation/mount-loss recovery.
    Failed or missing collection must block publication and must not delete the
    source artifact.

@@ -7,6 +7,7 @@ import os
 from pathlib import Path
 import shutil
 import subprocess
+import sys
 import tempfile
 import unittest
 from unittest.mock import patch
@@ -117,6 +118,20 @@ class PrivateCaptureTests(unittest.TestCase):
             root = Path(directory) / 'ssdf-results'
             self.assertIn('sensitive-diagnostic', (root / 'fixture.stdout').read_text())
             self.assertEqual(json.loads((root / 'fixture.result.json').read_text())['exit_code'], 7)
+
+    def test_cli_preserves_child_umask_while_capture_files_stay_private(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            public = root / "public-checkpoint"
+            child = "import os,sys; descriptor=os.open(sys.argv[1],os.O_WRONLY|os.O_CREAT|os.O_EXCL,0o644); os.close(descriptor)"
+            result = subprocess.run([sys.executable, str(ROOT / "scripts/release/capture_step.py"), "--name", "permissions", "--", sys.executable, "-c", child, str(public)],
+                                    env={**os.environ, "RUNNER_TEMP": directory}, umask=0o022, capture_output=True, timeout=5)
+            self.assertEqual(result.returncode, 0)
+            self.assertEqual(public.stat().st_mode & 0o777, 0o644)
+            logs = root / "ssdf-results"
+            self.assertEqual(logs.stat().st_mode & 0o777, 0o700)
+            for name in ("permissions.stdout", "permissions.stderr", "permissions.result.json"):
+                self.assertEqual((logs / name).stat().st_mode & 0o777, 0o600)
 
     def test_timeout_is_failure(self):
         with tempfile.TemporaryDirectory() as directory, patch.dict(os.environ, {'RUNNER_TEMP': directory}), contextlib.redirect_stdout(io.StringIO()):
