@@ -564,7 +564,7 @@ jobs:
           SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
           SONAR_CONTEXT_ARGS: ${{ steps.sonar-context.outputs.args }}
           EXPECTED_SOURCE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
-        run: python3 scripts/release/sonar_job_evidence.py --report-task .scannerwork/report-task.txt --context "$SONAR_CONTEXT_ARGS" --revision "$EXPECTED_SOURCE_SHA" --output sonar-evidence
+        run: python3 scripts/release/sonar_job_evidence.py --public-project-results --report-task .scannerwork/report-task.txt --context "$SONAR_CONTEXT_ARGS" --revision "$EXPECTED_SOURCE_SHA" --output sonar-evidence
       - name: Encrypt available private job evidence
         if: always()
         env:

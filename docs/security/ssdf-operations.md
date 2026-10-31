@@ -11,8 +11,8 @@ evidence locations intentionally remain in operator configuration.
 The implementation remains a draft prototype. Independent code and security
 review results and the final commit's CI status are tracked on
 [PR #115](https://github.com/lorconksu/veyport/pull/115). The current local
-validation includes 92 release-helper and 71 collector tests. A manual isolated
-native rehearsal at `c9d35d63` passed all 18 cases; it explicitly reported
+validation includes 101 release-helper and 71 collector tests. A manual isolated
+native rehearsal at `0962b374` passed all 18 cases; it explicitly reported
 `release_qualified:false`. These results do not establish credentialed automatic
 collection or a complete publication rehearsal.
 
@@ -29,21 +29,25 @@ collection or a complete publication rehearsal.
   seven additional days.
 - The candidate coordinator's firewall egress restrictions and host isolation
   were tested. Its 18-case harness passed against the released baseline locally
-  and against revision `c9d35d63` on isolated staging, exercising the installed
+  and against revision `0962b374` on isolated staging, exercising the installed
   coordinator and exact built native artifacts. Disposable candidates were
   cleaned up. This is a manual native rehearsal, not full release qualification.
   Normal staging remains on v2.0.57 and was not changed by the prototype.
-- Local validation passed 92 release-helper, 71 collector, 16 coordinator,
+- Local validation passed 101 release-helper, 71 collector, 16 coordinator,
   5 scanner, 6 harness, and 3 crypto tests. The CodeQL provider exporter was
   exercised against two existing analyses across five language categories;
   those reports were encrypted on the NAS and read back successfully. Snyk
   snapshots contain GitHub status metadata and safe references, not full SCM
   scan reports. Neither export starts another scan or grants release authority.
-- CI run 41182748494 passed functional tests and scanner quality gates, but
-  transiently failed its Sonar report export. The follow-up exporter retries
-  only bounded reads of the existing analysis, revalidates its exact source,
-  preserves partial output, and still fails when evidence remains incomplete.
-  The same analysis was successfully exported during a read-only replay.
+- CI runs 41182748494 and 41185877716 passed functional tests and scanner
+  quality gates but failed Sonar report export. The latter recorded repeated
+  HTTP 400 responses from the issues endpoint; a transient cause was not
+  established. The corrected exporter deliberately separates authenticated CE
+  task verification from anonymous reads of the verified public project's
+  reports. The same analysis was successfully replayed through this split.
+  It preserves exact source checks, partial output and all finding states;
+  permanent request/authentication errors fail immediately. See
+  [scanner access contracts](scanner-coverage.md) for the evidence and limits.
 - Collector and candidate timers are OFF. No release gate is active, and no
   publication, merge, approval, scanner retirement or Dependency-Track cutover
   has occurred.

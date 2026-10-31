@@ -132,11 +132,28 @@ class NoRedirect(urllib.request.HTTPRedirectHandler):
 
 
 class Sonar:
+    def __init__(self, public_project=False):
+        self.public_project = public_project
+
     def get(self, endpoint, params):
-        token = os.environ.get("SONAR_TOKEN")
-        if not token:
-            raise ValueError("Sonar authentication missing")
-        request = urllib.request.Request("https://sonarcloud.io/api/" + endpoint + "?" + urllib.parse.urlencode(params), headers={"Authorization": "Bearer " + token, "Accept": "application/json"})
+        headers = {"Accept": "application/json"}
+        if self.public_project and endpoint != "ce/task":
+            selectors = {"components/show": "component", "project_pull_requests/list": "project",
+                         "project_analyses/search": "project", "issues/search": "componentKeys",
+                         "hotspots/search": "projectKey"}
+            if endpoint == "qualitygates/project_status":
+                if set(params) != {"analysisId"} or not re.fullmatch(r"[A-Za-z0-9_-]{1,128}", params["analysisId"]):
+                    raise ValueError("Sonar exact analysis identity required")
+            elif endpoint not in selectors or params.get(selectors[endpoint]) != PROJECT:
+                raise ValueError("Sonar public reader requires the fixed project")
+            # This is a deliberate mode, never a fallback after an auth error.
+            # Analysis credentials are sent only to ce/task in this mode.
+        else:
+            token = os.environ.get("SONAR_TOKEN")
+            if not token:
+                raise ValueError("Sonar authentication missing")
+            headers["Authorization"] = "Bearer " + token
+        request = urllib.request.Request("https://sonarcloud.io/api/" + endpoint + "?" + urllib.parse.urlencode(params), headers=headers)
         with urllib.request.build_opener(NoRedirect()).open(request, timeout=30) as response:
             data = response.read(MAX_BYTES + 1)
         if len(data) > MAX_BYTES:
@@ -166,6 +183,14 @@ def save(root, name, value):
     path.chmod(0o600)
 
 
+def verify_public_sonar(api, root, name):
+    value = api.get("components/show", {"component": PROJECT})
+    save(root, name, value)
+    component = value.get("component") if isinstance(value, dict) else None
+    if not isinstance(component, dict) or component.get("key") != PROJECT or component.get("visibility") != "public":
+        raise ValueError("Sonar public reader requires verified public project visibility")
+
+
 def export_codeql(api, root, revision, version):
     analyses = api.pages("code-scanning/analyses?tool_name=CodeQL&ref=refs%2Fheads%2Fmain")
     selected = {}
@@ -193,7 +218,9 @@ def export_codeql(api, root, revision, version):
     return findings
 
 
-def export_sonar(api, root, revision, version, branch):
+def export_sonar(api, root, revision, version, branch, public_project=False):
+    if public_project:
+        verify_public_sonar(api, root, "sonar-project-before.json")
     params = {"project": PROJECT, "branch": branch, "p": 1, "ps": 1}
     before = api.get("project_analyses/search", params)
     analyses = before.get("analyses", [])
@@ -208,6 +235,8 @@ def export_sonar(api, root, revision, version, branch):
     after = api.get("project_analyses/search", params)
     if after != before:
         raise ValueError("Sonar mutable branch changed during evidence export")
+    if public_project:
+        verify_public_sonar(api, root, "sonar-project-after.json")
     save(root, "sonar-analysis.json", before)
     save(root, "sonar-issues.json", issue_pages)
     save(root, "sonar-hotspots.json", hotspot_pages)
@@ -297,7 +326,12 @@ def collect(args, api=None, sonar=None):
             elif scanner == "codeql":
                 findings = export_codeql(api or ExportAPI(), root, args.revision, args.version)
             else:
-                findings = export_sonar(sonar or Sonar(), root, args.revision, args.version, args.sonar_branch)
+                public_project = getattr(args, "sonar_public_project", False)
+                findings = export_sonar(sonar or Sonar(public_project=public_project), root, args.revision, args.version, args.sonar_branch, public_project)
+                if public_project:
+                    # authenticated records trusted report provenance, as for
+                    # local same-run Semgrep; it is not a client login claim.
+                    scope.update(provider_access="public-project-anonymous", client_authenticated=False)
             scope.update(status="completed", authenticated=True, coverage_complete=True, findings=findings)
         except (ValueError, OSError, KeyError, TypeError):
             scope["error"] = "Exact-source full baseline export incomplete; private diagnostics required."
@@ -324,6 +358,7 @@ def main():
         parser.add_argument("--" + flag, required=True)
     parser.add_argument("--root", default=".")
     parser.add_argument("--coverage-reviews", default="docs/security/coverage-reviews")
+    parser.add_argument("--sonar-public-project", action="store_true", help="Read fixed-project public Sonar results anonymously after visibility verification")
     args = parser.parse_args()
     try:
         if not re.fullmatch(r"[0-9a-f]{40}", args.revision) or not re.fullmatch(r"[A-Za-z0-9._-]{1,128}", args.candidate_id):

@@ -33,6 +33,7 @@ class Provider:
                               "status": "SUCCESS", "analysisId": "analysis-1", "pullRequest": "115"}}
         self.pr = {"key": "115", "commit": {"sha": REVISION}, "analysisDate": "2026-10-31T00:00:00Z"}
         self.gate = "OK"
+        self.component = {"key": capture.PROJECT, "visibility": "public"}
 
     def get(self, endpoint, params):
         self.calls.append((endpoint, params))
@@ -42,6 +43,8 @@ class Provider:
                 return replacement
         if endpoint == "ce/task":
             return copy.deepcopy(self.task)
+        if endpoint == "components/show":
+            return {"component": copy.deepcopy(self.component)}
         if endpoint == "qualitygates/project_status":
             return {"projectStatus": {"status": self.gate}}
         if endpoint == "project_pull_requests/list":
@@ -62,9 +65,63 @@ class SonarJobEvidenceTests(unittest.TestCase):
         self.provider = Provider()
         self.clock = Clock()
 
-    def collect(self, context=CONTEXT):
+    def collect(self, context=CONTEXT, **kwargs):
         return capture.collect(self.task_file, context, REVISION, self.root / "output", self.provider,
-                               timeout=4, clock=self.clock.now, pause=self.clock.pause)
+                               timeout=4, clock=self.clock.now, pause=self.clock.pause, **kwargs)
+
+    def test_explicit_public_mode_verifies_project_around_exact_source_transaction(self):
+        result = self.collect(public_project=True)
+        self.assertEqual(result["status"], "completed")
+        self.assertEqual(result["provider_access"], "public-project-anonymous")
+        self.assertFalse(result["client_authenticated"])
+        self.assertEqual(result["task_access"], "analysis-token")
+        endpoints = [endpoint for endpoint, _ in self.provider.calls]
+        self.assertEqual(endpoints.count("components/show"), 2)
+        self.assertLess(endpoints.index("components/show"), endpoints.index("issues/search"))
+        issues = next(params for endpoint, params in self.provider.calls if endpoint == "issues/search")
+        self.assertEqual(issues["issueStatuses"], "OPEN,CONFIRMED,FALSE_POSITIVE,ACCEPTED,FIXED")
+
+    def test_public_mode_rejects_wrong_project_private_or_missing_visibility(self):
+        for component in ({"key": "other", "visibility": "public"}, {"key": capture.PROJECT, "visibility": "private"}, {"key": capture.PROJECT}):
+            self.provider.component = component
+            result = capture.collect(self.task_file, CONTEXT, REVISION, self.root / str(len(self.provider.calls)), self.provider,
+                                     timeout=4, clock=self.clock.now, pause=self.clock.pause, public_project=True)
+            self.assertEqual(result["status"], "partial")
+            self.assertEqual(result["attempts"][0]["stage"], "project-visibility-before")
+            self.assertFalse(any(endpoint == "issues/search" for endpoint, _ in self.provider.calls))
+
+    def test_public_mode_preserves_supersession_refusal(self):
+        self.provider.pr["commit"]["sha"] = "b" * 40
+        result = self.collect(public_project=True)
+        self.assertEqual(result["status"], "partial")
+        self.assertFalse(any(endpoint == "issues/search" for endpoint, _ in self.provider.calls))
+
+    def test_public_mode_rejects_visibility_change_after_retrieval(self):
+        def hook(endpoint, _params):
+            if endpoint == "hotspots/search":
+                self.provider.component["visibility"] = "private"
+        self.provider.hook = hook
+        result = self.collect(public_project=True)
+        self.assertEqual(result["status"], "partial")
+        self.assertEqual(result["attempts"][0]["stage"], "project-visibility-after")
+        self.assertFalse((self.root / "output/context.json").exists())
+
+    def test_permanent_request_errors_stop_without_masking_reason_and_retain_private_body(self):
+        def hook(endpoint, _params):
+            if endpoint == "issues/search":
+                raise urllib.error.HTTPError("https://private.example/?token=sensitive", 400, "secret reason", {}, io.BytesIO(b'{"errors":[{"msg":"private provider reason"}]}'))
+
+        self.provider.hook = hook
+        result = self.collect()
+        self.assertEqual(result["status"], "partial")
+        self.assertEqual(result["failure_reason"], "provider-http-400")
+        self.assertEqual(result["failure_stage"], "issues")
+        self.assertEqual(len(result["attempts"]), 1)
+        self.assertEqual(self.clock.pauses, [])
+        retained = json.loads((self.root / "output/attempt-0001/provider-error.json").read_bytes())
+        self.assertIn("private provider reason", retained["body"])
+        self.assertNotIn("private provider reason", json.dumps(result))
+        self.assertNotIn("sensitive", json.dumps(result))
 
     def test_exact_successful_pr_export_does_not_retry_or_start_a_scan(self):
         result = self.collect()

@@ -6,7 +6,7 @@ import re
 import shlex
 import time
 import urllib.error
-from source_sast import Sonar, PROJECT, save
+from source_sast import Sonar, PROJECT, save, verify_public_sonar
 
 
 class CaptureFailure(ValueError):
@@ -20,12 +20,23 @@ class AttemptAPI(Sonar):
     def get(self, endpoint, params):
         if self.clock() >= self.deadline:
             raise CaptureFailure("export-deadline-exceeded")
-        value = self.provider.get(endpoint, params)
+        try:
+            value = self.provider.get(endpoint, params)
+        except urllib.error.HTTPError as error:
+            # Only the encrypted private evidence receives a bounded response
+            # body. Never record exception URLs, request headers or credentials.
+            try:
+                body = error.read(65537)
+            except OSError:
+                body = b"[provider error body unavailable]"
+            save(self.root, "provider-error.json", {"http_status": error.code,
+                 "body": body[:65536].decode("utf-8", errors="replace"), "truncated": len(body) > 65536})
+            raise
         # Keep every successful page, including pages preceding a pagination or
         # later endpoint failure. Endpoint names come only from this module.
         name = {"ce/task": "task", "qualitygates/project_status": "quality-gate",
                 "project_pull_requests/list": "pull-requests", "project_analyses/search": "analyses",
-                "issues/search": "issues", "hotspots/search": "hotspots"}[endpoint]
+                "issues/search": "issues", "hotspots/search": "hotspots", "components/show": "project"}[endpoint]
         if "p" in params:
             name += "-page-" + str(params["p"])
         path = self.root / (name + ".json")
@@ -48,8 +59,8 @@ def reason(error):
             AttributeError: "provider-shape-invalid", ValueError: "provider-result-invalid"}.get(type(error), "provider-unavailable")
 
 
-def collect(report_task, context, revision, output, api=None, timeout=60, clock=None, pause=None):
-    api = api or Sonar()
+def collect(report_task, context, revision, output, api=None, timeout=60, clock=None, pause=None, public_project=False):
+    api = api or Sonar(public_project=public_project)
     clock, pause = clock or time.monotonic, pause or time.sleep
     root = Path(output)
     root.mkdir(parents=True, exist_ok=False, mode=0o700)
@@ -86,6 +97,9 @@ def collect(report_task, context, revision, output, api=None, timeout=60, clock=
         if not isinstance(analysis_id, str) or not re.fullmatch(r"[A-Za-z0-9_-]{1,128}", analysis_id):
             raise CaptureFailure("scanner-analysis-identity-invalid")
         result["analysis_id"] = analysis_id
+        if public_project:
+            result.update(provider_access="public-project-anonymous", client_authenticated=False,
+                          task_access="analysis-token")
         deadline = clock() + timeout
 
         def snapshot(provider):
@@ -115,6 +129,9 @@ def collect(report_task, context, revision, output, api=None, timeout=60, clock=
                     for field in ("id", "componentKey", "status", "analysisId", "pullRequest"):
                         if repeated["task"].get(field) != current.get(field):
                             raise CaptureFailure("scanner-task-identity-changed")
+                if public_project:
+                    stage = "project-visibility-before"
+                    verify_public_sonar(provider, attempt_root, "project-before.json")
                 stage = "quality-gate"
                 gate = provider.get("qualitygates/project_status", {"analysisId": analysis_id})
                 save(root, "quality-gate.json", gate)
@@ -132,6 +149,9 @@ def collect(report_task, context, revision, output, api=None, timeout=60, clock=
                 save(attempt_root, "context-after.json", after)
                 if before != after:
                     raise CaptureFailure("snapshot-changed-during-export")
+                if public_project:
+                    stage = "project-visibility-after"
+                    verify_public_sonar(provider, attempt_root, "project-after.json")
                 save(root, "context.json", before)
                 result.update(status="completed", snapshot_binding="stable-exact-revision-context", quality_gate=gate.get("projectStatus", {}).get("status"))
                 result.pop("failure_stage", None)
@@ -144,7 +164,8 @@ def collect(report_task, context, revision, output, api=None, timeout=60, clock=
                 result["attempts"].append(failure)
                 result.update(failure_stage=stage, failure_reason=failure_reason)
                 remaining = deadline - clock()
-                if remaining <= 0 or attempt == 31 or isinstance(error, CaptureFailure) and str(error) == "scanner-task-identity-changed":
+                permanent_http = isinstance(error, urllib.error.HTTPError) and error.code in (400, 401, 403, 404, 405, 410, 422)
+                if permanent_http or remaining <= 0 or attempt == 31 or isinstance(error, CaptureFailure) and str(error) == "scanner-task-identity-changed":
                     break
                 pause(min(2, remaining))
     except (ValueError, OSError, KeyError, TypeError, AttributeError) as error:
@@ -160,9 +181,10 @@ def main():
     for flag in ("report-task", "context", "revision", "output"):
         parser.add_argument("--" + flag, required=True)
     parser.add_argument("--timeout", type=int, default=60)
+    parser.add_argument("--public-project-results", action="store_true", help="Use the analysis token only for task identity; read verified public project results anonymously")
     args = parser.parse_args()
     try:
-        result = collect(args.report_task, args.context, args.revision, args.output, timeout=args.timeout)
+        result = collect(args.report_task, args.context, args.revision, args.output, timeout=args.timeout, public_project=args.public_project_results)
         if result["status"] != "completed":
             parser.exit(1, "Sonar evidence is partial; independent reconciliation required\n")
     except (ValueError, OSError, KeyError, TypeError):

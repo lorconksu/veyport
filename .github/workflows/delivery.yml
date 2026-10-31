@@ -136,14 +136,13 @@ jobs:
       - name: Export completed full-baseline SAST without rescanning
         env:
           GH_TOKEN: ${{ github.token }}
-          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
         run: |
           set -euo pipefail
           # Stable release CI analyzes its explicit full source branch. Main
           # is acceptable only if the latest full analysis is this exact SHA.
           sonar_branch=main
           if [[ "$GITHUB_REF" == refs/tags/v* ]]; then sonar_branch="$GITHUB_REF"; fi
-          python3 scripts/release/source_sast.py --output "$RUNNER_TEMP/security/source-sast" --assessment "$RUNNER_TEMP/security/source-sast.json" --revision "$GITHUB_SHA" --version "$VERSION" --candidate-id "run-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT" --artifact-manifest "$RUNNER_TEMP/candidate.json" --semgrep "$RUNNER_TEMP/security/current-semgrep/semgrep.sarif" --sonar-branch "$sonar_branch"
+          python3 scripts/release/source_sast.py --sonar-public-project --output "$RUNNER_TEMP/security/source-sast" --assessment "$RUNNER_TEMP/security/source-sast.json" --revision "$GITHUB_SHA" --version "$VERSION" --candidate-id "run-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT" --artifact-manifest "$RUNNER_TEMP/candidate.json" --semgrep "$RUNNER_TEMP/security/current-semgrep/semgrep.sarif" --sonar-branch "$sonar_branch"
       - name: Await signed isolated candidate qualification
         env:
           GH_TOKEN: ${{ github.token }}

@@ -176,3 +176,30 @@ documents ignore-policy bypass and dependency options; its
 [archive scanning guide](https://docs.snyk.io/developer-tools/snyk-cli/scan-and-maintain-projects-using-the-cli/snyk-cli-for-snyk-container/advanced-use-of-snyk-container-cli)
 documents direct OCI scanning. These commands deliberately create no monitored
 projects. The existing integration remains the PR feedback path.
+
+### Sonar provider access
+
+The Sonar job exporter and delivery baseline exporter deliberately read this
+fixed public project anonymously over verified HTTPS, with redirects disabled.
+They check the provider's exact project key and public visibility before and
+after retrieval, and preserve the existing exact source, analysis, context,
+freshness, pagination and quality-gate checks. The job exporter uses the existing
+analysis credential only for `ce/task` identity and rechecks, which are not public.
+There is no anonymous fallback after a credential error, and a private project
+requires a separately configured reader with the required access.
+
+The provider documents that PR listing accepts Execute Analysis or Browse,
+whereas issue retrieval requires Browse. CI scan and quality-gate success did
+not establish access to the issue export: repeated issue requests returned HTTP
+400 under the CI analysis identity. The stored token type and exact permissions
+were not inspected. A successful replay with a different local credential did
+not prove the earlier failure was transient. Explicit public reads avoid
+expanding that analysis credential; permanent request/authentication failures
+remain partial evidence with their original failure reason.
+
+Assessment `authenticated` records trusted report provenance and exact source,
+as it already does for local same-run Semgrep; it does not assert a logged-in API
+client. Public Sonar exports additionally record
+`provider_access: public-project-anonymous` and `client_authenticated: false`.
+Public HTTP success alone cannot complete the scope: all source and coverage
+checks must pass, and PR new-code evidence still cannot establish a full baseline.
