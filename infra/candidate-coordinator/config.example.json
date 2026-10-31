@@ -1,0 +1,65 @@
+{
+  "repository": "lorconksu/veyport",
+  "allowed_workflows": [
+    ".github/workflows/staging.yml",
+    ".github/workflows/release.yml"
+  ],
+  "allowed_branches": [
+    "main"
+  ],
+  "allowed_events": [
+    "push",
+    "workflow_dispatch"
+  ],
+  "allowed_tag_patterns": [
+    "v[0-9]+\\.[0-9]+\\.[0-9]+"
+  ],
+  "trusted_branch": "main",
+  "trusted_helper_paths": [
+    ".github/workflows/delivery.yml",
+    "scripts/release/candidate.py",
+    "infra/candidate-coordinator/coordinator.py",
+    "scripts/native-candidate/run.py"
+  ],
+  "approved_source_revisions": [],
+  "state_root": "/var/lib/veyport-candidate",
+  "minimum_free_bytes": 12884901888,
+  "identity_file": "/etc/veyport-candidate/identity.age",
+  "signing_key_file": "/etc/veyport-candidate/receipt.pem",
+  "signing_public_key_file": "/etc/veyport-candidate/receipt-public.pem",
+  "token_file": "/etc/veyport-candidate/collector-token",
+  "docker_network": "veyport-candidate-internal",
+  "network_isolation_verified": false,
+  "audit_profile": "standard",
+  "hub_uid": 1000,
+  "hub_gid": 1000,
+  "hub_memory": "512m",
+  "harness_executable": "/opt/veyport-native/run.py",
+  "harness_sha256": "REPLACE-WITH-REVIEWED-HARNESS-SHA256",
+  "native_probe": "/opt/veyport-native/probe",
+  "native_probe_sha256": "REPLACE-WITH-REVIEWED-PROBE-SHA256",
+  "required_cases": [
+    "bootstrap.synthetic-mfa-and-agent-enrollment",
+    "grpc.enrolled-identity-reaches-protected-handler",
+    "grpc.missing-client-certificate-rejected",
+    "grpc.enrollment-listener-reachable-without-client-certificate",
+    "grpc.foreign-client-certificate-rejected",
+    "ssh.certificates-issued-to-mfa-sessions",
+    "ssh.stdin-stdout-stderr-exit-status",
+    "ssh.principal-substitution-rejected",
+    "ssh.foreign-ca-certificate-rejected",
+    "ssh.viewer-node-execution-denied",
+    "ssh.forwarding-and-subsystems-denied",
+    "ssh.disabled-account-execution-denied",
+    "ssh.standard-audit-records-present",
+    "ssh.required-audit-failure-denies-execution",
+    "ssh.audit-recovery-verifies-denied-command-never-ran",
+    "ssh.execution-user-enforced",
+    "grpc.oversized-message-rejected",
+    "ssh.client-cancellation-terminates-work"
+  ],
+  "native_tmp_root": "/run/veyport-candidate",
+  "agent_runtime_image": "REPLACE-WITH-OPERATOR-PROVISIONED-DEBIAN-IMAGE-CONFIG-ID",
+  "docker_network_id": "REPLACE-WITH-TESTED-DOCKER-NETWORK-ID",
+  "docker_network_subnet": "172.30.0.0/28"
+}

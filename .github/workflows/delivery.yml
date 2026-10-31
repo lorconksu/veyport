@@ -7,6 +7,10 @@ on:
         required: true
       DOCKERHUB_TOKEN:
         required: true
+      SNYK_TOKEN:
+        required: true
+      SONAR_TOKEN:
+        required: true
     inputs:
       version:
         type: string
@@ -17,9 +21,20 @@ on:
       prototype:
         type: boolean
         required: true
+      source_workflow:
+        type: string
+        required: true
+      publish:
+        description: Publication is explicitly enabled only by release callers
+        type: boolean
+        default: false
 
 permissions:
   contents: write
+  actions: read
+  checks: read
+  statuses: read
+  security-events: read
 
 concurrency:
   group: delivery-${{ inputs.tag }}
@@ -28,20 +43,43 @@ concurrency:
 jobs:
   build-and-scan:
     runs-on: ubuntu-latest
+    timeout-minutes: 180
+    env:
+      VERSION: ${{ inputs.version }}
+      TAG: ${{ inputs.tag }}
+      PROTOTYPE: ${{ inputs.prototype }}
+      SOURCE_WORKFLOW: ${{ inputs.source_workflow }}
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
-      - name: Validate immutable identity
+        with:
+          persist-credentials: false
+      - name: Validate immutable identity and pinned transport keys
         env:
-          VERSION: ${{ inputs.version }}
-          TAG: ${{ inputs.tag }}
-          PROTOTYPE: ${{ inputs.prototype }}
+          AGE_RECIPIENT: ${{ vars.SSDF_AGE_RECIPIENT }}
+          CANDIDATE_AGE_RECIPIENT: ${{ vars.SSDF_CANDIDATE_AGE_RECIPIENT }}
+          ARCHIVE_PUBLIC_KEY: ${{ vars.SSDF_RECEIPT_PUBLIC_KEY }}
+          CANDIDATE_PUBLIC_KEY: ${{ vars.SSDF_CANDIDATE_PUBLIC_KEY }}
         run: |
+          set -euo pipefail
+          umask 077
           args=()
           if [ "$PROTOTYPE" = true ]; then args+=(--prototype); fi
           python3 scripts/release/metadata.py --version "$VERSION" --tag "$TAG" --revision "$GITHUB_SHA" --ref "$GITHUB_REF" "${args[@]}"
+          test "$GITHUB_REPOSITORY" = lorconksu/veyport
+          [[ "$AGE_RECIPIENT" =~ ^age1[0-9a-z]{58}$ ]]
+          [[ "$CANDIDATE_AGE_RECIPIENT" =~ ^age1[0-9a-z]{58}$ ]]
+          mkdir -p "$RUNNER_TEMP/ssdf-keys" "$RUNNER_TEMP/security" "$RUNNER_TEMP/transport"
+          printf '%s\n' "$AGE_RECIPIENT" > "$RUNNER_TEMP/ssdf-keys/recipient.txt"
+          printf '%s\n' "$CANDIDATE_AGE_RECIPIENT" > "$RUNNER_TEMP/ssdf-keys/candidate-recipient.txt"
+          printf '%s\n' "$ARCHIVE_PUBLIC_KEY" > "$RUNNER_TEMP/ssdf-keys/archive.pem"
+          printf '%s\n' "$CANDIDATE_PUBLIC_KEY" > "$RUNNER_TEMP/ssdf-keys/candidate.pem"
+          for key in archive candidate; do openssl pkey -pubin -in "$RUNNER_TEMP/ssdf-keys/$key.pem" -noout >/dev/null 2>&1; done
       - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
         with:
           go-version-file: hub/go.mod
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: 25
       - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4
         with:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
@@ -52,82 +90,118 @@ jobs:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
       - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4
-      - name: Install verified scanners
+      - name: Install verified scanners and encryption transport
         run: |
           set -euo pipefail
           for tool in grype syft; do bash scripts/release/install_tools.sh "$tool" "$RUNNER_TEMP/release-tools"; done
           echo "$RUNNER_TEMP/release-tools" >> "$GITHUB_PATH"
           go install golang.org/x/vuln/cmd/govulncheck@v1.9.0
           sudo apt-get update
-          sudo apt-get install -y clamav skopeo
+          sudo apt-get install -y clamav skopeo age python3-venv
           sudo systemctl stop clamav-freshclam
           sudo freshclam
-      - name: Build and scan exact images and every public binary
-        env:
-          VERSION: ${{ inputs.version }}
+          npm install --prefix "$RUNNER_TEMP/snyk-tools" --no-audit --no-fund snyk@1.1308.3 > "$RUNNER_TEMP/security/snyk-install.log" 2>&1
+          # Dependency resolution needs the Go embed directory; compiled
+          # candidate assets are independently built and scanned above.
+          mkdir -p hub/web/dist
+          printf '<!doctype html>\n' > hub/web/dist/index.html
+          python3 -m venv "$RUNNER_TEMP/sca-python"
+          "$RUNNER_TEMP/sca-python/bin/python" -m pip install -r infra/audit-lab/storage/requirements.txt > "$RUNNER_TEMP/security/pip-install.log" 2>&1
+      - name: Build and scan exact images and every public binary once
         run: bash scripts/release/scan_delivery.sh "$RUNNER_TEMP/delivery" "$VERSION" "$GITHUB_SHA"
-      - name: Upload verified public artifacts
+      - name: Bind complete candidate and encrypt private deployment transfer
+        run: |
+          set -euo pipefail
+          python3 scripts/release/candidate.py manifest --directory "$RUNNER_TEMP/delivery" --manifest "$RUNNER_TEMP/candidate.json" --candidate-id "run-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT" --version "$VERSION" --workflow "$SOURCE_WORKFLOW"
+          python3 scripts/release/candidate.py seal --directory "$RUNNER_TEMP/delivery" --manifest "$RUNNER_TEMP/candidate.json" --recipient "$RUNNER_TEMP/ssdf-keys/candidate-recipient.txt" --output "$RUNNER_TEMP/transport/candidate.age"
+      - name: Transfer only recipient-encrypted candidate bytes
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
-          name: verified-delivery
-          path: ${{ runner.temp }}/delivery/
+          name: ssdf-candidate-v1-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/transport/candidate.age
           if-no-files-found: error
-          retention-days: 14
-      - name: Upload scan evidence after failure
-        if: failure()
+          retention-days: 7
+      - name: Assess complete source and exact-image SCA without creating projects
+        env:
+          SNYK_TOKEN: ${{ secrets.SNYK_TOKEN }}
+        run: bash scripts/release/qualify_sca.sh "$RUNNER_TEMP/candidate.json" "$RUNNER_TEMP/security" "$RUNNER_TEMP/delivery" "$RUNNER_TEMP/snyk-tools/node_modules/.bin/snyk" "$RUNNER_TEMP/sca-python/bin/python"
+      - name: Run required Semgrep gate once in private delivery
+        run: |
+          set -euo pipefail
+          python3 -m venv "$RUNNER_TEMP/semgrep-tools"
+          "$RUNNER_TEMP/semgrep-tools/bin/pip" install semgrep==1.180.0 > "$RUNNER_TEMP/security/semgrep-install.log" 2>&1
+          mkdir -p "$RUNNER_TEMP/security/current-semgrep"
+          "$RUNNER_TEMP/semgrep-tools/bin/semgrep" scan --strict --timeout 30 --config p/golang --config p/typescript --config p/owasp-top-ten --sarif -o "$RUNNER_TEMP/security/current-semgrep/semgrep.sarif" . > "$RUNNER_TEMP/security/current-semgrep/semgrep-output.txt" 2>&1
+          python3 scripts/release/check_scan.py semgrep "$RUNNER_TEMP/security/current-semgrep/semgrep.sarif"
+      - name: Export completed full-baseline SAST without rescanning
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+        run: |
+          set -euo pipefail
+          # Stable release CI analyzes its explicit full source branch. Main
+          # is acceptable only if the latest full analysis is this exact SHA.
+          sonar_branch=main
+          if [[ "$GITHUB_REF" == refs/tags/v* ]]; then sonar_branch="$GITHUB_REF"; fi
+          python3 scripts/release/source_sast.py --output "$RUNNER_TEMP/security/source-sast" --assessment "$RUNNER_TEMP/security/source-sast.json" --revision "$GITHUB_SHA" --version "$VERSION" --candidate-id "run-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT" --artifact-manifest "$RUNNER_TEMP/candidate.json" --semgrep "$RUNNER_TEMP/security/current-semgrep/semgrep.sarif" --sonar-branch "$sonar_branch"
+      - name: Await signed isolated candidate qualification
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 scripts/release/candidate.py wait --manifest "$RUNNER_TEMP/candidate.json" --public-key "$RUNNER_TEMP/ssdf-keys/candidate.pem" --output "$RUNNER_TEMP/security/native.json" --timeout 1800
+      - name: Evaluate every baseline finding and authenticated exception
+        id: policy
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: bash scripts/release/evaluate_candidate.sh "$RUNNER_TEMP/candidate.json" "$RUNNER_TEMP/security" "$RUNNER_TEMP/security/decision.json"
+      - name: Seal available evidence including failed and partial scans
+        id: evidence
+        if: always()
+        env:
+          POLICY_OUTCOME: ${{ steps.policy.outcome }}
+        run: |
+          set -euo pipefail
+          test -s "$RUNNER_TEMP/ssdf-keys/recipient.txt"
+          mkdir -p "$RUNNER_TEMP/transport"
+          args=()
+          if [ "$POLICY_OUTCOME" = success ]; then args+=(--complete); fi
+          python3 scripts/release/evidence_manifest.py --directory "$RUNNER_TEMP/evidence-files" --delivery "$RUNNER_TEMP/delivery" --security "$RUNNER_TEMP/security" --candidate "$RUNNER_TEMP/candidate.json" --workflow "$SOURCE_WORKFLOW" --version "$VERSION" --manifest "$RUNNER_TEMP/evidence-manifest.json" "${args[@]}"
+          python3 infra/evidence-collector/evidence.py seal --manifest "$RUNNER_TEMP/evidence-manifest.json" --source "$RUNNER_TEMP/evidence-files" --recipient "$RUNNER_TEMP/ssdf-keys/recipient.txt" --output "$RUNNER_TEMP/transport/evidence.age" --hash-output "$RUNNER_TEMP/evidence-manifest.sha256" > /dev/null
+      - name: Transfer only recipient-encrypted evidence
+        if: always() && steps.evidence.outcome == 'success'
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
-          name: failed-delivery-scan-evidence
-          path: ${{ runner.temp }}/delivery/reports/
-          retention-days: 14
-
-  publish:
-    needs: build-and-scan
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
-      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
-        with:
-          name: verified-delivery
-          path: ${{ runner.temp }}/delivery/
-      - name: Install publication tool
-        run: sudo apt-get update && sudo apt-get install -y skopeo
-      - name: Authenticate registry
+          name: ssdf-evidence-v1-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/transport/evidence.age
+          if-no-files-found: error
+          retention-days: 7
+      - name: Require durable authenticated exact-manifest archive receipt
         env:
-          REGISTRY_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
-          REGISTRY_PASSWORD: ${{ secrets.DOCKERHUB_TOKEN }}
-        run: printf '%s' "$REGISTRY_PASSWORD" | skopeo login --username "$REGISTRY_USERNAME" --password-stdin docker.io
-      - name: Validate and publish scanned digests
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          python3 infra/evidence-collector/evidence.py wait-receipt --repository "$GITHUB_REPOSITORY" --run-id "$GITHUB_RUN_ID" --attempt "$GITHUB_RUN_ATTEMPT" --revision "$GITHUB_SHA" --manifest-sha256 "$(cat "$RUNNER_TEMP/evidence-manifest.sha256")" --public-key "$RUNNER_TEMP/ssdf-keys/archive.pem" --timeout 1800 > "$RUNNER_TEMP/archive-receipt.json"
+      - name: Revalidate policy, candidate lease, bytes and receipt immediately before publication
+        if: inputs.publish
         env:
           GH_TOKEN: ${{ github.token }}
-          VERSION: ${{ inputs.version }}
-          TAG: ${{ inputs.tag }}
-          PROTOTYPE: ${{ inputs.prototype }}
-        run: |
-          set -euo pipefail
-          args=()
-          if [ "$PROTOTYPE" = true ]; then args+=(--prototype); fi
-          python3 scripts/release/metadata.py --version "$VERSION" --tag "$TAG" --revision "$GITHUB_SHA" --ref "$GITHUB_REF" "${args[@]}"
-          bash scripts/release/publish_delivery.sh "$RUNNER_TEMP/delivery" "$TAG" "$VERSION" "$PROTOTYPE" "$GITHUB_SHA"
-      - name: Create release with checksummed optional and core binaries
+          GITHUB_TOKEN: ${{ github.token }}
+        run: bash scripts/release/authorize_publication.sh "$RUNNER_TEMP"
+      - name: Publish exactly the qualified images
+        if: inputs.publish
         env:
           GH_TOKEN: ${{ github.token }}
-          VERSION: ${{ inputs.version }}
-          TAG: ${{ inputs.tag }}
-          PROTOTYPE: ${{ inputs.prototype }}
+        run: bash scripts/release/publish_delivery.sh "$RUNNER_TEMP/delivery" "$TAG" "$VERSION" "$PROTOTYPE" "$GITHUB_SHA"
+      - name: Publish disclosure-safe binary release assets
+        if: inputs.publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GITHUB_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          delivery="$RUNNER_TEMP/delivery"
-          tar -czf "$delivery/release-evidence.tar.gz" -C "$delivery" reports published-images.txt DELIVERY_SHA256SUMS
-          python3 - "$delivery" "$GITHUB_SHA" <<'PY'
-          import sys
-          from pathlib import Path
-          root=Path(sys.argv[1])
-          (root/'release-notes.md').write_text('Commit: `'+sys.argv[2]+'`\n\nExact scanned image digests:\n\n'+root.joinpath('published-images.txt').read_text()+'\nBinary hashes and scanner findings/classifications are attached. Completion of publication does not imply deployment or Enhanced qualification.\n')
-          PY
+          bash scripts/release/authorize_publication.sh "$RUNNER_TEMP"
+          python3 scripts/release/public_summary.py --delivery "$RUNNER_TEMP/delivery" --decision "$RUNNER_TEMP/security/decision.json" --receipt "$RUNNER_TEMP/archive-receipt.json" --version "$VERSION"
           args=()
           if [ "$PROTOTYPE" = true ]; then args+=(--prerelease); fi
           assets=()
-          while IFS= read -r name; do assets+=("$delivery/bin/$name" "$delivery/bin/$name.sha256"); done < <(python3 -c 'import sys;sys.path.insert(0,"scripts/release");from artifacts import BINARIES;print("\n".join(BINARIES))')
+          while IFS= read -r name; do assets+=("$RUNNER_TEMP/delivery/bin/$name" "$RUNNER_TEMP/delivery/bin/$name.sha256"); done < <(python3 -c 'import sys;sys.path.insert(0,"scripts/release");from artifacts import BINARIES;print("\n".join(BINARIES))')
           python3 scripts/release/git_tag.py check "$TAG" "$GITHUB_SHA" "$GITHUB_REPOSITORY"
-          gh release create "$TAG" --verify-tag --title "$VERSION" --notes-file "$delivery/release-notes.md" "${args[@]}" "${assets[@]}" "$delivery/bin/SHA256SUMS" "$delivery/bin/artifact-manifest.json" "$delivery/release-evidence.tar.gz"
+          gh release create "$TAG" --verify-tag --title "$VERSION" --notes-file "$RUNNER_TEMP/delivery/release-notes.md" "${args[@]}" "${assets[@]}" "$RUNNER_TEMP/delivery/bin/SHA256SUMS" "$RUNNER_TEMP/delivery/bin/artifact-manifest.json" "$RUNNER_TEMP/delivery/release-summary.json"
