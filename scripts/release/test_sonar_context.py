@@ -147,7 +147,7 @@ class SonarContext(unittest.TestCase):
         self.assertIn("SONAR_PULL_REQUEST_REQUIRED: ${{ inputs.sonar_pull_request_required }}", sonar_job)
         self.assertIn("SONAR_FULL_BRANCH_REQUIRED: ${{ inputs.sonar_full_branch_required }}", sonar_job)
         self.assertEqual(sonar_job.count("uses: SonarSource/sonarqube-scan-action@"), 1)
-        self.assertIn("-Dsonar.qualitygate.wait=true", sonar_job)
+        self.assertIn("-Dsonar.qualitygate.wait=${{ steps.sonar-context.outputs.quality_gate_wait }}", sonar_job)
         self.assertIn("-Dsonar.qualitygate.timeout=300", sonar_job)
         caller = (repo / ".github/workflows/staging.yml").read_text().split("  required-ci:\n", 1)[1].split("  prototype-delivery:\n", 1)[0]
         self.assertIn("sonar_pull_request_required: true", caller)
@@ -165,6 +165,11 @@ class SonarContext(unittest.TestCase):
         self.assertEqual(args, "-Dsonar.branch.name=release-ssdf-candidate-" + self.revision)
         self.assertNotIn("pullrequest", args)
         self.assertEqual(len(calls), 2)
+        plan = self.resolve(fetch=fetch, full_branch=True, details=True,
+                            workflow_ref=self.repository + "/.github/workflows/staging.yml@" + ref)
+        self.assertEqual(plan["args"], args)
+        self.assertIn("sonar.pullrequest.key=101", plan["gate_args"])
+        self.assertEqual(plan["quality_gate_wait"], "false")
         for invalid in ({"required": False}, {"event_name": "pull_request"},
                         {"workflow_ref": self.repository + "/.github/workflows/other.yml@" + ref}):
             options = {"fetch": fetch, "full_branch": True,
@@ -192,6 +197,47 @@ class SonarContext(unittest.TestCase):
         self.sonar["settings/values"]["settings"][0]["value"] = "(branch|release)-.*"
         self.sonar["components/show"]["component"]["visibility"] = "private"
         with self.assertRaises(ValueError): sonar.full_branch_context(self.revision, self.sonar_fetch)
+
+    def test_runtime_gate_context_requires_exact_trusted_open_pr_and_caller(self):
+        with tempfile.TemporaryDirectory() as directory:
+            event_path = Path(directory) / "event.json"
+            event_path.write_text(json.dumps({**self.event, "inputs": {"prototype": "true"}}))
+            ref = "refs/heads/" + self.branch
+            environment = {"GITHUB_EVENT_PATH": str(event_path), "GITHUB_REPOSITORY": self.repository,
+                           "GITHUB_SHA": self.revision, "GITHUB_REF": ref, "GITHUB_EVENT_NAME": "workflow_dispatch",
+                           "GITHUB_WORKFLOW_REF": self.repository + "/.github/workflows/staging.yml@" + ref}
+            fetch = lambda path: [self.pr] if "?" in path else self.pr
+            with patch.dict(os.environ, environment):
+                self.assertIn("sonar.pullrequest.key=101", sonar.runtime_gate_context(self.revision, fetch))
+                for changed in ({"GITHUB_SHA": "b" * 40}, {"GITHUB_EVENT_NAME": "pull_request"},
+                                {"GITHUB_WORKFLOW_REF": self.repository + "/.github/workflows/other.yml@" + ref}):
+                    with self.subTest(changed=changed), patch.dict(os.environ, changed), self.assertRaises(ValueError):
+                        sonar.runtime_gate_context(self.revision, fetch)
+                moved = {**self.pr, "head": {**self.pr["head"], "sha": "b" * 40}}
+                with self.assertRaises(ValueError):
+                    sonar.runtime_gate_context(self.revision, lambda path: [self.pr] if "?" in path else moved)
+
+    def test_stable_inventory_plan_and_runtime_require_exact_main_ancestry(self):
+        plan = self.resolve(required=False, ref="refs/tags/v2.0.52", main=lambda *_: True, details=True)
+        self.assertEqual(plan["gate_args"], "-Dsonar.branch.name=main")
+        self.assertEqual(plan["quality_gate_wait"], "false")
+        event = {**self.event, "pull_request": self.pr}
+        normal = sonar.resolve("pull_request", event, self.repository, "refs/pull/101/merge", self.revision, False, details=True)
+        self.assertEqual(normal["gate_args"], normal["args"])
+        self.assertEqual(normal["quality_gate_wait"], "true")
+        with tempfile.TemporaryDirectory() as directory:
+            event_path = Path(directory) / "event.json"
+            event_path.write_text(json.dumps(self.event))
+            ref = "refs/tags/v2.0.52"
+            environment = {"GITHUB_EVENT_PATH": str(event_path), "GITHUB_REPOSITORY": self.repository,
+                           "GITHUB_SHA": self.revision, "GITHUB_REF": ref, "GITHUB_EVENT_NAME": "push",
+                           "GITHUB_WORKFLOW_REF": self.repository + "/.github/workflows/release.yml@" + ref}
+            with patch.dict(os.environ, environment):
+                expected = {"status": "ahead", "merge_base_commit": {"sha": self.revision}}
+                self.assertEqual(sonar.runtime_gate_context(self.revision, lambda _: expected), "-Dsonar.branch.name=main")
+                for comparison in ({**expected, "status": "diverged"}, {**expected, "merge_base_commit": {"sha": "b" * 40}}):
+                    with self.subTest(comparison=comparison), self.assertRaises(ValueError):
+                        sonar.runtime_gate_context(self.revision, lambda _: comparison)
 
 
 if __name__ == "__main__":

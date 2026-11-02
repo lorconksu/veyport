@@ -143,7 +143,12 @@ def stable_ref(ref, revision):
 
 
 def resolve(event_name, event, repository, ref, revision, require_pr, fetch=public_api, belongs_to_main=main_source,
-            full_branch=False, sonar_fetch=public_sonar_api, workflow_ref=None):
+            full_branch=False, sonar_fetch=public_sonar_api, workflow_ref=None, details=False):
+    def resolved(args, gate_args=None):
+        plan = {"args": args, "gate_args": gate_args or args,
+                "quality_gate_wait": "false" if gate_args else "true"}
+        return plan if details else args
+
     require(re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", repository or "") and
             re.fullmatch(r"[0-9a-f]{40}", revision or "") and
             event["repository"]["full_name"] == repository and event["repository"]["private"] is False,
@@ -158,23 +163,50 @@ def resolve(event_name, event, repository, ref, revision, require_pr, fetch=publ
                 (ref.startswith("refs/tags/") and metadata.PROTOTYPE_TAG.fullmatch(ref.removeprefix("refs/tags/"))),
                 "Full candidate baseline requires an unmerged candidate source")
         branch = safe_branch(ref.removeprefix("refs/heads/")) if ref.startswith("refs/heads/") else None
-        open_source_pr(repository, revision, branch, fetch)
-        return full_branch_context(revision, sonar_fetch)
+        gate_args = open_source_pr(repository, revision, branch, fetch)
+        return resolved(full_branch_context(revision, sonar_fetch), gate_args)
     if event_name == "pull_request":
-        return pr_context(event["pull_request"], repository, revision)
+        return resolved(pr_context(event["pull_request"], repository, revision))
     if ref == "refs/heads/main":
         require(not require_pr and belongs_to_main(ref, revision), "Prototype/foreign source cannot be analyzed as main")
-        return "-Dsonar.branch.name=main"
+        return resolved("-Dsonar.branch.name=main")
     if stable_ref(ref, revision):
         require(not require_pr and belongs_to_main(ref, revision), "Prototype/foreign source cannot be analyzed as a stable tag")
         # Historical tag-named branches can be SHORT. Use a dedicated LONG
         # exact-source branch without replacing main or relabeling that history.
-        return full_branch_context(revision, sonar_fetch)
+        return resolved(full_branch_context(revision, sonar_fetch), "-Dsonar.branch.name=main")
     if ref.startswith("refs/heads/"):
-        return open_source_pr(repository, revision, safe_branch(ref.removeprefix("refs/heads/")), fetch)
+        return resolved(open_source_pr(repository, revision, safe_branch(ref.removeprefix("refs/heads/")), fetch))
     if ref.startswith("refs/tags/") and metadata.PROTOTYPE_TAG.fullmatch(ref.removeprefix("refs/tags/")):
-        return open_source_pr(repository, revision, None, fetch)
+        return resolved(open_source_pr(repository, revision, None, fetch))
     raise ValueError("No explicit Sonar branch/PR context for this source")
+
+
+def runtime_gate_context(revision, fetch=public_api):
+    """Revalidate the trusted caller and gate source, independently of CLI flags."""
+    repository, ref = os.environ.get("GITHUB_REPOSITORY"), os.environ.get("GITHUB_REF", "")
+    workflow_ref = os.environ.get("GITHUB_WORKFLOW_REF")
+    event = json.loads(Path(os.environ["GITHUB_EVENT_PATH"]).read_text())
+    require(repository == "lorconksu/veyport" and os.environ.get("GITHUB_SHA") == revision and
+            event.get("repository", {}).get("full_name") == repository and
+            event["repository"].get("private") is False,
+            "Exact trusted Sonar gate source required")
+    if workflow_ref == repository + "/.github/workflows/staging.yml@" + ref:
+        require(os.environ.get("GITHUB_EVENT_NAME") == "workflow_dispatch" and
+                event.get("inputs", {}).get("prototype") in (True, "true") and
+                ((ref.startswith("refs/heads/") and ref != "refs/heads/main") or
+                 (ref.startswith("refs/tags/") and metadata.PROTOTYPE_TAG.fullmatch(ref.removeprefix("refs/tags/")))),
+                "Sonar PR gate requires trusted prototype dispatch")
+        branch = safe_branch(ref.removeprefix("refs/heads/")) if ref.startswith("refs/heads/") else None
+        return open_source_pr(repository, revision, branch, fetch)
+    require(workflow_ref == repository + "/.github/workflows/release.yml@" + ref and
+            os.environ.get("GITHUB_EVENT_NAME") in ("push", "workflow_dispatch") and stable_ref(ref, revision),
+            "Sonar main gate requires a trusted stable release")
+    comparison = fetch("repos/" + repository + "/compare/" + revision + "...main")
+    require(comparison.get("status") in ("ahead", "identical") and
+            comparison.get("merge_base_commit", {}).get("sha") == revision,
+            "Stable Sonar source is outside main history")
+    return "-Dsonar.branch.name=main"
 
 
 def main():
@@ -187,11 +219,12 @@ def main():
     full_branch = os.environ.get("SONAR_FULL_BRANCH_REQUIRED", "")
     require(full_branch in ("", "false", "true"), "Invalid Sonar full baseline requirement")
     event = json.loads(Path(os.environ["GITHUB_EVENT_PATH"]).read_text())
-    args = resolve(os.environ["GITHUB_EVENT_NAME"], event, os.environ["GITHUB_REPOSITORY"],
+    plan = resolve(os.environ["GITHUB_EVENT_NAME"], event, os.environ["GITHUB_REPOSITORY"],
                    os.environ["GITHUB_REF"], revision, required == "true", full_branch=full_branch == "true",
-                   workflow_ref=os.environ.get("GITHUB_WORKFLOW_REF"))
+                   workflow_ref=os.environ.get("GITHUB_WORKFLOW_REF"), details=True)
     with Path(os.environ["GITHUB_OUTPUT"]).open("a") as output:
-        output.write("args=" + args + "\n")
+        for key, value in plan.items():
+            output.write(key + "=" + value + "\n")
     print("Exact source Sonar PR/branch context verified")
 
 

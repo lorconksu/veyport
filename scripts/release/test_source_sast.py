@@ -150,7 +150,7 @@ class SourceEvidenceTests(unittest.TestCase):
                     row = {'name': branch, 'type': branch_type, 'isMain': False}
                     if commit is not None:
                         row['commit'] = {'sha': commit}
-                    return {'branches': [row]}
+                    return {'branches': [row, {'name': 'main', 'type': 'LONG', 'isMain': True}]}
                 if endpoint == 'project_analyses/search':
                     calls['analysis'] += 1
                     return {'analyses': [{'revision': REV, 'key': 'different' if change and calls['analysis'] > 1 else 'analysis-1', 'date': completed}]}
@@ -160,7 +160,7 @@ class SourceEvidenceTests(unittest.TestCase):
             api.get = get
             api.pages = lambda *_: ([], [])
             return api
-        with tempfile.TemporaryDirectory() as directory:
+        with tempfile.TemporaryDirectory() as directory, patch('sonar_context.runtime_gate_context', return_value='-Dsonar.branch.name=main'):
             # commit is optional in Sonar's branch inventory; exact revision
             # comes from the stable full branch analysis, independently.
             self.assertEqual(sast.export_sonar(fake(), directory, REV, '2.0.58', branch), [])
@@ -170,6 +170,86 @@ class SourceEvidenceTests(unittest.TestCase):
             for untrusted in ('refs/tags/v2.0.58', 'PR-115', 'release-ssdf-candidate-' + 'b' * 40, 'arbitrary-long-branch'):
                 with self.assertRaises(ValueError):
                     sast.export_sonar(fake(), directory, REV, '2.0.58', untrusted)
+
+    def test_independent_pr_gate_requires_exact_fresh_source_and_actual_ok_status(self):
+        context = '-Dsonar.pullrequest.key=115 -Dsonar.pullrequest.branch=feature -Dsonar.pullrequest.base=main'
+        row = {'key': '115', 'branch': 'feature', 'base': 'main', 'commit': {'sha': REV},
+               'analysisDate': dt.datetime.now(dt.timezone.utc).isoformat(), 'status': {'qualityGateStatus': 'OK'}}
+        api = sast.Sonar()
+        gate = {'projectStatus': {'status': 'OK'}}
+        api.get = lambda endpoint, _: {'pullRequests': [copy.deepcopy(row)]} if endpoint == 'project_pull_requests/list' else gate
+        self.assertEqual(sast.sonar_gate_snapshot(api, context, REV)['scope'], 'pull-request-new-code')
+        mutations = [lambda r: r['commit'].update(sha='b' * 40), lambda r: r.update(base='other'),
+                     lambda r: r.update(branch='other'), lambda r: r.update(analysisDate='2026-01-01T00:00:00Z'),
+                     lambda r: r['status'].update(qualityGateStatus='NONE')]
+        for mutate in mutations:
+            changed = copy.deepcopy(row);mutate(changed)
+            api.get = lambda endpoint, _: {'pullRequests': [changed]} if endpoint == 'project_pull_requests/list' else gate
+            with self.subTest(changed=changed), self.assertRaises(ValueError):
+                sast.sonar_gate_snapshot(api, context, REV)
+        for status in ('NONE', 'ERROR', 'WARN', None):
+            api.get = lambda endpoint, _: {'pullRequests': [row]} if endpoint == 'project_pull_requests/list' else {'projectStatus': {'status': status}}
+            with self.subTest(status=status), self.assertRaises(ValueError):
+                sast.sonar_gate_snapshot(api, context, REV)
+        for invalid in (context + ' -Dsonar.pullrequest.key=116', '-Dsonar.branch.name=foreign', '-Dsonar.pullrequest.key=115'):
+            with self.subTest(invalid=invalid), self.assertRaises(ValueError):
+                sast.sonar_gate_snapshot(api, invalid, REV)
+
+    def test_independent_main_gate_requires_fresh_exact_main_analysis(self):
+        api = sast.Sonar()
+        branch = {'name': 'main', 'type': 'LONG', 'isMain': True, 'commit': {'sha': REV}}
+        analysis = {'key': 'main-analysis', 'revision': REV, 'date': dt.datetime.now(dt.timezone.utc).isoformat()}
+        gate = {'projectStatus': {'status': 'OK'}}
+        def get(endpoint, _):
+            if endpoint == 'project_branches/list':return {'branches': [branch]}
+            if endpoint == 'project_analyses/search':return {'analyses': [analysis]}
+            return gate
+        api.get = get
+        self.assertEqual(sast.sonar_gate_snapshot(api, '-Dsonar.branch.name=main', REV)['scope'], 'main-quality-gate')
+        for field, value in (('revision', 'b' * 40), ('date', '2026-01-01T00:00:00Z')):
+            old = analysis[field];analysis[field] = value
+            with self.assertRaises(ValueError):sast.sonar_gate_snapshot(api, '-Dsonar.branch.name=main', REV)
+            analysis[field] = old
+        gate['projectStatus']['status'] = 'NONE'
+        with self.assertRaises(ValueError):sast.sonar_gate_snapshot(api, '-Dsonar.branch.name=main', REV)
+
+    def test_inventory_none_is_diagnostic_and_independent_gate_is_bound_before_after(self):
+        branch = 'release-ssdf-candidate-' + REV
+        context = '-Dsonar.pullrequest.key=115 -Dsonar.pullrequest.branch=feature -Dsonar.pullrequest.base=main'
+        completed = dt.datetime.now(dt.timezone.utc).isoformat()
+        class API(sast.Sonar):
+            def __init__(self):
+                self.raw_gate, self.required_gate, self.move = 'NONE', 'OK', False
+                self.pr = {'key': '115', 'branch': 'feature', 'base': 'main', 'commit': {'sha': REV},
+                           'analysisDate': completed, 'status': {'qualityGateStatus': 'OK'}}
+            def get(self, endpoint, params):
+                if endpoint == 'project_branches/list':return {'branches': [{'name': branch, 'type': 'LONG', 'isMain': False}]}
+                if endpoint == 'project_analyses/search':return {'analyses': [{'key': 'candidate-analysis', 'revision': REV, 'date': completed}]}
+                if endpoint == 'project_pull_requests/list':return {'pullRequests': [copy.deepcopy(self.pr)]}
+                if endpoint == 'qualitygates/project_status':return {'projectStatus': {'status': self.required_gate if 'pullRequest' in params else self.raw_gate}}
+                raise AssertionError(endpoint)
+            def pages(self, endpoint, *_):
+                if self.move and endpoint == 'hotspots/search':self.pr['commit']['sha'] = 'b' * 40
+                return [], []
+        with tempfile.TemporaryDirectory() as directory, patch('sonar_context.runtime_gate_context', return_value=context):
+            api = API()
+            self.assertEqual(sast.export_sonar(api, directory, REV, '2.0.58', branch), [])
+            self.assertEqual(sast.strict_json((Path(directory) / 'sonar-quality-gate.json').read_bytes())['projectStatus']['status'], 'NONE')
+            self.assertEqual(sast.strict_json((Path(directory) / 'sonar-required-gate-after.json').read_bytes())['quality_gate']['projectStatus']['status'], 'OK')
+            for field, value in (('raw_gate', 'ERROR'), ('required_gate', 'NONE'), ('required_gate', 'ERROR'), ('move', True)):
+                api = API();setattr(api, field, value)
+                with self.subTest(field=field, value=value), self.assertRaises(ValueError):
+                    sast.export_sonar(api, directory, REV, '2.0.58', branch)
+
+    def test_public_reader_allows_only_fixed_project_exact_pr_gate(self):
+        api = sast.Sonar(public_project=True)
+        with patch.object(sast.urllib.request, 'build_opener') as opener:
+            opener.return_value.open.return_value = io.BytesIO(b'{"projectStatus":{"status":"OK"}}')
+            api.get('qualitygates/project_status', {'projectKey': sast.PROJECT, 'pullRequest': '115'})
+            self.assertIsNone(opener.return_value.open.call_args.args[0].get_header('Authorization'))
+            for params in ({'projectKey': 'other', 'pullRequest': '115'}, {'projectKey': sast.PROJECT, 'pullRequest': '../other'},
+                           {'projectKey': sast.PROJECT, 'branch': 'main'}):
+                with self.subTest(params=params), self.assertRaises(ValueError):api.get('qualitygates/project_status', params)
 
     def test_policy_inventory_binds_source_around_annotations(self):
         with tempfile.TemporaryDirectory() as directory:

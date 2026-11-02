@@ -2,6 +2,16 @@
 
 Status (2026-11-02): the implementation and personal collector prototype are in draft PR #115. Trusted rehearsal `41403473899` on `2debc2a` passed CI, exact-artifact scans, Snyk source/image assessment execution, and the Semgrep step. Eighteen native standard cases passed with a verified public signed-candidate receipt; the source SAST assessment still failed because CodeQL and Sonar supplied main-only baselines for this unmerged PR. The 51-record archive contained 31 signed records and 210 verified payloads; the final partial signed receipt was correctly rejected by the release gate. Staging v2.0.57 remains unchanged, temporary candidate credentials/configuration were removed, and timers remain disabled. This rehearsal does not qualify publication. No merge, release, risk acceptance, scanner retirement or Dependency-Track cutover has occurred. SCA still has two high and three medium frontend findings, Semgrep's seven medium findings remain, and first-seen history, full owner baseline coverage and finding dispositions are incomplete. Private reports remain private; do not publish finding paths. DAST remains deferred. Current-candidate source-baseline changes are under implementation; their validation is pending.
 
+Subsequent live rehearsal `41413022387` confirmed the first Sonar analysis on a
+new LONG candidate branch returns the complete exact-source inventory but a
+quality-gate status of `NONE`; this is a failure, not a passing gate. The
+implemented correction preserves that inventory and independently requires a
+fresh exact-SHA `OK` gate from the open PR for unmerged candidates or established
+main analysis for stable releases. Same-SHA reruns to induce an empty-diff
+green result are prohibited. The correction passes 139 release-helper tests
+and a live read-only export replay; independent security re-review is clear, and workflow validation remains
+pending. The failed rehearsal archive is verified and temporary setup cleaned up.
+
 ## Objective and agreed decisions
 
 Improve security coverage and retain reviewable SSDF evidence without adding unnecessary time to PR feedback. Publication may wait for required security results. Do not interpret parallel jobs as a guarantee of unchanged completion time.

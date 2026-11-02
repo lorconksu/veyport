@@ -6,8 +6,8 @@ import re
 import shlex
 import time
 import urllib.error
-from source_sast import Sonar, PROJECT, save, verify_public_sonar
-from sonar_context import candidate_branch
+from source_sast import Sonar, PROJECT, save, verify_public_sonar, sonar_gate_snapshot
+from sonar_context import candidate_branch, runtime_gate_context
 
 
 class CaptureFailure(ValueError):
@@ -61,7 +61,7 @@ def reason(error):
             AttributeError: "provider-shape-invalid", ValueError: "provider-result-invalid"}.get(type(error), "provider-unavailable")
 
 
-def collect(report_task, context, revision, output, api=None, timeout=60, clock=None, pause=None, public_project=False):
+def collect(report_task, context, revision, output, api=None, timeout=60, clock=None, pause=None, public_project=False, gate_context=None):
     api = api or Sonar(public_project=public_project)
     clock, pause = clock or time.monotonic, pause or time.sleep
     root = Path(output)
@@ -69,7 +69,7 @@ def collect(report_task, context, revision, output, api=None, timeout=60, clock=
     result = {"schema_version": 1, "revision": revision, "status": "partial", "missing": [], "attempts": []}
     stage = "input"
     try:
-        if not re.fullmatch(r"[0-9a-f]{40}", revision) or not 1 <= timeout <= 120:
+        if not re.fullmatch(r"[0-9a-f]{40}", revision) or not 1 <= timeout <= 600:
             raise CaptureFailure("invalid-source-or-deadline")
         path = Path(report_task)
         if path.is_symlink() or not 0 < path.stat().st_size <= 65536:
@@ -88,15 +88,25 @@ def collect(report_task, context, revision, output, api=None, timeout=60, clock=
         if not is_pr and identity not in ("main", candidate_branch(revision)):
             raise CaptureFailure("full-branch-context-not-source-bound")
         result["scope"] = "pull-request-new-code" if is_pr else "full-branch"
+        inventory_only = not is_pr and identity != "main"
         params = {"pullRequest" if is_pr else "branch": identity}
         stage = "task"
-        task = api.get("ce/task", {"id": task_id})
-        save(root, "task.json", task)
-        current = task["task"]
-        if current.get("id") != task_id or current.get("componentKey") != PROJECT or current.get("status") != "SUCCESS":
-            raise CaptureFailure("scanner-task-not-successful-or-mismatched")
-        if is_pr and current.get("pullRequest") != identity or not is_pr and current.get("pullRequest"):
-            raise CaptureFailure("scanner-task-context-mismatch")
+        deadline = clock() + timeout
+        while True:
+            if clock() >= deadline:
+                raise CaptureFailure("scanner-task-deadline-exceeded")
+            task = api.get("ce/task", {"id": task_id})
+            save(root, "task.json", task)
+            current = task["task"]
+            if current.get("id") != task_id or current.get("componentKey") != PROJECT:
+                raise CaptureFailure("scanner-task-not-successful-or-mismatched")
+            if is_pr and current.get("pullRequest") != identity or not is_pr and current.get("pullRequest"):
+                raise CaptureFailure("scanner-task-context-mismatch")
+            if current.get("status") == "SUCCESS":
+                break
+            if current.get("status") not in ("PENDING", "IN_PROGRESS"):
+                raise CaptureFailure("scanner-task-not-successful-or-mismatched")
+            pause(min(2, max(0, deadline - clock())))
         analysis_id = current["analysisId"]
         if not isinstance(analysis_id, str) or not re.fullmatch(r"[A-Za-z0-9_-]{1,128}", analysis_id):
             raise CaptureFailure("scanner-analysis-identity-invalid")
@@ -104,7 +114,6 @@ def collect(report_task, context, revision, output, api=None, timeout=60, clock=
         if public_project:
             result.update(provider_access="public-project-anonymous", client_authenticated=False,
                           task_access="analysis-token")
-        deadline = clock() + timeout
 
         def snapshot(provider):
             if is_pr:
@@ -124,7 +133,11 @@ def collect(report_task, context, revision, output, api=None, timeout=60, clock=
         # A successful CE task can precede convergence of mutable export views.
         # Retry only read-only retrieval, preserving the same task/analysis and
         # exact source checks. Never start another scan or accept a stale view.
-        for attempt in range(1, 32):
+        retry_delay = min(5, timeout / 4)
+        trusted_gate_context = None
+        for attempt in range(1, int(timeout / retry_delay) + 2):
+            if clock() >= deadline:
+                break
             attempt_root = root / ("attempt-" + str(attempt).zfill(4))
             attempt_root.mkdir(mode=0o700)
             provider = AttemptAPI(api, attempt_root, deadline, clock)
@@ -146,6 +159,15 @@ def collect(report_task, context, revision, output, api=None, timeout=60, clock=
                 stage = "snapshot-before"
                 before = snapshot(provider)
                 save(attempt_root, "context-before.json", before)
+                required_before = None
+                if inventory_only:
+                    stage = "required-quality-gate-before"
+                    if trusted_gate_context is None:
+                        if not gate_context or runtime_gate_context(revision) != gate_context:
+                            raise CaptureFailure("required-quality-gate-context-mismatch")
+                        trusted_gate_context = gate_context
+                    required_before = sonar_gate_snapshot(provider, gate_context, revision)
+                    save(attempt_root, "required-quality-gate-before.json", required_before)
                 stage = "issues"
                 _, issues = provider.pages("issues/search", {**params, "componentKeys": PROJECT, "additionalFields": "_all", "issueStatuses": "OPEN,CONFIRMED,FALSE_POSITIVE,ACCEPTED,FIXED"}, "issues")
                 save(root, "issues.json", issues)
@@ -157,6 +179,17 @@ def collect(report_task, context, revision, output, api=None, timeout=60, clock=
                 save(attempt_root, "context-after.json", after)
                 if before != after:
                     raise CaptureFailure("snapshot-changed-during-export")
+                if inventory_only:
+                    stage = "required-quality-gate-after"
+                    required_after = sonar_gate_snapshot(provider, gate_context, revision)
+                    save(attempt_root, "required-quality-gate-after.json", required_after)
+                    if required_before != required_after or runtime_gate_context(revision) != gate_context:
+                        raise CaptureFailure("required-quality-gate-changed")
+                    if gate.get("projectStatus", {}).get("status") not in ("OK", "NONE"):
+                        raise CaptureFailure("inventory-quality-gate-failed")
+                    save(root, "required-quality-gate.json", required_after)
+                    result.update(required_quality_gate="OK", required_quality_gate_scope=required_after["scope"],
+                                  inventory_quality_gate=gate.get("projectStatus", {}).get("status"))
                 if public_project:
                     stage = "project-visibility-after"
                     verify_public_sonar(provider, attempt_root, "project-after.json")
@@ -173,9 +206,11 @@ def collect(report_task, context, revision, output, api=None, timeout=60, clock=
                 result.update(failure_stage=stage, failure_reason=failure_reason)
                 remaining = deadline - clock()
                 permanent_http = isinstance(error, urllib.error.HTTPError) and error.code in (400, 401, 403, 404, 405, 410, 422)
-                if permanent_http or remaining <= 0 or attempt == 31 or isinstance(error, CaptureFailure) and str(error) == "scanner-task-identity-changed":
+                permanent_context = isinstance(error, CaptureFailure) and str(error) in (
+                    "scanner-task-identity-changed", "required-quality-gate-context-mismatch", "inventory-quality-gate-failed")
+                if permanent_http or remaining <= 0 or permanent_context:
                     break
-                pause(min(2, remaining))
+                pause(min(retry_delay, remaining))
     except (ValueError, OSError, KeyError, TypeError, AttributeError) as error:
         result.update(failure_stage=stage, failure_reason=reason(error))
     if result["status"] != "completed":
@@ -190,9 +225,10 @@ def main():
         parser.add_argument("--" + flag, required=True)
     parser.add_argument("--timeout", type=int, default=60)
     parser.add_argument("--public-project-results", action="store_true", help="Use the analysis token only for task identity; read verified public project results anonymously")
+    parser.add_argument("--gate-context", help="Separate source-bound PR/main gate for candidate inventory")
     args = parser.parse_args()
     try:
-        result = collect(args.report_task, args.context, args.revision, args.output, timeout=args.timeout, public_project=args.public_project_results)
+        result = collect(args.report_task, args.context, args.revision, args.output, timeout=args.timeout, public_project=args.public_project_results, gate_context=args.gate_context)
         if result["status"] != "completed":
             parser.exit(1, "Sonar evidence is partial; independent reconciliation required\n")
     except (ValueError, OSError, KeyError, TypeError):

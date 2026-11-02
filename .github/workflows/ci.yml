@@ -555,7 +555,7 @@ jobs:
       - uses: SonarSource/sonarqube-scan-action@c7ee0f9df90b7aa20e8dcf9695dcfe2e7da5b4f2 # v7
         with:
           args: >
-            -Dsonar.qualitygate.wait=true
+            -Dsonar.qualitygate.wait=${{ steps.sonar-context.outputs.quality_gate_wait }}
             -Dsonar.qualitygate.timeout=300
             -Dsonar.scm.revision=${{ github.event.pull_request.head.sha || github.sha }}
             ${{ steps.sonar-context.outputs.args }}
@@ -568,8 +568,9 @@ jobs:
         env:
           SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
           SONAR_CONTEXT_ARGS: ${{ steps.sonar-context.outputs.args }}
+          SONAR_GATE_CONTEXT_ARGS: ${{ steps.sonar-context.outputs.gate_args }}
           EXPECTED_SOURCE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
-        run: python3 scripts/release/sonar_job_evidence.py --public-project-results --report-task .scannerwork/report-task.txt --context "$SONAR_CONTEXT_ARGS" --revision "$EXPECTED_SOURCE_SHA" --output sonar-evidence
+        run: python3 scripts/release/sonar_job_evidence.py --public-project-results --report-task .scannerwork/report-task.txt --context="$SONAR_CONTEXT_ARGS" --gate-context="$SONAR_GATE_CONTEXT_ARGS" --timeout 600 --revision "$EXPECTED_SOURCE_SHA" --output sonar-evidence
       - name: Encrypt available private job evidence
         if: always()
         env:

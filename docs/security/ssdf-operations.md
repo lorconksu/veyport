@@ -59,14 +59,28 @@ OFF. Current-candidate full-baseline changes are still awaiting validation.
   delivery run, including main, must perform a fresh full CodeQL scan. Reuse is
   only a future capability if metadata can be authenticated under an approved
   configuration. Measure the added runtime. Partial failed reuse exports are
-  retained diagnostically while qualification fails closed. Implementation
-  release-helper suite passes 124 tests and the focused reviewer suite passes
-  59; live CI remains pending. Independent code review found no actionable
+  retained diagnostically while qualification fails closed. The initial baseline change passed 124 release-helper tests and 59 focused
+  reviewer tests; PR CI and managed CodeQL passed for `6bfbb5d`. Independent code review found no actionable
   findings. Security re-review resolved the CodeQL debug-artifact bypass
   (SEC-01), with no remaining actionable findings. The implementation rejects
   debug-upload environments before initialization and requires debug output to
   remain disabled. See
   [scanner access contracts](scanner-coverage.md) for scope and limits.
+- A later trusted Sonar rehearsal, `41413022387`, failed closed on the first
+  analysis of the new LONG candidate branch. Sonar returned the complete
+  exact-SHA issue inventory and a successful Compute Engine task, but its
+  quality-gate status was `NONE`. Keep that result diagnostic/nonpassing; do
+  not rerun the same SHA to manufacture an empty-diff green gate. The implemented
+  fix keeps the full branch inventory and separately requires a fresh exact-SHA
+  `OK` quality gate from the open PR for an unmerged candidate, or from the
+  established main analysis for a stable release. `ERROR`, `NONE`, stale or
+  mismatched gate evidence blocks qualification. Only inventory analysis uses
+  `sonar.qualitygate.wait=false`; ordinary PR analysis still waits. This fix passes 139 release-helper tests and a live read-only export replay;
+  independent security re-review is clear, and its workflow rehearsal remains pending. The failed
+  rehearsal archive verified 51 records, 29 signatures, 116 payload readbacks,
+  14 report bundles and 14 terminal logs. Temporary credentials and services
+  were removed; normal staging remained unchanged. Sonar describes the first-branch behavior
+  [here](https://community.sonarsource.com/t/quality-gate-status-failed-when-branch-does-not-exist/112706).
 - Collector and candidate timers are OFF. No release gate is active, and no
   publication, merge, approval, scanner retirement or Dependency-Track cutover
   has occurred.

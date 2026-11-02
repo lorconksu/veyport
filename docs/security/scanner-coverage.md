@@ -45,6 +45,29 @@ checks passed, and a read-only preflight confirmed the current SHA can use the
 dedicated branch.
 Overall candidate validation remains pending.
 
+Trusted live rehearsal `41413022387` confirmed that Sonar analysis can finish
+successfully and return the full exact-source inventory on the first analysis
+of a new LONG branch while reporting quality-gate status `NONE`. This is not a
+pass: the rehearsal failed closed, and that first-branch result remains
+diagnostic/nonpassing. Sonar documents the initial branch quality-gate behavior
+[here](https://community.sonarsource.com/t/quality-gate-status-failed-when-branch-does-not-exist/112706).
+Do not rerun the same SHA to try to turn this into an empty-diff green result.
+
+The correction keeps that full LONG-branch inventory and obtains gate
+evidence independently: an unmerged candidate requires a fresh `OK` result for
+the exact SHA from its open PR analysis; a stable release requires an `OK`
+result for the exact SHA from the established main analysis. `ERROR`, `NONE`,
+stale or mismatched evidence blocks qualification. Only the trusted inventory
+analysis uses `sonar.qualitygate.wait=false`; ordinary PR analysis continues to
+wait for its own gate. The CI change captures and validates the gate
+analysis separately from the candidate-branch inventory. The 139 release-helper tests, actionlint and secret scan pass. A read-only
+replay against the actual candidate inventory and PR gate passed; live workflow
+validation of this correction remains pending. A Sonar context argument parsing
+issue was fixed by using `--context=...`; a workflow-level subprocess
+regression check covers this invocation path. The separate gate proof preserves
+Sonar's actual returned conditions; it does not assert that unconfigured overall-code
+conditions were evaluated. Owner coverage review remains required.
+
 CodeQL reuse is allowed only for a fresh (24-hour) full main analysis matching
 the exact source SHA, GitHub default analysis identity/configuration, and all
 five required languages, without diagnostics or reduced-result markers. The
@@ -65,10 +88,12 @@ initialization sets `debug: false`, and result validation requires that setting.
 Partial failed reuse exports are retained diagnostically and still fail
 qualification. Missing, stale, partial or main-only results block qualification;
 no gate is weakened.
-The release-helper suite passes 124 tests, the focused reviewer suite passes
-59, and a local CodeQL CLI 2.27.3 fixture scan passed. Independent code review
+The initial baseline change passed 124 release-helper tests, 59 focused reviewer
+tests, and a local CodeQL CLI 2.27.3 fixture scan. Independent code review
 found no actionable findings. Security re-review resolved the debug-artifact
-bypass (SEC-01) with no remaining actionable findings. Live CI remains pending.
+bypass (SEC-01) with no remaining actionable findings. PR CI and managed
+CodeQL passed for `6bfbb5d`; the subsequent Sonar gate correction is under
+completed review and awaits its own live rehearsal.
 This is a full baseline within configured extraction
 scope, not a claim that every test file is
 analyzed. GitHub's managed Go extractor excludes `*_test.go` by default unless

@@ -5,6 +5,7 @@ import datetime as dt
 import os
 from pathlib import Path
 import re
+import shlex
 import subprocess
 import urllib.parse
 import urllib.request
@@ -147,7 +148,9 @@ class Sonar:
                          "project_analyses/search": "project", "issues/search": "componentKeys",
                          "hotspots/search": "projectKey", "project_branches/list": "project"}
             if endpoint == "qualitygates/project_status":
-                if set(params) != {"analysisId"} or not re.fullmatch(r"[A-Za-z0-9_-]{1,128}", params["analysisId"]):
+                exact_analysis = set(params) == {"analysisId"} and re.fullmatch(r"[A-Za-z0-9_-]{1,128}", params["analysisId"])
+                exact_pr = set(params) == {"projectKey", "pullRequest"} and params["projectKey"] == PROJECT and re.fullmatch(r"[1-9][0-9]*", params["pullRequest"])
+                if not (exact_analysis or exact_pr):
                     raise ValueError("Sonar exact analysis identity required")
             elif endpoint not in selectors or params.get(selectors[endpoint]) != PROJECT:
                 raise ValueError("Sonar public reader requires the fixed project")
@@ -267,6 +270,43 @@ def export_codeql(api, root, revision, version):
     return findings
 
 
+def sonar_gate_snapshot(api, context, revision):
+    """An independent genuine PR/main gate; the candidate inventory is not a gate."""
+    values = shlex.split(context)
+    if any(not item.startswith("-D") or "=" not in item for item in values):
+        raise ValueError("explicit Sonar gate context required")
+    args = dict(item[2:].split("=", 1) for item in values)
+    if len(args) != len(values):
+        raise ValueError("duplicate Sonar gate context")
+    if set(args) == {"sonar.pullrequest.key", "sonar.pullrequest.branch", "sonar.pullrequest.base"}:
+        key, branch = args["sonar.pullrequest.key"], args["sonar.pullrequest.branch"]
+        if not re.fullmatch(r"[1-9][0-9]*", key) or not re.fullmatch(r"[A-Za-z0-9_./+@-]{1,240}", branch) or args["sonar.pullrequest.base"] != "main":
+            raise ValueError("exact Sonar PR gate context required")
+        rows = api.get("project_pull_requests/list", {"project": PROJECT})["pullRequests"]
+        matches = [row for row in rows if row.get("key") == key]
+        if len(matches) != 1 or matches[0].get("commit", {}).get("sha") != revision or matches[0].get("branch") != branch or matches[0].get("base") != "main" or matches[0].get("status", {}).get("qualityGateStatus") != "OK":
+            raise ValueError("Sonar PR gate source changed or did not pass")
+        fresh(matches[0].get("analysisDate"))
+        source = {"scope": "pull-request-new-code", "pull_request": matches[0]}
+        gate = api.get("qualitygates/project_status", {"projectKey": PROJECT, "pullRequest": key})
+    elif args == {"sonar.branch.name": "main"}:
+        rows = api.get("project_branches/list", {"project": PROJECT})["branches"]
+        matches = [row for row in rows if row.get("name") == "main"]
+        if len(matches) != 1 or matches[0].get("type") != "LONG" or matches[0].get("isMain") is not True or matches[0].get("commit", {}).get("sha", revision) != revision:
+            raise ValueError("Sonar main gate source changed")
+        analyses = api.get("project_analyses/search", {"project": PROJECT, "branch": "main", "ps": 1, "p": 1})["analyses"]
+        if len(analyses) != 1 or analyses[0].get("revision") != revision or not re.fullmatch(r"[A-Za-z0-9_-]{1,128}", analyses[0].get("key", "")):
+            raise ValueError("Sonar main gate must match the exact candidate")
+        fresh(analyses[0].get("date"))
+        source = {"scope": "main-quality-gate", "branch": matches[0], "analysis": analyses[0]}
+        gate = api.get("qualitygates/project_status", {"analysisId": analyses[0]["key"]})
+    else:
+        raise ValueError("Sonar gate must be an exact PR or established main")
+    if gate.get("projectStatus", {}).get("status") != "OK":
+        raise ValueError("Sonar required quality gate did not pass")
+    return {**source, "quality_gate": gate}
+
+
 def export_sonar(api, root, revision, version, branch, public_project=False):
     if branch not in ("main", "release-ssdf-candidate-" + revision):
         raise ValueError("full reviewed Sonar source branch required")
@@ -285,15 +325,30 @@ def export_sonar(api, root, revision, version, branch, public_project=False):
     if len(analyses) != 1 or analyses[0].get("revision") != revision:
         raise ValueError("latest full Sonar branch analysis must match candidate")
     fresh(analyses[0]["date"])
+    candidate = branch != "main"
+    gate_before = gate_context = None
+    if candidate:
+        from sonar_context import runtime_gate_context
+        gate_context = runtime_gate_context(revision)
+        gate_before = sonar_gate_snapshot(api, gate_context, revision)
+        save(root, "sonar-required-gate-before.json", gate_before)
     issues, issue_pages = api.pages("issues/search", {"componentKeys": PROJECT, "branch": branch, "additionalFields": "_all", "issueStatuses": "OPEN,CONFIRMED,FALSE_POSITIVE,ACCEPTED,FIXED"}, "issues")
     hotspots, hotspot_pages = api.pages("hotspots/search", {"projectKey": PROJECT, "branch": branch}, "hotspots")
     gate = api.get("qualitygates/project_status", {"analysisId": analyses[0]["key"]})
-    if gate.get("projectStatus", {}).get("status") != "OK":
+    save(root, "sonar-quality-gate.json", gate)
+    # A first-ever LONG inventory has no new-code baseline. NONE is retained
+    # as not computed; only the independent exact-source gate can pass.
+    if gate.get("projectStatus", {}).get("status") not in (("OK", "NONE") if candidate else ("OK",)):
         raise ValueError("Sonar quality gate did not pass")
     after = api.get("project_analyses/search", params)
     branches_after, branch_after = branch_identity()
     if after != before or branch_after != branch_before:
         raise ValueError("Sonar mutable branch changed during evidence export")
+    if candidate:
+        gate_after = sonar_gate_snapshot(api, gate_context, revision)
+        save(root, "sonar-required-gate-after.json", gate_after)
+        if gate_before != gate_after or runtime_gate_context(revision) != gate_context:
+            raise ValueError("Sonar required gate changed during inventory export")
     if public_project:
         verify_public_sonar(api, root, "sonar-project-after.json")
     save(root, "sonar-analysis.json", before)

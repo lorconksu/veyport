@@ -1,10 +1,14 @@
 import copy
+import datetime as dt
 import io
 import json
+import os
+import subprocess
 from pathlib import Path
 import tempfile
 import unittest
 import urllib.error
+from unittest.mock import patch
 
 import sonar_job_evidence as capture
 
@@ -31,11 +35,12 @@ class Provider:
         self.hook = None
         self.task = {"task": {"id": "task-1", "componentKey": capture.PROJECT,
                               "status": "SUCCESS", "analysisId": "analysis-1", "pullRequest": "115"}}
-        self.pr = {"key": "115", "commit": {"sha": REVISION}, "analysisDate": "2026-10-31T00:00:00Z"}
+        self.pr = {"key": "115", "commit": {"sha": REVISION}, "analysisDate": dt.datetime.now(dt.timezone.utc).isoformat(),
+                   "branch": "feature", "base": "main", "status": {"qualityGateStatus": "OK"}}
         self.gate = "OK"
         self.component = {"key": capture.PROJECT, "visibility": "public"}
         self.branch = {"name": "main", "type": "LONG", "isMain": True, "commit": {"sha": REVISION}}
-        self.analysis = {"key": "analysis-1", "revision": REVISION}
+        self.analysis = {"key": "analysis-1", "revision": REVISION, "date": dt.datetime.now(dt.timezone.utc).isoformat()}
 
     def get(self, endpoint, params):
         self.calls.append((endpoint, params))
@@ -70,8 +75,11 @@ class SonarJobEvidenceTests(unittest.TestCase):
         self.clock = Clock()
 
     def collect(self, context=CONTEXT, **kwargs):
-        return capture.collect(self.task_file, context, REVISION, self.root / "output", self.provider,
-                               timeout=4, clock=self.clock.now, pause=self.clock.pause, **kwargs)
+        if "release-ssdf-candidate-" in context:
+            kwargs.setdefault("gate_context", CONTEXT)
+        with patch.object(capture, "runtime_gate_context", return_value=CONTEXT):
+            return capture.collect(self.task_file, context, REVISION, self.root / "output", self.provider,
+                                   timeout=4, clock=self.clock.now, pause=self.clock.pause, **kwargs)
 
     def test_explicit_public_mode_verifies_project_around_exact_source_transaction(self):
         result = self.collect(public_project=True)
@@ -297,6 +305,139 @@ class SonarJobEvidenceTests(unittest.TestCase):
         self.assertEqual(result["failure_reason"], "export-deadline-exceeded")
         self.assertTrue((self.root / "output/attempt-0001/hotspots-page-1.json").exists())
 
+    def candidate(self):
+        self.provider.task["task"].pop("pullRequest", None)
+        self.provider.branch.update(name=capture.candidate_branch(REVISION), isMain=False)
+        return "-Dsonar.branch.name=" + capture.candidate_branch(REVISION)
+
+    def test_inventory_none_requires_independent_exact_pr_gate_not_relabelled(self):
+        context = self.candidate()
+        def hook(endpoint, params):
+            if endpoint == "qualitygates/project_status":
+                return {"projectStatus": {"status": "OK" if "pullRequest" in params else "NONE"}}
+        self.provider.hook = hook
+        result = self.collect(context)
+        self.assertEqual(result["status"], "completed")
+        self.assertEqual(result["quality_gate"], "NONE")
+        self.assertEqual(result["inventory_quality_gate"], "NONE")
+        self.assertEqual(result["required_quality_gate"], "OK")
+        self.assertEqual(result["required_quality_gate_scope"], "pull-request-new-code")
+        self.assertTrue((self.root / "output/required-quality-gate.json").is_file())
+
+    def test_inventory_error_even_with_good_pr_gate_blocks(self):
+        context = self.candidate()
+        self.provider.hook = lambda endpoint, params: {"projectStatus": {"status": "OK" if "pullRequest" in params else "ERROR"}} if endpoint == "qualitygates/project_status" else None
+        result = self.collect(context)
+        self.assertEqual(result["status"], "partial")
+        self.assertEqual(result["failure_reason"], "inventory-quality-gate-failed")
+        self.assertEqual(json.loads((self.root / "output/quality-gate.json").read_text())["projectStatus"]["status"], "ERROR")
+
+    def test_inventory_none_or_ok_cannot_replace_failed_missing_stale_or_changed_pr_gate(self):
+        context = self.candidate()
+        self.provider.pr["analysisDate"] = "2026-01-01T00:00:00Z"
+        result = self.collect(context)
+        self.assertEqual(result["status"], "partial")
+        self.assertEqual(result["attempts"][0]["stage"], "required-quality-gate-before")
+        for index, status in enumerate(("NONE", "ERROR")):
+            self.provider.pr["analysisDate"] = dt.datetime.now(dt.timezone.utc).isoformat()
+            self.provider.hook = lambda endpoint, params: {"projectStatus": {"status": status if "pullRequest" in params else "OK"}} if endpoint == "qualitygates/project_status" else None
+            with patch.object(capture, "runtime_gate_context", return_value=CONTEXT):
+                value = capture.collect(self.task_file, context, REVISION, self.root / ("gate-" + str(index)), self.provider,
+                                        timeout=4, clock=self.clock.now, pause=self.clock.pause, gate_context=CONTEXT)
+            self.assertEqual(value["status"], "partial")
+
+    def test_independent_gate_move_during_inventory_blocks(self):
+        context = self.candidate()
+        def hook(endpoint, _params):
+            if endpoint == "hotspots/search":
+                self.provider.pr["commit"]["sha"] = "b" * 40
+        self.provider.hook = hook
+        result = self.collect(context)
+        self.assertEqual(result["status"], "partial")
+        self.assertTrue(any(a["stage"] == "required-quality-gate-after" for a in result["attempts"]))
+
+    def test_gate_flags_cannot_override_trusted_resolver(self):
+        result = self.collect(self.candidate(), gate_context="-Dsonar.branch.name=main")
+        self.assertEqual(result["status"], "partial")
+        self.assertEqual(result["failure_reason"], "required-quality-gate-context-mismatch")
+
+    def test_candidate_inventory_requires_gate_context_and_stable_candidate_uses_exact_main(self):
+        context = self.candidate()
+        with patch.object(capture, "runtime_gate_context", return_value=CONTEXT):
+            result = capture.collect(self.task_file, context, REVISION, self.root / "missing-gate", self.provider,
+                                     timeout=4, clock=self.clock.now, pause=self.clock.pause)
+        self.assertEqual(result["failure_reason"], "required-quality-gate-context-mismatch")
+        main_context = '-Dsonar.branch.name=main'
+        def hook(endpoint, params):
+            if endpoint == 'project_branches/list':
+                return {'branches': [copy.deepcopy(self.provider.branch), {'name': 'main', 'isMain': True, 'type': 'LONG', 'commit': {'sha': REVISION}}]}
+            if endpoint == 'project_analyses/search' and params['branch'] == 'main':
+                return {'analyses': [{**self.provider.analysis, 'key': 'main-analysis'}]}
+            if endpoint == 'qualitygates/project_status':
+                return {'projectStatus': {'status': 'OK' if params.get('analysisId') == 'main-analysis' else 'NONE'}}
+        self.provider.hook = hook
+        with patch.object(capture, 'runtime_gate_context', return_value=main_context):
+            result = capture.collect(self.task_file, context, REVISION, self.root / 'stable-gate', self.provider,
+                                     timeout=4, clock=self.clock.now, pause=self.clock.pause, gate_context=main_context)
+        self.assertEqual(result['status'], 'completed')
+        self.assertEqual(result['inventory_quality_gate'], 'NONE')
+        self.assertEqual(result['required_quality_gate_scope'], 'main-quality-gate')
+
+    def test_pending_ce_is_polled_bounded_and_failed_or_never_finishing_ce_blocks(self):
+        polls = 0
+        def hook(endpoint, _params):
+            nonlocal polls
+            if endpoint == "ce/task":
+                polls += 1
+                if polls == 1:
+                    value = copy.deepcopy(self.provider.task)
+                    value["task"]["status"] = "PENDING"
+                    return value
+        self.provider.hook = hook
+        result = self.collect()
+        self.assertEqual(result["status"], "completed")
+        self.assertEqual(self.clock.pauses, [2])
+        self.provider.hook = None
+        self.provider.task["task"]["status"] = "IN_PROGRESS"
+        value = capture.collect(self.task_file, CONTEXT, REVISION, self.root / "pending", self.provider,
+                                timeout=4, clock=self.clock.now, pause=self.clock.pause)
+        self.assertEqual(value["status"], "partial")
+        self.assertEqual(value["failure_reason"], "scanner-task-deadline-exceeded")
+        self.assertEqual(self.clock.instant, 6)
+
+    def test_gate_can_converge_after_a_minute_without_repeating_github_lookups(self):
+        context = self.candidate()
+        def hook(endpoint, params):
+            if endpoint == 'qualitygates/project_status':
+                status = 'OK' if 'pullRequest' in params and self.clock.instant >= 80 else 'NONE'
+                return {'projectStatus': {'status': status}}
+        self.provider.hook = hook
+        with patch.object(capture, 'runtime_gate_context', return_value=CONTEXT) as trusted:
+            result = capture.collect(self.task_file, context, REVISION, self.root / 'late-gate', self.provider,
+                                     timeout=120, clock=self.clock.now, pause=self.clock.pause, gate_context=CONTEXT)
+        self.assertEqual(result['status'], 'completed')
+        self.assertEqual(self.clock.instant, 80)
+        self.assertEqual(trusted.call_count, 2)
+        self.assertGreater(len(result['attempts']), 15)
+
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class WorkflowArgumentTests(unittest.TestCase):
+    def test_single_branch_argument_reaches_evidence_capture(self):
+        root = Path(__file__).resolve().parents[2]
+        workflow = (root / ".github/workflows/ci.yml").read_text()
+        line = next(line.strip().removeprefix("run: ") for line in workflow.splitlines()
+                    if "run: python3 scripts/release/sonar_job_evidence.py" in line)
+        line = line.replace("scripts/release/sonar_job_evidence.py", str(root / "scripts/release/sonar_job_evidence.py"))
+        with tempfile.TemporaryDirectory() as directory:
+            result = subprocess.run(["bash", "-c", line], cwd=directory, capture_output=True, text=True,
+                                    env={**os.environ, "SONAR_CONTEXT_ARGS": "-Dsonar.branch.name=release-ssdf-candidate-" + REVISION,
+                                         "SONAR_GATE_CONTEXT_ARGS": CONTEXT, "EXPECTED_SOURCE_SHA": REVISION})
+            self.assertEqual(result.returncode, 1)
+            self.assertNotIn("expected one argument", result.stderr)
+            record = json.loads((Path(directory) / "sonar-evidence/capture.json").read_text())
+            self.assertEqual(record["status"], "partial")
+            self.assertEqual(record["failure_stage"], "input")
