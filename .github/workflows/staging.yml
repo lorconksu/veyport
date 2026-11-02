@@ -36,6 +36,7 @@ jobs:
     with:
       defer_semgrep_to_delivery: true
       sonar_pull_request_required: true
+      sonar_full_branch_required: true
     secrets:
       DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
       DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}

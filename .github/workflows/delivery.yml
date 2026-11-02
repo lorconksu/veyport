@@ -133,16 +133,51 @@ jobs:
           mkdir -p "$RUNNER_TEMP/security/current-semgrep"
           "$RUNNER_TEMP/semgrep-tools/bin/semgrep" scan --strict --timeout 30 --config p/golang --config p/typescript --config p/owasp-top-ten --sarif -o "$RUNNER_TEMP/security/current-semgrep/semgrep.sarif" . > "$RUNNER_TEMP/security/current-semgrep/semgrep-output.txt" 2>&1
           python3 scripts/release/check_scan.py semgrep "$RUNNER_TEMP/security/current-semgrep/semgrep.sarif"
-      - name: Export completed full-baseline SAST without rescanning
+      - name: Select complete exact-source CodeQL baseline or prepare current-job full scan
+        id: codeql_baseline
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 scripts/release/codeql_evidence.py prepare --root . --artifact-manifest "$RUNNER_TEMP/candidate.json" --output "$RUNNER_TEMP/security/codeql-evidence" --sarif-directory "$RUNNER_TEMP/security/codeql-local"
+      - name: Initialize current-job full CodeQL analysis when exact main baseline is unavailable
+        if: steps.codeql_baseline.outputs.local_required == 'true'
+        uses: github/codeql-action/init@9b3254085494b55a0f7c4c2b3d2d52cc712ce370 # v4
+        with:
+          debug: false
+          languages: actions,go,javascript-typescript,python,ruby
+          config: |
+            queries:
+              - uses: security-extended
+          trap-caching: false
+          dependency-caching: false
+      - name: Build every tracked Go module for complete current-job extraction
+        if: steps.codeql_baseline.outputs.local_required == 'true'
+        env:
+          GOFLAGS: ''
+        run: |
+          set -euo pipefail
+          git ls-files -z '**/go.mod' | while IFS= read -r -d '' module; do
+            (cd "$(dirname "$module")" && go build -a ./...)
+          done
+      - name: Complete current-job full CodeQL analysis without provider uploads
+        if: steps.codeql_baseline.outputs.local_required == 'true'
+        uses: github/codeql-action/analyze@9b3254085494b55a0f7c4c2b3d2d52cc712ce370 # v4
+        with:
+          output: ${{ runner.temp }}/security/codeql-local
+          upload: never
+          upload-database: false
+          wait-for-processing: false
+      - name: Bind current-job full CodeQL results to the immutable candidate
+        if: steps.codeql_baseline.outputs.local_required == 'true'
+        run: python3 scripts/release/codeql_evidence.py finish --root . --artifact-manifest "$RUNNER_TEMP/candidate.json" --output "$RUNNER_TEMP/security/codeql-evidence" --sarif-directory "$RUNNER_TEMP/security/codeql-local" --action-config "$RUNNER_TEMP/config"
+      - name: Export completed full-baseline SAST evidence
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          # Stable release CI analyzes its explicit full source branch. Main
-          # is acceptable only if the latest full analysis is this exact SHA.
-          sonar_branch=main
-          if [[ "$GITHUB_REF" == refs/tags/v* ]]; then sonar_branch="$GITHUB_REF"; fi
-          python3 scripts/release/source_sast.py --sonar-public-project --output "$RUNNER_TEMP/security/source-sast" --assessment "$RUNNER_TEMP/security/source-sast.json" --revision "$GITHUB_SHA" --version "$VERSION" --candidate-id "run-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT" --artifact-manifest "$RUNNER_TEMP/candidate.json" --semgrep "$RUNNER_TEMP/security/current-semgrep/semgrep.sarif" --sonar-branch "$sonar_branch"
+          # The existing required CI job scans this exact dedicated LONG
+          # branch once. Never export a PR/new-code or historical SHORT view.
+          sonar_branch="release-ssdf-candidate-$GITHUB_SHA"
+          python3 scripts/release/source_sast.py --sonar-public-project --output "$RUNNER_TEMP/security/source-sast" --assessment "$RUNNER_TEMP/security/source-sast.json" --revision "$GITHUB_SHA" --version "$VERSION" --candidate-id "run-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT" --artifact-manifest "$RUNNER_TEMP/candidate.json" --semgrep "$RUNNER_TEMP/security/current-semgrep/semgrep.sarif" --sonar-branch "$sonar_branch" --codeql-evidence "$RUNNER_TEMP/security/codeql-evidence"
       - name: Await signed isolated candidate qualification
         env:
           GH_TOKEN: ${{ github.token }}

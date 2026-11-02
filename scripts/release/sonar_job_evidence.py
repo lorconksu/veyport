@@ -7,6 +7,7 @@ import shlex
 import time
 import urllib.error
 from source_sast import Sonar, PROJECT, save, verify_public_sonar
+from sonar_context import candidate_branch
 
 
 class CaptureFailure(ValueError):
@@ -36,6 +37,7 @@ class AttemptAPI(Sonar):
         # later endpoint failure. Endpoint names come only from this module.
         name = {"ce/task": "task", "qualitygates/project_status": "quality-gate",
                 "project_pull_requests/list": "pull-requests", "project_analyses/search": "analyses",
+                "project_branches/list": "branches",
                 "issues/search": "issues", "hotspots/search": "hotspots", "components/show": "project"}[endpoint]
         if "p" in params:
             name += "-page-" + str(params["p"])
@@ -83,6 +85,8 @@ def collect(report_task, context, revision, output, api=None, timeout=60, clock=
         identity = args["sonar.pullrequest.key"] if is_pr else args["sonar.branch.name"]
         if not re.fullmatch(r"[1-9][0-9]*" if is_pr else r"[A-Za-z0-9_./+@-]{1,240}", identity):
             raise CaptureFailure("analysis-context-invalid")
+        if not is_pr and identity not in ("main", candidate_branch(revision)):
+            raise CaptureFailure("full-branch-context-not-source-bound")
         result["scope"] = "pull-request-new-code" if is_pr else "full-branch"
         params = {"pullRequest" if is_pr else "branch": identity}
         stage = "task"
@@ -108,10 +112,14 @@ def collect(report_task, context, revision, output, api=None, timeout=60, clock=
                 if len(matches) != 1 or matches[0].get("commit", {}).get("sha") != revision:
                     raise CaptureFailure("pr-source-unavailable-or-superseded")
                 return matches[0]
+            branches = provider.get("project_branches/list", {"project": PROJECT})["branches"]
+            matches = [b for b in branches if b.get("name") == identity]
+            if len(matches) != 1 or matches[0].get("type") != "LONG" or matches[0].get("isMain") is not (identity == "main"):
+                raise CaptureFailure("branch-not-long-lived-or-source-mismatched")
             rows = provider.get("project_analyses/search", {"project": PROJECT, "branch": identity, "ps": 1, "p": 1})["analyses"]
             if len(rows) != 1 or rows[0].get("revision") != revision or rows[0].get("key") != analysis_id:
                 raise CaptureFailure("branch-analysis-unavailable-or-superseded")
-            return rows[0]
+            return {"branch": matches[0], "analysis": rows[0]}
 
         # A successful CE task can precede convergence of mutable export views.
         # Retry only read-only retrieval, preserving the same task/analysis and

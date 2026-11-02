@@ -1,6 +1,6 @@
 # SSDF-aligned security pipeline implementation plan
 
-Status (2026-10-31): the implementation and personal collector prototype are in draft PR #115. Local validation includes 101 release-helper and 71 collector tests. The isolated native rehearsal at `0962b374` passed 18 cases with `release_qualified:false`; normal staging remains v2.0.57 and disposable candidates were removed. CI on that revision passed functional tests and scanner quality gates but repeatedly failed Sonar issues export with HTTP 400. The follow-up explicitly separates authenticated task verification from verified public-project report reads, with unchanged source-identity checks and no broader credential. Final commit CI and independent code/security reviews are recorded on PR #115. No merge, release, risk acceptance, scanner retirement or Dependency-Track cutover has occurred. Collector and candidate timers remain disabled pending scoped credentials and rollout verification. DAST remains deferred. CodeQL diagnostic archival and Snyk status/reference snapshots export existing results without adding scans; Snyk snapshots are not full SCM reports.
+Status (2026-11-02): the implementation and personal collector prototype are in draft PR #115. Trusted rehearsal `41403473899` on `2debc2a` passed CI, exact-artifact scans, Snyk source/image assessment execution, and the Semgrep step. Eighteen native standard cases passed with a verified public signed-candidate receipt; the source SAST assessment still failed because CodeQL and Sonar supplied main-only baselines for this unmerged PR. The 51-record archive contained 31 signed records and 210 verified payloads; the final partial signed receipt was correctly rejected by the release gate. Staging v2.0.57 remains unchanged, temporary candidate credentials/configuration were removed, and timers remain disabled. This rehearsal does not qualify publication. No merge, release, risk acceptance, scanner retirement or Dependency-Track cutover has occurred. SCA still has two high and three medium frontend findings, Semgrep's seven medium findings remain, and first-seen history, full owner baseline coverage and finding dispositions are incomplete. Private reports remain private; do not publish finding paths. DAST remains deferred. Current-candidate source-baseline changes are under implementation; their validation is pending.
 
 ## Objective and agreed decisions
 
@@ -46,6 +46,17 @@ The existing pipeline uses `.github/workflows/ci.yml`, `release.yml`, `delivery.
 Measured CI run [41001983872](https://github.com/lorconksu/veyport/actions/runs/41001983872) completed in 38m33s. Its longest server-test shard took 22m21s, followed by E2E at 15m36s; Sonar took 1m17s and Semgrep 51s and finished before E2E. This is a single baseline, not a percentile or performance guarantee. Removing Semgrep alone would not have shortened that run.
 
 Measure comparable PR and release runs separately, including queue time, scan startup, candidate deployment, polling, evidence persistence, and publication waits. Report the median and tail when sufficient samples exist. Do not skip necessary checks to meet a timing target.
+
+The current GitHub Actions token can read code-scanning security events but
+cannot read `code-scanning/default-setup` (HTTP 403; GitHub requires
+`Administration:read` to verify configured languages and query suite). Do not
+broaden credentials for this check. Since full default configuration cannot be
+verified, the trusted delivery workflow must run a fresh full CodeQL scan even
+for main; no exact-main reuse or runtime savings are currently claimed. A
+future reuse path requires authenticated configuration metadata, exact-SHA
+fresh full results for all five languages and matching default analysis
+identity. Measure the additional scan runtime. Preserve failed/partial reuse
+exports for diagnosis while failing qualification closed.
 
 Review duplicate CI execution across merge/tag workflows. Reuse evidence only when its exact revision, workflow trust, configuration, scanner/version, required job set, artifact identity, and documented freshness requirements match. Account for vulnerability-intelligence updates even when source is unchanged. Version-dependent binary and candidate checks must validate the final release candidate. Do not reuse results solely because a branch or mutable tag has a green badge. Record the source scan identity and reuse decision in every consuming run.
 
@@ -195,7 +206,7 @@ This is a contribution to an SSDF assessment, not a claim of certification or fu
 
 ## Implementation tasks and sequencing
 
-Task tiers follow the owner's provider policy. On 2026-10-31 the official OpenAI model catalog (https://developers.openai.com/api/docs/models), local model cache, and callable collaboration runtime agree on `gpt-6.1-sol` for complex work and `gpt-6-luna` for standard work. Complex implementation was dispatched to three `gpt-6.1-sol` agents with supported `high` reasoning: collector/archive, release enforcement, and scanner/native coverage. Standard operator documentation used `gpt-6-luna` with `medium` reasoning. These choices do not change the owner's main conversation model.
+Task tiers follow the owner's provider policy. On 2026-11-02, the official [OpenAI model catalog](https://developers.openai.com/api/docs/models), [latest model guide](https://developers.openai.com/api/guides/latest-model), and active callable model routing were checked. Complex Sonar/workflow and CodeQL work was routed to `gpt-6.1-sol` with `high` reasoning; standard documentation work was routed to `gpt-6-luna` with `medium` reasoning. This routing does not change the owner's main conversation model.
 
 | ID | Tier | Task | Depends on | Exit evidence | Current status |
 | --- | --- | --- | --- | --- | --- |
@@ -209,11 +220,11 @@ Task tiers follow the owner's provider policy. On 2026-10-31 the official OpenAI
 | P08 | complex | Fill verified gRPC/SSH security-test gaps | P01, P04 | Candidate-bound protocol evidence and negative tests | 18-case native harness passed in isolated rehearsal; complete release-bound evidence pending |
 | P09 | complex | Implement exception schema, verified approval binding and evaluator | P03 | Tampering/expiry/scope/bypass regression checks | Implementation and local tests passed; final CI is tracked on PR #115, no operational approval or release decision |
 | P10 | standard | Document risk policy/template, maintainer and operator procedures | P09 | Public-safe docs and usable approval workflow | Plan and operator status documented; operational adoption and evidence-backed procedure remain pending |
-| P11 | complex | Integrate gated promotion, personal NAS archival, per-run reconciliation and shared-evidence retention | P03, P06, P08, P09; P07 only in the later DAST phase | No-publication failure tests, complete run manifests, safe deduplication/cleanup and identical tested/published digests | Prototype implementation and native rehearsal passed; collection token, deletion credential, final CI validation and end-to-end release evidence pending; gates off |
+| P11 | complex | Integrate gated promotion, personal NAS archival, per-run reconciliation and shared-evidence retention | P03, P06, P08, P09; P07 only in the later DAST phase | No-publication failure tests, complete run manifests, safe deduplication/cleanup and identical tested/published digests | Trusted rehearsal passed 18 native standard cases and rejected a final partial signed receipt; candidate cleaned up, collection token installed and cleanup credential absent; full source baseline, final change validation and end-to-end release evidence pending; gates off |
 | P12 | complex | Apply supported scanner consolidation and required-check migration | P02, P11 | No uncovered checks; branch protection and constitution synchronized | Deferred pending P02/P11 evidence; current scanners remain active |
 | P13 | standard | Publish SSDF evidence mapping and measure PR/release completion | P10-P12 | Comparison against baseline, retained readable evidence | Mapping documented; post-change completion comparison awaits an activated, qualified pipeline |
-| P14 | complex | Code review, then security review; resolve findings and re-qualify | P11-P13 | Reviewed exact final head with no unresolved blocking findings | Independent code and security reviews recorded privately and summarized on PR #115; complete credentialed release qualification pending |
-| P15 | complex | Candidate rehearsal, rollback drill and final monitoring | P14 | Complete passing run, intentional blocking cases, verified rollback | 18-case isolated native rehearsal passed and candidate cleaned; full publication/staging promotion and rollback qualification pending |
+| P14 | complex | Code review, then security review; resolve findings and re-qualify | P11-P13 | Reviewed exact final head with no unresolved blocking findings | Independent code review found no actionable findings; security re-review resolved the CodeQL debug-artifact bypass (SEC-01), with no remaining actionable findings; live CI pending |
+| P15 | complex | Candidate rehearsal, rollback drill and final monitoring | P14 | Complete passing run, intentional blocking cases, verified rollback | Trusted rehearsal `41403473899` passed 18 native standard cases; source SAST baseline failed closed, publication/staging promotion and rollback qualification pending |
 
 Keep the work in PR #115 unmerged until reviewed. PR #112 is the earlier paused scanner proposal; do not merge or activate it. Reconcile reusable ideas deliberately rather than stacking unreviewed workflow changes.
 

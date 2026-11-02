@@ -34,6 +34,8 @@ class Provider:
         self.pr = {"key": "115", "commit": {"sha": REVISION}, "analysisDate": "2026-10-31T00:00:00Z"}
         self.gate = "OK"
         self.component = {"key": capture.PROJECT, "visibility": "public"}
+        self.branch = {"name": "main", "type": "LONG", "isMain": True, "commit": {"sha": REVISION}}
+        self.analysis = {"key": "analysis-1", "revision": REVISION}
 
     def get(self, endpoint, params):
         self.calls.append((endpoint, params))
@@ -50,7 +52,9 @@ class Provider:
         if endpoint == "project_pull_requests/list":
             return {"pullRequests": [copy.deepcopy(self.pr)]}
         if endpoint == "project_analyses/search":
-            return {"analyses": [{"key": "analysis-1", "revision": REVISION}]}
+            return {"analyses": [copy.deepcopy(self.analysis)]}
+        if endpoint == "project_branches/list":
+            return {"branches": [copy.deepcopy(self.branch)]}
         key = {"issues/search": "issues", "hotspots/search": "hotspots"}[endpoint]
         return {"paging": {"total": 0}, key: []}
 
@@ -237,6 +241,50 @@ class SonarJobEvidenceTests(unittest.TestCase):
         result = self.collect("-Dsonar.branch.name=main")
         self.assertEqual(result["status"], "completed")
         self.assertEqual(result["scope"], "full-branch")
+        self.assertEqual(sum(endpoint == "project_branches/list" for endpoint, _ in self.provider.calls), 2)
+
+    def test_candidate_full_branch_requires_long_nonmain_exact_source(self):
+        self.provider.task["task"].pop("pullRequest")
+        branch = capture.candidate_branch(REVISION)
+        self.provider.branch.update(name=branch, isMain=False)
+        self.provider.branch.pop("commit")
+        result = self.collect("-Dsonar.branch.name=" + branch)
+        self.assertEqual(result["status"], "completed")
+        for index, change in enumerate(({"type": "SHORT"}, {"isMain": True})):
+            self.provider.branch.update(name=branch, type="LONG", isMain=False, commit={"sha": REVISION})
+            self.provider.branch.update(change)
+            result = capture.collect(self.task_file, "-Dsonar.branch.name=" + branch, REVISION,
+                                     self.root / ("invalid-" + str(index)), self.provider,
+                                     timeout=4, clock=self.clock.now, pause=self.clock.pause)
+            self.assertEqual(result["status"], "partial")
+            self.assertEqual(result["attempts"][0]["reason"], "branch-not-long-lived-or-source-mismatched")
+
+    def test_long_candidate_branch_still_requires_exact_analysis_revision(self):
+        self.provider.task["task"].pop("pullRequest")
+        branch = capture.candidate_branch(REVISION)
+        self.provider.branch.update(name=branch, isMain=False)
+        self.provider.analysis["revision"] = "b" * 40
+        result = self.collect("-Dsonar.branch.name=" + branch)
+        self.assertEqual(result["status"], "partial")
+        self.assertEqual(result["attempts"][0]["reason"], "branch-analysis-unavailable-or-superseded")
+
+    def test_candidate_branch_type_change_during_export_is_refused(self):
+        self.provider.task["task"].pop("pullRequest")
+        branch = capture.candidate_branch(REVISION)
+        self.provider.branch.update(name=branch, isMain=False)
+        def hook(endpoint, _params):
+            if endpoint == "hotspots/search":
+                self.provider.branch["type"] = "SHORT"
+        self.provider.hook = hook
+        result = self.collect("-Dsonar.branch.name=" + branch)
+        self.assertEqual(result["status"], "partial")
+        self.assertEqual(result["attempts"][0]["stage"], "snapshot-after")
+        self.assertFalse((self.root / "output/context.json").exists())
+
+    def test_unbound_historical_tag_branch_refused_before_provider_requests(self):
+        result = self.collect("-Dsonar.branch.name=refs/tags/v2.0.57")
+        self.assertEqual(result["failure_reason"], "full-branch-context-not-source-bound")
+        self.assertEqual(self.provider.calls, [])
 
     def test_response_arriving_after_deadline_is_retained_but_not_completed(self):
         def hook(endpoint, _params):

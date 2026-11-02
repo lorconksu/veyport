@@ -15,13 +15,67 @@ prototype rollout state and operator blockers.
 | Trusted release source baseline | One fresh Snyk CLI test per explicit manifest, including development dependencies | Full baseline is checked even when no dependency changed |
 | Exact release images | One Snyk Container test per selected native OCI manifest | Grype/Syft remain until replacement and failure behavior are fully qualified |
 | Every public Go binary | Existing exact-binary `govulncheck`, binary inventory and malware checks | Image OS inventory cannot substitute for binary symbol reachability or malware detection |
-| Source SAST | Existing SonarQube, CodeQL and Semgrep | Snyk Code comparison stays nonblocking; no additional required Code gate |
+| Source SAST | Existing SonarQube, CodeQL and Semgrep, with full exact-source baselines required for trusted release qualification | Snyk Code comparison stays nonblocking; no additional required Code gate |
 | gRPC/SSH source fixtures | Existing tests; export their existing Go JSON execution | Deployed candidate qualification is an additional boundary, requiring exact candidate bytes |
 
 The release CLI does not call `monitor`, `report`, or import a project. Repeating
 release scans after PR feedback is justified by immutable artifact identity and
 fresh vulnerability intelligence. Exporting reports never starts another scan.
 Do not add monitored projects for individual CI runs.
+
+## Full source baseline for trusted candidates
+
+Trusted rehearsal `41403473899` exposed a baseline gap: its unmerged PR source
+received only main-revision CodeQL and Sonar results, so the full source SAST
+assessment failed closed. PR new-code checks remain useful feedback, but do not
+establish the complete finding baseline for a candidate SHA.
+
+Sonar's candidate-baseline implementation uses a dedicated long-lived branch
+named `release-ssdf-candidate-<40-character-source-SHA>` for trusted prototype
+and stable-release scans. The trusted staging dispatch verifies its caller,
+prototype context, and exact open same-repository PR. Stable tags must match
+their release metadata and main ancestry. A preflight checks the fixed public
+project's actual long-lived branch pattern and any existing dedicated branch's
+long-lived/non-main type. Exact source identity is verified through the
+successful analysis task and provider analysis record; optional branch commit
+metadata is not required. The scan does not overwrite `main`, and ordinary PR
+analysis remains new-code analysis. Existing stable tag branches are short-lived
+and cannot provide a full baseline. The focused Sonar tests and actionlint
+checks passed, and a read-only preflight confirmed the current SHA can use the
+dedicated branch.
+Overall candidate validation remains pending.
+
+CodeQL reuse is allowed only for a fresh (24-hour) full main analysis matching
+the exact source SHA, GitHub default analysis identity/configuration, and all
+five required languages, without diagnostics or reduced-result markers. The
+current workflow token has `security-events:read`, but GitHub's
+`code-scanning/default-setup` endpoint returned 403 and requires
+`Administration:read` to verify the configured languages and query suite. We
+will not broaden the credential for this check. Since the workflow cannot
+verify that prerequisite, it must perform a fresh full CodeQL scan on every
+delivery run, including main; no current main-reuse or runtime reduction is
+claimed. The trusted same-job scan validates its configuration and unmodified
+SARIF against the exact candidate and artifact manifest, without uploading
+duplicate GitHub results or creating a second provider project. Reuse remains
+possible if that provider metadata is authenticated in a future approved
+configuration. The extra scan is justified by inability to verify full provider
+configuration, and its runtime impact still needs measurement. The CodeQL
+prepare step rejects debug-upload environments before initialization; local
+initialization sets `debug: false`, and result validation requires that setting.
+Partial failed reuse exports are retained diagnostically and still fail
+qualification. Missing, stale, partial or main-only results block qualification;
+no gate is weakened.
+The release-helper suite passes 124 tests, the focused reviewer suite passes
+59, and a local CodeQL CLI 2.27.3 fixture scan passed. Independent code review
+found no actionable findings. Security re-review resolved the debug-artifact
+bypass (SEC-01) with no remaining actionable findings. Live CI remains pending.
+This is a full baseline within configured extraction
+scope, not a claim that every test file is
+analyzed. GitHub's managed Go extractor excludes `*_test.go` by default unless
+`CODEQL_EXTRACTOR_GO_OPTION_EXTRACT_TESTS=true`; this change does not expand that
+scope. See GitHub's [Go extractor options](https://docs.github.com/en/code-security/reference/code-scanning/codeql/build-options-for-compiled-languages#extractor-options-for-go).
+Do not infer that the current candidate change passed review or live CI until
+those validations complete.
 
 The initial read-only 2026-10-31 inventory found ten GitHub-origin projects: five
 Go modules, frontend npm, Python requirements, two Dockerfiles and one Code

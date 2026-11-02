@@ -45,6 +45,8 @@
     "scripts/release/authorize_publication.sh",
     "scripts/release/qualify_sca.sh",
     "scripts/release/source_sast.py",
+    "scripts/release/codeql_evidence.py",
+    "scripts/release/sonar_context.py",
     "scripts/release/public_summary.py",
     "scripts/release/publish_delivery.sh",
     "scripts/release/scan_delivery.sh",

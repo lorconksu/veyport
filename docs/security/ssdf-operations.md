@@ -9,12 +9,17 @@ for configuration and procedures. Hostnames, addresses, mount paths and private
 evidence locations intentionally remain in operator configuration.
 
 The implementation remains a draft prototype. Independent code and security
-review results and the final commit's CI status are tracked on
-[PR #115](https://github.com/lorconksu/veyport/pull/115). The current local
-validation includes 101 release-helper and 71 collector tests. A manual isolated
-native rehearsal at `0962b374` passed all 18 cases; it explicitly reported
-`release_qualified:false`. These results do not establish credentialed automatic
-collection or a complete publication rehearsal.
+review results and final CI status are tracked on
+[PR #115](https://github.com/lorconksu/veyport/pull/115). Trusted rehearsal
+`41403473899` on `2debc2a` passed CI, exact-artifact scans, Snyk source/image
+assessment execution and the Semgrep step. Eighteen native standard cases
+passed with a verified public signed-candidate receipt. The source SAST
+assessment failed because this unmerged PR received main-only CodeQL and Sonar
+baselines. The archive contained 51 records (31 signed records and 210 verified
+payloads); the release gate rejected the final partial signed receipt. The
+rehearsal did not publish or promote a candidate. Staging remains v2.0.57,
+temporary candidate credentials/configuration were removed, and timers remain
+OFF. Current-candidate full-baseline changes are still awaiting validation.
 
 ## Established prototype state
 
@@ -28,26 +33,40 @@ collection or a complete publication rehearsal.
   WORM protection. NAS expiration behavior can retain expired data for up to
   seven additional days.
 - The candidate coordinator's firewall egress restrictions and host isolation
-  were tested. Its 18-case harness passed against the released baseline locally
-  and against revision `0962b374` on isolated staging, exercising the installed
-  coordinator and exact built native artifacts. Disposable candidates were
-  cleaned up. This is a manual native rehearsal, not full release qualification.
-  Normal staging remains on v2.0.57 and was not changed by the prototype.
+  were tested. Its 18-case standard harness passed in the trusted rehearsal
+  against exact built native artifacts with a verified public signed-candidate
+  receipt. The final partial signed receipt was rejected. Disposable candidates
+  were cleaned up. This is not full release qualification. Normal staging
+  remains on v2.0.57 and was not changed by the prototype.
 - Local validation passed 101 release-helper, 71 collector, 16 coordinator,
   5 scanner, 6 harness, and 3 crypto tests. The CodeQL provider exporter was
   exercised against two existing analyses across five language categories;
   those reports were encrypted on the NAS and read back successfully. Snyk
   snapshots contain GitHub status metadata and safe references, not full SCM
   scan reports. Neither export starts another scan or grants release authority.
-- CI runs 41182748494 and 41185877716 passed functional tests and scanner
-  quality gates but failed Sonar report export. The latter recorded repeated
-  HTTP 400 responses from the issues endpoint; a transient cause was not
-  established. The corrected exporter deliberately separates authenticated CE
-  task verification from anonymous reads of the verified public project's
-  reports. The same analysis was successfully replayed through this split.
-  It preserves exact source checks, partial output and all finding states;
-  permanent request/authentication errors fail immediately. See
-  [scanner access contracts](scanner-coverage.md) for the evidence and limits.
+- The earlier Sonar issue-export HTTP 400 failure was resolved for the trusted
+  rehearsal, and authenticated Snyk source/image assessments executed. Source
+  SAST remains incomplete: the unmerged candidate received main-only CodeQL and
+  Sonar baselines, so the assessment failed closed. The correction
+  uses a dedicated full Sonar branch named
+  `release-ssdf-candidate-<40-character-source-SHA>` for trusted prototype and
+  stable-release scans, without overwriting `main`; ordinary PR analysis stays
+  unchanged. Existing stable tag branches are short-lived and cannot count as
+  full baselines. CodeQL reuse requires verifying GitHub's default analysis
+  languages and query suite, but the current `security-events:read` workflow
+  token receives HTTP 403 from that endpoint, which requires
+  `Administration:read`. Credentials will not be broadened; therefore each
+  delivery run, including main, must perform a fresh full CodeQL scan. Reuse is
+  only a future capability if metadata can be authenticated under an approved
+  configuration. Measure the added runtime. Partial failed reuse exports are
+  retained diagnostically while qualification fails closed. Implementation
+  release-helper suite passes 124 tests and the focused reviewer suite passes
+  59; live CI remains pending. Independent code review found no actionable
+  findings. Security re-review resolved the CodeQL debug-artifact bypass
+  (SEC-01), with no remaining actionable findings. The implementation rejects
+  debug-upload environments before initialization and requires debug output to
+  remain disabled. See
+  [scanner access contracts](scanner-coverage.md) for scope and limits.
 - Collector and candidate timers are OFF. No release gate is active, and no
   publication, merge, approval, scanner retirement or Dependency-Track cutover
   has occurred.
@@ -60,9 +79,9 @@ collection or a complete publication rehearsal.
 
 ## Scanner and release blockers
 
-The SCA baseline contains two unresolved high frontend advisories. The scan
-records also lack upstream `first_seen` values needed to support 30-day medium
-and 90-day low tracking. First-seen history and a complete Snyk SCM export,
+The SCA baseline contains two unresolved high and three medium frontend
+advisories. The scan records also lack upstream `first_seen` values needed to
+support 30-day medium and 90-day low tracking. First-seen history and a complete Snyk SCM export,
 owner baseline coverage, and risk disposition remain pending. These gaps block
 publication. Python cryptography was updated to 50.0.0 and its fresh scan was
 clean, but this does not substitute for complete final-revision scans. See

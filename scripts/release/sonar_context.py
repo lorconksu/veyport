@@ -9,6 +9,13 @@ import urllib.request
 
 import metadata
 
+PROJECT = "lorconksu_veyport"
+
+
+class NoRedirect(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        return None
+
 
 def require(condition, message):
     if not condition:
@@ -19,6 +26,50 @@ def safe_branch(value):
     require(isinstance(value, str) and re.fullmatch(r"[A-Za-z0-9_./+@-]{1,240}", value),
             "Unsafe Sonar branch metadata")
     return value
+
+
+def candidate_branch(revision):
+    require(re.fullmatch(r"[0-9a-f]{40}", revision or ""), "Exact candidate revision required")
+    return "release-ssdf-candidate-" + revision
+
+
+def public_sonar_api(endpoint, params):
+    # Fixed public project reads only. Analysis credentials never enter this
+    # preflight, and no project or settings mutation is permitted.
+    require((endpoint, tuple(sorted(params))) in (
+        ("components/show", ("component",)),
+        ("settings/values", ("component", "keys")),
+        ("project_branches/list", ("project",)),
+        ("project_analyses/search", ("branch", "p", "project", "ps"))), "Unsupported Sonar preflight")
+    require(params.get("component", params.get("project")) == PROJECT, "Unexpected Sonar project")
+    require(endpoint != "settings/values" or params["keys"] == "sonar.branch.longLivedBranches.regex",
+            "Unsupported Sonar settings read")
+    request = urllib.request.Request("https://sonarcloud.io/api/" + endpoint + "?" + urllib.parse.urlencode(params),
+                                     headers={"Accept": "application/json"})
+    with urllib.request.build_opener(NoRedirect()).open(request, timeout=20) as response:
+        raw = response.read((16 << 20) + 1)
+    require(len(raw) <= 16 << 20, "Sonar preflight exceeds evidence bound")
+    return json.loads(raw)
+
+
+def full_branch_context(revision, fetch):
+    branch = candidate_branch(revision)
+    component = fetch("components/show", {"component": PROJECT})["component"]
+    require(component.get("key") == PROJECT and component.get("visibility") == "public",
+            "Candidate analysis requires the verified public project")
+    settings = fetch("settings/values", {"component": PROJECT, "keys": "sonar.branch.longLivedBranches.regex"})["settings"]
+    patterns = [s["value"] for s in settings if s.get("key") == "sonar.branch.longLivedBranches.regex"]
+    require(len(patterns) == 1 and isinstance(patterns[0], str) and len(patterns[0]) <= 1024 and
+            re.fullmatch(patterns[0], branch), "Candidate branch must match actual long-lived pattern")
+    branches = fetch("project_branches/list", {"project": PROJECT})["branches"]
+    matches = [b for b in branches if b.get("name") == branch]
+    require(len(matches) <= 1 and all(b.get("type") == "LONG" and b.get("isMain") is False for b in matches),
+            "Existing candidate branch is not a full exact-source branch")
+    if matches:
+        rows = fetch("project_analyses/search", {"project": PROJECT, "branch": branch, "ps": 1, "p": 1})["analyses"]
+        require(len(rows) == 1 and rows[0].get("revision") == revision,
+                "Existing candidate analysis belongs to another source")
+    return "-Dsonar.branch.name=" + branch
 
 
 def pr_context(pr, repository, revision, branch=None, same_repository=False):
@@ -91,12 +142,24 @@ def stable_ref(ref, revision):
         return False
 
 
-def resolve(event_name, event, repository, ref, revision, require_pr, fetch=public_api, belongs_to_main=main_source):
+def resolve(event_name, event, repository, ref, revision, require_pr, fetch=public_api, belongs_to_main=main_source,
+            full_branch=False, sonar_fetch=public_sonar_api, workflow_ref=None):
     require(re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", repository or "") and
             re.fullmatch(r"[0-9a-f]{40}", revision or "") and
             event["repository"]["full_name"] == repository and event["repository"]["private"] is False,
             "Exact public repository/source context required")
     require(event_name in ("pull_request", "push", "workflow_dispatch", "workflow_call"), "Unsupported Sonar event context")
+    if full_branch:
+        require(require_pr and event_name == "workflow_dispatch" and
+                workflow_ref == repository + "/.github/workflows/staging.yml@" + ref and
+                event.get("inputs", {}).get("prototype") in (True, "true"),
+                "Full candidate baseline requires the trusted staging prototype caller")
+        require((ref.startswith("refs/heads/") and ref != "refs/heads/main") or
+                (ref.startswith("refs/tags/") and metadata.PROTOTYPE_TAG.fullmatch(ref.removeprefix("refs/tags/"))),
+                "Full candidate baseline requires an unmerged candidate source")
+        branch = safe_branch(ref.removeprefix("refs/heads/")) if ref.startswith("refs/heads/") else None
+        open_source_pr(repository, revision, branch, fetch)
+        return full_branch_context(revision, sonar_fetch)
     if event_name == "pull_request":
         return pr_context(event["pull_request"], repository, revision)
     if ref == "refs/heads/main":
@@ -104,9 +167,9 @@ def resolve(event_name, event, repository, ref, revision, require_pr, fetch=publ
         return "-Dsonar.branch.name=main"
     if stable_ref(ref, revision):
         require(not require_pr and belongs_to_main(ref, revision), "Prototype/foreign source cannot be analyzed as a stable tag")
-        # Releases historically have separate Sonar branches. An old release
-        # must not replace the current main baseline used for PR comparisons.
-        return "-Dsonar.branch.name=" + ref
+        # Historical tag-named branches can be SHORT. Use a dedicated LONG
+        # exact-source branch without replacing main or relabeling that history.
+        return full_branch_context(revision, sonar_fetch)
     if ref.startswith("refs/heads/"):
         return open_source_pr(repository, revision, safe_branch(ref.removeprefix("refs/heads/")), fetch)
     if ref.startswith("refs/tags/") and metadata.PROTOTYPE_TAG.fullmatch(ref.removeprefix("refs/tags/")):
@@ -121,9 +184,12 @@ def main():
             "Checked-out Sonar source differs from expected revision")
     required = os.environ.get("SONAR_PULL_REQUEST_REQUIRED", "")
     require(required in ("", "false", "true"), "Invalid Sonar prototype context requirement")
+    full_branch = os.environ.get("SONAR_FULL_BRANCH_REQUIRED", "")
+    require(full_branch in ("", "false", "true"), "Invalid Sonar full baseline requirement")
     event = json.loads(Path(os.environ["GITHUB_EVENT_PATH"]).read_text())
     args = resolve(os.environ["GITHUB_EVENT_NAME"], event, os.environ["GITHUB_REPOSITORY"],
-                   os.environ["GITHUB_REF"], revision, required == "true")
+                   os.environ["GITHUB_REF"], revision, required == "true", full_branch=full_branch == "true",
+                   workflow_ref=os.environ.get("GITHUB_WORKFLOW_REF"))
     with Path(os.environ["GITHUB_OUTPUT"]).open("a") as output:
         output.write("args=" + args + "\n")
     print("Exact source Sonar PR/branch context verified")

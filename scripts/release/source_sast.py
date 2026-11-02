@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Export completed exact-revision SAST evidence without starting another scan."""
+"""Export full exact-revision SAST evidence from trusted completed scans."""
 import argparse
 import datetime as dt
 import os
@@ -11,6 +11,7 @@ import urllib.request
 from risk_acceptance import GitHub, REPOSITORY, canonical, now, sha, strict_json, load_record, verify
 
 CODEQL_CATEGORIES = {"/language:" + n for n in ("go", "javascript-typescript", "python", "ruby", "actions")}
+CODEQL_DEFAULT_KEY = "dynamic/github-code-scanning/codeql:analyze"
 MAX_BYTES = 16 << 20
 PROJECT = "lorconksu_veyport"
 
@@ -57,16 +58,20 @@ def severity(rule, result):
     return {"error": "high", "warning": "medium", "note": "low", "none": "info"}[result.get("level", "warning")]
 
 
-def sarif_findings(raw, scanner, revision, version, alerts=()):
-    if raw.get("version") != "2.1.0" or not isinstance(raw.get("runs"), list) or not raw["runs"]:
+def sarif_findings(raw, scanner, revision, version, alerts=(), local_codeql=False):
+    if not isinstance(raw, dict) or raw.get("version") != "2.1.0" or not isinstance(raw.get("runs"), list) or not raw["runs"]:
         raise ValueError("complete SARIF runs required")
     findings = []
     alert_map = {a["number"]: a for a in alerts}
     for run in raw["runs"]:
+        if not isinstance(run, dict) or not isinstance(run.get("tool"), dict) or not isinstance(run["tool"].get("driver"), dict):
+            raise ValueError("SARIF producer metadata missing")
         driver = run.get("tool", {}).get("driver", {})
         if scanner == "codeql":
-            if driver.get("name") != "CodeQL" or not any(p.get("revisionId") == revision and p.get("repositoryUri", "").removesuffix(".git") == "https://github.com/" + REPOSITORY for p in run.get("versionControlProvenance", [])):
+            provenance = run.get("versionControlProvenance", [])
+            if driver.get("name") != "CodeQL" or (not provenance and not local_codeql) or any(p.get("revisionId") != revision or p.get("repositoryUri", "").removesuffix(".git") != "https://github.com/" + REPOSITORY for p in provenance):
                 raise ValueError("SARIF source identity mismatch")
+            validate_codeql_run(run, local=local_codeql)
         elif driver.get("name", "").lower() != "semgrep oss":
             if driver.get("name", "").lower() != "semgrep":
                 raise ValueError("unexpected Semgrep producer")
@@ -140,7 +145,7 @@ class Sonar:
         if self.public_project and endpoint != "ce/task":
             selectors = {"components/show": "component", "project_pull_requests/list": "project",
                          "project_analyses/search": "project", "issues/search": "componentKeys",
-                         "hotspots/search": "projectKey"}
+                         "hotspots/search": "projectKey", "project_branches/list": "project"}
             if endpoint == "qualitygates/project_status":
                 if set(params) != {"analysisId"} or not re.fullmatch(r"[A-Za-z0-9_-]{1,128}", params["analysisId"]):
                     raise ValueError("Sonar exact analysis identity required")
@@ -191,11 +196,50 @@ def verify_public_sonar(api, root, name):
         raise ValueError("Sonar public reader requires verified public project visibility")
 
 
+def validate_codeql_run(run, local=False):
+    """Reject reduced analyses and incomplete execution, including zero-result runs."""
+    properties = run.get("properties", {})
+    if not isinstance(properties, dict) or not isinstance(run.get("tool", {}).get("extensions", []), list):
+        raise ValueError("CodeQL configuration metadata malformed")
+    components = [run.get("tool", {}).get("driver", {})] + run.get("tool", {}).get("extensions", [])
+    if any(not isinstance(component, dict) for component in components):
+        raise ValueError("CodeQL component metadata malformed")
+    if any(re.search(r"pr-diff-range|diff.?informed|incremental|overlay", component.get("name", ""), re.I) for component in components):
+        raise ValueError("CodeQL incremental query extension is not a full baseline")
+    for key, value in properties.items():
+        if re.search(r"incremental|diff.?informed|truncat|partial.?analysis|overlay", key, re.I) and value not in (None, False, "", "none", "full"):
+            raise ValueError("CodeQL full analysis required")
+    invocations = run.get("invocations", [])
+    if not isinstance(invocations, list) or any(not isinstance(i, dict) for i in invocations):
+        raise ValueError("CodeQL execution receipt malformed")
+    if local and not invocations:
+        raise ValueError("local CodeQL execution receipt required")
+    for invocation in invocations:
+        if invocation.get("executionSuccessful") is not True:
+            raise ValueError("CodeQL execution incomplete")
+        for key in ("toolExecutionNotifications", "toolConfigurationNotifications"):
+            if any(n.get("level", "warning") in ("warning", "error") for n in invocation.get(key, [])):
+                raise ValueError("CodeQL diagnostic requires review")
+    if any(result.get("baselineState") in ("new", "updated", "absent") for result in run.get("results", [])):
+        raise ValueError("CodeQL differential results are not a full baseline")
+    if local and properties.get("codeqlConfigSummary") != {"disableDefaultQueries": False, "queries": [{"type": "builtinSuite", "uses": "security-extended"}]}:
+        raise ValueError("known full CodeQL configuration receipt required")
+
+
+def default_codeql_configuration(api):
+    config = api.get("code-scanning/default-setup")
+    languages = set(config.get("languages", []))
+    if config.get("state") != "configured" or config.get("query_suite") not in ("default", "extended") or not {c.removeprefix("/language:") for c in CODEQL_CATEGORIES} <= languages or date(config.get("updated_at")) is None:
+        raise ValueError("known complete default CodeQL configuration required")
+    return config
+
+
 def export_codeql(api, root, revision, version):
+    configuration = default_codeql_configuration(api)
     analyses = api.pages("code-scanning/analyses?tool_name=CodeQL&ref=refs%2Fheads%2Fmain")
     selected = {}
     for item in analyses:
-        if item.get("commit_sha") == revision and item.get("category") in CODEQL_CATEGORIES:
+        if item.get("commit_sha") == revision and item.get("category") in CODEQL_CATEGORIES and item.get("ref") == "refs/heads/main" and item.get("analysis_key") == CODEQL_DEFAULT_KEY:
             selected.setdefault(item["category"], item)
     if set(selected) != CODEQL_CATEGORIES:
         raise ValueError("all exact-main-revision CodeQL languages required")
@@ -205,22 +249,36 @@ def export_codeql(api, root, revision, version):
     findings = []
     for index, item in enumerate(selected.values()):
         fresh(item["created_at"])
-        if item.get("error") or item.get("warning") or item.get("tool", {}).get("name") != "CodeQL":
+        if item.get("error") or item.get("warning") or item.get("tool", {}).get("name") != "CodeQL" or date(configuration["updated_at"]) > date(item["created_at"]) or type(item.get("results_count")) is not int or item["results_count"] < 0:
             raise ValueError("incomplete CodeQL analysis")
         raw = api.sarif(item["id"])
         save(root, f"codeql-{index}.sarif", raw)
+        if any(r.get("automationDetails", {}).get("id", "").rstrip("/") != item["category"] or any(p.get("branch") != "refs/heads/main" for p in r.get("versionControlProvenance", [])) for r in raw.get("runs", [])):
+            raise ValueError("CodeQL category/ref mismatch")
         results = sarif_findings(raw, "codeql", revision, version, all_alerts)
         if len(results) != item.get("results_count"):
             raise ValueError("CodeQL full result count mismatch")
         findings.extend(results)
+    if default_codeql_configuration(api) != configuration:
+        raise ValueError("CodeQL configuration changed during export")
+    save(root, "codeql-default-setup.json", configuration)
     # Default-branch full analyses are reused only for this exact revision;
     # PR/new-code-only analyses are never accepted as the baseline.
     return findings
 
 
 def export_sonar(api, root, revision, version, branch, public_project=False):
+    if branch not in ("main", "release-ssdf-candidate-" + revision):
+        raise ValueError("full reviewed Sonar source branch required")
     if public_project:
         verify_public_sonar(api, root, "sonar-project-before.json")
+    def branch_identity():
+        value = api.get("project_branches/list", {"project": PROJECT})
+        matches = [b for b in value.get("branches", []) if b.get("name") == branch]
+        if len(matches) != 1 or matches[0].get("type") != "LONG" or matches[0].get("isMain") is not (branch == "main") or matches[0].get("commit", {}).get("sha", revision) != revision:
+            raise ValueError("Sonar full long-lived branch required")
+        return value, matches[0]
+    branches_before, branch_before = branch_identity()
     params = {"project": PROJECT, "branch": branch, "p": 1, "ps": 1}
     before = api.get("project_analyses/search", params)
     analyses = before.get("analyses", [])
@@ -233,11 +291,14 @@ def export_sonar(api, root, revision, version, branch, public_project=False):
     if gate.get("projectStatus", {}).get("status") != "OK":
         raise ValueError("Sonar quality gate did not pass")
     after = api.get("project_analyses/search", params)
-    if after != before:
+    branches_after, branch_after = branch_identity()
+    if after != before or branch_after != branch_before:
         raise ValueError("Sonar mutable branch changed during evidence export")
     if public_project:
         verify_public_sonar(api, root, "sonar-project-after.json")
     save(root, "sonar-analysis.json", before)
+    save(root, "sonar-branches-before.json", branches_before)
+    save(root, "sonar-branches-after.json", branches_after)
     save(root, "sonar-issues.json", issue_pages)
     save(root, "sonar-hotspots.json", hotspot_pages)
     save(root, "sonar-quality-gate.json", gate)
@@ -267,7 +328,7 @@ def suppression_inventory(root):
     configs, annotations = [], []
     for name in sorted(n for n in tracked if n):
         path = root / name
-        is_config = name in ("sonar-project.properties", ".github/workflows/ci.yml", ".semgrepignore", ".snyk") or name.startswith((".github/codeql/", ".semgrep/"))
+        is_config = name in ("sonar-project.properties", ".github/workflows/ci.yml", ".github/workflows/delivery.yml", ".github/workflows/staging.yml", ".github/workflows/release.yml", ".github/workflows/ssdf-rehearsal.yml", "scripts/release/codeql_evidence.py", "scripts/release/source_sast.py", "scripts/release/sonar_context.py", "scripts/release/sonar_job_evidence.py", ".semgrepignore", ".snyk") or name.startswith((".github/codeql/", ".semgrep/"))
         is_source = name.startswith(("hub/", "agent/", "cli/", "web/src/", "proto/")) and path.suffix in (".go", ".ts", ".tsx", ".js", ".py", ".rb") and not name.endswith(".pb.go")
         if not is_config and not is_source:
             continue
@@ -324,7 +385,11 @@ def collect(args, api=None, sonar=None):
                 save(root, "semgrep.sarif", raw)
                 findings = sarif_findings(raw, scanner, args.revision, args.version)
             elif scanner == "codeql":
-                findings = export_codeql(api or ExportAPI(), root, args.revision, args.version)
+                if getattr(args, "codeql_evidence", None):
+                    from codeql_evidence import consume
+                    findings = consume(args.codeql_evidence, args.artifact_manifest, getattr(args, "root", "."), root, args.revision, args.version, args.candidate_id)
+                else:
+                    findings = export_codeql(api or ExportAPI(), root, args.revision, args.version)
             else:
                 public_project = getattr(args, "sonar_public_project", False)
                 findings = export_sonar(sonar or Sonar(public_project=public_project), root, args.revision, args.version, args.sonar_branch, public_project)
@@ -359,6 +424,7 @@ def main():
     parser.add_argument("--root", default=".")
     parser.add_argument("--coverage-reviews", default="docs/security/coverage-reviews")
     parser.add_argument("--sonar-public-project", action="store_true", help="Read fixed-project public Sonar results anonymously after visibility verification")
+    parser.add_argument("--codeql-evidence", help="Same-job sealed full CodeQL evidence directory")
     args = parser.parse_args()
     try:
         if not re.fullmatch(r"[0-9a-f]{40}", args.revision) or not re.fullmatch(r"[A-Za-z0-9._-]{1,128}", args.candidate_id):

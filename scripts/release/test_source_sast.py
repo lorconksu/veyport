@@ -77,6 +77,8 @@ class SourceEvidenceTests(unittest.TestCase):
                     return {'component': {'key': sast.PROJECT, 'visibility': self.visibility}}
                 if endpoint == 'project_analyses/search':
                     return {'analyses': [{'revision': self.revision, 'key': 'analysis-1', 'date': now}]}
+                if endpoint == 'project_branches/list':
+                    return {'branches': [{'name': 'main', 'isMain': True, 'type': 'LONG'}]}
                 if endpoint == 'qualitygates/project_status':
                     return {'projectStatus': {'status': self.gate}}
                 key = {'issues/search': 'issues', 'hotspots/search': 'hotspots'}[endpoint]
@@ -137,6 +139,38 @@ class SourceEvidenceTests(unittest.TestCase):
             with self.assertRaises(ValueError):
                 sast.export_sonar(api, '.', REV, '2.0.58', 'main')
 
+    def test_candidate_sonar_requires_exact_deterministic_long_branch_and_stable_analysis(self):
+        branch = 'release-ssdf-candidate-' + REV
+        completed = dt.datetime.now(dt.timezone.utc).isoformat()
+        def fake(branch_type='LONG', commit=None, change=False):
+            api = sast.Sonar()
+            calls = {'analysis': 0}
+            def get(endpoint, _params):
+                if endpoint == 'project_branches/list':
+                    row = {'name': branch, 'type': branch_type, 'isMain': False}
+                    if commit is not None:
+                        row['commit'] = {'sha': commit}
+                    return {'branches': [row]}
+                if endpoint == 'project_analyses/search':
+                    calls['analysis'] += 1
+                    return {'analyses': [{'revision': REV, 'key': 'different' if change and calls['analysis'] > 1 else 'analysis-1', 'date': completed}]}
+                if endpoint == 'qualitygates/project_status':
+                    return {'projectStatus': {'status': 'OK'}}
+                raise AssertionError(endpoint)
+            api.get = get
+            api.pages = lambda *_: ([], [])
+            return api
+        with tempfile.TemporaryDirectory() as directory:
+            # commit is optional in Sonar's branch inventory; exact revision
+            # comes from the stable full branch analysis, independently.
+            self.assertEqual(sast.export_sonar(fake(), directory, REV, '2.0.58', branch), [])
+            for api in (fake(branch_type='SHORT'), fake(commit='b' * 40), fake(change=True)):
+                with self.assertRaises(ValueError):
+                    sast.export_sonar(api, directory, REV, '2.0.58', branch)
+            for untrusted in ('refs/tags/v2.0.58', 'PR-115', 'release-ssdf-candidate-' + 'b' * 40, 'arbitrary-long-branch'):
+                with self.assertRaises(ValueError):
+                    sast.export_sonar(fake(), directory, REV, '2.0.58', untrusted)
+
     def test_policy_inventory_binds_source_around_annotations(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -158,9 +192,24 @@ class SourceEvidenceTests(unittest.TestCase):
             with self.assertRaises(ValueError):
                 sast.reviewed_inventory('a' * 64, directory, None)
 
+    def test_policy_inventory_binds_full_scan_workflow_and_helper_configuration(self):
+        names = ['.github/workflows/delivery.yml', '.github/workflows/staging.yml', '.github/workflows/release.yml', 'scripts/release/codeql_evidence.py', 'scripts/release/sonar_context.py', 'scripts/release/source_sast.py']
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            for name in names:
+                path = root / name
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_text('full scanner configuration\n')
+            with patch.object(sast.subprocess, 'check_output', return_value=('\0'.join(names) + '\0').encode()):
+                before = sast.suppression_inventory(root)
+                self.assertEqual({c['path'] for c in before['configurations']}, set(names))
+                (root / names[0]).write_text('changed queries or language configuration\n')
+                after = sast.suppression_inventory(root)
+            self.assertNotEqual(sast.sha(sast.canonical(before)), sast.sha(sast.canonical(after)))
+
     def test_codeql_missing_language_is_incomplete_not_clean(self):
         api = sast.ExportAPI('test-token')
-        with patch.object(api, 'pages', return_value=[]):
+        with patch.object(api, 'pages', return_value=[]), patch.object(sast, 'default_codeql_configuration', return_value={}):
             with self.assertRaises(ValueError):
                 sast.export_codeql(api, '.', REV, '2.0.58')
 
