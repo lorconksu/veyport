@@ -53,6 +53,23 @@ At the top of the page you will also see summary cards for:
 
 If the system detects unusual patterns, an **Active Detections** panel appears above the log table.
 
+The health card uses four states:
+
+- **Checking** - the health request is still loading.
+- **Unavailable** - the Hub could not load or validate the health response. This
+  says nothing about whether audit writes succeeded or whether stored logs are
+  intact; treat audit health as unverified until it can be read again.
+- **Degraded** - the Hub recorded an audit write failure. The card remains
+  degraded until a subsequent audit write succeeds and records recovery.
+- **Healthy** - the Hub can read its audit-health state and has no recorded
+  outstanding audit write failure. This status is not an integrity verification
+  and does not prove that every expected event was logged or that the log chain
+  is intact. Use the audit verification and review procedures for those checks.
+
+If health becomes unavailable, retry after the storage problem is resolved and
+investigate any suspected audit gaps separately. Do not interpret an unavailable
+health response as a healthy state.
+
 ---
 
 ## Filtering the Log
