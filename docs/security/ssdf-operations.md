@@ -109,19 +109,30 @@ The baseline rehearsal surfaced unapproved coverage/finding dispositions that
 block publication. Exact fingerprint, rule, location and code-flow matching is
 now integrated into the sealed CodeQL source evidence ledger: nine findings
 have authenticated provider dates and nine remain unknown. Snyk and Semgrep
-dates remain unknown; no historical risk dispositions were inherited. A fresh
-development-inclusive web scan of the current working
-tree reports four unfixed unique advisory IDs (two high, two medium), with no
-minimatch finding after the scoped override. Complete Snyk SCM export, owner
+dates remain unknown; no historical risk dispositions were inherited.
+Complete Snyk SCM export, owner
 coverage/risk approvals and remaining verified first-seen history remain
-outstanding. The owner enabled Snyk development dependencies and existing projects were
-refreshed through the API. E2E now matches its lockfile; the frontend still
-omits seven required peer dependencies and Python is root-only. The scoped collector read/status
+outstanding. The owner enabled Snyk development dependencies and existing
+projects were refreshed through the API. E2E matches its 11 locked pairs; the
+main frontend SCM graph still omits seven required peer pairs and Python is
+root-only. In a separate feature-branch lock fixture, explicitly declaring the
+already-installed `@testing-library/dom@10.4.1` peer preserved all 560
+package/version pairs and changed the actual Snyk security-test graph from 553
+to an exact 560-pair match. The feature-branch change needs to land and the SCM
+graph needs a lock-only refresh. The collector graph-completeness check passed
+local regression tests and real frontend/E2E graph validation. Do not treat these as completed migration.
+
+Earlier scans returned four advisory IDs, including PICOMATCH `21248802`. Snyk
+now confirms that advisory was revoked; this is provider status, not package
+remediation or risk acceptance. Current fresh source fixtures return three
+unresolved URIJS findings on `uri-js@4.4.1`: `19963961` medium, `19963963` high,
+and `20341609` medium. Preserve unknown first-discovery times and do not reset
+remediation clocks to project creation or provider refresh dates. The scoped collector read/status
 token is installed and supervised authenticated collection has been
 demonstrated. Distinct coordinator and cleanup tokens are installed remotely and pass
 Actions/Contents read checks; write permissions remain unverified. Cleanup
 still needs an independent service identity with appropriate NFS permissions;
-root cannot access the root-squashed archive, and no cleanup unit is installed. Unattended activation and reviewed main bootstrap remain pending.
+root cannot access the protected NFS archive, and no cleanup unit is installed. Unattended activation and reviewed main bootstrap remain pending.
 Ninety-three historical publication
 identity holds block deletion, not collection. See
 [scanner coverage](scanner-coverage.md) for scope and remaining evidence.

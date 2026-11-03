@@ -46,7 +46,7 @@ for that step.
 Distinct coordinator and cleanup tokens are installed in protected remote
 files and pass Actions/Contents read checks. Write permissions remain unverified;
 no status receipt or deletion was performed with them. Cleanup still requires
-a separate runtime identity with least-privilege NFS access; root is squashed
+a separate runtime identity with least-privilege NFS access; root cannot access its protected state,
 and no cleanup unit exists. Immutable reviewed source records and historical publication
 reconciliation remain prerequisites for unattended operation. Existing
 collector credentials must not silently be repurposed. Collection, retention
@@ -54,10 +54,24 @@ and publication readiness are separate results; 93 unresolved historical
 publication identities continue to block deletion, but not evidence collection.
 
 The owner enabled development dependencies, and an API import refreshed the
-existing Snyk projects to include development dependencies. The E2E graph now matches all eleven locked dependency pairs. The frontend
-still omits seven required peer-dependency pairs, and Python remains root-only. CLI coverage does not prove dashboard
-projects complete. Verify the actual graphs against scanned source before
-declaring migration complete or removing Veyport's Dependency-Track history.
+existing Snyk projects to include development dependencies. E2E matches all 11
+locked pairs. On the feature branch, explicitly declaring the already-installed
+`@testing-library/dom@10.4.1` peer left all 560 unique package/version pairs
+unchanged. Authenticated security-test graphs improved from 553 reachable pairs
+to an exact match of all 560 locked pairs. Frontend build and all 854 tests
+passed. This does not refresh the main SCM graph, which remains 552/559 until
+the source lands and its existing project is lock-only refreshed. The release
+worker's exact graph-equality guard passed local regression and real-report
+checks (560 frontend pairs and 11 E2E pairs); final-head CI remains required. Python remains
+root-only. Do not declare migration complete or remove Veyport's Dependency-
+Track history until SCM and release graph equality are verified.
+
+Earlier scans reported four IDs including PICOMATCH `21248802`; Snyk now confirms
+that advisory was revoked, not remediated by source change or accepted as risk.
+Current fixture scans return three unresolved `uri-js@4.4.1` findings:
+`19963961` medium, `19963963` high, and `20341609` medium. Their original
+first-discovery dates remain unknown; no project-creation or provider timestamp
+was used to reset a remediation clock.
 
 Web/API DAST remains explicitly deferred by the owner. It is not counted as
 passing, and its eventual activation needs its own reviewed configuration.

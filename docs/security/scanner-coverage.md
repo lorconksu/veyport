@@ -120,24 +120,30 @@ Go modules, frontend npm, Python requirements, two Dockerfiles and one Code
 project. The maintainer then imported only the missing E2E manifest through the
 existing GitHub integration, bringing Veyport's project count to eleven. No
 duplicate project was created. On 2026-11-03 the owner enabled development
-coverage. Refreshing the existing projects with lockfile-only import paths
-preserved all eleven project IDs. Against unchanged main `dfce2e6`, the E2E
-graph now matches all eleven locked dependency name/version pairs. The frontend
-graph contains 552 locked pairs but omits seven required peer-dependency pairs
-from the 559-pair lock inventory. No unexpected version pairs remain in either
-graph. Python still contains only its root node. These are concrete remaining
-coverage gaps; successful import or a fresh test timestamp is not completeness.
-Imported Dockerfiles are not image evidence. No ignores or Dependency-Track
-project deletions were applied.
+coverage. Refreshing existing projects with lockfile-only import paths
+preserved all eleven project IDs. Against unchanged main `dfce2e6`, E2E matches
+its 11 locked pairs. Frontend's 552-package SCM graph still omits seven required
+peer pairs from the 559-pair main lock; Python remains root-only. Separately, a
+minimal explicit declaration of the already-installed `@testing-library/dom`
+peer closed this exact gap in the feature-branch lock without changing its 560
+unique package/version pairs. Authenticated Snyk security-test graphs before
+and after the change contained 553 and 560 reachable pairs respectively; the
+post-change graph exactly matched the lock. This is CLI fixture evidence, not a
+refreshed SCM graph. The release collector now validates the actual scan graph
+against the lockfile, including graph references and reachability. Local checks
+rejected the incomplete web graph and accepted the complete frontend and E2E graphs. Imported Dockerfiles are not image
+evidence. No ignores or Dependency-Track project deletions were applied.
 
 The earlier GitHub frontend graph contained only 258 dependencies. Enabling
-development dependencies improved it, but current PR feedback must not be
-treated as a complete baseline while the peer inventory remains incomplete.
-Release CLI coverage includes development dependencies and remains separately
-bound to the exact source and lockfile. Archived CLI output reports 552
-dependencies too, but contains findings and counts rather than a full graph.
-It therefore does not prove coverage of the seven missing peer dependencies;
-a possible shared resolver gap remains under investigation.
+development dependencies improved it, but current PR feedback against main
+must not be treated as complete while that source and lockfile have not landed
+and its SCM graph has not been refreshed. Release CLI coverage includes
+development dependencies and is separately bound to exact source and lockfile.
+The new security-test graph fixture traverses actual reachable graph nodes,
+compares them to every locked pair, and uses no extra scan. The collector uses
+`--print-deps` on its existing npm test calls and retains the raw graphs privately.
+Fourteen scanner tests and 147 release-helper tests passed; final-revision CI
+and candidate qualification remain required.
 
 The adjacent `infra/audit-lab/storage/.snyk` configures Python 3.14, without ignore
 entries. Snyk documents that the default Python 3.7 SCM resolver can silently omit
@@ -197,10 +203,14 @@ disposition, final revision/artifact scans, historical Dependency-Track archival
 and candidate qualification remain required. Do not remove Dependency-Track's
 Veyport history or replace Grype based on this sample.
 
-The fresh development-inclusive web scan reported four unique advisory IDs (two
-high, two medium); minimatch is absent after the scoped 11.0.4 override. This is
-a changed-scope scan, not a complete final-head scan. Owner dispositions and
-verified discovery dates remain outstanding. CodeQL history is now integrated
+Earlier scans reported four web advisory IDs, including
+`SNYK-JS-PICOMATCH-21248802`; that provider advisory is now confirmed revoked,
+not remediated by a code change or risk acceptance. Current fresh scans return
+three unresolved `uri-js@4.4.1` IDs: `19963961` (medium), `19963963` (high),
+and `20341609` (medium). This fixture scan does not qualify the final head.
+Their original discovery dates remain unknown; do not reset the remediation
+clock to project creation, refresh, advisory publication, or revocation time.
+Owner dispositions and verified discovery dates remain outstanding. CodeQL history is now integrated
 into the sealed source-SAST evidence ledger: exact matching dated nine of 18
 CodeQL findings, with nine unknown. Snyk and Semgrep discovery dates also remain
 unknown; no risk dispositions were inherited. This history correlation does

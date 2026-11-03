@@ -22,6 +22,12 @@ SOURCES = {
     "source:pip:infra/audit-lab/storage": ("infra/audit-lab/storage", "requirements.txt", "pip"),
 }
 IMAGES = ("veyport", "audit-ingest", "audit-export")
+MAX_REPORT_BYTES = 64 << 20
+MAX_NPM_LOCK_BYTES = 8 << 20
+MAX_NPM_ENTRIES = 100000
+MAX_NPM_EDGES = 1000000
+NPM_NAME = r"(?:@[A-Za-z0-9._~-]+/)?[A-Za-z0-9._~-]+"
+NPM_LOCK_PATH = re.compile(r"node_modules/" + NPM_NAME + r"(?:/node_modules/" + NPM_NAME + r")*")
 
 
 def sha256(path):
@@ -34,6 +40,189 @@ def write_private(path, value):
     with Path(path).open("x", encoding="utf-8") as stream:
         os.chmod(path, 0o600)
         stream.write(json.dumps(value, indent=2) + "\n")
+
+
+def _npm_json_object(items):
+    result = {}
+    for key, value in items:
+        if key in result:
+            raise ValueError("duplicate npm evidence JSON key")
+        result[key] = value
+    return result
+
+
+def _npm_json_constant(value):
+    raise ValueError("non-finite npm evidence JSON")
+
+
+def _read_npm_json(path, limit, expected_hash=None):
+    path = Path(path)
+    if path.is_symlink() or not path.is_file() or not 0 < path.stat().st_size <= limit:
+        raise ValueError("bounded regular npm evidence required")
+    with path.open("rb") as stream:
+        raw = stream.read(limit + 1)
+    if not 0 < len(raw) <= limit:
+        raise ValueError("bounded regular npm evidence required")
+    if expected_hash is not None and hashlib.sha256(raw).hexdigest() != expected_hash:
+        raise ValueError("npm lockfile changed during scan")
+    try:
+        return json.loads(raw, object_pairs_hook=_npm_json_object, parse_constant=_npm_json_constant)
+    except RecursionError as error:
+        raise ValueError("npm evidence JSON nesting exceeds bound") from error
+
+
+def _npm_text(value, limit=1024):
+    if not isinstance(value, str) or not 0 < len(value) <= limit or any(ord(c) < 33 for c in value):
+        raise ValueError("bounded npm identity required")
+    return value
+
+
+def _npm_pair(info, root=False):
+    if not isinstance(info, dict):
+        raise ValueError("npm package metadata required")
+    name = _npm_text(info.get("name"), 214)
+    if not re.fullmatch(NPM_NAME, name):
+        raise ValueError("npm package name required")
+    version = info.get("version")
+    if version is None and root:
+        return name, None
+    return name, _npm_text(version, 256)
+
+
+def _npm_locked_pair(path, item):
+    if not isinstance(item, dict) or item.get("link") or not NPM_LOCK_PATH.fullmatch(_npm_text(path, 4096)):
+        raise ValueError("unsupported npm lockfile package entry")
+    if any(part in (".", "..") for part in path.split("/")):
+        raise ValueError("unsupported npm lockfile package path")
+    name = item.get("name", path.rsplit("node_modules/", 1)[-1])
+    return _npm_pair({"name": name, "version": item.get("version")})
+
+
+def _npm_lock_inventory(lock):
+    if not isinstance(lock, dict) or type(lock.get("lockfileVersion")) is not int or lock["lockfileVersion"] not in (2, 3):
+        raise ValueError("npm lockfile v2/v3 package inventory required")
+    packages = lock.get("packages")
+    if not isinstance(packages, dict) or not 1 < len(packages) <= MAX_NPM_ENTRIES:
+        raise ValueError("bounded nonempty npm lockfile packages required")
+    root = packages.get("")
+    if not isinstance(root, dict) or "workspaces" in root or "workspaces" in lock:
+        raise ValueError("npm workspaces are not qualified")
+    identity = {"name": root.get("name", lock.get("name")), "version": root.get("version", lock.get("version"))}
+    pairs = {_npm_locked_pair(path, item) for path, item in packages.items() if path}
+    return pairs, _npm_pair(identity, root=True)
+
+
+def _npm_graph_packages(graph):
+    packages = graph.get("pkgs")
+    if not isinstance(packages, list) or not 1 < len(packages) <= MAX_NPM_ENTRIES:
+        raise ValueError("bounded npm graph package inventory required")
+    result = {}
+    for item in packages:
+        if not isinstance(item, dict):
+            raise ValueError("npm graph package metadata required")
+        identity = _npm_text(item.get("id"))
+        pair = _npm_pair(item.get("info"), root=True)
+        if identity in result or identity != pair[0] + "@" + (pair[1] or ""):
+            raise ValueError("duplicate or inconsistent npm graph package identity")
+        result[identity] = pair
+    return result
+
+
+def _npm_edge(edge):
+    if not isinstance(edge, dict):
+        raise ValueError("npm graph edge metadata required")
+    return _npm_text(edge.get("nodeId"))
+
+
+def _npm_node(node, packages):
+    if not isinstance(node, dict) or not isinstance(node.get("deps"), list):
+        raise ValueError("npm graph node metadata required")
+    identity, package = _npm_text(node.get("nodeId")), _npm_text(node.get("pkgId"))
+    if package not in packages or len(node["deps"]) > MAX_NPM_EDGES:
+        raise ValueError("npm graph node package or edge bound mismatch")
+    children = [_npm_edge(edge) for edge in node["deps"]]
+    if len(children) != len(set(children)):
+        raise ValueError("duplicate npm graph edge")
+    return identity, package, children
+
+
+def _npm_graph_nodes(graph, packages):
+    nodes = graph.get("nodes")
+    if not isinstance(nodes, list) or not 1 < len(nodes) <= MAX_NPM_ENTRIES:
+        raise ValueError("bounded npm graph nodes required")
+    result, edges = {}, 0
+    for node in nodes:
+        identity, package, children = _npm_node(node, packages)
+        edges += len(children)
+        if identity in result or edges > MAX_NPM_EDGES:
+            raise ValueError("duplicate npm graph node or edge bound exceeded")
+        result[identity] = (package, children)
+    return result
+
+
+def _npm_reachable_nodes(nodes, root):
+    pending, reached = [root], {root}
+    while pending:
+        for child in nodes[pending.pop()][1]:
+            if child not in nodes:
+                raise ValueError("dangling npm graph node reference")
+            if child not in reached:
+                reached.add(child)
+                pending.append(child)
+    if reached != set(nodes):
+        raise ValueError("unreachable npm graph nodes")
+
+
+def _npm_graph_inventory(value, expected_root):
+    if not isinstance(value, dict) or value.get("schemaVersion") != "1.3.0" or value.get("pkgManager") != {"name": "npm"}:
+        raise ValueError("qualified npm scanned dependency graph required")
+    graph = value.get("graph")
+    if not isinstance(graph, dict):
+        raise ValueError("npm graph metadata required")
+    packages = _npm_graph_packages(value)
+    nodes = _npm_graph_nodes(graph, packages)
+    root = _npm_text(graph.get("rootNodeId"))
+    if root not in nodes:
+        raise ValueError("npm graph root is absent")
+    root_package = nodes[root][0]
+    actual_root = packages[root_package]
+    if actual_root[0] != expected_root[0] or (expected_root[1] is not None and actual_root[1] != expected_root[1]):
+        raise ValueError("npm graph belongs to another root package")
+    _npm_reachable_nodes(nodes, root)
+    _npm_graph_package_usage(packages, nodes, root, root_package)
+    return {pair for identity, pair in packages.items() if identity != root_package}
+
+
+def _npm_graph_package_usage(packages, nodes, root, root_package):
+    if {package for package, _ in nodes.values()} != set(packages):
+        raise ValueError("unused npm graph package inventory")
+    if any(package == root_package for identity, (package, _) in nodes.items() if identity != root):
+        raise ValueError("npm graph root package reused as dependency")
+    if any(pair[1] is None for identity, pair in packages.items() if identity != root_package):
+        raise ValueError("npm graph dependency version missing")
+
+
+def validate_npm_coverage(report, lock_path, expected_hash=None):
+    """Check scanned package coverage only, not executable reachability or safety."""
+    if not isinstance(report, dict) or report.get("packageManager") != "npm":
+        raise ValueError("one exact npm source report required")
+    lock = _read_npm_json(lock_path, MAX_NPM_LOCK_BYTES, expected_hash)
+    locked, root = _npm_lock_inventory(lock)
+    scanned = _npm_graph_inventory(report.get("depGraph"), root)
+    if scanned != locked:
+        raise ValueError("scanned npm graph does not match locked package inventory")
+    if type(report.get("dependencyCount")) is not int or report["dependencyCount"] != len(scanned):
+        raise ValueError("npm reported dependency count disagrees with scanned graph")
+    return {"locked_packages": len(locked), "scanned_packages": len(scanned)}
+
+
+def _record_npm_coverage(record, raw, cwd, result_path):
+    if not isinstance(raw, dict) or "depGraph" not in raw:
+        raise ValueError("npm scanned dependency graph is missing")
+    graph_path = result_path.with_suffix(".dep-graph.json")
+    write_private(graph_path, raw["depGraph"])
+    record["dep_graph_sha256"] = sha256(graph_path)
+    record["npm_coverage"] = validate_npm_coverage(raw, cwd / "package-lock.json", record["lock_sha256"])
 
 
 def verify_image(archive, expected):
@@ -90,8 +279,9 @@ def inventory(root):
         if not path.is_file() or path.is_symlink():
             raise ValueError("regular manifest required")
         if manager == "npm":
-            lock = json.loads((path.parent / "package-lock.json").read_text())
-            manifest = json.loads(path.read_text())
+            lock = _read_npm_json(path.parent / "package-lock.json", MAX_NPM_LOCK_BYTES)
+            _npm_lock_inventory(lock)
+            manifest = _read_npm_json(path, MAX_NPM_LOCK_BYTES)
             for kind in ("dependencies", "devDependencies", "optionalDependencies"):
                 if lock.get("packages", {}).get("", {}).get(kind, {}) != manifest.get(kind, {}):
                     raise ValueError("npm manifest/lock mismatch")
@@ -201,7 +391,8 @@ def collect(args):
                 scan_file = "package-lock.json" if manager == "npm" else filename
                 command += ["test", f"--file={scan_file}", f"--package-manager={manager}", "--dev"]
                 if manager == "npm":
-                    command += ["--strict-out-of-sync=true"]
+                    command += ["--strict-out-of-sync=true", "--print-deps"]
+                    record["lock_sha256"] = sha256(cwd / "package-lock.json")
                 elif manager == "pip":
                     command += [f"--command={args.python}", "--skip-unresolved=false"]
                 record["manifest_sha256"] = sha256(cwd / filename)
@@ -225,11 +416,17 @@ def collect(args):
             code = execute(command, cwd, result_path, args.timeout)
             record["exit_code"] = code
             try:
-                if result_path.is_symlink() or not 0 < result_path.stat().st_size <= 64 << 20:
+                if result_path.is_symlink() or not 0 < result_path.stat().st_size <= MAX_REPORT_BYTES:
                     raise ValueError("missing or oversized Snyk report")
                 os.chmod(result_path, 0o600)
                 record["report_sha256"] = sha256(result_path)
-                findings, count = normalize(json.loads(result_path.read_text()), code, manager)
+                raw = _read_npm_json(result_path, MAX_REPORT_BYTES) if manager == "npm" else json.loads(result_path.read_text())
+                findings, count = normalize(raw, code, manager)
+                if args.kind == "source" and manager == "npm":
+                    # Preserve genuine findings/counts even when graph coverage
+                    # fails; they never become an operational waiver.
+                    record.update(findings=findings, dependency_count=count)
+                    _record_npm_coverage(record, raw, cwd, result_path)
                 if args.kind == "image":
                     reports = json.loads(result_path.read_text())
                     reports = reports if isinstance(reports, list) else [reports]
