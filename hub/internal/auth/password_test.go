@@ -1,7 +1,11 @@
 package auth_test
 
 import (
+	"errors"
+	"strings"
 	"testing"
+
+	"golang.org/x/crypto/bcrypt"
 
 	"github.com/wyiu/veyport/hub/internal/auth"
 )
@@ -35,7 +39,11 @@ func TestValidatePasswordPolicy(t *testing.T) {
 		{"no lowercase", "MYP@SSW0RD!23", true},
 		{"no digit", "MyP@ssword!AB", true},
 		{"no special", "MyPassw0rd123", true},
-		{"exactly 12 chars", "MyP@ssw0rd!2", false},
+		{"exactly 11 bytes", "Aa1!" + strings.Repeat("x", 7), true},
+		{"exactly 12 bytes", "Aa1!" + strings.Repeat("x", 8), false},
+		{"exactly 256 bytes", "Aa1!" + strings.Repeat("x", 252), false},
+		{"exactly 257 bytes", "Aa1!" + strings.Repeat("x", 253), true},
+		{"unicode categories", "Ää１€" + strings.Repeat("x", 8), false},
 	}
 
 	for _, tt := range tests {
@@ -57,5 +65,27 @@ func TestGenerateTemporaryPassword(t *testing.T) {
 
 	if err := auth.ValidatePasswordPolicy(pw); err != nil {
 		t.Fatalf("generated password should pass policy: %v", err)
+	}
+}
+
+func TestHashPasswordBcryptLengthBoundary(t *testing.T) {
+	password := "Aa1!" + strings.Repeat("x", 68)
+	hash, err := auth.HashPassword(password)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cost, err := bcrypt.Cost([]byte(hash))
+	if err != nil || cost < 12 {
+		t.Fatalf("bcrypt cost = %d, error = %v", cost, err)
+	}
+	if !auth.ComparePassword(hash, password) {
+		t.Fatal("72-byte password did not match")
+	}
+	hash, err = auth.HashPassword(password + "x")
+	if !errors.Is(err, bcrypt.ErrPasswordTooLong) || hash != "" {
+		t.Fatalf("73-byte hash = %q, error = %v", hash, err)
+	}
+	if auth.ComparePassword("invalid hash", password) {
+		t.Fatal("invalid hash matched")
 	}
 }

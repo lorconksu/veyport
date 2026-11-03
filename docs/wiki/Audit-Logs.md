@@ -59,6 +59,10 @@ At the top of the page you will also see summary cards for:
 
 If the system detects unusual patterns, an **Active Detections** panel appears above the log table.
 
+Time filters compare timestamps as instants, including SQLite's stored timestamp
+format and RFC3339 inputs with offsets. Same-day events remain eligible for the
+login-failure, registration-failure and privileged-action threshold checks.
+
 The health card uses four states:
 
 - **Checking** - the health request is still loading.
@@ -164,6 +168,8 @@ revisits recovery provenance that has since expired without rewinding or
 starving the main cleanup sweep. Each cursor restarts after reaching the end;
 a Hub restart also begins new sweeps.
 Cutoffs compare exact instants, including offsets and subsecond timestamps.
+Cleanup reports only deletions from committed batches. If a later deletion fails
+and its batch rolls back, those rows are not included in the deleted count.
 Unexpired recovery grants retain their audit provenance until completion or
 expiry; malformed provenance expiry is retained for review.
 

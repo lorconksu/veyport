@@ -84,6 +84,11 @@ jobs:
       - name: Embed production frontend
         run: mkdir -p hub/web/dist && cp -a web/dist/. hub/web/dist/
 
+      - name: Reproduce generated protobuf and check schema compatibility
+        env:
+          PROTO_BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
+        run: python3 scripts/release/capture_step.py --name protobuf-controls -- python3 scripts/proto/check.py ci
+
       - name: Vet all Go modules
         run: make vet
 
@@ -135,6 +140,12 @@ jobs:
           mapfile -t packages < <(printf '%s\n' "$listed" | awk '!/\/internal\/(integration|server)$/')
           python3 ../scripts/release/capture_step.py --name hub -- go test -json -race "${packages[@]}" -timeout 30m -coverprofile=../coverage-hub.out -covermode=atomic -coverpkg=./internal/...
 
+      - name: Auth encryption rejection coverage in FIPS-only mode
+        env:
+          GODEBUG: fips140=only
+          VEYPORT_TEST_FIPS_ONLY: "1"
+        run: cd hub && python3 ../scripts/release/capture_step.py --name hub-auth-fips -- go test -json -covermode=atomic -coverprofile=../coverage-auth-fips.out ./internal/auth -run '^TestEncryptionRejectsFIPSOnlyMode$'
+
       - name: Hub command tests with coverage
         run: cd hub && python3 ../scripts/release/capture_step.py --name hub-command -- go test -json -race ./cmd/... -coverprofile=../coverage-hub-cmd.out -covermode=atomic
 
@@ -162,6 +173,7 @@ jobs:
           name: coverage-units
           path: |
             coverage-hub.out
+            coverage-auth-fips.out
             coverage-hub-cmd.out
             coverage-agent.out
             coverage-cli.out
@@ -300,7 +312,7 @@ jobs:
           pattern: coverage-server-shard-*
           path: coverage-server
       - name: Validate the complete server inventory and merge atomic coverage
-        run: python3 scripts/release/server_test_shards.py merge --input coverage-server --output coverage-hub.out --include coverage-hub.out --shards 6
+        run: python3 scripts/release/server_test_shards.py merge --input coverage-server --output coverage-hub.out --include coverage-hub.out --include coverage-auth-fips.out --shards 6
       - name: Upload complete coverage for Sonar
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:

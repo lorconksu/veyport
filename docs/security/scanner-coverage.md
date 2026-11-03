@@ -110,24 +110,34 @@ scope, not a claim that every test file is
 analyzed. GitHub's managed Go extractor excludes `*_test.go` by default unless
 `CODEQL_EXTRACTOR_GO_OPTION_EXTRACT_TESTS=true`; this change does not expand that
 scope. See GitHub's [Go extractor options](https://docs.github.com/en/code-security/reference/code-scanning/codeql/build-options-for-compiled-languages#extractor-options-for-go).
-The latest verified CI and managed CodeQL runs are for baseline `017dc7b`.
-Local validation and independent reviews of subsequent changes passed; final-
-head CI status is tracked on PR #115 and is not represented here as passed.
+The committed base `5d8f193` passed CI `41719743481` and managed CodeQL
+`41719737121`, with encrypted archive/readback verification. Later closeout
+changes require their own final-head CI, tracked on PR #115; the older
+`017dc7b` full candidate rehearsal does not qualify those later changes.
 
 The initial read-only 2026-10-31 inventory found ten GitHub-origin projects: five
 Go modules, frontend npm, Python requirements, two Dockerfiles and one Code
 project. The maintainer then imported only the missing E2E manifest through the
 existing GitHub integration, bringing Veyport's project count to eleven. No
-duplicate project was created. Both the E2E and Python imported dependency graphs
-are still empty; import completion does not establish coverage. Imported
-Dockerfiles are not image evidence. No ignores or Dependency-Track project
-deletions were applied.
+duplicate project was created. On 2026-11-03 the owner enabled development
+coverage. Refreshing the existing projects with lockfile-only import paths
+preserved all eleven project IDs. Against unchanged main `dfce2e6`, the E2E
+graph now matches all eleven locked dependency name/version pairs. The frontend
+graph contains 552 locked pairs but omits seven required peer-dependency pairs
+from the 559-pair lock inventory. No unexpected version pairs remain in either
+graph. Python still contains only its root node. These are concrete remaining
+coverage gaps; successful import or a fresh test timestamp is not completeness.
+Imported Dockerfiles are not image evidence. No ignores or Dependency-Track
+project deletions were applied.
 
-The GitHub frontend graph contains 258 dependencies versus 552 in the explicit
-development-inclusive CLI test. The integration currently omits JavaScript
-development dependencies. Its organization UI setting requires a later operator
-change and dependency-graph verification; current PR feedback must not be treated
-as complete baseline coverage. Release CLI coverage includes those dependencies.
+The earlier GitHub frontend graph contained only 258 dependencies. Enabling
+development dependencies improved it, but current PR feedback must not be
+treated as a complete baseline while the peer inventory remains incomplete.
+Release CLI coverage includes development dependencies and remains separately
+bound to the exact source and lockfile. Archived CLI output reports 552
+dependencies too, but contains findings and counts rather than a full graph.
+It therefore does not prove coverage of the seven missing peer dependencies;
+a possible shared resolver gap remains under investigation.
 
 The adjacent `infra/audit-lab/storage/.snyk` configures Python 3.14, without ignore
 entries. Snyk documents that the default Python 3.7 SCM resolver can silently omit
@@ -187,15 +197,17 @@ disposition, final revision/artifact scans, historical Dependency-Track archival
 and candidate qualification remain required. Do not remove Dependency-Track's
 Veyport history or replace Grype based on this sample.
 
-The fresh development-inclusive web scan of the current working tree reports
-four unique advisory IDs (two high, two medium); minimatch is absent after the
-scoped 11.0.4 override. This is a changed-scope scan, not a complete final-head
-scan. Finalized SCA triage identifies four unfixed unique web advisory IDs (two
-high, two medium). Owner dispositions and verified discovery dates are still
-outstanding. History triage correlated nine Go CodeQL alerts to provider
-history by exact fingerprint, rule, location and code-flow evidence; the other
-findings have unknown dates. This correlation has not been wired into a durable
-history ledger. Final-head CI and other final-revision scans remain pending.
+The fresh development-inclusive web scan reported four unique advisory IDs (two
+high, two medium); minimatch is absent after the scoped 11.0.4 override. This is
+a changed-scope scan, not a complete final-head scan. Owner dispositions and
+verified discovery dates remain outstanding. CodeQL history is now integrated
+into the sealed source-SAST evidence ledger: exact matching dated nine of 18
+CodeQL findings, with nine unknown. Snyk and Semgrep discovery dates also remain
+unknown; no risk dispositions were inherited. This history correlation does
+not establish cross-branch Sonar continuity. The Snyk owner enabled development
+dependencies and refreshed the API to include development graphs, but graph
+completeness and lockfile exactness remain under investigation; Python is still
+root-only. Final-head CI and exact final-revision scans remain pending.
 
 ## SAST flow and historical comparison
 

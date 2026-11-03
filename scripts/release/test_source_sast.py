@@ -294,5 +294,127 @@ class SourceEvidenceTests(unittest.TestCase):
                 sast.export_codeql(api, '.', REV, '2.0.58')
 
 
+class CodeQLHistoryTests(unittest.TestCase):
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp.cleanup)
+        self.root = Path(self.temp.name)
+        (self.root / 'codeql-local').mkdir()
+        self.raw = sarif()
+        run = self.raw['runs'][0]
+        run['automationDetails'] = {'id': '/language:go/'}
+        run['versionControlProvenance'][0]['branch'] = 'refs/heads/main'
+        run['invocations'] = [{'executionSuccessful': True}]
+        run['properties'] = {'codeqlConfigSummary': {'disableDefaultQueries': False, 'queries': [{'type': 'builtinSuite', 'uses': 'security-extended'}]}}
+        result = run['results'][0]
+        result['partialFingerprints'] = {'primaryLocationLineHash': 'abc:1'}
+        result['locations'][0]['physicalLocation']['region'] = {'startLine': 10, 'endLine': 10, 'startColumn': 3, 'endColumn': 9}
+        result['codeFlows'] = [{'threadFlows': [{'locations': [{'location': copy.deepcopy(result['locations'][0])}]}]}]
+        self.write_local()
+        historic = copy.deepcopy(self.raw)
+        historic['runs'][0]['versionControlProvenance'][0]['revisionId'] = 'b' * 40
+        class API:
+            def __init__(self):
+                self.raw = historic
+                self.analyses = [{'id': 123, 'category': '/language:go', 'ref': 'refs/heads/main',
+                                  'analysis_key': sast.CODEQL_DEFAULT_KEY, 'commit_sha': 'b' * 40,
+                                  'created_at': '2026-10-30T00:00:00Z', 'tool': {'name': 'CodeQL'}, 'results_count': 1}]
+                self.alerts = [{'number': 7, 'created_at': '2026-01-01T00:00:00Z', 'state': 'dismissed',
+                                'dismissed_reason': 'false positive', 'tool': {'name': 'CodeQL'}, 'rule': {'id': 'go/auth'}}]
+            def pages(self, path):
+                return copy.deepcopy(self.analyses if 'analyses?' in path else self.alerts)
+            def sarif(self, analysis_id):
+                if analysis_id != 123:raise AssertionError(analysis_id)
+                return copy.deepcopy(self.raw)
+        self.api = API()
+
+    def write_local(self):
+        (self.root / 'codeql-local/go.sarif').write_bytes(sast.canonical(self.raw))
+
+    def link(self):
+        findings = sast.sarif_findings(self.raw, 'codeql', REV, '2.0.58', local_codeql=True)
+        return sast.link_codeql_history(self.api, self.root, REV, '2.0.58', findings)
+
+    def test_exact_history_sets_date_and_archives_sources_without_importing_dismissal(self):
+        finding = self.link()[0]
+        self.assertEqual(finding['first_seen'], '2026-01-01T00:00:00Z')
+        self.assertEqual(finding['classification'], 'authentication')
+        self.assertFalse(finding['suppressed'])
+        self.assertIsNone(finding['provider_state'])
+        ledger = sast.strict_json((self.root / 'codeql-first-seen-history.json').read_bytes())
+        self.assertEqual(len(ledger['matches']), 1)
+        self.assertEqual(ledger['unmatched'], [])
+        self.assertEqual(finding['first_seen_evidence']['provider_sarif_sha256'], sast.sha((self.root / 'codeql-history-0.sarif').read_bytes()))
+        self.assertEqual(finding['first_seen_evidence']['provider_alerts_sha256'], sast.sha((self.root / 'codeql-history-alerts.json').read_bytes()))
+        self.assertTrue((self.root / ledger['sources'][0]['sarif']).is_file())
+        self.assertTrue((self.root / 'codeql-history-alerts.json').is_file())
+
+    def test_coordinate_defaults_and_artifact_indexes_do_not_prevent_exact_match(self):
+        historic = self.api.raw['runs'][0]['results'][0]
+        historic['locations'][0]['physicalLocation']['region'].pop('endLine')
+        historic['locations'][0]['physicalLocation']['artifactLocation']['index'] = 99
+        self.assertIsNotNone(self.link()[0]['first_seen'])
+
+    def test_missing_fingerprint_coordinates_and_changed_flow_remain_unknown(self):
+        original = copy.deepcopy(self.api.raw)
+        mutations = [lambda r: r.pop('partialFingerprints'),
+                     lambda r: r['partialFingerprints'].update(primaryLocationLineHash='changed'),
+                     lambda r: r['locations'][0]['physicalLocation']['region'].update(startLine=11),
+                     lambda r: r['locations'][0]['physicalLocation']['region'].pop('startColumn'),
+                     lambda r: r['codeFlows'][0]['threadFlows'][0]['locations'][0]['location']['physicalLocation']['region'].update(startColumn=4)]
+        for mutate in mutations:
+            with self.subTest(mutate=mutate):
+                self.api.raw = copy.deepcopy(original)
+                mutate(self.api.raw['runs'][0]['results'][0])
+                self.assertIsNone(self.link()[0]['first_seen'])
+
+    def test_wrong_rule_tool_invalid_missing_or_future_provider_dates_remain_unknown(self):
+        original = copy.deepcopy(self.api.alerts)
+        for change in [{'rule': {'id': 'other'}}, {'tool': {'name': 'other'}}, {'created_at': None},
+                       {'created_at': '2027-01-01T00:00:00Z'}, {'created_at': '2026-01-01T00:00:00'}]:
+            with self.subTest(change=change):
+                self.api.alerts = copy.deepcopy(original)
+                self.api.alerts[0].update(change)
+                self.assertIsNone(self.link()[0]['first_seen'])
+
+    def test_ambiguous_provider_identities_remain_unknown(self):
+        other = copy.deepcopy(self.api.raw['runs'][0]['results'][0])
+        other['properties']['github/alertNumber'] = 8
+        self.api.raw['runs'][0]['results'].append(other)
+        self.api.analyses[0]['results_count'] = 2
+        self.api.alerts.append({**self.api.alerts[0], 'number': 8})
+        self.assertIsNone(self.link()[0]['first_seen'])
+        ledger = sast.strict_json((self.root / 'codeql-first-seen-history.json').read_bytes())
+        self.assertEqual(ledger['unmatched'][0]['reason'], 'ambiguous-history')
+
+    def test_partial_foreign_or_failed_analysis_cannot_supply_history(self):
+        original = copy.deepcopy(self.api.raw)
+        for mutate in [lambda r: r['versionControlProvenance'][0].update(revisionId='c' * 40),
+                       lambda r: r['versionControlProvenance'][0].update(branch='refs/pull/115/merge'),
+                       lambda r: r['invocations'][0].update(executionSuccessful=False),
+                       lambda r: r['properties'].update(resultsTruncated=True)]:
+            with self.subTest(mutate=mutate):
+                self.api.raw = copy.deepcopy(original)
+                mutate(self.api.raw['runs'][0])
+                with self.assertRaises(ValueError):self.link()
+
+    def test_duplicate_alert_inventory_and_provider_outage_fail_closed(self):
+        self.api.alerts.append(copy.deepcopy(self.api.alerts[0]))
+        with self.assertRaises(ValueError):self.link()
+        with patch.object(self.api, 'pages', side_effect=OSError('provider unavailable')):
+            with self.assertRaises(OSError):self.link()
+
+    def test_current_report_mismatch_and_conflicting_date_rejected(self):
+        with self.assertRaises(ValueError):
+            sast.link_codeql_history(self.api, self.root, REV, '2.0.58', [])
+        findings = sast.sarif_findings(self.raw, 'codeql', REV, '2.0.58', local_codeql=True)
+        changed = [{**findings[0], 'component': 'other.go'}]
+        with self.assertRaises(ValueError):
+            sast.link_codeql_history(self.api, self.root, REV, '2.0.58', changed)
+        findings[0]['first_seen'] = '2026-02-01T00:00:00Z'
+        with self.assertRaises(ValueError):
+            sast.link_codeql_history(self.api, self.root, REV, '2.0.58', findings)
+
+
 if __name__ == '__main__':
     unittest.main()

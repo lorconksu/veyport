@@ -9,7 +9,10 @@ for configuration and procedures. Hostnames, addresses, mount paths and private
 evidence locations intentionally remain in operator configuration.
 
 PR #115 remains unmerged and the pipeline remains a draft prototype. On baseline
-`017dc7b`, PR CI `41419129930` and managed CodeQL `41419123755` passed. Trusted
+`017dc7b`, PR CI `41419129930` and managed CodeQL `41419123755` passed. The
+committed closeout base `5d8f193` passed CI `41719743481` (all 15 checks) and
+CodeQL `41719737121` (all five checks); its encrypted evidence was archived and
+read back. Closeout follow-up changes require their own final-head CI, tracked on PR #115. Trusted
 rehearsal `41419141402` collected full source SAST, passed 18 native cases, and
 recorded 51 records with 31 signatures and 225 verified payload readbacks. The
 release evaluation correctly BLOCKED on unapproved coverage, finding
@@ -103,18 +106,24 @@ scanner retirement or Dependency-Track cutover occurred.
 ## Scanner and release blockers
 
 The baseline rehearsal surfaced unapproved coverage/finding dispositions that
-block publication. History triage has since correlated nine Go CodeQL alerts to
-provider dates using exact fingerprint, rule, location and code-flow evidence;
-remaining dates are unknown, and this correlation is not wired into a durable
-ledger. A fresh development-inclusive web scan of the current working
+block publication. Exact fingerprint, rule, location and code-flow matching is
+now integrated into the sealed CodeQL source evidence ledger: nine findings
+have authenticated provider dates and nine remain unknown. Snyk and Semgrep
+dates remain unknown; no historical risk dispositions were inherited. A fresh
+development-inclusive web scan of the current working
 tree reports four unfixed unique advisory IDs (two high, two medium), with no
 minimatch finding after the scoped override. Complete Snyk SCM export, owner
-coverage review, remaining verified first-seen history and finding
-dispositions remain outstanding. Triage has not wired the history correlation
-into a durable ledger or created approvals. The scoped collector read/status token is installed and
-supervised authenticated collection has been demonstrated. Unattended
-activation, dedicated coordinator credential and separate deletion credential
-remain pending. See
+coverage/risk approvals and remaining verified first-seen history remain
+outstanding. The owner enabled Snyk development dependencies and existing projects were
+refreshed through the API. E2E now matches its lockfile; the frontend still
+omits seven required peer dependencies and Python is root-only. The scoped collector read/status
+token is installed and supervised authenticated collection has been
+demonstrated. Distinct coordinator and cleanup tokens are installed remotely and pass
+Actions/Contents read checks; write permissions remain unverified. Cleanup
+still needs an independent service identity with appropriate NFS permissions;
+root cannot access the root-squashed archive, and no cleanup unit is installed. Unattended activation and reviewed main bootstrap remain pending.
+Ninety-three historical publication
+identity holds block deletion, not collection. See
 [scanner coverage](scanner-coverage.md) for scope and remaining evidence.
 
 Keep SonarQube, CodeQL and Semgrep active until same-revision coverage and
@@ -127,9 +136,10 @@ separate DAST provisioning and policy review are complete.
 1. Verify final-head CI and review status on PR #115. Retain its
    native rehearsal record and confirm that candidate, source revision and
    evidence identify the same immutable bytes before release qualification.
-2. Provision and verify the dedicated coordinator credential and separate
-   least-privilege deletion credential. The scoped collector read/status token
-   is installed; do not reuse it as either credential.
+2. Verify write permissions through the intended controlled operations for the
+   installed dedicated credentials. Provision a separate cleanup runtime with
+   least-privilege NFS access and no private signing/decryption keys. Read-only
+   API checks passed; do not reuse the collector credential.
 3. Keep both timers disabled until credentials, trusted source pins, receipt
    key pins, monitoring, storage capacity and the full recovery/deletion
    procedure have been reviewed against the runbooks.
@@ -141,7 +151,7 @@ separate DAST provisioning and policy review are complete.
 5. Review the public `go-test.jsonl` artifact's privacy handling and ensure
    published records describe its synthetic-fixture scope accurately.
 6. Reconcile the supervised encrypted CI transport backups retained on the NAS
-   while coordinator and deletion credentials are pending. They are recovery
+   while unattended operation remains disabled. They are recovery
    copies, not release-authorizing archive receipts. Exercise authenticated collection,
    signed receipt verification, failure
    behavior, exact-ID artifact deletion and cancellation/mount-loss recovery.

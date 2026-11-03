@@ -270,6 +270,195 @@ def export_codeql(api, root, revision, version):
     return findings
 
 
+def _codeql_history_location(run, value):
+    physical = value.get("physicalLocation", {})
+    artifact = physical.get("artifactLocation", {})
+    uri = artifact.get("uri")
+    if uri is None and type(artifact.get("index")) is int:
+        index = artifact["index"]
+        artifacts = run.get("artifacts", [])
+        if 0 <= index < len(artifacts):
+            uri = artifacts[index].get("location", {}).get("uri")
+    region = physical.get("region", {})
+    start = region.get("startLine")
+    coordinates = [start, region.get("endLine", start), region.get("startColumn"), region.get("endColumn")]
+    if not isinstance(uri, str) or not uri or any(type(n) is not int or n < 1 for n in coordinates):
+        raise ValueError("complete history coordinates required")
+    return [uri, *coordinates]
+
+
+def _codeql_history_flow(run, flow):
+    return [[_codeql_history_location(run, value["location"]) for value in thread["locations"]]
+            for thread in flow["threadFlows"]]
+
+
+def codeql_history_signature(run, result):
+    """Conservative identity across exports; never match by line or rule alone."""
+    fingerprint = result.get("partialFingerprints", {}).get("primaryLocationLineHash")
+    if not isinstance(fingerprint, str) or not 1 <= len(fingerprint) <= 256:
+        return None
+    try:
+        locations = [_codeql_history_location(run, value) for value in result.get("locations", [])]
+        flows = [_codeql_history_flow(run, flow) for flow in result.get("codeFlows", [])]
+        if not locations or not isinstance(result.get("ruleId"), str):
+            return None
+        return sha(canonical({"rule": result["ruleId"], "fingerprint": fingerprint,
+                              "locations": locations, "flows": flows}))
+    except (KeyError, TypeError, ValueError):
+        return None
+
+
+def _codeql_history_signatures(raw):
+    return [codeql_history_signature(run, result) for run in raw["runs"] for result in run["results"]]
+
+
+def _codeql_history_inventory_matches(findings, normalized):
+    fields = ("scanner", "id", "component", "version", "rule_id", "severity", "classification", "suppressed", "provider_state")
+    actual = [[finding.get(key) for key in fields] for finding in findings]
+    expected = [[finding.get(key) for key in fields] for finding in normalized]
+    return actual == expected
+
+
+def _codeql_current_history(root, revision, version, findings):
+    local = Path(root) / "codeql-local"
+    if not local.is_dir() or local.is_symlink():
+        raise ValueError("current local CodeQL evidence required for history")
+    current, normalized = [], []
+    for path in sorted(local.glob("*.sarif")):
+        if path.is_symlink() or not 0 < path.stat().st_size <= MAX_BYTES:
+            raise ValueError("bounded local CodeQL history source required")
+        raw = strict_json(path.read_bytes())
+        # Validate these bytes independently before using their identity.
+        normalized.extend(sarif_findings(raw, "codeql", revision, version, local_codeql=True))
+        current.extend(_codeql_history_signatures(raw))
+    if len(current) != len(findings) or not _codeql_history_inventory_matches(findings, normalized):
+        raise ValueError("CodeQL history finding inventory mismatch")
+    return current
+
+
+def _codeql_history_alert_map(alerts):
+    alert_map = {}
+    for alert in alerts:
+        number = alert.get("number")
+        if type(number) is not int or number < 1 or number in alert_map:
+            raise ValueError("ambiguous CodeQL alert history")
+        alert_map[number] = alert
+    return alert_map
+
+
+def _codeql_history_analyses(analyses):
+    selected = {}
+    for item in analyses:
+        if item.get("category") in CODEQL_CATEGORIES and item.get("ref") == "refs/heads/main" and item.get("analysis_key") == CODEQL_DEFAULT_KEY:
+            selected.setdefault(item["category"], item)
+    return list(selected.values())
+
+
+def _codeql_history_analysis_identity(item, observed_at):
+    source_revision = item.get("commit_sha", "")
+    created = date(item.get("created_at"))
+    if (type(item.get("id")) is not int or item["id"] < 1 or not re.fullmatch(r"[0-9a-f]{40}", source_revision)
+            or created is None or created > observed_at or item.get("error") or item.get("warning")
+            or item.get("tool", {}).get("name") != "CodeQL" or type(item.get("results_count")) is not int):
+        raise ValueError("invalid CodeQL history analysis")
+    return source_revision, created
+
+
+def _codeql_history_run_scope(run, category):
+    return (run.get("automationDetails", {}).get("id", "").rstrip("/") == category
+            and all(p.get("branch") == "refs/heads/main" for p in run.get("versionControlProvenance", [])))
+
+
+def _codeql_history_report(api, root, index, item, version, observed_at, alerts_hash):
+    source_revision, created = _codeql_history_analysis_identity(item, observed_at)
+    raw = api.sarif(item["id"])
+    name = f"codeql-history-{index}.sarif"
+    save(root, name, raw)
+    historic = sarif_findings(raw, "codeql", source_revision, version)
+    if len(historic) != item["results_count"] or any(
+            not _codeql_history_run_scope(run, item["category"]) for run in raw["runs"]):
+        raise ValueError("CodeQL history scope mismatch")
+    source = {"analysis_id": item["id"], "revision": source_revision, "sarif": name,
+              "sarif_sha256": sha((Path(root) / name).read_bytes()), "alerts_sha256": alerts_hash}
+    return raw, source, created
+
+
+def _codeql_history_result(run, result, alert_map, source, created):
+    signature = codeql_history_signature(run, result)
+    alert = alert_map.get(result.get("properties", {}).get("github/alertNumber"))
+    if signature is None or alert is None:
+        return None
+    first_seen = date(alert.get("created_at"))
+    if (alert.get("tool", {}).get("name") != "CodeQL" or alert.get("rule", {}).get("id") != result["ruleId"]
+            or first_seen is None or first_seen > created):
+        return None
+    return {"analysis_id": source["analysis_id"], "alert_number": alert["number"], "first_seen": first_seen,
+            "match_sha256": signature, "provider_sarif_sha256": source["sarif_sha256"],
+            "provider_alerts_sha256": source["alerts_sha256"], "source_revision": source["revision"]}
+
+
+def _codeql_history_report_matches(raw, alert_map, source, created, matches):
+    for run in raw["runs"]:
+        for result in run["results"]:
+            evidence = _codeql_history_result(run, result, alert_map, source, created)
+            if evidence is not None:
+                matches.setdefault(evidence["match_sha256"], []).append(evidence)
+
+
+def _codeql_history_matches(api, root, version, ledger):
+    analyses = api.pages("code-scanning/analyses?tool_name=CodeQL&ref=refs%2Fheads%2Fmain")
+    alerts = api.pages("code-scanning/alerts?ref=refs%2Fheads%2Fmain")
+    alert_map = _codeql_history_alert_map(alerts)
+    save(root, "codeql-history-alerts.json", alerts)
+    alerts_hash = sha((Path(root) / "codeql-history-alerts.json").read_bytes())
+    selected = _codeql_history_analyses(analyses)
+    save(root, "codeql-history-analyses.json", selected)
+    matches = {}
+    for index, item in enumerate(selected):
+        raw, source, created = _codeql_history_report(api, root, index, item, version, ledger["observed_at"], alerts_hash)
+        ledger["sources"].append(source)
+        _codeql_history_report_matches(raw, alert_map, source, created, matches)
+    return matches
+
+
+def _apply_codeql_history(findings, current, matches, ledger):
+    linked = []
+    for finding, signature in zip(findings, current):
+        item = dict(finding)
+        candidates = matches.get(signature, [])
+        # Multiple provider identities are ambiguous even when dates agree.
+        if len(candidates) == 1:
+            evidence = candidates[0]
+            if item.get("first_seen") not in (None, evidence["first_seen"]):
+                raise ValueError("conflicting CodeQL first-seen history")
+            item.update(first_seen=evidence["first_seen"], first_seen_evidence=evidence)
+            ledger["matches"].append({"finding_id": item["id"], **evidence})
+        else:
+            ledger["unmatched"].append({"finding_id": item["id"], "reason": "ambiguous-history" if candidates else "no-exact-history"})
+        linked.append(item)
+    return linked
+
+
+def link_codeql_history(api, root, revision, version, findings):
+    """Archive authenticated historical dates without importing dismissals.
+
+    Historical analyses supply identity/date evidence only. They never replace
+    the current full scan or establish that its findings have been approved.
+    The ledger and its source payloads travel in the encrypted per-run archive.
+    """
+    current = _codeql_current_history(root, revision, version, findings)
+    ledger = {"schema_version": 1, "repository": REPOSITORY, "revision": revision,
+              "observed_at": now().strftime("%Y-%m-%dT%H:%M:%SZ"),
+              "purpose": "first-seen-only; no finding disposition or release authority",
+              "matches": [], "unmatched": [], "sources": []}
+    linked = findings
+    if current:
+        matches = _codeql_history_matches(api, root, version, ledger)
+        linked = _apply_codeql_history(findings, current, matches, ledger)
+    save(root, "codeql-first-seen-history.json", ledger)
+    return linked
+
+
 def sonar_gate_snapshot(api, context, revision):
     """An independent genuine PR/main gate; the candidate inventory is not a gate."""
     values = shlex.split(context)
@@ -443,6 +632,8 @@ def collect(args, api=None, sonar=None):
                 if getattr(args, "codeql_evidence", None):
                     from codeql_evidence import consume
                     findings = consume(args.codeql_evidence, args.artifact_manifest, getattr(args, "root", "."), root, args.revision, args.version, args.candidate_id)
+                    if (root / "codeql-local").is_dir():
+                        findings = link_codeql_history(api or ExportAPI(), root, args.revision, args.version, findings)
                 else:
                     findings = export_codeql(api or ExportAPI(), root, args.revision, args.version)
             else:
