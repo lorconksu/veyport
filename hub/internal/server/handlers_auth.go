@@ -696,10 +696,13 @@ func (s *Server) handleTOTPEnable(w http.ResponseWriter, r *http.Request) {
 	// This path completes a first sign-in, so it resets the lockout counter and
 	// stamps the sign-in time exactly like the code stage does.
 	s.recordLoginSuccess(user)
+	s.respondAfterTOTPSetup(w, r, userID)
+}
 
+func (s *Server) respondAfterTOTPSetup(w http.ResponseWriter, r *http.Request, userID string) {
 	// A first sign-in completes here rather than at the code stage, so this is
 	// the other point that establishes a session (009 FR-001).
-	user, err = s.store.GetUserByID(userID)
+	user, err := s.store.GetUserByID(userID)
 	if err != nil || !user.TOTPEnabled || user.MustChangePassword {
 		respondError(w, http.StatusUnauthorized, errUserNotFound)
 		return
@@ -947,14 +950,10 @@ func (s *Server) handleTOTPDisable(w http.ResponseWriter, r *http.Request) {
 	actor := store.AccountManagementActor{UserID: adminID, SessionID: claims.SessionID, Generation: claims.TokenGeneration, SecurityRevision: admin.SecurityRevision, ExpiresAt: claims.ExpiresAt.Time}
 
 	// Decrypt admin's TOTP secret if encrypted
-	adminTOTPSecret := admin.TOTPSecret
-	if adminTOTPSecret != nil && strings.HasPrefix(*adminTOTPSecret, "enc:") {
-		decrypted, err := s.decryptTOTPSecret(*adminTOTPSecret)
-		if err != nil {
-			respondError(w, http.StatusInternalServerError, "failed to decrypt admin TOTP secret")
-			return
-		}
-		adminTOTPSecret = &decrypted
+	adminTOTPSecret, err := s.totpSecretForValidation(admin.TOTPSecret)
+	if err != nil {
+		respondError(w, http.StatusInternalServerError, "failed to decrypt admin TOTP secret")
+		return
 	}
 
 	if adminTOTPSecret == nil || !auth.ValidateTOTPWithReplay(s.totpCache, adminID, *adminTOTPSecret, req.AdminTOTPCode) {
