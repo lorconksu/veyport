@@ -2,10 +2,14 @@
 
 This PR prepares the SSDF pipeline; its collector/coordinator timers are OFF and
 the gates are not active. DAST remains deferred and has not been tested.
-Candidate qualification, complete current-revision SAST exports, archival and
-owner-approved finding dispositions are prerequisites to publication. This
-record grants no exception. See [SSDF operations](ssdf-operations.md) for
-prototype rollout state and operator blockers.
+On baseline `017dc7b`, trusted rehearsal `41419141402` collected full source
+SAST and exact-candidate evidence; release evaluation correctly blocked on
+unapproved coverage, finding dispositions and unknown discovery dates. This
+does not establish coverage or approval for later changes. Local server and
+frontend validation passed, and independent code and security reviews found no
+actionable findings. Final-head CI status is tracked on PR #115; this record
+grants no exception. See
+[SSDF operations](ssdf-operations.md) for rollout state and blockers.
 
 ## Scan ownership
 
@@ -43,7 +47,8 @@ analysis remains new-code analysis. Existing stable tag branches are short-lived
 and cannot provide a full baseline. The focused Sonar tests and actionlint
 checks passed, and a read-only preflight confirmed the current SHA can use the
 dedicated branch.
-Overall candidate validation remains pending.
+That earlier validation was superseded by baseline `017dc7b` and rehearsal
+`41419141402`, described below.
 
 Trusted live rehearsal `41413022387` confirmed that Sonar analysis can finish
 successfully and return the full exact-source inventory on the first analysis
@@ -62,7 +67,8 @@ analysis uses `sonar.qualitygate.wait=false`; ordinary PR analysis continues to
 wait for its own gate. The CI change captures and validates the gate
 analysis separately from the candidate-branch inventory. The 139 release-helper tests, actionlint and secret scan pass. A read-only
 replay against the actual candidate inventory and PR gate passed; live workflow
-validation of this correction remains pending. A Sonar context argument parsing
+validation subsequently completed for baseline `017dc7b` in rehearsal
+`41419141402`. A Sonar context argument parsing
 issue was fixed by using `--context=...`; a workflow-level subprocess
 regression check covers this invocation path. The separate gate proof preserves
 Sonar's actual returned conditions; it does not assert that unconfigured overall-code
@@ -82,7 +88,8 @@ SARIF against the exact candidate and artifact manifest, without uploading
 duplicate GitHub results or creating a second provider project. Reuse remains
 possible if that provider metadata is authenticated in a future approved
 configuration. The extra scan is justified by inability to verify full provider
-configuration, and its runtime impact still needs measurement. The CodeQL
+configuration. The full local CodeQL scan took 330 seconds on one runner; this
+single measurement is not a general runtime estimate. The CodeQL
 prepare step rejects debug-upload environments before initialization; local
 initialization sets `debug: false`, and result validation requires that setting.
 Partial failed reuse exports are retained diagnostically and still fail
@@ -92,15 +99,20 @@ The initial baseline change passed 124 release-helper tests, 59 focused reviewer
 tests, and a local CodeQL CLI 2.27.3 fixture scan. Independent code review
 found no actionable findings. Security re-review resolved the debug-artifact
 bypass (SEC-01) with no remaining actionable findings. PR CI and managed
-CodeQL passed for `6bfbb5d`; the subsequent Sonar gate correction is under
-completed review and awaits its own live rehearsal.
+CodeQL passed for `6bfbb5d`. For baseline `017dc7b`, PR CI `41419129930`,
+managed CodeQL `41419123755`, and trusted rehearsal `41419141402` passed their
+stated checks; the rehearsal included a five-language full local CodeQL scan.
+It took 330 seconds on one runner, a single measurement rather than a general
+runtime estimate. The resulting full baseline remains subject to owner coverage
+and finding-disposition review.
 This is a full baseline within configured extraction
 scope, not a claim that every test file is
 analyzed. GitHub's managed Go extractor excludes `*_test.go` by default unless
 `CODEQL_EXTRACTOR_GO_OPTION_EXTRACT_TESTS=true`; this change does not expand that
 scope. See GitHub's [Go extractor options](https://docs.github.com/en/code-security/reference/code-scanning/codeql/build-options-for-compiled-languages#extractor-options-for-go).
-Do not infer that the current candidate change passed review or live CI until
-those validations complete.
+The latest verified CI and managed CodeQL runs are for baseline `017dc7b`.
+Local validation and independent reviews of subsequent changes passed; final-
+head CI status is tracked on PR #115 and is not represented here as passed.
 
 The initial read-only 2026-10-31 inventory found ten GitHub-origin projects: five
 Go modules, frontend npm, Python requirements, two Dockerfiles and one Code
@@ -174,6 +186,16 @@ complete final-candidate migration is not yet qualified. Frontend baseline
 disposition, final revision/artifact scans, historical Dependency-Track archival
 and candidate qualification remain required. Do not remove Dependency-Track's
 Veyport history or replace Grype based on this sample.
+
+The fresh development-inclusive web scan of the current working tree reports
+four unique advisory IDs (two high, two medium); minimatch is absent after the
+scoped 11.0.4 override. This is a changed-scope scan, not a complete final-head
+scan. Finalized SCA triage identifies four unfixed unique web advisory IDs (two
+high, two medium). Owner dispositions and verified discovery dates are still
+outstanding. History triage correlated nine Go CodeQL alerts to provider
+history by exact fingerprint, rule, location and code-flow evidence; the other
+findings have unknown dates. This correlation has not been wired into a durable
+history ledger. Final-head CI and other final-revision scans remain pending.
 
 ## SAST flow and historical comparison
 

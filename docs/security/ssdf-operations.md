@@ -8,18 +8,20 @@ and [candidate coordinator runbook](../../infra/candidate-coordinator/README.md)
 for configuration and procedures. Hostnames, addresses, mount paths and private
 evidence locations intentionally remain in operator configuration.
 
-The implementation remains a draft prototype. Independent code and security
-review results and final CI status are tracked on
-[PR #115](https://github.com/lorconksu/veyport/pull/115). Trusted rehearsal
-`41403473899` on `2debc2a` passed CI, exact-artifact scans, Snyk source/image
-assessment execution and the Semgrep step. Eighteen native standard cases
-passed with a verified public signed-candidate receipt. The source SAST
-assessment failed because this unmerged PR received main-only CodeQL and Sonar
-baselines. The archive contained 51 records (31 signed records and 210 verified
-payloads); the release gate rejected the final partial signed receipt. The
-rehearsal did not publish or promote a candidate. Staging remains v2.0.57,
-temporary candidate credentials/configuration were removed, and timers remain
-OFF. Current-candidate full-baseline changes are still awaiting validation.
+PR #115 remains unmerged and the pipeline remains a draft prototype. On baseline
+`017dc7b`, PR CI `41419129930` and managed CodeQL `41419123755` passed. Trusted
+rehearsal `41419141402` collected full source SAST, passed 18 native cases, and
+recorded 51 records with 31 signatures and 225 verified payload readbacks. The
+release evaluation correctly BLOCKED on unapproved coverage, finding
+dispositions and unknown discovery dates. It did not publish or promote a
+candidate. Subsequent local validation passed: server tests in 505.998 seconds
+at 86.4% coverage, notify coverage 90.6%, `go vet`, 846 frontend tests, frontend
+build, and changed-file Gitleaks with no exclusions. Independent code and
+security reviews found no actionable findings. Repository-wide lint retains
+the same 20 errors and two warnings. Final-head CI status is tracked on PR #115
+and is not claimed passed here. Staging remains v2.0.57 and timers remain OFF.
+No merge, release, risk acceptance,
+scanner retirement or Dependency-Track cutover occurred.
 
 ## Established prototype state
 
@@ -45,9 +47,12 @@ OFF. Current-candidate full-baseline changes are still awaiting validation.
   snapshots contain GitHub status metadata and safe references, not full SCM
   scan reports. Neither export starts another scan or grants release authority.
 - The earlier Sonar issue-export HTTP 400 failure was resolved for the trusted
-  rehearsal, and authenticated Snyk source/image assessments executed. Source
-  SAST remains incomplete: the unmerged candidate received main-only CodeQL and
-  Sonar baselines, so the assessment failed closed. The correction
+  rehearsal, and authenticated Snyk source/image assessments executed. The
+  earlier rehearsal's main-only CodeQL/Sonar baseline failure was corrected:
+  rehearsal `41419141402` collected full exact-source CodeQL and Sonar evidence
+  and a separate exact-commit PR gate for baseline `017dc7b`. Release policy
+  still blocks on outstanding coverage approval, finding dispositions and
+  discovery dates. The correction
   uses a dedicated full Sonar branch named
   `release-ssdf-candidate-<40-character-source-SHA>` for trusted prototype and
   stable-release scans, without overwriting `main`; ordinary PR analysis stays
@@ -58,15 +63,18 @@ OFF. Current-candidate full-baseline changes are still awaiting validation.
   `Administration:read`. Credentials will not be broadened; therefore each
   delivery run, including main, must perform a fresh full CodeQL scan. Reuse is
   only a future capability if metadata can be authenticated under an approved
-  configuration. Measure the added runtime. Partial failed reuse exports are
+  configuration. The full local CodeQL scan took 330 seconds on one runner; this
+  single measurement is not a general runtime estimate. Partial failed reuse
+  exports are
   retained diagnostically while qualification fails closed. The initial baseline change passed 124 release-helper tests and 59 focused
-  reviewer tests; PR CI and managed CodeQL passed for `6bfbb5d`. Independent code review found no actionable
-  findings. Security re-review resolved the CodeQL debug-artifact bypass
-  (SEC-01), with no remaining actionable findings. The implementation rejects
+  reviewer tests. PR CI `41419129930` and managed CodeQL `41419123755` passed
+  for baseline `017dc7b`. Independent code review found no actionable findings.
+  Security re-review resolved the CodeQL debug-artifact bypass (SEC-01). The
+  implementation rejects
   debug-upload environments before initialization and requires debug output to
   remain disabled. See
   [scanner access contracts](scanner-coverage.md) for scope and limits.
-- A later trusted Sonar rehearsal, `41413022387`, failed closed on the first
+- Earlier trusted Sonar rehearsal `41413022387` failed closed on the first
   analysis of the new LONG candidate branch. Sonar returned the complete
   exact-SHA issue inventory and a successful Compute Engine task, but its
   quality-gate status was `NONE`. Keep that result diagnostic/nonpassing; do
@@ -76,7 +84,8 @@ OFF. Current-candidate full-baseline changes are still awaiting validation.
   established main analysis for a stable release. `ERROR`, `NONE`, stale or
   mismatched gate evidence blocks qualification. Only inventory analysis uses
   `sonar.qualitygate.wait=false`; ordinary PR analysis still waits. This fix passes 139 release-helper tests and a live read-only export replay;
-  independent security re-review is clear, and its workflow rehearsal remains pending. The failed
+  independent security re-review is clear. Trusted rehearsal `41419141402`
+  validated the correction for baseline `017dc7b`. The earlier failed
   rehearsal archive verified 51 records, 29 signatures, 116 payload readbacks,
   14 report bundles and 14 terminal logs. Temporary credentials and services
   were removed; normal staging remained unchanged. Sonar describes the first-branch behavior
@@ -93,12 +102,19 @@ OFF. Current-candidate full-baseline changes are still awaiting validation.
 
 ## Scanner and release blockers
 
-The SCA baseline contains two unresolved high and three medium frontend
-advisories. The scan records also lack upstream `first_seen` values needed to
-support 30-day medium and 90-day low tracking. First-seen history and a complete Snyk SCM export,
-owner baseline coverage, and risk disposition remain pending. These gaps block
-publication. Python cryptography was updated to 50.0.0 and its fresh scan was
-clean, but this does not substitute for complete final-revision scans. See
+The baseline rehearsal surfaced unapproved coverage/finding dispositions that
+block publication. History triage has since correlated nine Go CodeQL alerts to
+provider dates using exact fingerprint, rule, location and code-flow evidence;
+remaining dates are unknown, and this correlation is not wired into a durable
+ledger. A fresh development-inclusive web scan of the current working
+tree reports four unfixed unique advisory IDs (two high, two medium), with no
+minimatch finding after the scoped override. Complete Snyk SCM export, owner
+coverage review, remaining verified first-seen history and finding
+dispositions remain outstanding. Triage has not wired the history correlation
+into a durable ledger or created approvals. The scoped collector read/status token is installed and
+supervised authenticated collection has been demonstrated. Unattended
+activation, dedicated coordinator credential and separate deletion credential
+remain pending. See
 [scanner coverage](scanner-coverage.md) for scope and remaining evidence.
 
 Keep SonarQube, CodeQL and Semgrep active until same-revision coverage and
@@ -108,13 +124,12 @@ separate DAST provisioning and policy review are complete.
 
 ## Operator pending checklist
 
-1. Verify the latest commit's CI and review results on PR #115. Retain its
+1. Verify final-head CI and review status on PR #115. Retain its
    native rehearsal record and confirm that candidate, source revision and
    evidence identify the same immutable bytes before release qualification.
-2. Obtain and verify the repository-scoped collection token with Actions read,
-   Code scanning alerts read, Contents read, and commit statuses read/write.
-   Provision a separate least-privilege deletion credential; it is currently
-   absent.
+2. Provision and verify the dedicated coordinator credential and separate
+   least-privilege deletion credential. The scoped collector read/status token
+   is installed; do not reuse it as either credential.
 3. Keep both timers disabled until credentials, trusted source pins, receipt
    key pins, monitoring, storage capacity and the full recovery/deletion
    procedure have been reviewed against the runbooks.
@@ -126,8 +141,8 @@ separate DAST provisioning and policy review are complete.
 5. Review the public `go-test.jsonl` artifact's privacy handling and ensure
    published records describe its synthetic-fixture scope accurately.
 6. Reconcile the supervised encrypted CI transport backups retained on the NAS
-   while the service credential is pending. They are recovery copies, not
-   release-authorizing archive receipts. Exercise authenticated collection,
+   while coordinator and deletion credentials are pending. They are recovery
+   copies, not release-authorizing archive receipts. Exercise authenticated collection,
    signed receipt verification, failure
    behavior, exact-ID artifact deletion and cancellation/mount-loss recovery.
    Failed or missing collection must block publication and must not delete the

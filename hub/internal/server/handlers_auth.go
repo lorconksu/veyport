@@ -250,6 +250,11 @@ func (s *Server) recordLoginFailure(r *http.Request, userID *string, username st
 	}
 	s.auditLogRequest(r, entry)
 	if notify && s.notifier != nil {
+		// An unknown login name is arbitrary unauthenticated content, including
+		// phishing links. Keep it out of trusted notification emails.
+		if userID == nil {
+			username = "(unrecognized account)"
+		}
 		s.notifier.Notify(model.NotifyLoginFailed, map[string]string{
 			"username":  username,
 			"ip":        ip,

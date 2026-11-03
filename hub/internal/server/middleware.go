@@ -250,7 +250,8 @@ func loggingMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		start := time.Now()
 		next.ServeHTTP(w, r)
-		log.Printf("%s %s %s request_id=%s", r.Method, r.URL.Path, time.Since(start), RequestIDFromContext(r.Context()))
+		// Quote the decoded path so client input cannot forge log lines or terminal controls.
+		log.Printf("%s %q %s request_id=%s", r.Method, r.URL.Path, time.Since(start), RequestIDFromContext(r.Context()))
 	})
 }
 
