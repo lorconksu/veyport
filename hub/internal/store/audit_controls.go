@@ -33,27 +33,38 @@ func (s *Store) GetAuditSettings() model.AuditSettings {
 	}
 }
 
+// UpdateAuditSettings is the trusted system entry point. HTTP callers must use
+// UpdateAuditSettingsAudited to bind the write to live administrator authority.
 func (s *Store) UpdateAuditSettings(settings model.AuditSettings) error {
-	values := AuditSettingsConfig(settings)
-	return s.withImmediateTx(func(ctx context.Context, conn *sql.Conn) error {
-		var allowed bool
-		if err := conn.QueryRowContext(ctx, "SELECT state='standard' AND pending_version IS NULL FROM audit_policy_state WHERE id=1").Scan(&allowed); err != nil {
+	if err := ValidateAuditSettings(settings); err != nil {
+		return err
+	}
+	appended := false
+	err := s.withImmediateTx(func(ctx context.Context, conn *sql.Conn) error {
+		if err := guardStandardAuditSettings(ctx, conn); err != nil {
 			return err
 		}
-		enrolled, err := governanceEnrolled(ctx, conn)
-		if err != nil {
-			return err
-		}
-		if !allowed || enrolled {
-			return ErrProtectedChange
-		}
-		for key, value := range values {
-			if _, err := conn.ExecContext(ctx, "INSERT INTO _config(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value", key, value); err != nil {
-				return err
-			}
-		}
-		return nil
+		err := logAuditSettingsConn(ctx, conn, settings, model.AuditEntry{ActorType: model.AuditActorTypeSystem})
+		appended = err == nil
+		return err
 	})
+	s.noteAuditSettingsResult(err, appended)
+	return err
+}
+
+func guardStandardAuditSettings(ctx context.Context, conn *sql.Conn) error {
+	var allowed bool
+	if err := conn.QueryRowContext(ctx, "SELECT state='standard' AND pending_version IS NULL FROM audit_policy_state WHERE id=1").Scan(&allowed); err != nil {
+		return err
+	}
+	enrolled, err := governanceEnrolled(ctx, conn)
+	if err != nil {
+		return err
+	}
+	if !allowed || enrolled {
+		return ErrProtectedChange
+	}
+	return nil
 }
 
 func AuditSettingsConfig(settings model.AuditSettings) map[string]string {

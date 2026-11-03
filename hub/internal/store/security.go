@@ -669,55 +669,72 @@ func (s *Store) RecordSecurityCommit(id, reference string) error {
 	return err
 }
 func (s *Store) ActivateSecurityChange(c model.SecurityChange, p model.SecurityChangePayload) error {
-	return s.changeInteractivePolicy(func() error { return s.activateSecurityChange(c, p) })
-}
-func (s *Store) activateSecurityChange(c model.SecurityChange, p model.SecurityChangePayload) error {
-	clock := func() time.Time { return time.Now().UTC() }
-	return s.withImmediateTx(func(ctx context.Context, conn *sql.Conn) error {
-		var active uint64
-		var pending sql.NullInt64
-		var id string
-		if err := conn.QueryRowContext(ctx, "SELECT active_version,pending_version,pending_change FROM audit_policy_state WHERE id=1 AND state='applying'").Scan(&active, &pending, &id); err != nil {
-			return err
-		}
-		if id != c.ID || !pending.Valid || uint64(pending.Int64) != c.ExpectedVersion+1 {
-			return ErrSecurityConflict
-		}
-		for _, version := range []uint64{active, uint64(pending.Int64)} {
-			if _, err := readPolicyVersion(conn.QueryRowContext(ctx, "SELECT payload,digest,request_id FROM audit_policy_versions WHERE version=?", version), version); err != nil {
-				return err
-			}
-		}
-		if active == c.ExpectedVersion+1 {
-			return nil
-		}
-		if active != c.ExpectedVersion {
-			return ErrSecurityConflict
-		}
-		var commit string
-		if err := conn.QueryRowContext(ctx, "SELECT commit_ref FROM security_changes WHERE id=? AND state='applying'", c.ID).Scan(&commit); err != nil || commit == "" {
-			return ErrSecurityConflict
-		}
-		applierGuard, err := checkSecurityPrincipal(ctx, conn, c, c.ApplierID, c.ApplierPersonID, c.ApplierRevision, "security.apply", clock)
-		if err != nil {
-			return err
-		}
-		quorumGuards, err := s.validateSecurityQuorumConn(ctx, conn, c, clock)
-		if err != nil {
-			return err
-		}
-		principalGuards := append([]securityPrincipalGuard{applierGuard}, quorumGuards...)
-		if err := recheckSecurityPrincipalGuards(clock, principalGuards...); err != nil {
-			return err
-		}
-		if err := applySecurityPayload(ctx, conn, c, p); err != nil {
-			return err
-		}
-		if _, err := conn.ExecContext(ctx, "UPDATE audit_policy_state SET active_version=? WHERE id=1 AND active_version=? AND pending_change=?", c.ExpectedVersion+1, c.ExpectedVersion, c.ID); err != nil {
-			return err
-		}
-		return recheckSecurityPrincipalGuards(clock, principalGuards...)
+	auditAppended := false
+	err := s.changeInteractivePolicy(func() error {
+		var err error
+		auditAppended, err = s.activateSecurityChange(c, p)
+		return err
 	})
+	if p.Kind == "audit-settings" {
+		s.noteAuditSettingsResult(err, auditAppended)
+	}
+	return err
+}
+func (s *Store) activateSecurityChange(c model.SecurityChange, p model.SecurityChangePayload) (auditAppended bool, err error) {
+	clock := func() time.Time { return time.Now().UTC() }
+	err = s.withImmediateTx(func(ctx context.Context, conn *sql.Conn) error {
+		var err error
+		auditAppended, err = s.activateSecurityChangeConn(ctx, conn, c, p, clock)
+		return err
+	})
+	return auditAppended, err
+}
+
+func (s *Store) activateSecurityChangeConn(ctx context.Context, conn *sql.Conn, c model.SecurityChange, p model.SecurityChangePayload, clock func() time.Time) (bool, error) {
+	var active uint64
+	var pending sql.NullInt64
+	var id string
+	if err := conn.QueryRowContext(ctx, "SELECT active_version,pending_version,pending_change FROM audit_policy_state WHERE id=1 AND state='applying'").Scan(&active, &pending, &id); err != nil {
+		return false, err
+	}
+	if id != c.ID || !pending.Valid || uint64(pending.Int64) != c.ExpectedVersion+1 {
+		return false, ErrSecurityConflict
+	}
+	for _, version := range []uint64{active, uint64(pending.Int64)} {
+		if _, err := readPolicyVersion(conn.QueryRowContext(ctx, "SELECT payload,digest,request_id FROM audit_policy_versions WHERE version=?", version), version); err != nil {
+			return false, err
+		}
+	}
+	if active == c.ExpectedVersion+1 {
+		return false, nil
+	}
+	if active != c.ExpectedVersion {
+		return false, ErrSecurityConflict
+	}
+	var commit string
+	if err := conn.QueryRowContext(ctx, "SELECT commit_ref FROM security_changes WHERE id=? AND state='applying'", c.ID).Scan(&commit); err != nil || commit == "" {
+		return false, ErrSecurityConflict
+	}
+	applierGuard, err := checkSecurityPrincipal(ctx, conn, c, c.ApplierID, c.ApplierPersonID, c.ApplierRevision, "security.apply", clock)
+	if err != nil {
+		return false, err
+	}
+	quorumGuards, err := s.validateSecurityQuorumConn(ctx, conn, c, clock)
+	if err != nil {
+		return false, err
+	}
+	principalGuards := append([]securityPrincipalGuard{applierGuard}, quorumGuards...)
+	if err := recheckSecurityPrincipalGuards(clock, principalGuards...); err != nil {
+		return false, err
+	}
+	if err := applySecurityPayload(ctx, conn, c, p); err != nil {
+		return false, err
+	}
+	auditAppended := p.Kind == "audit-settings"
+	if _, err := conn.ExecContext(ctx, "UPDATE audit_policy_state SET active_version=? WHERE id=1 AND active_version=? AND pending_change=?", c.ExpectedVersion+1, c.ExpectedVersion, c.ID); err != nil {
+		return auditAppended, err
+	}
+	return auditAppended, recheckSecurityPrincipalGuards(clock, principalGuards...)
 }
 func applySecurityPayload(ctx context.Context, conn *sql.Conn, c model.SecurityChange, p model.SecurityChangePayload) error {
 	invalidate := func(user string) error {
@@ -745,11 +762,21 @@ func applySecurityPayload(ctx context.Context, conn *sql.Conn, c model.SecurityC
 		return invalidate(user)
 	}
 	switch p.Kind {
-	case "audit-settings", "ldap":
-		configs := p.PreparedConfig
-		if p.AuditSettings != nil {
-			configs = AuditSettingsConfig(*p.AuditSettings)
+	case "audit-settings":
+		if p.AuditSettings == nil {
+			return ErrSecurityConflict
 		}
+		// Activation, the old/new settings record and the policy-version CAS
+		// commit together. An acknowledged external commit remains recoverable
+		// if this local transaction fails; reconciliation retries this exact change.
+		return logAuditSettingsConn(ctx, conn, *p.AuditSettings, model.AuditEntry{
+			ID:            c.ID + "-audit-settings",
+			UserID:        &c.ApplierID,
+			ActorType:     model.AuditActorTypeUser,
+			CorrelationID: &c.ID,
+		})
+	case "ldap":
+		configs := p.PreparedConfig
 		if len(configs) == 0 {
 			return ErrSecurityConflict
 		}

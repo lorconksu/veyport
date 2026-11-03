@@ -440,64 +440,109 @@ func accountManagementPolicyStrict(ctx context.Context, conn *sql.Conn) (lockout
 	return policy, nil
 }
 func guardAccountManagementActor(ctx context.Context, conn *sql.Conn, actors []AccountManagementActor, clock func() time.Time) error {
+	return guardAdministratorActor(ctx, conn, actors, clock, true)
+}
+
+func guardAdministratorActor(ctx context.Context, conn *sql.Conn, actors []AccountManagementActor, clock func() time.Time, requireMFA bool) error {
 	if len(actors) == 0 {
 		return nil
 	}
 	actor := actors[0]
-	var u model.User
-	var disabled, activity, reactivated sql.NullString
-	var created string
-	var admin bool
-	err := conn.QueryRowContext(ctx, `SELECT u.token_generation,u.security_revision,u.must_change_password,u.totp_enabled AND u.totp_secret IS NOT NULL,u.disabled_at,u.last_activity_at,u.reactivated_at,u.created_at,u.dormancy_exempt,EXISTS(SELECT 1 FROM user_roles r WHERE r.user_id=u.id AND r.role='admin') FROM users u WHERE u.id=?`, actor.UserID).Scan(&u.TokenGeneration, &u.SecurityRevision, &u.MustChangePassword, &u.TOTPEnabled, &disabled, &activity, &reactivated, &created, &u.DormancyExempt, &admin)
+	u, admin, err := readAdministratorUser(ctx, conn, actor.UserID)
 	if err != nil {
-		if errors.Is(err, sql.ErrNoRows) {
-			return ErrAccountManagementActor
-		}
 		return err
 	}
-	u.DisabledAt = parseSQLiteTime(disabled)
-	u.LastActivityAt = parseSQLiteTime(activity)
-	u.ReactivatedAt = parseSQLiteTime(reactivated)
-	u.CreatedAt, _ = time.Parse(sqliteTimeFormat, created)
 	policy, err := accountManagementPolicyStrict(ctx, conn)
 	if err != nil {
 		return err
 	}
-	var actorSession session.State
-	var apiExpires, apiRevoked sql.NullString
-	var apiUser string
-	if actor.APITokenHash != "" {
-		err = conn.QueryRowContext(ctx, "SELECT user_id,expires_at,revoked_at FROM api_tokens WHERE token_hash=?", actor.APITokenHash).Scan(&apiUser, &apiExpires, &apiRevoked)
-		if err != nil {
-			if errors.Is(err, sql.ErrNoRows) {
-				return ErrAccountManagementActor
-			}
-			return err
-		}
+	api, err := readAdministratorAPIToken(ctx, conn, actor)
+	if err != nil {
+		return err
 	}
-	if actor.SessionID != "" {
-		actorSession, err = readLiveSession(ctx, conn, actor.SessionID, actor.UserID)
-		if err != nil {
-			if errors.Is(err, ErrSecurityConflict) {
-				return ErrAccountManagementActor
-			}
-			return err
-		}
+	actorSession, err := readAdministratorSession(ctx, conn, actor)
+	if err != nil {
+		return err
 	}
 	// Sample only after every authority read. Absolute and idle expiry continue
 	// advancing while SQLite or a policy/session view is blocked.
 	now := clock()
-	if !admin || !u.TOTPEnabled || u.TokenGeneration != actor.Generation || u.SecurityRevision != actor.SecurityRevision || u.MustChangePassword || u.DisabledAt != nil || account.IsDormant(account.InputFromUser(&u), now, policy.DormantDays) || !actor.ExpiresAt.IsZero() && !now.Before(actor.ExpiresAt) {
+	if !administratorUserValid(u, admin, actor, policy, now, requireMFA) || !api.valid(actor, now) {
 		return ErrAccountManagementActor
-	}
-	if actor.APITokenHash != "" {
-		expires := parseSQLiteTime(apiExpires)
-		if apiUser != actor.UserID || apiRevoked.Valid || apiExpires.Valid && (expires == nil || !now.Before(*expires)) {
-			return ErrAccountManagementActor
-		}
 	}
 	if actor.SessionID != "" && session.Evaluate(actorSession, now, policy) != session.VerdictOK {
 		return ErrAccountManagementActor
 	}
 	return nil
+}
+
+func readAdministratorUser(ctx context.Context, conn *sql.Conn, userID string) (*model.User, bool, error) {
+	var u model.User
+	var disabled, activity, reactivated sql.NullString
+	var created string
+	var admin bool
+	err := conn.QueryRowContext(ctx, `SELECT u.token_generation,u.security_revision,u.must_change_password,u.totp_enabled AND u.totp_secret IS NOT NULL,u.disabled_at,u.last_activity_at,u.reactivated_at,u.created_at,u.dormancy_exempt,EXISTS(SELECT 1 FROM user_roles r WHERE r.user_id=u.id AND r.role='admin') FROM users u WHERE u.id=?`, userID).Scan(&u.TokenGeneration, &u.SecurityRevision, &u.MustChangePassword, &u.TOTPEnabled, &disabled, &activity, &reactivated, &created, &u.DormancyExempt, &admin)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, false, ErrAccountManagementActor
+	}
+	if err != nil {
+		return nil, false, err
+	}
+	u.DisabledAt = parseSQLiteTime(disabled)
+	u.LastActivityAt = parseSQLiteTime(activity)
+	u.ReactivatedAt = parseSQLiteTime(reactivated)
+	u.CreatedAt, _ = time.Parse(sqliteTimeFormat, created)
+	return &u, admin, nil
+}
+
+func administratorUserValid(u *model.User, admin bool, actor AccountManagementActor, policy lockout.Policy, now time.Time, requireMFA bool) bool {
+	if !admin || u.TokenGeneration != actor.Generation || u.SecurityRevision != actor.SecurityRevision || u.MustChangePassword || u.DisabledAt != nil {
+		return false
+	}
+	if requireMFA && !u.TOTPEnabled {
+		return false
+	}
+	if account.IsDormant(account.InputFromUser(u), now, policy.DormantDays) {
+		return false
+	}
+	return actor.ExpiresAt.IsZero() || now.Before(actor.ExpiresAt)
+}
+
+type administratorAPIAuthority struct {
+	userID           string
+	expires, revoked sql.NullString
+}
+
+func readAdministratorAPIToken(ctx context.Context, conn *sql.Conn, actor AccountManagementActor) (administratorAPIAuthority, error) {
+	var api administratorAPIAuthority
+	if actor.APITokenHash == "" {
+		return api, nil
+	}
+	err := conn.QueryRowContext(ctx, "SELECT user_id,expires_at,revoked_at FROM api_tokens WHERE token_hash=?", actor.APITokenHash).Scan(&api.userID, &api.expires, &api.revoked)
+	if errors.Is(err, sql.ErrNoRows) {
+		return api, ErrAccountManagementActor
+	}
+	return api, err
+}
+
+func (api administratorAPIAuthority) valid(actor AccountManagementActor, now time.Time) bool {
+	if actor.APITokenHash == "" {
+		return true
+	}
+	if api.userID != actor.UserID || api.revoked.Valid {
+		return false
+	}
+	expires := parseSQLiteTime(api.expires)
+	return !api.expires.Valid || expires != nil && now.Before(*expires)
+}
+
+func readAdministratorSession(ctx context.Context, conn *sql.Conn, actor AccountManagementActor) (session.State, error) {
+	if actor.SessionID == "" {
+		return session.State{}, nil
+	}
+	state, err := readLiveSession(ctx, conn, actor.SessionID, actor.UserID)
+	if errors.Is(err, ErrSecurityConflict) {
+		return state, ErrAccountManagementActor
+	}
+	return state, err
 }

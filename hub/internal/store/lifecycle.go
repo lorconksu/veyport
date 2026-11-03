@@ -60,11 +60,18 @@ func (s *Store) withImmediateTx(fn func(ctx context.Context, conn *sql.Conn) err
 	}
 
 	if _, err = conn.ExecContext(ctx, "COMMIT"); err != nil {
-		return fmt.Errorf("commit: %w", err)
+		return &transactionCommitError{err: err}
 	}
 	committed = true
 	return nil
 }
+
+// transactionCommitError distinguishes failed persistence from a rejected
+// operation when an audited transaction reports its health after rollback.
+type transactionCommitError struct{ err error }
+
+func (e *transactionCommitError) Error() string { return "commit: " + e.err.Error() }
+func (e *transactionCommitError) Unwrap() error { return e.err }
 
 // advancingClock preserves an injected wall clock while including monotonic
 // elapsed time spent acquiring connections, local locks and SQLite's writer.

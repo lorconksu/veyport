@@ -28,6 +28,12 @@ require a protected request and two independent approvals, including after an
 approved return to Standard. Audit readers can review, export, filter, and flag
 events without gaining settings authority.
 
+Saving audit settings succeeds only when both the settings and their
+`audit.retention_updated` event are durably recorded. In Standard mode, the
+settings update and local audit event commit together, so a failed write does
+not leave an unaudited settings change. Governed updates retain the approval
+and external audit protocol and also require the local event to be saved.
+
 ---
 
 ## Viewing the Audit Log
