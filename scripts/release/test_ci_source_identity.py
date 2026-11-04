@@ -48,10 +48,19 @@ class CISourceIdentity(unittest.TestCase):
                 self.assertTrue(block[checkout.end():].startswith("      - name: Verify checked-out source revision\n"))
                 guard(block)
         self.assertIn("-Dsonar.scm.revision=" + REVISION, jobs["sonarcloud"])
-        # The push-only automatic release retains its existing checkout and tag flow.
+    def test_automatic_publication_is_held_for_every_trigger(self):
+        # Pin the leading literal false: the conjunction is false for every
+        # event/ref, including push, PR, workflow_call and workflow_dispatch.
+        # Preserve the prerequisites and original tag/dispatch flow for the
+        # separately reviewed restoration; all source jobs still run above.
+        jobs = source_jobs()
+        self.assertIn("    needs: [integration, smoke, e2e, sonarcloud, sast, secret-scan, vulnerability-scan]\n",
+                      jobs["auto-release"])
         self.assertNotIn("EXPECTED_SOURCE_SHA", jobs["auto-release"])
         self.assertNotIn("          ref:", jobs["auto-release"])
-        self.assertIn("if: github.event_name == 'push' && github.ref == 'refs/heads/main'", jobs["auto-release"])
+        self.assertEqual(re.findall(r"(?m)^    if: (.+)$", jobs["auto-release"]),
+                         ["false && github.event_name == 'push' && github.ref == 'refs/heads/main'"])
+        self.assertIn("docs/security/approval-bootstrap.md", jobs["auto-release"])
 
     def test_actual_merge_tree_is_refused_and_exact_pr_or_push_head_is_accepted(self):
         with tempfile.TemporaryDirectory() as directory:

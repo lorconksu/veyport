@@ -84,7 +84,7 @@ jobs:
           bash scripts/release/install_tools.sh actionlint "$RUNNER_TEMP/release-tools"
           "$RUNNER_TEMP/release-tools/actionlint"
 
-      - name: Release helper tests
+      - name: Release and approval helper tests
         run: python3 -m unittest discover -s scripts/release -p "test_*.py"
 
       - name: Dependency-Track integration tests
@@ -531,7 +531,10 @@ jobs:
 
   auto-release:
     needs: [integration, smoke, e2e, sonarcloud, sast, secret-scan, vulnerability-scan]
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    # Temporary publication hold for the trusted approval bootstrap: no tags or
+    # release dispatch until reviewed qualification is complete. Restore only by
+    # reviewed PR following docs/security/approval-bootstrap.md.
+    if: false && github.event_name == 'push' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     permissions:
       actions: write
