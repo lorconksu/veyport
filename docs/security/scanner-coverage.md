@@ -11,6 +11,20 @@ actionable findings. Final-head CI status is tracked on PR #115; this record
 grants no exception. See
 [SSDF operations](ssdf-operations.md) for rollout state and blockers.
 
+The blanket Sonar coverage exclusions for handwritten application code were
+removed. Frontend coverage still excludes `src/main.tsx`, `src/test/**` and
+`src/types/**` in `web/vitest.config.ts`; 16 c8 ignore marker lines remain
+across five frontend files (five start/stop ranges and six next markers). The
+active coverage engine recognizes c8 markers, and the remaining ignored ranges
+include executable upload, delete, live-tail and Markdown paths; these facts do
+not make the remaining exclusions structurally untestable or approved. The canonical
+`source_sast` inventory (nine configs and 33 annotations) does not explicitly
+inventory or fully cover the Vitest/c8 measurement controls. A supplemental
+measurement inventory has been prepared privately for hash-bound owner
+discussion; the current canonical approval gate does not enforce it. Whether
+and how to include it remains a collaborative decision. No new CR or RA
+approvals were recorded; no scanner removal or new exclusion was approved.
+
 ## Scan ownership
 
 | Scope | Authoritative execution | Complementary coverage retained |
@@ -123,7 +137,8 @@ duplicate project was created. On 2026-11-03 the owner enabled development
 coverage. Refreshing existing projects with lockfile-only import paths
 preserved all eleven project IDs. Against unchanged main `dfce2e6`, E2E matches
 its 11 locked pairs. Frontend's 552-package SCM graph still omits seven required
-peer pairs from the 559-pair main lock; Python remains root-only. Separately, a
+peer pairs from the 559-pair main lock; Python CLI resolved ten dependencies in
+the verified sample, while its SCM project remains root-only. Separately, a
 minimal explicit declaration of the already-installed `@testing-library/dom`
 peer closed this exact gap in the feature-branch lock without changing its 560
 unique package/version pairs. Authenticated Snyk security-test graphs before
@@ -216,8 +231,9 @@ CodeQL findings, with nine unknown. Snyk and Semgrep discovery dates also remain
 unknown; no risk dispositions were inherited. This history correlation does
 not establish cross-branch Sonar continuity. The Snyk owner enabled development
 dependencies and refreshed the API to include development graphs, but graph
-completeness and lockfile exactness remain under investigation; Python is still
-root-only. Final-head CI and exact final-revision scans remain pending.
+completeness and lockfile exactness remain under investigation. The verified
+Python CLI sample resolved ten dependencies; Python SCM remains root-only.
+Final-head CI and exact final-revision scans remain pending.
 
 ## SAST flow and historical comparison
 

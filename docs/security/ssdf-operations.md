@@ -8,23 +8,20 @@ and [candidate coordinator runbook](../../infra/candidate-coordinator/README.md)
 for configuration and procedures. Hostnames, addresses, mount paths and private
 evidence locations intentionally remain in operator configuration.
 
-PR #115 remains unmerged and the pipeline remains a draft prototype. On baseline
-`017dc7b`, PR CI `41419129930` and managed CodeQL `41419123755` passed. The
-committed closeout base `5d8f193` passed CI `41719743481` (all 15 checks) and
-CodeQL `41719737121` (all five checks); its encrypted evidence was archived and
-read back. Closeout follow-up changes require their own final-head CI, tracked on PR #115. Trusted
-rehearsal `41419141402` collected full source SAST, passed 18 native cases, and
-recorded 51 records with 31 signatures and 225 verified payload readbacks. The
-release evaluation correctly BLOCKED on unapproved coverage, finding
-dispositions and unknown discovery dates. It did not publish or promote a
-candidate. Subsequent local validation passed: server tests in 505.998 seconds
-at 86.4% coverage, notify coverage 90.6%, `go vet`, 846 frontend tests, frontend
-build, and changed-file Gitleaks with no exclusions. Independent code and
-security reviews found no actionable findings. Repository-wide lint retains
-the same 20 errors and two warnings. Final-head CI status is tracked on PR #115
-and is not claimed passed here. Staging remains v2.0.57 and timers remain OFF.
-No merge, release, risk acceptance,
-scanner retirement or Dependency-Track cutover occurred.
+Status (2026-11-05): PR #115 remains unmerged and the pipeline remains a draft
+prototype. Baseline revision `16ef348` passed CI `41739418814` (15/15 jobs) and
+managed CodeQL `41739414356` (5/5 analyses). Exact-candidate rehearsal
+`41739668223` completed evidence acquisition and passed all 18 standard native
+cases, then correctly blocked on unapproved source-coverage policy; publication
+was skipped. PR #122 merged to `main` at `a65fb36` and installed the approval
+workflow; automatic release remains held. PR #115 refresh checks are pending.
+
+The coordinator credential successfully posted its signed candidate result
+during rehearsal. Cleanup-token write capability remains untested. Python CLI
+resolved ten dependencies in the verified sample; Python SCM coverage remains
+root-only. No PR #115 merge, release, risk acceptance, scanner retirement or
+Dependency-Track cutover is claimed. Staging remains v2.0.57 and timers remain
+OFF. DAST remains deferred.
 
 ## Established prototype state
 
@@ -129,12 +126,16 @@ unresolved URIJS findings on `uri-js@4.4.1`: `19963961` medium, `19963963` high,
 and `20341609` medium. Preserve unknown first-discovery times and do not reset
 remediation clocks to project creation or provider refresh dates. The scoped collector read/status
 token is installed and supervised authenticated collection has been
-demonstrated. Distinct coordinator and cleanup tokens are installed remotely and pass
-Actions/Contents read checks; write permissions remain unverified. Cleanup
+demonstrated. The coordinator credential successfully posted its signed
+candidate result during rehearsal; cleanup-token write capability remains
+untested. Cleanup
 still needs an independent service identity with appropriate NFS permissions;
-root cannot access the protected NFS archive, and no cleanup unit is installed. Unattended activation and reviewed main bootstrap remain pending.
-Ninety-three historical publication
-identity holds block deletion, not collection. See
+root cannot access the protected NFS archive, and no cleanup unit is installed.
+Ninety-three historical publication identity holds block deletion, not
+collection. PR #122 merged to `main` at
+`a65fb36` and installed the approval workflow; automatic release remains held
+and PR #115 refresh checks are pending. This workflow installation grants no
+coverage or risk approval. See
 [scanner coverage](scanner-coverage.md) for scope and remaining evidence.
 
 Keep SonarQube, CodeQL and Semgrep active until same-revision coverage and
