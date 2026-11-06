@@ -82,13 +82,15 @@ func TestBreakGlassResetRollsBackEveryStorageBoundary(t *testing.T) {
 		t.Run(boundary, func(t *testing.T) {
 			f := newManagementMutationFixture(t, "reset")
 			installBreakGlassApplicationAuthority(t, f.s)
-			managementExec(t, f.s, `INSERT INTO password_history(id,user_id,password_hash) VALUES('older','target','older')`)
+			// Seed history before the reset clock so retention reaches the older-row
+			// trigger even when fixture setup crosses a wall-clock second.
+			managementExec(t, f.s, `INSERT INTO password_history(id,user_id,password_hash,created_at) VALUES('older','target','older',?)`, f.now.Add(-2*time.Hour).Format("2006-01-02 15:04:05"))
 			settings := f.s.GetAuditSettings()
 			settings.PasswordHistoryCount = 1
 			if err := f.s.UpdateAuditSettings(settings); err != nil {
 				t.Fatal(err)
 			}
-			managementExec(t, f.s, `INSERT INTO password_history(id,user_id,password_hash) VALUES('legacy','target','h')`)
+			managementExec(t, f.s, `INSERT INTO password_history(id,user_id,password_hash,created_at) VALUES('legacy','target','h',?)`, f.now.Add(-time.Hour).Format("2006-01-02 15:04:05"))
 			// Use an existing applied change solely as a fixture for stale grants.
 			managementExec(t, f.s, `INSERT INTO security_changes(id,revision,requester_id,requester_person,requester_generation,expected_version,digest,reason,payload,state,created_at,expires_at) VALUES('old',1,'actor','actor',0,1,?,'test','{}','applied',0,9999999999)`, strings.Repeat("0", 64))
 			managementExec(t, f.s, `INSERT INTO security_password_recoveries VALUES('target','old','h')`)
@@ -111,6 +113,7 @@ func TestBreakGlassResetRollsBackEveryStorageBoundary(t *testing.T) {
 			if err := f.s.ResetLocalTOTPBreakGlass(store.PasswordResetTarget{UserID: f.user.ID, ExpectedGeneration: f.user.TokenGeneration}, managementReplacementHash, f.now); err != nil {
 				t.Fatal(err)
 			}
+			assertPasswordHistoryHashes(t, f.s, f.user.ID, []string{f.user.PasswordHash})
 		})
 	}
 }

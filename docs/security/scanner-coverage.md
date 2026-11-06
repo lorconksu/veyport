@@ -22,7 +22,7 @@ configuration files are `web/.gitignore`, `web/package.json`,
 binding also covers bounded future standard config
 variants and frontend ignore/version-hint files. Exact source hashes bind the
 configuration and marker hints. Canonical inventory SHA256:
-`ee3398635b9085c15921e0f24a47075441628b05c9f7bc4791d5c9b35d4ee0e8`. Local
+`4dad825b42bd4e4af340a7b47332d3fd6aa44c9df3c4084e11390df1018157fe`. Local
 binding and approval regression validation passed, including rejection after
 configuration/marker mutation. The bounded matcher covers c8/v8/istanbul/
 node:coverage `if`, `else`, `next`, `file`, `start` and `stop` hints in tracked

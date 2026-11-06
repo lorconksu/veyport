@@ -15,7 +15,7 @@ annotations: the existing 33 SAST rows are unchanged, with 16 explicit
 coverage-v8 rows across five c8-bearing files. It binds the Vitest configuration,
 frontend toolchain configurations and supported ignore hints. All existing
 exclusions remain unchanged and unapproved. Canonical inventory SHA256 is
-`ee3398635b9085c15921e0f24a47075441628b05c9f7bc4791d5c9b35d4ee0e8`. Local
+`4dad825b42bd4e4af340a7b47332d3fd6aa44c9df3c4084e11390df1018157fe`. Local
 binding/approval validation passed, including rejection of configuration and
 marker mutations. Code/security review and changed-head CI/archive remain
 outstanding. The main frontend SCM graph remains 552/559; E2E is 11/11. Python
