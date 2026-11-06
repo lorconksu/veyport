@@ -6,8 +6,10 @@ from pathlib import Path
 import tempfile
 import unittest
 import zipfile
+from unittest.mock import patch
 
 import risk_acceptance as risk
+import source_sast as sast
 
 
 AT = dt.datetime(2026, 11, 4, 12, tzinfo=dt.timezone.utc)
@@ -143,6 +145,44 @@ class ApprovalTests(unittest.TestCase):
                 self.api.run[field] = value
                 with self.assertRaises(ValueError):
                     self.verify()
+
+    def test_authenticated_coverage_approval_cannot_authorize_measurement_mutations(self):
+        root = self.folder / 'source'
+        (root / 'web/src').mkdir(parents=True)
+        config = root / 'web/vitest.config.ts'
+        source = root / 'web/src/login-totp.tsx'
+        original_config = 'export default { test: { coverage: { provider: "v8" } } }\n'
+        original_source = 'export const verify = () => true\n'
+        config.write_text(original_config)
+        source.write_text(original_source)
+        tracked = b'web/vitest.config.ts\0web/src/login-totp.tsx\0'
+        with patch.object(sast.subprocess, 'check_output', return_value=tracked):
+            for initial_marker in ('', '/* c8 ignore next */\n'):
+                with self.subTest(initial_marker=initial_marker):
+                    source.write_text(initial_marker + original_source)
+                    initial_hash = risk.sha(risk.canonical(sast.suppression_inventory(root)))
+                    self.record = {**proposal(coverage=True), 'inventory_sha256': initial_hash}
+                    self.path = self.folder / 'CR-0001.md'
+                    self.write_record()
+                    self.api = FakeGitHub(self.path.read_bytes(), self.record['id'])
+                    self.approval = risk.prepare(self.api, self.path, REVISION, risk.sha(self.path.read_bytes()), 123)
+                    self.api.approval = self.approval
+                    self.path.with_suffix('.approval.json').write_bytes(risk.canonical(self.approval))
+                    # Exercise the actual authenticated verifier with fixture API data.
+                    with patch.object(risk, 'now', return_value=AT):
+                        self.assertEqual(sast.reviewed_inventory(initial_hash, self.folder, self.api)['id'], 'CR-0001')
+                        mutations = [(config, original_config.replace('"v8"', '"istanbul"')),
+                                     (source, original_source if initial_marker else '/* c8 ignore next */\n' + original_source),
+                                     (source, '/* c8 ignore file */\n' + original_source)]
+                        for path, changed in mutations:
+                            with self.subTest(path=path.name, changed=changed):
+                                previous = path.read_text()
+                                path.write_text(changed)
+                                changed_hash = risk.sha(risk.canonical(sast.suppression_inventory(root)))
+                                self.assertNotEqual(changed_hash, initial_hash)
+                                with self.assertRaisesRegex(ValueError, 'needs owner policy review'):
+                                    sast.reviewed_inventory(changed_hash, self.folder, self.api)
+                                path.write_text(previous)
 
     def test_both_actors_require_pinned_owner_identity(self):
         for actor in ("actor", "triggering_actor"):

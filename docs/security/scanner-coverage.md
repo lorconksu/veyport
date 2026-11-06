@@ -1,29 +1,40 @@
 # Scanner coverage and migration record
 
 This PR prepares the SSDF pipeline; its collector/coordinator timers are OFF and
-the gates are not active. DAST remains deferred and has not been tested.
-On baseline `017dc7b`, trusted rehearsal `41419141402` collected full source
-SAST and exact-candidate evidence; release evaluation correctly blocked on
-unapproved coverage, finding dispositions and unknown discovery dates. This
-does not establish coverage or approval for later changes. Local server and
-frontend validation passed, and independent code and security reviews found no
-actionable findings. Final-head CI status is tracked on PR #115; this record
-grants no exception. See
+the gates are not active. DAST remains deferred and has not been tested. The
+latest captured baseline `28ad4dd30775a32e21e7dbcb236045a75245b9b7` passed CI
+`41973613744` (15/15) and CodeQL `41973608508` (5/5); sequential reviews were
+clear and encrypted archives/readback were verified. These results apply only
+to that revision. Check PR #115 for changed-head status. The prior trusted
+rehearsal correctly blocked on unapproved coverage and finding policy; no
+approval is implied here. See
 [SSDF operations](ssdf-operations.md) for rollout state and blockers.
 
 The blanket Sonar coverage exclusions for handwritten application code were
-removed. Frontend coverage still excludes `src/main.tsx`, `src/test/**` and
-`src/types/**` in `web/vitest.config.ts`; 16 c8 ignore marker lines remain
-across five frontend files (five start/stop ranges and six next markers). The
-active coverage engine recognizes c8 markers, and the remaining ignored ranges
-include executable upload, delete, live-tail and Markdown paths; these facts do
-not make the remaining exclusions structurally untestable or approved. The canonical
-`source_sast` inventory (nine configs and 33 annotations) does not explicitly
-inventory or fully cover the Vitest/c8 measurement controls. A supplemental
-measurement inventory has been prepared privately for hash-bound owner
-discussion; the current canonical approval gate does not enforce it. Whether
-and how to include it remains a collaborative decision. No new CR or RA
-approvals were recorded; no scanner removal or new exclusion was approved.
+removed. The measurement-binding implementation keeps schema version 1 and
+inventories 17 configurations and 49 annotations: the original 33 SAST rows
+remain unchanged, with 16 coverage-v8 rows covering five c8-bearing files. It
+binds the Vitest configuration, actual frontend toolchain configuration and
+supported c8/v8/istanbul/node:coverage ignore hints. The eight added
+configuration files are `web/.gitignore`, `web/package.json`,
+`web/package-lock.json`, `web/tsconfig.json`, `web/tsconfig.app.json`,
+`web/tsconfig.node.json`, `web/vite.config.ts` and `web/vitest.config.ts`. The
+binding also covers bounded future standard config
+variants and frontend ignore/version-hint files. Exact source hashes bind the
+configuration and marker hints. Canonical inventory SHA256:
+`ee3398635b9085c15921e0f24a47075441628b05c9f7bc4791d5c9b35d4ee0e8`. Local
+binding and approval regression validation passed, including rejection after
+configuration/marker mutation. The bounded matcher covers c8/v8/istanbul/
+node:coverage `if`, `else`, `next`, `file`, `start` and `stop` hints in tracked
+`web/src` `.ts`, `.tsx` and `.js` files. Candidate text is conservatively
+included even inside strings; arbitrary JavaScript configuration imports,
+transformations or source maps are not parsed. Existing exclusions, including the Vitest
+exclusions for `src/main.tsx`, `src/test/**` and `src/types/**`, and all c8
+markers remain unchanged. Executable upload, delete, live-tail and Markdown
+paths remain subject to individual assessment; binding is not approval or proof
+that exclusions are structurally necessary. The changed revision still needs
+sequential code/security reviews and exact-head CI/archive. No
+coverage/risk approval or scanner removal is recorded.
 
 ## Scan ownership
 
@@ -233,7 +244,8 @@ not establish cross-branch Sonar continuity. The Snyk owner enabled development
 dependencies and refreshed the API to include development graphs, but graph
 completeness and lockfile exactness remain under investigation. The verified
 Python CLI sample resolved ten dependencies; Python SCM remains root-only.
-Final-head CI and exact final-revision scans remain pending.
+The captured baseline checks are recorded above; changed-head CI and exact
+final-revision scans remain subject to PR #115 status.
 
 ## SAST flow and historical comparison
 

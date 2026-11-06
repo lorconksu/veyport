@@ -1,28 +1,58 @@
 # PR 115 closeout
 
-The owner authorized completing the remaining implementation and verification
-on 2026-11-03. Earlier base `5d8f193c0b16a09e8a9e27986edca06b4a342568` passed
+Status (2026-11-06): the latest captured baseline is `28ad4dd30775a32e21e7dbcb236045a75245b9b7`. Its CI `41973613744` passed all 15 jobs and managed CodeQL `41973608508` passed all five analyses; sequential code and security reviews were clear, and encrypted CI/CodeQL archives and NAS readback were verified. These results apply to that revision only. They do not validate later changes or approve coverage, findings, merge or release. The draft PR remains unmerged, publication remains held, staging remains v2.0.57 and timers remain OFF. Earlier “refresh checks pending” statements below are superseded by this dated baseline; check PR #115 for any newer head status.
+
+## Bounded feature finish line
+
+Five acceptance packages remain, including the coverage package currently
+underway; four remain after that package closes. These count outcomes, not
+individual bugs, approvals, scans or days. The packages describe the already
+agreed feature and are not newly discovered scope.
+
+| Package | Closure evidence | Decision boundary |
+| --- | --- | --- |
+| 1. Coverage binding and exclusion decisions | Enforce all relevant frontend measurement controls, prepare a fresh exact inventory, then assess executable and configured exclusions individually | Automation may implement and prepare records; only the owner approves exact policy. Binding alone does not close this package. |
+| 2. Finding dispositions and discovery history | Final inventory remediated or validly dispositioned, with reliable discovery evidence or policy-compliant handling of unknown dates | Risk dispositions/extensions require authenticated owner approval; never invent or reset dates. |
+| 3. Snyk migration and scanner decision | Complete source/SCM/artifact coverage, documented scanner decision, preserved history, then Veyport-only Dependency-Track retirement | Main SCM refresh follows source landing. Retaining complementary scanners is valid when evidence supports it. |
+| 4. Unattended collection, cleanup and retention | Qualified separate cleanup identity, reference-safe one-year/180-day retention, reconciled deletion holds, exact archived transport deletion and recovery | Collection is proven in supervised runs; deletion and unattended activation remain held until qualified and authorized. |
+| 5. Final candidate qualification, review and delivery | Exact-head reviews/checks/archive; complete candidate, failure/recovery and rollback evidence; authorized merge/release and exact-version staging verification | Green CI is not release authority. Merge, release and activation remain separate decisions. |
+
+These are feature-completion packages, not five mechanical merge checks. A
+reviewed merge under the explicit publication hold could precede some rollout
+only if the owner deliberately chooses that boundary; that would not complete
+the feature. Full candidate lifecycle, hostname, login/TOTP/CSRF and network
+confinement evidence remain in package 5 unless later exact evidence closes
+them. External web/API DAST is explicitly deferred and is not counted among the
+five. One-year release evidence, 180-day other-run evidence, shared-reference
+protection, exact archived transport deletion, and Veyport-only Dependency-Track
+retirement remain agreed functionality, not optional follow-up.
+
+The following implementation/evidence table preserves the state recorded in
+the earlier 2026-11-03 closeout; its “pending” entries are historical and do
+not override the dated baseline above or later PR #115 evidence. The owner
+authorized completing the remaining implementation and verification on
+2026-11-03. Earlier base `5d8f193c0b16a09e8a9e27986edca06b4a342568` passed
 CI `41719743481` (15 checks) and CodeQL `41719737121` (five checks), with
 encrypted evidence archived and read back. Baseline `16ef348` subsequently
 passed CI `41739418814` (15/15) and CodeQL `41739414356` (5/5). Exact-candidate
 rehearsal `41739668223` acquired evidence and passed 18 standard native cases,
-then blocked on unapproved source-coverage policy. PR #115 refresh checks remain
-pending; these results do not grant a policy exception or release qualification.
+then blocked on unapproved source-coverage policy; publication was skipped.
+These results do not grant a policy exception or release qualification.
 
 ## Implementation and evidence
 
 | Work | Completion evidence | State |
 | --- | --- | --- |
-| Audit and administrator guard coverage | Direct rejection, rollback, expiry, idempotent recovery; original 14 guard gaps directly tested | Implemented and focused/race verified; full final-head CI pending |
-| Audit storage coverage | Transaction, concurrent history, retention failure and recovery; committed-batch deletion counts and exact timestamp precision | Implemented and focused/race verified; full final-head CI pending |
+| Audit and administrator guard coverage | Direct rejection, rollback, expiry, idempotent recovery; original 14 guard gaps directly tested | Included in captured baseline `28ad4dd` CI `41973613744` (15/15 passed); changed-head checks are tracked on PR #115 |
+| Audit storage coverage | Transaction, concurrent history, retention failure and recovery; committed-batch deletion counts and exact timestamp precision | Included in captured baseline `28ad4dd` CI `41973613744` (15/15 passed); changed-head checks are tracked on PR #115 |
 | Password and encryption coverage | Boundary/reachable failures; normal and real FIPS-only profiles kept distinct | Implemented and verified; FIPS-only profile rejects caller-managed GCM nonces, so application is not claimed FIPS compatible |
 | Certificate-authority persistence | Fail-closed read errors/corruption/mismatch; atomic initial persistence and legacy migration; concurrency regressions | Implemented and verified; no rotation/expiry policy added |
-| Generated protobuf controls | Pinned verified generation, reproducibility and Buf schema compatibility checks; retain generated-code exclusion | Local controls and actionlint passed; final-head CI pending |
-| Coverage configuration | Blanket Sonar coverage exclusions for handwritten application code were removed; generated code, assets and declaration types remain excluded | Frontend Vitest still excludes `src/main.tsx`, `src/test/**` and `src/types/**`; 16 c8 ignore marker lines remain across five frontend files (five start/stop ranges and six next markers). These measurement exclusions are outside the canonical SAST inventory and need collaborative owner assessment; no approval is claimed |
-| Finding history | Authenticated exact-match CodeQL history ledger retained with reports; unknown dates stay unknown | Integrated and replayed: 9 dated, 9 unknown; no risk dispositions inherited |
+| Generated protobuf controls | Pinned verified generation, reproducibility and Buf schema compatibility checks; retain generated-code exclusion | Local controls and actionlint passed; captured baseline `28ad4dd` CI `41973613744` (15/15 passed); changed-head checks are tracked on PR #115 |
+| Coverage configuration | Blanket Sonar coverage exclusions for handwritten application code were removed; generated code, assets and declaration types remain excluded | Schema-v1 inventory now binds 17 configurations and 49 rows, including 16 coverage-v8 rows; original 33 SAST rows are unchanged. Exact inventory SHA256 is `ee3398635b9085c15921e0f24a47075441628b05c9f7bc4791d5c9b35d4ee0e8`. Local binding/approval regression validation passed. Code/security review and changed-head CI/archive remain outstanding. Existing exclusions still require individual owner review; no approval is claimed. |
+| Finding history | Authenticated exact-match CodeQL history ledger retained with reports; unknown dates stay unknown | Historical ledger snapshot at `16ef348`: 8 dated and 8 unknown; use the exact-candidate sealed ledger for current findings/history. No risk dispositions are inherited. |
 | Scanner comparison | Per-flow security and quality coverage, justified retained checks and timing | Decision packet pending |
 | Snyk migration | Nonempty complete source graphs, exact-artifact coverage and preserved prior history before Dependency-Track cutover | Incomplete |
-| Final verification | Code review, then independent security review, final-revision CI, encrypted evidence/readback, candidate qualification and recovery | Baseline `16ef348` CI `41739418814` (15/15) and CodeQL `41739414356` (5/5) passed; exact-candidate rehearsal `41739668223` acquired evidence and passed 18 standard native cases, then blocked on unapproved source-coverage policy. PR #115 refresh checks and final qualification remain pending |
+| Final verification | Code review, then independent security review, final-revision CI, encrypted evidence/readback, candidate qualification and recovery | Captured baseline `28ad4dd` CI `41973613744` (15/15) and CodeQL `41973608508` (5/5) passed, reviews were clear and encrypted archives/readback verified. Exact candidate qualification and delivery remain pending; these results do not validate a later revision. |
 
 Complex implementation and review tasks use `gpt-6.1-sol` with high reasoning;
 standard tasks use `gpt-6-luna` with medium reasoning. These available model
@@ -33,14 +63,16 @@ the root coordinates shared workflow, coverage and documentation changes.
 
 Risk dispositions and source-coverage approval require the owner's authenticated
 review of exact records. Implementation authorization does not approve an
-exception. Four unresolved development-tool advisory IDs were present in the
-last complete scan; current package registry checks still provide no newer
-release of the affected packages. A final scan must establish the exact remaining
-inventory before any decision is requested.
+exception. Earlier scans reported four development-tool advisory IDs; later
+captured status below records PICOMATCH as provider-revoked and three URIJS
+findings. This dated report does not assert current registry availability. The
+final candidate inventory must establish exact remaining findings before any
+decision is requested.
 
 PR #122 merged to `main` at `a65fb36` and installed the approval workflow.
-Automatic release remains held. PR #115 refresh checks are pending; this does
-not approve any finding disposition or coverage exception. Feature-branch
+Automatic release remains held. The baseline PR #115 refresh checks completed
+as recorded above; any changed head requires its own checks and review. This
+does not approve any finding disposition or coverage exception. Feature-branch
 execution or fabricated approval descriptors cannot substitute for genuine
 owner review.
 

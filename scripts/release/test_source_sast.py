@@ -272,6 +272,102 @@ class SourceEvidenceTests(unittest.TestCase):
             with self.assertRaises(ValueError):
                 sast.reviewed_inventory('a' * 64, directory, None)
 
+    def test_frontend_measurement_configuration_and_toolchain_are_bound(self):
+        names = ['web/vitest.config.ts', 'web/vite.config.ts', 'web/tsconfig.json',
+                 'web/tsconfig.app.json', 'web/tsconfig.node.json', 'web/package.json',
+                 'web/package-lock.json', 'web/.gitignore', 'web/.npmrc',
+                 'web/vitest.workspace.ts', 'web/vitest.config.mts']
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / 'web').mkdir()
+            for name in names:
+                (root / name).write_text('original measurement policy\n')
+            with patch.object(sast.subprocess, 'check_output', return_value=('\0'.join(names) + '\0').encode()):
+                before = sast.suppression_inventory(root)
+                self.assertEqual({c['path'] for c in before['configurations']}, set(names))
+                for name in names:
+                    with self.subTest(name=name):
+                        path = root / name
+                        path.write_text('changed measurement policy\n')
+                        after = sast.suppression_inventory(root)
+                        self.assertNotEqual(sast.sha(sast.canonical(before)), sast.sha(sast.canonical(after)))
+                        path.write_text('original measurement policy\n')
+            tracked = names[:-1]
+            with patch.object(sast.subprocess, 'check_output', return_value=('\0'.join(tracked) + '\0').encode()):
+                removed = sast.suppression_inventory(root)
+            self.assertNotEqual(before, removed)
+            with patch.object(sast.subprocess, 'check_output', return_value=('\0'.join(names) + '\0').encode()):
+                self.assertEqual(before, sast.suppression_inventory(root))
+
+    def test_coverage_hints_bind_previously_unannotated_frontend_source(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / 'web/src').mkdir(parents=True)
+            path = root / 'web/src/example.tsx'
+            plain = 'export const value = () => 1\n'
+            path.write_text(plain)
+            with patch.object(sast.subprocess, 'check_output', return_value=b'web/src/example.tsx\0'):
+                original = sast.suppression_inventory(root)
+                self.assertEqual(original['annotations'], [])
+                for prefix in ('c8', 'v8', 'istanbul', 'node:coverage'):
+                    for hint in ('if', 'else', 'next', 'file', 'start', 'stop'):
+                        with self.subTest(prefix=prefix, hint=hint):
+                            marker = f'/* {prefix} ignore {hint} */\n'
+                            path.write_text(marker + plain)
+                            added = sast.suppression_inventory(root)
+                            self.assertEqual(len(added['annotations']), 1)
+                            annotation = added['annotations'][0]
+                            self.assertEqual(annotation['scanners'], ['coverage-v8'])
+                            self.assertEqual(annotation['line'], 1)
+                            self.assertEqual(annotation['annotation_sha256'], sast.sha(marker.rstrip('\n').encode()))
+                            self.assertEqual(annotation['source_sha256'], sast.sha(path.read_bytes()))
+                            self.assertNotEqual(original, added)
+                            path.write_text(marker + plain.replace('1', '2'))
+                            self.assertNotEqual(added, sast.suppression_inventory(root))
+                            path.write_text(marker.replace(hint, hint + ' changed rationale') + plain)
+                            self.assertNotEqual(added, sast.suppression_inventory(root))
+                            path.write_text(plain)
+                            self.assertEqual(original, sast.suppression_inventory(root))
+
+    def test_coverage_hint_candidates_include_multiline_and_raw_text_provider_forms(self):
+        source = ('/**\n\ufeffistanbul\n ignore\n next */\n'
+                  'export const text = "prefixv8 ignore start"\n'
+                  '/* node:coverage ignore stop: explanation */\n'
+                  '/* c8 ignore nextish */\n'
+                  '/* v8 ignore file_suffix */\n')
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / 'web/src').mkdir(parents=True)
+            path = root / 'web/src/example.tsx'
+            path.write_text(source)
+            with patch.object(sast.subprocess, 'check_output', return_value=b'web/src/example.tsx\0'):
+                annotations = sast.suppression_inventory(root)['annotations']
+            self.assertEqual([a['line'] for a in annotations], [2, 5, 6])
+            self.assertTrue(all(a['scanners'] == ['coverage-v8'] for a in annotations))
+            path.write_text(source.replace('\n', '\r'))
+            with patch.object(sast.subprocess, 'check_output', return_value=b'web/src/example.tsx\0'):
+                self.assertEqual([a['line'] for a in sast.suppression_inventory(root)['annotations']], [2, 5, 6])
+
+    def test_measurement_inventory_selected_files_fail_closed(self):
+        for name in ('web/vitest.config.ts', 'web/package-lock.json', 'web/src/example.tsx'):
+            with self.subTest(name=name), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                path = root / name
+                path.parent.mkdir(parents=True)
+                tracked = (name + '\0').encode()
+                with patch.object(sast.subprocess, 'check_output', return_value=tracked):
+                    with self.assertRaisesRegex(ValueError, 'source policy inventory is incomplete'):
+                        sast.suppression_inventory(root)
+                    target = root / 'target'
+                    target.write_text('/* c8 ignore file */\n')
+                    path.symlink_to(target)
+                    with self.assertRaisesRegex(ValueError, 'source policy inventory is incomplete'):
+                        sast.suppression_inventory(root)
+                    path.unlink()
+                    path.write_bytes(b' ' * ((4 << 20) + 1))
+                    with self.assertRaisesRegex(ValueError, 'source policy inventory is incomplete'):
+                        sast.suppression_inventory(root)
+
     def test_policy_inventory_binds_full_scan_workflow_and_helper_configuration(self):
         names = ['.github/workflows/delivery.yml', '.github/workflows/staging.yml', '.github/workflows/release.yml', 'scripts/release/codeql_evidence.py', 'scripts/release/sonar_context.py', 'scripts/release/source_sast.py']
         with tempfile.TemporaryDirectory() as directory:

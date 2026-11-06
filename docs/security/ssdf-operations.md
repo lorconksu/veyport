@@ -8,13 +8,15 @@ and [candidate coordinator runbook](../../infra/candidate-coordinator/README.md)
 for configuration and procedures. Hostnames, addresses, mount paths and private
 evidence locations intentionally remain in operator configuration.
 
-Status (2026-11-05): PR #115 remains unmerged and the pipeline remains a draft
-prototype. Baseline revision `16ef348` passed CI `41739418814` (15/15 jobs) and
-managed CodeQL `41739414356` (5/5 analyses). Exact-candidate rehearsal
-`41739668223` completed evidence acquisition and passed all 18 standard native
-cases, then correctly blocked on unapproved source-coverage policy; publication
-was skipped. PR #122 merged to `main` at `a65fb36` and installed the approval
-workflow; automatic release remains held. PR #115 refresh checks are pending.
+Status (2026-11-06): PR #115 remains draft, unmerged and the pipeline remains a
+prototype. The latest captured baseline `28ad4dd30775a32e21e7dbcb236045a75245b9b7`
+passed CI `41973613744` (15/15 jobs) and managed CodeQL `41973608508` (5/5
+analyses); sequential reviews were clear and encrypted archives/readback were
+verified. Those results apply to that revision only; check PR #115 for later
+head status. The prior exact-candidate rehearsal passed all 18 standard native
+cases, then correctly blocked on unapproved coverage policy; publication was
+skipped. PR #122 merged to `main` at `a65fb36` and installed the approval
+workflow; automatic release remains held.
 
 The coordinator credential successfully posted its signed candidate result
 during rehearsal. Cleanup-token write capability remains untested. Python CLI
@@ -93,6 +95,17 @@ OFF. DAST remains deferred.
 - Collector and candidate timers are OFF. No release gate is active, and no
   publication, merge, approval, scanner retirement or Dependency-Track cutover
   has occurred.
+- The frontend measurement-binding implementation now records 17
+  configurations and 49 annotations: 33 unchanged SAST rows and 16 explicit
+  coverage-v8 rows across five c8-bearing files; the existing schema remains
+  version 1. It binds the Vitest configuration, actual frontend toolchain
+  configuration and supported c8/v8/istanbul/node:coverage ignore hints. Exclusions
+  remain unchanged and require individual owner assessment; this implementation
+  is not policy approval. The changed revision needs its own final inventory
+  hash, checks, archive and reviews. Candidate detection is bounded to tracked
+  `web/src` `.ts`, `.tsx` and `.js` files and conservatively includes matching
+  text inside strings; arbitrary configuration imports, transformations and
+  source maps are not parsed.
 - Evidence privacy is not uniform. Newly produced private CI artifacts are
   encrypted, but public `coverage-server-shard` artifacts include
   `go-test.jsonl` used to merge the authenticated test inventory. That
@@ -134,7 +147,7 @@ root cannot access the protected NFS archive, and no cleanup unit is installed.
 Ninety-three historical publication identity holds block deletion, not
 collection. PR #122 merged to `main` at
 `a65fb36` and installed the approval workflow; automatic release remains held
-and PR #115 refresh checks are pending. This workflow installation grants no
+and any changed PR #115 head requires its own checks. This workflow installation grants no
 coverage or risk approval. See
 [scanner coverage](scanner-coverage.md) for scope and remaining evidence.
 

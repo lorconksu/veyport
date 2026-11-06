@@ -1,25 +1,51 @@
 # SSDF-aligned security pipeline implementation plan
 
-Status (2026-11-05): PR #115 remains unmerged and unpromoted. Baseline revision
-`16ef348` passed CI `41739418814` (15/15 jobs) and managed CodeQL
-`41739414356` (5/5 analyses). Exact-candidate rehearsal `41739668223`
-completed evidence acquisition and all 18 standard native cases, then correctly
-blocked on unapproved source-coverage policy; publication was skipped. PR #122
-merged to `main` at `a65fb36` and installed the approval workflow; automatic
-release remains held. PR #115 refresh checks are pending.
+Status (2026-11-06): PR #115 remains draft, unmerged and unpromoted. The latest
+captured baseline `28ad4dd30775a32e21e7dbcb236045a75245b9b7` passed CI
+`41973613744` (15/15 jobs) and managed CodeQL `41973608508` (5/5 analyses);
+sequential code/security reviews were clear and encrypted archives/readback
+were verified. These results apply to that baseline only; check PR #115 for
+later head results. The prior exact-candidate rehearsal passed 18 standard
+native cases but blocked on unapproved source-coverage policy. PR #122 merged
+to `main` at `a65fb36` and installed the approval workflow; automatic release
+remains held.
 
-Blanket Sonar coverage exclusions for handwritten Go/TypeScript were removed;
-generated code, assets and declaration types remain excluded. Frontend Vitest
-still excludes `src/main.tsx`, `src/test/**` and `src/types/**`, and 16 c8 ignore
-marker lines remain across five frontend files. These measurement exclusions
-need collaborative owner assessment; no approval is claimed. The main frontend
-SCM graph remains 552/559; E2E is 11/11. Python CLI resolved all ten dependencies
-in the verified sample, while its SCM project remains root-only. The coordinator
-credential successfully posted its signed candidate result in rehearsal;
-cleanup-token write capability remains untested. Other blockers, including
-finding dispositions, unknown discovery dates, cleanup runtime/NFS access and
-historical publication holds, remain. Staging is v2.0.57, timers are OFF, and
-DAST remains deferred.
+The measurement-binding change now inventories 17 configurations and 49
+annotations: the existing 33 SAST rows are unchanged, with 16 explicit
+coverage-v8 rows across five c8-bearing files. It binds the Vitest configuration,
+frontend toolchain configurations and supported ignore hints. All existing
+exclusions remain unchanged and unapproved. Canonical inventory SHA256 is
+`ee3398635b9085c15921e0f24a47075441628b05c9f7bc4791d5c9b35d4ee0e8`. Local
+binding/approval validation passed, including rejection of configuration and
+marker mutations. Code/security review and changed-head CI/archive remain
+outstanding. The main frontend SCM graph remains 552/559; E2E is 11/11. Python
+CLI resolved all ten dependencies in the
+verified sample, while its SCM project remains root-only. Cleanup-token write
+capability remains untested. Finding dispositions, unknown discovery dates,
+cleanup runtime/NFS access and historical publication holds remain. Staging is
+v2.0.57, timers are OFF, and DAST remains deferred.
+
+## Bounded feature finish line
+
+Five acceptance packages remain, including the coverage package currently
+underway; four remain after that package closes. This is a bounded count of
+feature outcomes, not a count of bugs, scans, approvals or days.
+
+| Package | Closure criteria | Owner/autonomous boundary |
+| --- | --- | --- |
+| 1. Coverage binding and exclusion decisions | Enforce all Vitest/c8 measurement controls; generate a fresh exact inventory; assess executable ranges/markers and configured exclusions individually | Agent may implement and prepare evidence. Exact policy approval belongs to the owner; binding alone does not close this package. |
+| 2. Finding dispositions and discovery history | Remediate or validly disposition final findings; recover first-seen evidence or handle unknown dates under the documented policy | Owner approval is required for risk dispositions/extensions; dates cannot be fabricated or reset. |
+| 3. Snyk migration and scanner decision | Complete SCM/source/artifact scope, document comparison and scan ownership, preserve history, then retire only Veyport Dependency-Track imports/projects | Main SCM refresh follows source landing. The two-tool target is provisional; retaining complementary scanners is valid when justified. |
+| 4. Unattended collection, cleanup and retention qualification | Qualify separate cleanup identity, one-year/180-day reference-safe retention, historical holds, exact transport deletion and recovery | Supervised collection is proven; deletion and unattended activation remain held until qualified and authorized. |
+| 5. Final candidate qualification, reviews and release handoff | Exact-head reviews/checks/archive; full isolated candidate, failure/recovery/rollback evidence; authorized merge/release and exact-version staging verification | Green checks are not release authority. Merge, publication and activation remain separate decisions. |
+
+These are acceptance packages, not five mechanical merge checks. A reviewed
+merge under the explicit publication hold could precede some rollout only by
+deliberate owner choice, and would not mean the feature is complete. Full
+candidate lifecycle, hostname, login/TOTP/CSRF and network-confinement evidence
+remain in package 5 unless exact later evidence closes them. External DAST is
+explicitly deferred and is not included in the five. Required retention,
+transport deletion and Dependency-Track migration remain agreed functionality.
 
 Subsequent live rehearsal `41413022387` confirmed the first Sonar analysis on a
 new LONG candidate branch returns the complete exact-source inventory but a
@@ -244,7 +270,7 @@ Task tiers follow the owner's provider policy. On 2026-11-03, the official [Open
 | P03 | complex | Design trusted candidate transfer, coordinator lease, private evidence and promotion binding | P01 | Reviewed trust boundaries, failure cases and least-privilege access | Prototype implemented and locally validated; collector read/status access and coordinator signed-post verified in rehearsal. Unattended activation and cleanup runtime/NFS access remain unqualified; cleanup-token write remains untested |
 | P04 | standard | Create isolated candidate deployment/configuration and disposable data lifecycle | P03 | Independent volumes/keys/ports, isolation and reset verification | Isolated native staging rehearsal and cleanup proven; complete candidate application lifecycle pending |
 | P05 | complex | Validate candidate hostname, login/TOTP/CSRF and network confinement | P04 | Positive/negative authentication and isolation checks | Pending |
-| P06 | complex | Close Snyk SCA gaps, assign scan ownership, verify exact-artifact coverage and retire Veyport Dependency-Track imports after migration | P01, access | Complete inventories, no redundant scan/project creation, archived history, baseline triage and failure behavior | Partial: feature fixture security graph exactly matches all 560 lock pairs after DOM peer declaration; main SCM graph remains seven pairs short pending source landing and refresh; Python CLI resolved ten dependencies in the verified sample, while its SCM remains root-only. Current fixture has three unresolved URIJS IDs (two medium, one high); prior PICOMATCH ID is provider-revoked, not code-fixed. Graph guard passed local regression and real-report checks; first-seen dates, owner decisions, final-head CI and cutover remain pending |
+| P06 | complex | Close Snyk SCA gaps, assign scan ownership, verify exact-artifact coverage and retire Veyport Dependency-Track imports after migration | P01, access | Complete inventories, no redundant scan/project creation, archived history, baseline triage and failure behavior | Partial: feature fixture security graph exactly matches all 560 lock pairs; main SCM graph last captured seven pairs short pending source landing/refresh; Python CLI resolved ten dependencies in the sample but SCM remains root-only. Three URIJS findings remain (one high, two medium); PICOMATCH is provider-revoked, not code-fixed. First-seen dates, owner decisions, complete migration and cutover remain pending |
 | P07 | complex | Deferred: configure and integrate authenticated DAST | P05, owner resumes DAST review, provisioning/key | External scan coverage, role evidence, failure-mode verification | Deferred by owner; not implemented or run |
 | P08 | complex | Fill verified gRPC/SSH security-test gaps | P01, P04 | Candidate-bound protocol evidence and negative tests | 18-case native harness passed in isolated rehearsal; complete release-bound evidence pending |
 | P09 | complex | Implement exception schema, verified approval binding and evaluator | P03 | Tampering/expiry/scope/bypass regression checks | Implementation and local tests passed; final CI is tracked on PR #115, no operational approval or release decision |
@@ -252,8 +278,8 @@ Task tiers follow the owner's provider policy. On 2026-11-03, the official [Open
 | P11 | complex | Integrate gated promotion, personal NAS archival, per-run reconciliation and shared-evidence retention | P03, P06, P08, P09; P07 only in the later DAST phase | No-publication failure tests, complete run manifests, safe deduplication/cleanup and identical tested/published digests | Exact-candidate rehearsal `41739668223` acquired evidence and passed 18 standard native cases, then correctly blocked on unapproved source-coverage policy. Collector read/status and coordinator signed-post were verified; cleanup-token write and runtime/NFS access remain unqualified. End-to-end release evidence remains pending; gates off |
 | P12 | complex | Apply supported scanner consolidation and required-check migration | P02, P11 | No uncovered checks; branch protection and constitution synchronized | Deferred pending P02/P11 evidence; current scanners remain active |
 | P13 | standard | Publish SSDF evidence mapping and measure PR/release completion | P10-P12 | Comparison against baseline, retained readable evidence | Mapping documented; post-change completion comparison awaits an activated, qualified pipeline |
-| P14 | complex | Code review, then security review; resolve findings and re-qualify | P11-P13 | Reviewed exact final head with no unresolved blocking findings | Independent code and security reviews of the current changes found no actionable findings. Local server/frontend validation and changed-file Gitleaks passed; final-head CI status is tracked on PR #115 |
-| P15 | complex | Candidate rehearsal, rollback drill and final monitoring | P14 | Complete passing run, intentional blocking cases, verified rollback | Trusted rehearsal `41419141402` collected full baseline SAST and passed 18 native cases; release evaluation correctly blocked on coverage approval, finding dispositions and unknown dates. Publication, staging promotion and rollback qualification remain pending |
+| P14 | complex | Code review, then security review; resolve findings and re-qualify | P11-P13 | Reviewed exact final head with no unresolved blocking findings | Baseline `28ad4dd` reviews were clear; changed measurement-binding revision requires its own sequential reviews and exact-head checks/archive |
+| P15 | complex | Candidate rehearsal, rollback drill and final monitoring | P14 | Complete passing run, intentional blocking cases, verified rollback | Prior rehearsal passed 18 standard native cases and correctly blocked on unapproved coverage policy. Final candidate run, rollback, publication and staging promotion remain pending |
 
 Keep the work in PR #115 unmerged until reviewed. PR #112 is the earlier paused scanner proposal; do not merge or activate it. Reconcile reusable ideas deliberately rather than stacking unreviewed workflow changes.
 

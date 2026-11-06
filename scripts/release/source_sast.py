@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Export full exact-revision SAST evidence from trusted completed scans."""
 import argparse
+from bisect import bisect_right
 import datetime as dt
 import os
 from pathlib import Path
@@ -15,6 +16,16 @@ CODEQL_CATEGORIES = {"/language:" + n for n in ("go", "javascript-typescript", "
 CODEQL_DEFAULT_KEY = "dynamic/github-code-scanning/codeql:analyze"
 MAX_BYTES = 16 << 20
 PROJECT = "lorconksu_veyport"
+# Bind the current frontend measurement inputs, including the locked provider's
+# implicit defaults and source transforms. This is a bounded path inventory,
+# not a dependency graph for arbitrary executable configuration imports.
+FRONTEND_MEASUREMENT_CONFIG = re.compile(r"web/(?:(?:vite|vitest)\.(?:config|workspace)\.[cm]?[jt]s|tsconfig(?:\.[^/]+)?\.json|package(?:-lock)?\.json|\.(?:gitignore|npmrc|nvmrc|node-version))$")
+# ast-v8-to-istanbul (locked through web/package-lock.json) accepts all four
+# namespaces. start/stop are raw source text hints; other forms are comments
+# after transforms. Conservatively inventory candidate text, including hints
+# spanning whitespace/newlines, without claiming to parse JS/TS or transforms.
+# JS's word boundary is ASCII; its whitespace also includes U+FEFF.
+COVERAGE_HINT = re.compile(r"(?:istanbul|[cv]8|node:coverage)[\s\ufeff]+ignore[\s\ufeff]+(?:if|else|next|file|start|stop)(?![A-Za-z0-9_])")
 
 
 def date(value):
@@ -572,7 +583,7 @@ def suppression_inventory(root):
     configs, annotations = [], []
     for name in sorted(n for n in tracked if n):
         path = root / name
-        is_config = name in ("sonar-project.properties", ".github/workflows/ci.yml", ".github/workflows/delivery.yml", ".github/workflows/staging.yml", ".github/workflows/release.yml", ".github/workflows/ssdf-rehearsal.yml", "scripts/release/codeql_evidence.py", "scripts/release/source_sast.py", "scripts/release/sonar_context.py", "scripts/release/sonar_job_evidence.py", ".semgrepignore", ".snyk") or name.startswith((".github/codeql/", ".semgrep/"))
+        is_config = name in ("sonar-project.properties", ".github/workflows/ci.yml", ".github/workflows/delivery.yml", ".github/workflows/staging.yml", ".github/workflows/release.yml", ".github/workflows/ssdf-rehearsal.yml", "scripts/release/codeql_evidence.py", "scripts/release/source_sast.py", "scripts/release/sonar_context.py", "scripts/release/sonar_job_evidence.py", ".semgrepignore", ".snyk") or name.startswith((".github/codeql/", ".semgrep/")) or FRONTEND_MEASUREMENT_CONFIG.fullmatch(name) is not None
         is_source = name.startswith(("hub/", "agent/", "cli/", "web/src/", "proto/")) and path.suffix in (".go", ".ts", ".tsx", ".js", ".py", ".rb") and not name.endswith(".pb.go")
         if not is_config and not is_source:
             continue
@@ -583,7 +594,16 @@ def suppression_inventory(root):
         if is_config:
             configs.append({"path": name, "sha256": digest})
         if is_source:
-            for index, line in enumerate(raw.decode().splitlines(), 1):
+            text = raw.decode()
+            lines = text.splitlines(keepends=True)
+            coverage_lines = set()
+            if name.startswith("web/src/") and path.suffix in (".ts", ".tsx", ".js"):
+                starts, offset = [], 0
+                for line in lines:
+                    starts.append(offset)
+                    offset += len(line)
+                coverage_lines = {bisect_right(starts, match.start()) for match in COVERAGE_HINT.finditer(text)}
+            for index, line in enumerate(text.splitlines(), 1):
                 kinds = []
                 if "NOSONAR" in line:
                     kinds.append("sonar")
@@ -591,6 +611,8 @@ def suppression_inventory(root):
                     kinds.append("semgrep")
                 if "lgtm[" in line or re.search(r"codeql.*(?:disable|suppress)", line, re.I):
                     kinds.append("codeql")
+                if index in coverage_lines:
+                    kinds.append("coverage-v8")
                 if kinds:
                     annotations.append({"path": name, "line": index, "scanners": kinds, "annotation_sha256": sha(line.encode()), "source_sha256": digest})
     return {"schema_version": 1, "repository": REPOSITORY, "configurations": configs, "annotations": annotations}
