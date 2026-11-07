@@ -4,11 +4,12 @@ import type { Root } from 'react-dom/client'
 import { afterEach, expect, it, vi } from 'vitest'
 import { queryClient } from '@/lib/query-client'
 
+type ReactDOMClientModule = typeof import('react-dom/client')
 const lifecycle = vi.hoisted(() => ({ root: null as Root | null }))
 // Retain the real root only for cleanup. Both createRoot and its render method
 // run unchanged, mounting the actual StrictMode/App/provider/router tree.
 vi.mock('react-dom/client', async importOriginal => {
-  const actual = await importOriginal<typeof import('react-dom/client')>()
+  const actual = await importOriginal<ReactDOMClientModule>()
   return {
     ...actual,
     createRoot: (...args: Parameters<typeof actual.createRoot>) => {
