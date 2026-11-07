@@ -132,7 +132,9 @@ func (s *failingExecBridgeStream) Recv() (*pb.ExecutionAgentMessage, error) {
 }
 func (s *failingExecBridgeStream) Send(msg *pb.ExecutionHubMessage) error {
 	if start := msg.GetStart(); start != nil {
-		s.starts.Add(1)
+		// Output producers wait on starts. Publish it only after Started is
+		// queued, so their output cannot overtake the fake agent's response.
+		defer s.starts.Add(1)
 		if s.failStart {
 			return errors.New("Start reply lost")
 		}

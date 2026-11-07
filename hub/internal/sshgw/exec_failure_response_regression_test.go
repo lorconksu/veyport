@@ -9,6 +9,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/wyiu/veyport/hub/internal/grpcserver"
@@ -44,6 +45,28 @@ func executionResponseStream(t *testing.T, a *failingExecBridgeAgent) *failingEx
 	})
 	t.Cleanup(func() { a.closeStream(); waitForDone(t, stream.done, "execution RPC cleanup") })
 	return stream
+}
+
+func TestExecutionResponseStreamQueuesStartedBeforePublishingStart(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		stream := &failingExecBridgeStream{incoming: make(chan *pb.ExecutionAgentMessage)}
+		sent := make(chan error, 1)
+		go func() {
+			sent <- stream.Send(&pb.ExecutionHubMessage{Payload: &pb.ExecutionHubMessage_Start{Start: &pb.ExecutionStart{}}})
+		}()
+		// Hold the fake agent at its Started response. Output producers use
+		// starts as their readiness signal, so it must remain unpublished.
+		synctest.Wait()
+		if stream.starts.Load() != 0 {
+			t.Error("execution output can overtake the fake agent's Started response")
+		}
+		if msg := <-stream.incoming; msg.GetStarted() == nil {
+			t.Fatal("fake agent did not queue Started")
+		}
+		if err := <-sent; err != nil || stream.starts.Load() != 1 {
+			t.Fatalf("fake agent did not publish its completed Start response: %v", err)
+		}
+	})
 }
 
 // The SSH listener, execution registry and RPC handler are real. The agent
