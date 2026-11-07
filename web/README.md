@@ -1,5 +1,16 @@
 # React + TypeScript + Vite
 
+The development toolchain temporarily overrides `minimatch@^10.2.0` with
+`11.0.4` to fix [GHSA-g3hv-75wg-m249](https://github.com/isaacs/minimatch/security/advisories/GHSA-g3hv-75wg-m249)
+(globstar-parent preprocessing amplification at optimization level 2).
+Remove the override when ESLint, `@eslint/config-array`, and
+`@typescript-eslint/typescript-estree` resolve a fixed release without it;
+retain the bounded-preprocessing and ESLint compatibility regression tests.
+The upgrade adds `@isaacs/nonrecursive-glob-match` (BlueOak-1.0.0), the
+maintainer's replacement matching engine, to the build toolchain.
+The upstream default expansion cap is still 100,000 alternatives; this upgrade
+does not establish a small memory bound for callers using optimization level 2.
+
 This template provides a minimal setup to get React working in Vite with HMR and some ESLint rules.
 
 Currently, two official plugins are available:

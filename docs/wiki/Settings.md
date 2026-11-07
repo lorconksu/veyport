@@ -416,6 +416,11 @@ Available event types include:
 
 Toggle each event on or off. Changes are saved automatically.
 
+Failed login emails identify known accounts using their stored username. If the
+attempt does not resolve to an account, the email shows `(unrecognized account)`
+to prevent arbitrary sign-in input from inserting misleading content or links.
+Directory sign-in and the login response remain unchanged.
+
 > **Note:** Email notifications require a working SMTP configuration in the Notifications tab. If SMTP is not configured, alerts will be silently skipped.
 
 ---

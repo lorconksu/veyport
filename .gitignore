@@ -39,6 +39,9 @@ coverage-*.out
 web/coverage/
 frontend-lint-results.json
 scripts/release/__pycache__/
+# Python helper bytecode
+__pycache__/
+*.py[cod]
 output/playwright/security-lab/
 
 # Internal documentation (stored in Confluence)

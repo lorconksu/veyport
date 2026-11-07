@@ -27,6 +27,11 @@ Veyport uses a **Hub-and-Spoke** model. The Hub hosts the web UI, REST API, SSH 
 
 ## Security Boundaries
 
+- The Hub's stored certificate authority is a persistent trust identity. Startup
+  fails on unreadable, incomplete or mismatched stored identities; initial
+  creation and legacy-key encryption persist transactionally. Storage failure
+  never authorizes automatic replacement. See the repository's
+  [CA storage and recovery notes](https://github.com/lorconksu/veyport/blob/main/docs/security/certificate-authority.md).
 - All user access goes through the Hub, which enforces session auth, TOTP, RBAC, and per-server or per-path authorization.
 - Browser and SSH terminal sessions share `AuthorizeTerminalExecution`: admins are permitted; other users must be LDAP users with terminal access and a root (`/`) path assignment on the target server. API tokens cannot open browser terminal sessions or obtain SSH certificates.
 - Veyport authentication identifies the operator; it does not by itself select the OS account running the shell. See the execution identity table below.

@@ -1,4 +1,4 @@
-.PHONY: dev-hub dev-web dev-web-lan build build-web embed-web build-hub build-agent build-vey build-audit artifact-manifest test test-hub test-agent test-cli test-proto vet clean proto
+.PHONY: dev-hub dev-web dev-web-lan build build-web embed-web build-hub build-agent build-vey build-audit artifact-manifest test test-hub test-agent test-cli test-proto vet clean proto proto-check proto-breaking
 
 # All binaries share the same linker-stamped version.
 VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
@@ -14,11 +14,16 @@ dev-web:
 dev-web-lan:
 	scripts/dev-web-local-https.sh
 
-# Proto generation
+# Pinned, checksum-verified protobuf tools; no system protoc/plugins required.
 proto:
-	protoc --go_out=. --go_opt=paths=source_relative \
-	       --go-grpc_out=. --go-grpc_opt=paths=source_relative \
-	       proto/veyport/v1/agent.proto
+	python3 scripts/proto/check.py generate
+
+proto-check:
+	python3 scripts/proto/check.py check
+
+# Set PROTO_BASE_SHA to an exact commit, or resolve origin's main to its SHA.
+proto-breaking:
+	python3 scripts/proto/check.py breaking
 
 # Build production binary (frontend embedded)
 build: artifact-manifest

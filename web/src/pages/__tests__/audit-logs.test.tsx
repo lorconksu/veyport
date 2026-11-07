@@ -86,13 +86,14 @@ function installAuditMocks({
 
 function renderPage() {
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } })
-  return render(
+  const view = render(
     <QueryClientProvider client={qc}>
       <BrowserRouter>
         <AuditLogsPage />
       </BrowserRouter>
     </QueryClientProvider>,
   )
+  return { ...view, queryClient: qc }
 }
 
 describe('AuditLogsPage', () => {
@@ -110,6 +111,89 @@ describe('AuditLogsPage', () => {
     mockApiFetch.mockReturnValue(new Promise(() => {}))
     renderPage()
     expect(screen.getByText('Loading...')).toBeInTheDocument()
+  })
+
+  it('shows Checking while audit health is loading', () => {
+    installAuditMocks()
+    const fallback = mockApiFetch.getMockImplementation()!
+    mockApiFetch.mockImplementation((path: string) => {
+      if (path === '/audit-logs/health') return new Promise(() => {})
+      return fallback(path)
+    })
+    renderPage()
+    expect(screen.getByText('Checking')).toBeInTheDocument()
+    expect(screen.queryByText('Healthy')).not.toBeInTheDocument()
+  })
+
+  it('shows Unavailable when the audit health request fails', async () => {
+    installAuditMocks()
+    const fallback = mockApiFetch.getMockImplementation()!
+    mockApiFetch.mockImplementation((path: string) => {
+      if (path === '/audit-logs/health') return Promise.reject(new Error('offline'))
+      return fallback(path)
+    })
+    renderPage()
+    expect(await screen.findByText('Unavailable')).toBeInTheDocument()
+    expect(screen.getByText('Audit health could not be loaded.')).toBeInTheDocument()
+  })
+
+  it('shows Unavailable when the health endpoint returns no response', async () => {
+    installAuditMocks()
+    const fallback = mockApiFetch.getMockImplementation()!
+    mockApiFetch.mockImplementation((path: string) => {
+      if (path === '/audit-logs/health') return Promise.resolve(null)
+      return fallback(path)
+    })
+    renderPage()
+    expect(await screen.findByText('Unavailable')).toBeInTheDocument()
+  })
+
+  it.each([
+    ['an empty object', {}],
+    ['a non-boolean degraded flag', { ...mockHealth, degraded: 'false' }],
+    ['an invalid failure count', { ...mockHealth, failure_count: -1 }],
+  ])('shows Unavailable for a malformed health response (%s)', async (_description, response) => {
+    installAuditMocks()
+    const fallback = mockApiFetch.getMockImplementation()!
+    mockApiFetch.mockImplementation((path: string) => path === '/audit-logs/health'
+      ? Promise.resolve(response)
+      : fallback(path))
+    renderPage()
+    expect(await screen.findByText('Unavailable')).toBeInTheDocument()
+  })
+
+  it('shows Unavailable after a background health refresh fails, then recovers', async () => {
+    let calls = 0
+    installAuditMocks()
+    const fallback = mockApiFetch.getMockImplementation()!
+    mockApiFetch.mockImplementation((path: string) => {
+      if (path === '/audit-logs/health') {
+        calls += 1
+        return calls === 1 ? Promise.resolve(mockHealth) : Promise.reject(new Error('offline'))
+      }
+      return fallback(path)
+    })
+    const { queryClient } = renderPage()
+    expect(await screen.findByText('Healthy')).toBeInTheDocument()
+    await queryClient.invalidateQueries({ queryKey: ['audit-health'] })
+    expect(await screen.findByText('Unavailable')).toBeInTheDocument()
+    expect(screen.getByText('Audit health could not be loaded.')).toBeInTheDocument()
+
+    mockApiFetch.mockImplementation((path: string) => path === '/audit-logs/health'
+      ? Promise.resolve(mockHealth)
+      : fallback(path))
+    await queryClient.invalidateQueries({ queryKey: ['audit-health'] })
+    expect(await screen.findByText('Healthy')).toBeInTheDocument()
+  })
+
+  it('shows Degraded when the health response reports failures', async () => {
+    installAuditMocks()
+    const fallback = mockApiFetch.getMockImplementation()!
+    mockApiFetch.mockImplementation((path: string) => path === '/audit-logs/health'
+      ? Promise.resolve({ ...mockHealth, degraded: true, failure_count: 2 })
+      : fallback(path))
+    renderPage()
+    expect(await screen.findByText('Degraded')).toBeInTheDocument()
   })
 
   it('shows empty state when no entries', async () => {
