@@ -1326,6 +1326,7 @@ def verify_storage(archive, record):
 
 def cleanup(config, api, archive):
     # The independent deletion token is never loaded by collection.
+    require(config.get('cleanup_enabled') is True, 'cleanup role is not enabled')
     deadlines = release_deadlines(api, archive, config)
     require_publication_identity_resolved(deadlines)
     for record in archive.records():

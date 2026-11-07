@@ -1,6 +1,9 @@
 # SSDF-aligned security pipeline implementation plan
 
-Status (2026-11-06): PR #115 remains draft, unmerged and unpromoted. The latest
+Current status snapshot (2026-11-07): the latest fully captured CI/CodeQL baseline is `49e96fd56eb2810c43a9ec98fea850f5406a7690`; all CI jobs and the five managed CodeQL analyses passed there. The parallel frontend batch passed 922 tests across 61 files and `tsc -b && vite build`; all six c8 markers and the `src/main.tsx` exclusion are removed. Changed-lines lint passed with five inherited diagnostics outside changed lines. These local results are not current-head CI/review; use live PR #115 status. Inventory approval, risk dispositions and unknown-age handling remain pending; the existing strict hold applies to unknown first-seen dates. Scanner recommendation: Snyk Open Source/Container + Sonar + CodeQL; the owner's Snyk + Sonar option remains open, so keep current gates. Retention source/config fixtures are locally qualified only; deployed cleanup/NFS roles and source/state isolation remain blockers. Timers remain OFF, publication is held, and DAST remains deferred.
+
+Historical validation snapshots (superseded by the current status above):
+Historical status (2026-11-06): PR #115 remained draft, unmerged and unpromoted. The latest
 captured baseline `28ad4dd30775a32e21e7dbcb236045a75245b9b7` passed CI
 `41973613744` (15/15 jobs) and managed CodeQL `41973608508` (5/5 analyses);
 sequential code/security reviews were clear and encrypted archives/readback
@@ -13,8 +16,8 @@ remains held.
 The PR #115 measurement inventory binds the SHA256 of
 `web/src/pages/server-detail.tsx`
 (`e3920d70b0fb0798ec0092eecf4f31f9fcc41ca0eca19c336f01c0ea8456747f`) and
-covers 17 configurations and 39 rows: 33 SAST rows and six
-coverage-v8 rows across four c8-bearing files. SAST row semantics are
+covered 17 configurations and 39 rows: 33 SAST rows and six
+coverage-v8 rows across four c8-bearing files in that historical snapshot. SAST row semantics are
 unchanged; source hashes and line positions are revision-bound. Canonical
 inventory SHA256 is
 `ede4b08e8641845b448d62637e0d23a534462093fbdb64b0b659826c66a3c5ed`. The
@@ -50,7 +53,7 @@ binding covers the Vitest configuration, frontend toolchain configurations and
 supported ignore hints. Four Markdown viewer markers, two LiveTail range
 markers and four upload/delete markers were removed; other exclusions remain unchanged and unapproved. Local binding/approval
 validation passed, including rejection of configuration and marker mutations.
-Changed-head review and CI/archive remain outstanding. The main frontend SCM graph remains 552/559; E2E is 11/11. Python
+At the time of this historical snapshot, changed-head review and CI/archive remained outstanding. The main frontend SCM graph remains 552/559; E2E is 11/11. Python
 CLI resolved all ten dependencies in the
 verified sample, while its SCM project remains root-only. Cleanup-token write
 capability remains untested. Finding dispositions, unknown discovery dates,
@@ -67,7 +70,7 @@ feature outcomes, not a count of bugs, scans, approvals or days.
 | --- | --- | --- |
 | 1. Coverage binding and exclusion decisions | Enforce all Vitest/c8 measurement controls; generate a fresh exact inventory; assess executable ranges/markers and configured exclusions individually | Agent may implement and prepare evidence. Exact policy approval belongs to the owner; binding alone does not close this package. |
 | 2. Finding dispositions and discovery history | Remediate or validly disposition final findings; recover first-seen evidence or handle unknown dates under the documented policy | Owner approval is required for risk dispositions/extensions; dates cannot be fabricated or reset. |
-| 3. Snyk migration and scanner decision | Complete SCM/source/artifact scope, document comparison and scan ownership, preserve history, then retire only Veyport Dependency-Track imports/projects | Main SCM refresh follows source landing. The two-tool target is provisional; retaining complementary scanners is valid when justified. |
+| 3. Snyk migration and scanner decision | Complete SCM/source/artifact scope, document comparison and scan ownership, preserve history, then retire only Veyport Dependency-Track imports/projects | Main SCM refresh follows source landing. Historical planning left the two-tool target provisional; current owner choice is recorded above. |
 | 4. Unattended collection, cleanup and retention qualification | Qualify separate cleanup identity, one-year/180-day reference-safe retention, historical holds, exact transport deletion and recovery | Supervised collection is proven; deletion and unattended activation remain held until qualified and authorized. |
 | 5. Final candidate qualification, reviews and release handoff | Exact-head reviews/checks/archive; full isolated candidate, failure/recovery/rollback evidence; authorized merge/release and exact-version staging verification | Green checks are not release authority. Merge, publication and activation remain separate decisions. |
 

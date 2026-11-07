@@ -1,5 +1,27 @@
 # SSDF prototype operations and rollout status
 
+Current status (2026-11-07): PR #115's latest captured successful CI/CodeQL
+baseline is `49e96fd56eb2810c43a9ec98fea850f5406a7690`. At evidence capture, local combined frontend validation passed
+922 tests across 61 files and the TypeScript/Vite build; six c8 markers and the
+`src/main.tsx` exclusion are removed. Changed-lines lint passed, with five
+inherited diagnostics outside changed lines. No current-head CI or release
+qualification is claimed. The current inventory is unapproved: 17 configs, 33
+SAST annotations and zero coverage annotations (SHA256
+`6b1168b0ea10044827ed34a4002bf35bbfa6406356057992dd2932aa7f4ea5ac`). The
+scanner assessment recommends Snyk Open Source/Container, Sonar and CodeQL;
+Snyk + Sonar is still an explicit owner option. Keep existing gates pending
+that decision. Unknown first-seen ages remain governed by the current strict
+hold; no date was supplied, reset or fabricated.
+
+The 2026-11-07 retention qualification prepared disabled-by-default cleanup and
+retention templates and passed local tests and ACL fixtures. It did not qualify
+live roles, token write access, deployed NFS permissions or unattended
+operation. Cleanup currently writes collector-owned run indexes and publication state,
+which conflicts with proposed read-only cleanup index/catalog grants. Source/state
+isolation and real NFS qualification are required before runtime grants or
+activation. The 93 existing publication holds remain
+unaudited. No deletion, timer activation or runtime grant occurred.
+
 This is the operator status record for the prototype on `feat/ssdf-pipeline`.
 It describes evidence gathered so far; it does not activate release gates or
 approve a release, merge, exception, scanner retirement or Dependency-Track
@@ -8,7 +30,7 @@ and [candidate coordinator runbook](../../infra/candidate-coordinator/README.md)
 for configuration and procedures. Hostnames, addresses, mount paths and private
 evidence locations intentionally remain in operator configuration.
 
-Status (2026-11-06): PR #115 remains draft, unmerged and the pipeline remains a
+Historical status (2026-11-06; superseded by current status above): PR #115 remained draft, unmerged and the pipeline remained a
 prototype. The latest captured baseline `28ad4dd30775a32e21e7dbcb236045a75245b9b7`
 passed CI `41973613744` (15/15 jobs) and managed CodeQL `41973608508` (5/5
 analyses); sequential reviews were clear and encrypted archives/readback were

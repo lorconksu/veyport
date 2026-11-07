@@ -1,8 +1,33 @@
 # Scanner coverage and migration record
 
+Current status (2026-11-07): the six inherited c8 markers have been removed
+and the Vitest exclusion for `src/main.tsx` has been removed. The combined
+frontend run passed 922 tests across 61 files and the TypeScript/Vite build;
+changed-lines lint passed with five inherited diagnostics outside changed
+lines. These local results do not establish current-head CI or release
+qualification; use the live PR #115 status for current checks and review. Coverage policy and all remaining configured
+exclusions still require owner review. Keep existing SAST and quality gates
+pending the scanner choice. The assessment recommends Snyk Open Source/Container,
+Sonar and CodeQL; Snyk + Sonar remains the owner's available two-product option.
+Semgrep retirement is a proposal for explicit review, not an approved change.
+The latest fully captured CI/CodeQL baseline is `49e96fd56eb2810c43a9ec98fea850f5406a7690`;
+all CI jobs and five managed CodeQL analyses passed there.
+The recomputed technical inventory has 17 configurations, 33 SAST annotations
+(26 Sonar and 7 Semgrep), and zero coverage annotations; SHA256 is
+`6b1168b0ea10044827ed34a4002bf35bbfa6406356057992dd2932aa7f4ea5ac`. It is
+unapproved and does not contain an owner authority descriptor. The earlier
+inventory with six coverage rows and its hashes is a historical snapshot,
+superseded by this current inventory.
+
+## Historical validation snapshots (superseded by current status above)
+
+The following PR snapshots preserve prior evidence. Their dates, inventory
+hashes and pending statements do not describe the current inventory or current
+PR checks.
+
 This PR prepares the SSDF pipeline; its collector/coordinator timers are OFF and
 the gates are not active. DAST remains deferred and has not been tested. The
-latest captured baseline `28ad4dd30775a32e21e7dbcb236045a75245b9b7` passed CI
+2026-11-06 captured baseline `28ad4dd30775a32e21e7dbcb236045a75245b9b7` passed CI
 `41973613744` (15/15) and CodeQL `41973608508` (5/5); sequential reviews were
 clear and encrypted archives/readback were verified. These results apply only
 to that revision. Check PR #115 for changed-head status. The prior trusted
@@ -37,9 +62,10 @@ upload and delete behavior. The bounded matcher covers c8/v8/istanbul/
 node:coverage `if`, `else`, `next`, `file`, `start` and `stop` hints in tracked
 `web/src` `.ts`, `.tsx` and `.js` files. Candidate text is conservatively
 included even inside strings; arbitrary JavaScript configuration imports,
-transformations or source maps are not parsed. Existing exclusions, including
-the Vitest exclusions for `src/main.tsx`, `src/test/**` and `src/types/**`,
-remain unchanged. The earlier Markdown viewer change removed its four c8
+transformations or source maps are not parsed. At that historical snapshot,
+the Vitest exclusions for `src/main.tsx`, `src/test/**` and `src/types/**`
+remained unchanged. The later 2026-11-07 combined validation removed the
+`src/main.tsx` exclusion; `src/test/**` and `src/types/**` remain. The earlier Markdown viewer change removed its four c8
 markers and added 11 focused tests; its sanitization tests use real
 ReactMarkdown, DOMPurify and supported highlighting, with Mermaid rendering
 controlled. The 2026-11-07 LiveTail change removed two c8 range markers and
@@ -77,6 +103,30 @@ lint passed against main; final-head CI/archive and sequential review remain
 pending. No
 coverage/risk approval or scanner removal is recorded.
 
+## Scanner comparison and pending owner choice (2026-11-07)
+
+The read-only comparison found complementary, reviewable value for CodeQL:
+later security-extended candidate scans exposed and helped reproduce/fix request
+log injection and trusted-E2E shell interpolation; CodeQL also covers Actions
+and five language categories. The original Snyk Code comparison did not report
+those two defects, while Sonar's configured roots omit E2E tests and workflows.
+This is cross-revision and query-suite evidence, not a claim of universal
+scanner equivalence. Completed triage established no uniquely actionable
+Semgrep or Snyk Code defect. Semgrep's seven differing results and React sinks
+are not proof of unique exploitable defects; removing it would still drop
+configured infrastructure and sink rule coverage. Snyk Code's 485 comparison
+results and 419 test-tagged results are counts, not actionable-defect totals.
+
+The recommendation is Snyk Open Source/Container + Sonar + CodeQL, with Semgrep
+retirement considered only after owner approval and policy/coverage review. The
+owner's Snyk + Sonar target remains an explicit option with documented loss of
+the demonstrated CodeQL findings and Actions coverage. Retaining all current
+scanners is also possible, with an explicit review point. No option has been
+approved. Keep the current gates and provider settings until the owner decides;
+do not add Snyk Code as a required gate. The private assessment packet contains
+the detailed flows, timing and source references; public docs omit private
+provider identifiers and raw inventories.
+
 ## Scan ownership
 
 | Scope | Authoritative execution | Complementary coverage retained |
@@ -85,7 +135,7 @@ coverage/risk approval or scanner removal is recorded.
 | Trusted release source baseline | One fresh Snyk CLI test per explicit manifest, including development dependencies | Full baseline is checked even when no dependency changed |
 | Exact release images | One Snyk Container test per selected native OCI manifest | Grype/Syft remain until replacement and failure behavior are fully qualified |
 | Every public Go binary | Existing exact-binary `govulncheck`, binary inventory and malware checks | Image OS inventory cannot substitute for binary symbol reachability or malware detection |
-| Source SAST | Existing SonarQube, CodeQL and Semgrep, with full exact-source baselines required for trusted release qualification | Snyk Code comparison stays nonblocking; no additional required Code gate |
+| Source SAST | Existing SonarQube, CodeQL and Semgrep remain current gates pending owner choice | Snyk Code comparison stays nonblocking; no additional required Code gate |
 | gRPC/SSH source fixtures | Existing tests; export their existing Go JSON execution | Deployed candidate qualification is an additional boundary, requiring exact candidate bytes |
 
 The release CLI does not call `monitor`, `report`, or import a project. Repeating

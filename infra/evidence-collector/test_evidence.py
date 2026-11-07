@@ -82,6 +82,7 @@ class EvidenceTests(unittest.TestCase):
         self.blobs = {self.sha: self.payload}
         self.artifact = {'id': 42, 'name': e.artifact_name(123, 1), 'digest': 'sha256:' + 'b' * 64, 'workflow_run': {'id': 123, 'head_sha': 'a' * 40}}
         self.archive = LocalArchive(self.config)
+        self.config['cleanup_enabled'] = True
         self.addCleanup(os.close, self.archive.root_fd)
         self.api = mock.Mock()
         self.api.prefix = '/repos/owner/repo'

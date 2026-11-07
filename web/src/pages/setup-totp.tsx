@@ -67,7 +67,6 @@ export function SetupTOTPPage() {
 
   const { digits, inputRefs, handleDigitChange, handlePaste, handleKeyDown, reset } = useTOTPDigits(submitCode)
 
-  /* c8 ignore next */
   const handleVerifyClick = () => submitCode(digits.join(''))
 
   useEffect(() => {

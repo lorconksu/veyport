@@ -30,6 +30,7 @@
   "read_token_file": "/etc/veyport-evidence/collector-token",
   "delete_token_file": "/etc/veyport-evidence/cleanup-token",
   "retention_enabled": false,
+  "cleanup_enabled": false,
   "trusted_branch": "main",
   "approved_source_revisions": [],
   "trusted_helper_paths": [

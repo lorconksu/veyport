@@ -93,9 +93,36 @@ Exceptional/historical mappings are currently pending operator audit. To resolve
 
 Legacy `state/releases.json` entries derived from tag lookup migrate into an unverified observation catalog. Their prior per-run deadline extensions remain intact, but cached tag observations do not become historical proof and cannot release the deletion hold without operator audit. Removing an audited mapping causes that publication to become unresolved again. Keep the hold under operator monitoring; it must never be cleared merely to reduce storage occupancy.
 
-Run `cleanup --config PRIVATE-CLEANUP-CONFIG` only under the independent identity with Actions write and Contents read. It requires neither private age identities nor the signing key; commit-statuses access is unnecessary for local receipt verification. It requires a signed, exact-manifest archive acknowledgement, rereads and hashes the archived ciphertext inventory, confirms the exact artifact ID/name/digest/source run, and waits until all workflow jobs and any current rerun have completed. It deletes no release asset, workflow, unrelated artifact or candidate build artifact. Do not give artifact consumers in other workflows access to these dedicated transport artifacts; same-run consumers are checked automatically. It records deletion after acknowledgement and retries safely. Automatic upstream expiry can still occur without a collector receipt.
+Run `cleanup --config PRIVATE-CLEANUP-CONFIG` only under the independent identity with Actions write and Contents read and an explicitly reviewed `cleanup_enabled:true`. Missing, false or nonboolean values fail before discovery or archive changes. It requires neither private age identities nor the signing key; commit-statuses access is unnecessary for local receipt verification. It requires a signed, exact-manifest archive acknowledgement, rereads and hashes the archived ciphertext inventory, confirms the exact artifact ID/name/digest/source run, and waits until all workflow jobs and any current rerun have completed. It deletes no release asset, workflow, unrelated artifact or candidate build artifact. Do not give artifact consumers in other workflows access to these dedicated transport artifacts; same-run consumers are checked automatically. It records deletion after acknowledgement and retries safely. Automatic upstream expiry can still occur without a collector receipt.
 
 Run `retain --config PRIVATE-RETENTION-CONFIG` as the separate storage operator with `retention_enabled:true` and a read-only GitHub credential holding Actions read and Contents read. This role requires neither age nor signing keys nor the Actions-delete credential. It refreshes final outcomes/release deadlines, then removes expired per-run references under the shared NFS lock. Blobs/manifests remain protected until the latest referencing deadline; orphan ciphertext gets at least 180 days before cleanup. Never enable retention in the collector service configuration. NFS directory ownership may still permit collector unlink; strict append-only privilege requires tested NAS ACLs outside this application. This implementation claims application/credential separation, not WORM or immutable retention. NAS snapshots are separately scheduled recovery protection and must be restore-tested.
+
+The separate `cleanup.config.example.json`, `retention.config.example.json` and
+matching cleanup/retention service templates prepare manual operation only.
+Both configurations ship disabled; neither service has an install target or a
+timer. The templates reserve distinct UIDs/GIDs 1001 and 1002; verify they are
+unused and provision them explicitly before installation. Keep each role's
+configuration and copy of the pinned receipt public key in its own root-owned
+directory, `/etc/veyport-cleanup` or `/etc/veyport-retention`. Systemd loads the
+existing root-only cleanup credential using `LoadCredential`; retention needs
+its own read-only credential at `/etc/veyport-retention/retention-token`.
+Neither role needs access to the collector configuration or private keys.
+Copy exact workflow/ref/job allowlists and reviewed publication audits into
+each role's configuration; empty job allowlists deliberately prevent job-artifact
+cleanup. Keep `retention_enabled:false` in the cleanup configuration.
+
+These templates do not grant NAS permissions or qualify deployed identities.
+Archive directories currently created with mode 0700 and temporary files with
+mode 0600 cannot be shared merely by adding another account or a default POSIX
+ACL: the creation mode can mask inherited named-user access. Before installation,
+qualify explicit read/update/delete rights for each path, inherited rights for
+new files, shared lock access, and denied access to every private key. Cleanup
+currently updates run indexes and publication discovery state, so an ACL that
+allows only an isolated cleanup journal cannot support the current implementation.
+Review that remaining state-ownership boundary before granting access. A common
+writable archive group would grant more authority than these role credentials
+imply. Do not change archive permissions recursively or enable either service
+as a substitute for that review.
 
 ## Validation and public API references
 

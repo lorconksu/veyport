@@ -1801,7 +1801,6 @@ export function ServerDetailPage() {
   }, [])
 
   // Scroll current match into view when it changes
-  /* c8 ignore next 6 */
   useEffect(() => {
     if (effectiveSearchTerm && matchCount > 0) {
       const el = document.getElementById('current-search-match')
