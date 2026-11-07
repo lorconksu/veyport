@@ -12,7 +12,7 @@ approval is implied here. See
 
 The blanket Sonar coverage exclusions for handwritten application code were
 removed. The measurement-binding implementation keeps schema version 1 and
-inventories 17 configurations and 45 annotations: 33 SAST rows and 12
+inventories 17 configurations and 43 annotations: 33 SAST rows and 10
 coverage-v8 rows across four remaining c8-bearing files. The SAST row set and
 semantics are unchanged; source hashes and line positions are revision-bound.
 It binds the Vitest configuration, actual frontend toolchain configuration and
@@ -23,7 +23,7 @@ configuration files are `web/.gitignore`, `web/package.json`,
 binding also covers bounded future standard config
 variants and frontend ignore/version-hint files. Exact source hashes bind the
 configuration and marker hints. Canonical inventory SHA256:
-`23e49e93a3ff1f75a80ae9954114f806926aa409cb048c85facf1b307cf81cf5`. Local
+`bb8f6dd81ab31b3b915c6739b5fc09278f971d7f96446a0539df5874022807da`. Local
 binding and approval regression validation passed, including rejection after
 configuration/marker mutation. The bounded matcher covers c8/v8/istanbul/
 node:coverage `if`, `else`, `next`, `file`, `start` and `stop` hints in tracked
@@ -31,19 +31,25 @@ node:coverage `if`, `else`, `next`, `file`, `start` and `stop` hints in tracked
 included even inside strings; arbitrary JavaScript configuration imports,
 transformations or source maps are not parsed. Existing exclusions, including
 the Vitest exclusions for `src/main.tsx`, `src/test/**` and `src/types/**`,
-remain unchanged. The 2026-11-07 Markdown viewer change removed only its four
-c8 markers and added 11 focused tests; all 11 focused tests and all 865 frontend
-tests across 55 files passed, as did the frontend build, scoped lint and
-`git diff --check`. Viewer coverage is 31/33 lines and statements (93.93%),
-13/17 branches (76.47%) and 8/8 functions. Uncovered helper conversion branches
-are not produced by real ReactMarkdown children. Sanitization tests use real
+remain unchanged. The earlier Markdown viewer change removed its four c8
+markers and added 11 focused tests; its sanitization tests use real
 ReactMarkdown, DOMPurify and supported highlighting, with Mermaid rendering
-controlled; real Mermaid layout is outside the jsdom renderer mock. The two
-private sanitizer-bypass controls failed as expected. Broad lint reports 20
-errors and two warnings in 13 files unchanged from base. Executable upload,
-delete and live-tail paths remain subject to individual assessment; binding is
-not approval or proof that exclusions are structurally necessary. Changed-head
-sequential review and CI/archive remain pending. No
+controlled. The 2026-11-07 LiveTail change removed only the two c8 range
+markers. It fixed four reproduced lifecycle/failure cases and added focused
+streaming, failure, cleanup and buffering tests. All 888 frontend tests across
+56 files and the frontend build passed. LiveTail coverage is 101/101 lines
+(100%), 63/65 branches (96.92%) and 21/21 functions (100%); the two uncovered
+branches are the missing-scroll-container and empty-pending-buffer guards.
+Overall frontend line coverage rose from 94.30% to 95.95%. Targeted ESLint
+reports four preexisting diagnostics in `server-detail.tsx`; the new test file
+is clean. Changed-lines CI lint passed against main. Executable upload/delete
+exclusions and remaining coverage exclusions still require
+individual assessment; inventory binding and marker removal are not policy
+approval. A bounded Chromium run of the full App/Server Detail UI passed the
+filter reconnect, SSE decoding, pause/scroll, 2,000-line cap and stop/leave
+flows with no console errors or warnings, using a local fixture API/stream.
+No backend/auth/agent E2E was run. Changed-lines CI lint passed against main;
+full CI/archive and sequential review remain pending. No
 coverage/risk approval or scanner removal is recorded.
 
 ## Scan ownership

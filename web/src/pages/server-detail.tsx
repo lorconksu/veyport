@@ -656,7 +656,6 @@ function DropzoneUpload({ serverId }: Readonly<{ serverId: string }>) {
 }
 
 // --- LiveTail Component ---
-/* c8 ignore start */
 
 type LiveTailStatus = 'connecting' | 'streaming' | 'disconnected'
 
@@ -746,20 +745,24 @@ function LiveTail({
 
   // Appends new log lines into a pending buffer, flushed at most once per frame.
   const appendLogLines = useCallback((newLogLines: string[]) => {
-    pendingLinesRef.current.push(...newLogLines)
+    // Frames can stall in background tabs while network reads continue. Bound
+    // the pending buffer as well as the rendered lines, without spreading a
+    // potentially huge batch into a function's argument list.
+    pendingLinesRef.current = [...pendingLinesRef.current, ...newLogLines.slice(-MAX_LINES)].slice(-MAX_LINES)
     rafIdRef.current ??= requestAnimationFrame(flushPendingLines)
   }, [flushPendingLines])
 
   // Reads an SSE stream and forwards reassembled log lines via appendLogLines.
   // Frames are not line-aligned, so the assembler carries partial lines across
   // frames and emits the remainder once the stream ends.
-  const readStream = useCallback(async (reader: ReadableStreamDefaultReader<Uint8Array>) => {
+  const readStream = useCallback(async (reader: ReadableStreamDefaultReader<Uint8Array>, signal: AbortSignal) => {
     const decoder = new TextDecoder()
     const assembler = createLogLineAssembler()
     let sseBuffer = ''
 
     while (true) {
       const { done, value } = await reader.read()
+      if (signal.aborted) return
       if (done) break
 
       sseBuffer += decoder.decode(value, { stream: true })
@@ -799,6 +802,8 @@ function LiveTail({
           signal,
         })
 
+        if (signal.aborted) return
+
         if (!response.ok) {
           const errBody = await response.json().catch(() => ({ error: `HTTP ${response.status}` }))
           throw new Error((errBody as { error?: string }).error || `HTTP ${response.status}`)
@@ -809,7 +814,8 @@ function LiveTail({
         const reader = response.body?.getReader()
         if (!reader) throw new Error('Response body is not readable')
 
-        await readStream(reader)
+        await readStream(reader, signal)
+        if (signal.aborted) return
 
         // Stream ended normally
         setStatus('disconnected')
@@ -825,6 +831,11 @@ function LiveTail({
 
     return () => {
       controller.abort()
+      // Pending output belongs to this connection and must not enter the next
+      // grep result or survive a stop/unmount.
+      if (rafIdRef.current !== null) cancelAnimationFrame(rafIdRef.current)
+      rafIdRef.current = null
+      pendingLinesRef.current = []
     }
   }, [serverId, filePath, grep, readStream])
 
@@ -923,7 +934,6 @@ function LiveTail({
     </div>
   )
 }
-/* c8 ignore stop */
 
 // --- FileViewerContent Component ---
 

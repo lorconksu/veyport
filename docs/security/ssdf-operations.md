@@ -95,21 +95,27 @@ OFF. DAST remains deferred.
 - Collector and candidate timers are OFF. No release gate is active, and no
   publication, merge, approval, scanner retirement or Dependency-Track cutover
   has occurred.
-- The frontend measurement inventory records 17 configurations and 45
-  annotations: 33 SAST rows and 12 coverage-v8 rows across four remaining
+- The frontend measurement inventory records 17 configurations and 43
+  annotations: 33 SAST rows and 10 coverage-v8 rows across four remaining
   c8-bearing files; the schema remains version 1. The SAST row set and
   semantics are unchanged, though source hashes and line positions are
   revision-bound. Canonical inventory SHA256 is
-  `23e49e93a3ff1f75a80ae9954114f806926aa409cb048c85facf1b307cf81cf5`.
-  The 2026-11-07 Markdown viewer change removed only its four c8 markers and
-  added 11 focused tests. All 11 focused tests and all 865 frontend tests across
-  55 files passed; the frontend build, scoped lint and `git diff --check` passed.
-  Viewer coverage was 31/33 lines and statements (93.93%), 13/17 branches
-  (76.47%), and 8/8 functions. Tests use real ReactMarkdown, DOMPurify and
-  supported highlighting, with Mermaid rendering controlled; real Mermaid
-  layout is outside the jsdom renderer mock. Broad lint reports 20 errors and
-  two warnings in 13 files unchanged from base. This closes the Markdown viewer
-  exclusion subtask only, not an exclusion review or approval. The binding
+  `bb8f6dd81ab31b3b915c6739b5fc09278f971d7f96446a0539df5874022807da`.
+  The earlier Markdown viewer change removed its four c8 markers and added 11
+  focused tests. The 2026-11-07 LiveTail change removed only the two c8 range
+  markers, fixed four reproduced lifecycle/failure cases, and added focused
+  streaming, failure, cleanup and buffering tests. All 888 frontend tests across
+  56 files and the frontend build passed. LiveTail coverage is 101/101 lines
+  (100%), 63/65 branches (96.92%) and 21/21 functions (100%); two defensive
+  branches remain uncovered. Overall frontend line coverage rose from 94.30%
+  to 95.95%. Targeted ESLint reports four preexisting diagnostics in
+  `server-detail.tsx`; the new test file is clean. Changed-lines CI lint passed
+  against main. These changes close only the two executable-range subtasks, not an
+  exclusion review or approval. The bounded Chromium check exercised the full
+  App/Server Detail UI with a local fixture API/stream and passed reconnect,
+  SSE, pause/scroll, line-cap and stop/leave behavior without console errors or
+  warnings. Backend/auth/agent full-stack behavior remains unverified.
+  The binding
   covers the Vitest configuration, actual frontend toolchain configuration and
   supported c8/v8/istanbul/node:coverage ignore hints. Other exclusions remain
   unchanged and require individual owner assessment; this implementation is

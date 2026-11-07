@@ -10,21 +10,24 @@ native cases but blocked on unapproved source-coverage policy. PR #122 merged
 to `main` at `a65fb36` and installed the approval workflow; automatic release
 remains held.
 
-The measurement inventory has 17 configurations and 45 annotations: 33 SAST
-rows and 12 coverage-v8 rows across four remaining c8-bearing files. SAST row
+The measurement inventory has 17 configurations and 43 annotations: 33 SAST
+rows and 10 coverage-v8 rows across four remaining c8-bearing files. SAST row
 semantics are unchanged; source hashes and line positions are revision-bound.
-The 2026-11-07 Markdown viewer subtask removed only its four c8 markers. Its 11
-focused tests and all 865 frontend tests across 55 files passed, as did build,
-scoped lint and diff check. Viewer coverage is 31/33 lines and statements
-(93.93%), 13/17 branches (76.47%) and 8/8 functions. Sanitization tests use real
-ReactMarkdown, DOMPurify and supported highlighting; Mermaid rendering is
-controlled and real Mermaid layout is outside the jsdom renderer mock. Broad
-lint reports 20 errors/two warnings in 13 files unchanged from base. Canonical
-inventory SHA256 is
-`23e49e93a3ff1f75a80ae9954114f806926aa409cb048c85facf1b307cf81cf5`. The
+The earlier Markdown viewer subtask removed its four c8 markers. On
+2026-11-07, the LiveTail subtask removed only its two c8 range markers, fixed
+four reproduced lifecycle/failure cases, and added focused streaming, failure,
+cleanup and buffering tests. All 888 frontend tests across 56 files and the
+frontend build passed. LiveTail coverage is 101/101 lines (100%), 63/65
+branches (96.92%) and 21/21 functions (100%). Overall frontend line coverage
+rose from 94.30% to 95.95%. Targeted ESLint reports four preexisting
+`server-detail.tsx` diagnostics; the new test file is clean, and changed-lines
+CI lint passed. A bounded Chromium check of the full App/Server
+Detail UI passed against a local fixture API/stream; backend/auth/agent E2E
+remains unverified. Canonical inventory SHA256 is
+`bb8f6dd81ab31b3b915c6739b5fc09278f971d7f96446a0539df5874022807da`. The
 binding covers the Vitest configuration, frontend toolchain configurations and
-supported ignore hints. Only the four Markdown viewer c8 markers were removed;
-other exclusions remain unchanged and unapproved. Local binding/approval
+supported ignore hints. The four Markdown viewer markers and two LiveTail range
+markers were removed; other exclusions remain unchanged and unapproved. Local binding/approval
 validation passed, including rejection of configuration and marker mutations.
 Changed-head review and CI/archive remain outstanding. The main frontend SCM graph remains 552/559; E2E is 11/11. Python
 CLI resolved all ten dependencies in the

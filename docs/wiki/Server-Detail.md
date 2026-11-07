@@ -137,16 +137,17 @@ Both admins and viewers can use Live Tail on paths they have been granted access
 
 ### Grep Filter
 
-Type a filter string into the **Grep** field at the top of the console. Only lines containing that string (case-insensitive) are shown. Clear the field to see all lines again. The filter applies to incoming lines in real time.
+Type a filter string into the **Grep** field at the top of the console. Only lines containing that string (case-insensitive) are shown. After the filter change is applied, Live Tail reconnects and clears the previous buffered output; the new stream shows matching incoming lines. Clear the field to reconnect without a filter.
 
 ### Pausing and Resuming
 
-- Click **Pause** to freeze the output. New lines continue to buffer in the background.
-- Click **Resume** to flush the buffer and continue live display.
+- The **Auto-scroll** toggle controls automatic scrolling only; the stream and displayed output continue while it is paused.
+- Scrolling up disables automatic stick-to-bottom behavior. Automatic scrolling resumes near the bottom while **Auto-scroll** is enabled.
+- The display and pending frame buffer are each bounded to the newest 2,000 lines.
 
 ### Stopping a Tail Session
 
-Click **Stop** to end the tail session. The console retains the lines that were received so you can scroll and read them after stopping.
+Click **Stop** to end the stream and return to the file view. Leaving Live Tail also cancels the stream. The displayed output is cleared when the Live Tail console closes.
 
 ---
 
