@@ -95,26 +95,52 @@ OFF. DAST remains deferred.
 - Collector and candidate timers are OFF. No release gate is active, and no
   publication, merge, approval, scanner retirement or Dependency-Track cutover
   has occurred.
-- The frontend measurement inventory records 17 configurations and 43
-  annotations: 33 SAST rows and 10 coverage-v8 rows across four remaining
-  c8-bearing files; the schema remains version 1. The SAST row set and
-  semantics are unchanged, though source hashes and line positions are
-  revision-bound. Canonical inventory SHA256 is
-  `bb8f6dd81ab31b3b915c6739b5fc09278f971d7f96446a0539df5874022807da`.
+- The frozen PR #115 frontend measurement inventory records 17 configurations
+  and 39 rows: 33 SAST rows and six coverage-v8 rows across four c8-bearing
+  files; the schema remains version 1. The SAST row set and semantics are
+  unchanged, though source hashes and line positions are revision-bound. The SHA256 of
+  `web/src/pages/server-detail.tsx` is
+  `e3920d70b0fb0798ec0092eecf4f31f9fcc41ca0eca19c336f01c0ea8456747f`; canonical
+  inventory SHA256 is
+  `ede4b08e8641845b448d62637e0d23a534462093fbdb64b0b659826c66a3c5ed`. The
+  preceding LiveTail inventory hash `bb8f6dd81ab31b3b915c6739b5fc09278f971d7f96446a0539df5874022807da`
+  is a dated snapshot within PR #115, before upload/delete.
   The earlier Markdown viewer change removed its four c8 markers and added 11
   focused tests. The 2026-11-07 LiveTail change removed only the two c8 range
   markers, fixed four reproduced lifecycle/failure cases, and added focused
-  streaming, failure, cleanup and buffering tests. All 888 frontend tests across
-  56 files and the frontend build passed. LiveTail coverage is 101/101 lines
-  (100%), 63/65 branches (96.92%) and 21/21 functions (100%); two defensive
-  branches remain uncovered. Overall frontend line coverage rose from 94.30%
-  to 95.95%. Targeted ESLint reports four preexisting diagnostics in
-  `server-detail.tsx`; the new test file is clean. Changed-lines CI lint passed
-  against main. These changes close only the two executable-range subtasks, not an
-  exclusion review or approval. The bounded Chromium check exercised the full
-  App/Server Detail UI with a local fixture API/stream and passed reconnect,
-  SSE, pause/scroll, line-cap and stop/leave behavior without console errors or
-  warnings. Backend/auth/agent full-stack behavior remains unverified.
+  streaming, failure, cleanup and buffering tests. That dated LiveTail
+  validation snapshot had 888 frontend tests across 56 files and a passing
+  build; LiveTail coverage was 101/101 lines (100%), 63/65 branches (96.92%)
+  and 21/21 functions (100%). Overall frontend coverage at that snapshot rose
+  from 94.30% to 95.95%. The 2026-11-07 upload/delete change removed four c8
+  markers from `server-detail.tsx`, added focused UI coverage, and fixed a
+  reproduced second drop after upload entered pending plus stale UI state on
+  server navigation. While the pending guard is active, additional drops are ignored;
+  changing servers resets this UI state and does not cancel a remote operation.
+  The focused suite passed 20/20 cases, with six regression cases failing
+  before the fix. The full frontend suite passed 908/908 tests across 57 files
+  and the build passed. Dropzone coverage is 63/63 lines (100%), 44/45 branches
+  (97.78%) and 13/13 functions (100%); the only uncovered branch is a defensive
+  empty-confirmation guard with no reachable UI path. Overall frontend
+  coverage rose from 2,887/3,011 lines (95.88%) to 2,894/3,015 (95.98%).
+  `server-detail.tsx` measured 378/378 lines, 339/366 branches and 119/121
+  functions.
+  Changed-lines CI lint passed against main commit `a65fb36`; targeted ESLint
+  reports the same four inherited `server-detail.tsx` diagnostics, and the new
+  test file is clean. A 16-check browser integration using the actual App against
+  a local HTTP fixture passed upload multipart/CSRF/origin/session handling;
+  suppression of a second drop after the first upload entered pending;
+  success/error/retry/reset feedback; delete confirmation, pending, success,
+  error/retry and refreshed listing; cached-server navigation
+  isolation; and non-admin hiding. It made 248 requests to the local app origin,
+  with no unknown endpoints or JavaScript errors; two expected HTTP 500 console
+  messages came from injected failures. This is not real Hub/agent/auth
+  qualification. These changes close only executable-range
+  subtasks, not an exclusion review or approval. The earlier bounded Chromium
+  check exercised the full App/Server Detail UI with a local fixture API/stream
+  and passed reconnect, SSE, pause/scroll, line-cap and stop/leave behavior
+  without console errors or warnings. Backend/auth/agent full-stack behavior
+  remains unverified.
   The binding
   covers the Vitest configuration, actual frontend toolchain configuration and
   supported c8/v8/istanbul/node:coverage ignore hints. Other exclusions remain

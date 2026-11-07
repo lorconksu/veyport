@@ -11,10 +11,17 @@ approval is implied here. See
 [SSDF operations](ssdf-operations.md) for rollout state and blockers.
 
 The blanket Sonar coverage exclusions for handwritten application code were
-removed. The measurement-binding implementation keeps schema version 1 and
-inventories 17 configurations and 43 annotations: 33 SAST rows and 10
-coverage-v8 rows across four remaining c8-bearing files. The SAST row set and
-semantics are unchanged; source hashes and line positions are revision-bound.
+removed. The measurement-binding implementation keeps schema version 1. The
+preceding LiveTail inventory
+`bb8f6dd81ab31b3b915c6739b5fc09278f971d7f96446a0539df5874022807da` is a
+dated snapshot within PR #115, before the upload/delete change. The updated
+inventory covers 17 configurations and 39 rows: 33 SAST rows and six
+coverage-v8 rows across four c8-bearing files. Its canonical inventory SHA256
+is `ede4b08e8641845b448d62637e0d23a534462093fbdb64b0b659826c66a3c5ed`.
+The SHA256 of `web/src/pages/server-detail.tsx` is
+`e3920d70b0fb0798ec0092eecf4f31f9fcc41ca0eca19c336f01c0ea8456747f`. The SAST
+row set and semantics are unchanged; source hashes and line positions are
+revision-bound.
 It binds the Vitest configuration, actual frontend toolchain configuration and
 supported c8/v8/istanbul/node:coverage ignore hints. The eight added
 configuration files are `web/.gitignore`, `web/package.json`,
@@ -22,10 +29,11 @@ configuration files are `web/.gitignore`, `web/package.json`,
 `web/tsconfig.node.json`, `web/vite.config.ts` and `web/vitest.config.ts`. The
 binding also covers bounded future standard config
 variants and frontend ignore/version-hint files. Exact source hashes bind the
-configuration and marker hints. Canonical inventory SHA256:
-`bb8f6dd81ab31b3b915c6739b5fc09278f971d7f96446a0539df5874022807da`. Local
-binding and approval regression validation passed, including rejection after
-configuration/marker mutation. The bounded matcher covers c8/v8/istanbul/
+configuration and marker hints. Local binding and approval regression
+validation passed, including rejection after
+configuration/marker mutation. The 2026-11-07 upload/delete change removed
+four c8 markers in `server-detail.tsx`; focused UI coverage was added for
+upload and delete behavior. The bounded matcher covers c8/v8/istanbul/
 node:coverage `if`, `else`, `next`, `file`, `start` and `stop` hints in tracked
 `web/src` `.ts`, `.tsx` and `.js` files. Candidate text is conservatively
 included even inside strings; arbitrary JavaScript configuration imports,
@@ -34,22 +42,39 @@ the Vitest exclusions for `src/main.tsx`, `src/test/**` and `src/types/**`,
 remain unchanged. The earlier Markdown viewer change removed its four c8
 markers and added 11 focused tests; its sanitization tests use real
 ReactMarkdown, DOMPurify and supported highlighting, with Mermaid rendering
-controlled. The 2026-11-07 LiveTail change removed only the two c8 range
-markers. It fixed four reproduced lifecycle/failure cases and added focused
-streaming, failure, cleanup and buffering tests. All 888 frontend tests across
-56 files and the frontend build passed. LiveTail coverage is 101/101 lines
-(100%), 63/65 branches (96.92%) and 21/21 functions (100%); the two uncovered
-branches are the missing-scroll-container and empty-pending-buffer guards.
-Overall frontend line coverage rose from 94.30% to 95.95%. Targeted ESLint
-reports four preexisting diagnostics in `server-detail.tsx`; the new test file
-is clean. Changed-lines CI lint passed against main. Executable upload/delete
-exclusions and remaining coverage exclusions still require
-individual assessment; inventory binding and marker removal are not policy
-approval. A bounded Chromium run of the full App/Server Detail UI passed the
-filter reconnect, SSE decoding, pause/scroll, 2,000-line cap and stop/leave
-flows with no console errors or warnings, using a local fixture API/stream.
-No backend/auth/agent E2E was run. Changed-lines CI lint passed against main;
-full CI/archive and sequential review remain pending. No
+controlled. The 2026-11-07 LiveTail change removed two c8 range markers and
+fixed four reproduced lifecycle/failure cases. Its dated validation snapshot
+had 888 frontend tests across 56 files and a passing build; LiveTail coverage
+was 101/101 lines (100%), 63/65 branches (96.92%) and 21/21 functions (100%).
+The later 2026-11-07 upload/delete change removed four c8 markers from
+`server-detail.tsx`, fixed a reproduced second drop after upload entered
+pending and stale UI state on server navigation, and added focused tests. The focused suite passed 20/20 cases; six
+regression cases failed before the fix. The full frontend suite passed 908/908
+tests across 57 files and the build passed. Dropzone coverage is 63/63 lines
+(100%), 44/45 branches (97.78%) and 13/13 functions (100%); its sole uncovered
+branch is the defensive empty-confirmation guard with no reachable UI path.
+The marker-free Dropzone baseline was 56/59 lines (94.92%), 33/43 branches
+(76.74%) and 13/13 functions.
+Overall frontend coverage rose from 2,887/3,011 lines (95.88%) to 2,894/3,015
+(95.98%). The page measured 378/378 lines, 339/366 branches and 119/121
+functions. Targeted ESLint reports the same four inherited diagnostics in
+`server-detail.tsx`; the new test file is clean. Changed-lines CI lint passed
+against main commit `a65fb36`. The upload/delete markers have been removed;
+remaining configured and other coverage exclusions still require individual
+assessment. Inventory binding and marker removal are not policy
+approval. A 16-check browser integration using the actual App against a local HTTP
+fixture passed upload multipart/CSRF/origin/session handling; suppression of a
+second drop after the first upload entered pending; success, error, retry and
+reset feedback; delete confirmation, pending, success, error/retry and refreshed
+listing; cached-server navigation isolation; and non-admin hiding. It made 248 requests to the local app origin, with no unknown
+endpoints or JavaScript errors; two expected HTTP 500 console messages came
+from injected failures. This fixture run does not qualify real Hub/agent/auth
+behavior. The earlier bounded Chromium LiveTail run of the full App/Server
+Detail UI passed filter reconnect, SSE decoding, pause/scroll, 2,000-line cap
+and stop/leave flows without console errors or warnings, using a local fixture
+API/stream. No backend/auth/agent E2E was run. Changed-lines CI
+lint passed against main; final-head CI/archive and sequential review remain
+pending. No
 coverage/risk approval or scanner removal is recorded.
 
 ## Scan ownership

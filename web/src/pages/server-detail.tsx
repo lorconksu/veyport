@@ -359,6 +359,7 @@ function DropzoneUpload({ serverId }: Readonly<{ serverId: string }>) {
   const [dragOver, setDragOver] = useState(false)
   const [confirmDelete, setConfirmDelete] = useState<string | null>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
+  const uploadInFlight = useRef(false)
   const queryClient = useQueryClient()
 
   const { data: dropzoneData } = useQuery({
@@ -371,7 +372,6 @@ function DropzoneUpload({ serverId }: Readonly<{ serverId: string }>) {
   const [deleteState, setDeleteState] = useState<'idle' | 'deleting' | 'done' | 'error'>('idle')
   const [deleteError, setDeleteError] = useState('')
 
-  /* c8 ignore start */
   const handleConfirmDelete = async () => {
     if (!confirmDelete) return
     setDeleteState('deleting')
@@ -385,7 +385,6 @@ function DropzoneUpload({ serverId }: Readonly<{ serverId: string }>) {
       setDeleteState('error')
     }
   }
-  /* c8 ignore stop */
 
   const closeDeleteModal = () => {
     setConfirmDelete(null)
@@ -393,8 +392,10 @@ function DropzoneUpload({ serverId }: Readonly<{ serverId: string }>) {
     setDeleteError('')
   }
 
-  /* c8 ignore start */
   const handleUpload = async (file: File) => {
+    // Disabled buttons can still receive drops, including before React renders.
+    if (uploadInFlight.current) return
+    uploadInFlight.current = true
     setUploading(true)
     setUploadResult(null)
     setUploadError(null)
@@ -412,10 +413,10 @@ function DropzoneUpload({ serverId }: Readonly<{ serverId: string }>) {
     } catch (err) {
       setUploadError(err instanceof Error ? err.message : 'Upload failed')
     } finally {
+      uploadInFlight.current = false
       setUploading(false)
     }
   }
-  /* c8 ignore stop */
 
   const handleDrop = (e: React.DragEvent<HTMLButtonElement>) => {
     e.preventDefault()
@@ -1938,7 +1939,7 @@ export function ServerDetailPage() {
             <ReEnrollApproval request={pendingRequest} />
           )}
           <PathManagement serverId={serverId ?? ''} />
-          <DropzoneUpload serverId={serverId ?? ''} />
+          <DropzoneUpload key={serverId} serverId={serverId ?? ''} />
         </div>
       )}
     </div>

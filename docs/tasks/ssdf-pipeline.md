@@ -10,24 +10,45 @@ native cases but blocked on unapproved source-coverage policy. PR #122 merged
 to `main` at `a65fb36` and installed the approval workflow; automatic release
 remains held.
 
-The measurement inventory has 17 configurations and 43 annotations: 33 SAST
-rows and 10 coverage-v8 rows across four remaining c8-bearing files. SAST row
-semantics are unchanged; source hashes and line positions are revision-bound.
-The earlier Markdown viewer subtask removed its four c8 markers. On
-2026-11-07, the LiveTail subtask removed only its two c8 range markers, fixed
-four reproduced lifecycle/failure cases, and added focused streaming, failure,
-cleanup and buffering tests. All 888 frontend tests across 56 files and the
-frontend build passed. LiveTail coverage is 101/101 lines (100%), 63/65
-branches (96.92%) and 21/21 functions (100%). Overall frontend line coverage
-rose from 94.30% to 95.95%. Targeted ESLint reports four preexisting
-`server-detail.tsx` diagnostics; the new test file is clean, and changed-lines
-CI lint passed. A bounded Chromium check of the full App/Server
-Detail UI passed against a local fixture API/stream; backend/auth/agent E2E
-remains unverified. Canonical inventory SHA256 is
-`bb8f6dd81ab31b3b915c6739b5fc09278f971d7f96446a0539df5874022807da`. The
+The PR #115 measurement inventory binds the SHA256 of
+`web/src/pages/server-detail.tsx`
+(`e3920d70b0fb0798ec0092eecf4f31f9fcc41ca0eca19c336f01c0ea8456747f`) and
+covers 17 configurations and 39 rows: 33 SAST rows and six
+coverage-v8 rows across four c8-bearing files. SAST row semantics are
+unchanged; source hashes and line positions are revision-bound. Canonical
+inventory SHA256 is
+`ede4b08e8641845b448d62637e0d23a534462093fbdb64b0b659826c66a3c5ed`. The
+earlier Markdown viewer subtask removed its four c8 markers. The 2026-11-07
+LiveTail subtask removed two c8 range markers and fixed four reproduced
+lifecycle/failure cases. Its dated validation is historical: all 888 tests
+across 56 files and the frontend build passed; LiveTail coverage was 101/101
+lines (100%), 63/65 branches (96.92%) and 21/21 functions (100%). Overall line
+coverage at that snapshot rose from 94.30% to 95.95%. The 2026-11-07
+upload/delete change removed four c8 markers from `server-detail.tsx`, added
+focused UI coverage, and fixed a second drop after an upload entered pending and
+stale UI state across server navigation. Additional drops are ignored while
+upload is pending; changing servers resets UI state and does not cancel the
+remote operation. The focused suite passed 20/20 cases; its six regression
+cases failed before the fix. Full frontend validation passed 908/908 tests
+across 57 files and the build. Dropzone coverage was 63/63 lines (100%), 44/45
+branches (97.78%) and 13/13 functions (100%). The sole uncovered branch is a
+defensive empty-confirmation guard with no reachable UI path. Overall frontend
+coverage moved from 2,887/3,011 lines (95.88%) to 2,894/3,015 (95.98%).
+Changed-lines CI lint passed against main commit
+`a65fb36`; targeted ESLint reports the same four inherited
+`server-detail.tsx` diagnostics, and the new test file is
+clean. A 16-check browser integration using the actual App against a local HTTP fixture passed upload
+multipart/CSRF/origin/session handling; suppression of a second drop after the first upload entered pending; success,
+error, retry and reset feedback; delete confirmation, pending, success,
+error/retry and refreshed listing; cached-server navigation isolation; and
+non-admin hiding. It made 248 requests to the local app origin, with no unknown
+endpoints or JavaScript errors; two expected HTTP 500 console messages came
+from injected failures. This does not qualify real Hub/agent/auth behavior.
+Canonical inventory SHA256 is
+`ede4b08e8641845b448d62637e0d23a534462093fbdb64b0b659826c66a3c5ed`. The
 binding covers the Vitest configuration, frontend toolchain configurations and
-supported ignore hints. The four Markdown viewer markers and two LiveTail range
-markers were removed; other exclusions remain unchanged and unapproved. Local binding/approval
+supported ignore hints. Four Markdown viewer markers, two LiveTail range
+markers and four upload/delete markers were removed; other exclusions remain unchanged and unapproved. Local binding/approval
 validation passed, including rejection of configuration and marker mutations.
 Changed-head review and CI/archive remain outstanding. The main frontend SCM graph remains 552/559; E2E is 11/11. Python
 CLI resolved all ten dependencies in the
