@@ -41,7 +41,6 @@ function markdownChildrenToText(children: React.ReactNode): string {
 }
 
 // Mermaid diagram component
-/* c8 ignore start */
 function MermaidDiagram({ chart }: Readonly<{ chart: string }>) {
   const containerRef = useRef<HTMLDivElement>(null)
   const [svg, setSvg] = useState<string>('')
@@ -77,10 +76,8 @@ function MermaidDiagram({ chart }: Readonly<{ chart: string }>) {
     />
   )
 }
-/* c8 ignore stop */
 
 // Custom code block renderer for ReactMarkdown — renders mermaid blocks as diagrams
-/* c8 ignore start */
 const markdownComponents: Components = {
   code({ className, children, ...props }) {
     const match = /language-(\w+)/.exec(className || '')
@@ -113,7 +110,6 @@ const markdownComponents: Components = {
     }
   },
 }
-/* c8 ignore stop */
 
 interface MarkdownViewerProps {
   content: string

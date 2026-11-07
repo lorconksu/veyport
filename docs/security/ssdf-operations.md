@@ -95,14 +95,26 @@ OFF. DAST remains deferred.
 - Collector and candidate timers are OFF. No release gate is active, and no
   publication, merge, approval, scanner retirement or Dependency-Track cutover
   has occurred.
-- The frontend measurement-binding implementation now records 17
-  configurations and 49 annotations: 33 unchanged SAST rows and 16 explicit
-  coverage-v8 rows across five c8-bearing files; the existing schema remains
-  version 1. It binds the Vitest configuration, actual frontend toolchain
-  configuration and supported c8/v8/istanbul/node:coverage ignore hints. Exclusions
-  remain unchanged and require individual owner assessment; this implementation
-  is not policy approval. The changed revision needs its own final inventory
-  hash, checks, archive and reviews. Candidate detection is bounded to tracked
+- The frontend measurement inventory records 17 configurations and 45
+  annotations: 33 SAST rows and 12 coverage-v8 rows across four remaining
+  c8-bearing files; the schema remains version 1. The SAST row set and
+  semantics are unchanged, though source hashes and line positions are
+  revision-bound. Canonical inventory SHA256 is
+  `23e49e93a3ff1f75a80ae9954114f806926aa409cb048c85facf1b307cf81cf5`.
+  The 2026-11-07 Markdown viewer change removed only its four c8 markers and
+  added 11 focused tests. All 11 focused tests and all 865 frontend tests across
+  55 files passed; the frontend build, scoped lint and `git diff --check` passed.
+  Viewer coverage was 31/33 lines and statements (93.93%), 13/17 branches
+  (76.47%), and 8/8 functions. Tests use real ReactMarkdown, DOMPurify and
+  supported highlighting, with Mermaid rendering controlled; real Mermaid
+  layout is outside the jsdom renderer mock. Broad lint reports 20 errors and
+  two warnings in 13 files unchanged from base. This closes the Markdown viewer
+  exclusion subtask only, not an exclusion review or approval. The binding
+  covers the Vitest configuration, actual frontend toolchain configuration and
+  supported c8/v8/istanbul/node:coverage ignore hints. Other exclusions remain
+  unchanged and require individual owner assessment; this implementation is
+  not policy approval. Changed-head sequential review and CI/archive remain
+  pending. Candidate detection is bounded to tracked
   `web/src` `.ts`, `.tsx` and `.js` files and conservatively includes matching
   text inside strings; arbitrary configuration imports, transformations and
   source maps are not parsed.

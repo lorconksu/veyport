@@ -10,15 +10,23 @@ native cases but blocked on unapproved source-coverage policy. PR #122 merged
 to `main` at `a65fb36` and installed the approval workflow; automatic release
 remains held.
 
-The measurement-binding change now inventories 17 configurations and 49
-annotations: the existing 33 SAST rows are unchanged, with 16 explicit
-coverage-v8 rows across five c8-bearing files. It binds the Vitest configuration,
-frontend toolchain configurations and supported ignore hints. All existing
-exclusions remain unchanged and unapproved. Canonical inventory SHA256 is
-`4dad825b42bd4e4af340a7b47332d3fd6aa44c9df3c4084e11390df1018157fe`. Local
-binding/approval validation passed, including rejection of configuration and
-marker mutations. Code/security review and changed-head CI/archive remain
-outstanding. The main frontend SCM graph remains 552/559; E2E is 11/11. Python
+The measurement inventory has 17 configurations and 45 annotations: 33 SAST
+rows and 12 coverage-v8 rows across four remaining c8-bearing files. SAST row
+semantics are unchanged; source hashes and line positions are revision-bound.
+The 2026-11-07 Markdown viewer subtask removed only its four c8 markers. Its 11
+focused tests and all 865 frontend tests across 55 files passed, as did build,
+scoped lint and diff check. Viewer coverage is 31/33 lines and statements
+(93.93%), 13/17 branches (76.47%) and 8/8 functions. Sanitization tests use real
+ReactMarkdown, DOMPurify and supported highlighting; Mermaid rendering is
+controlled and real Mermaid layout is outside the jsdom renderer mock. Broad
+lint reports 20 errors/two warnings in 13 files unchanged from base. Canonical
+inventory SHA256 is
+`23e49e93a3ff1f75a80ae9954114f806926aa409cb048c85facf1b307cf81cf5`. The
+binding covers the Vitest configuration, frontend toolchain configurations and
+supported ignore hints. Only the four Markdown viewer c8 markers were removed;
+other exclusions remain unchanged and unapproved. Local binding/approval
+validation passed, including rejection of configuration and marker mutations.
+Changed-head review and CI/archive remain outstanding. The main frontend SCM graph remains 552/559; E2E is 11/11. Python
 CLI resolved all ten dependencies in the
 verified sample, while its SCM project remains root-only. Cleanup-token write
 capability remains untested. Finding dispositions, unknown discovery dates,

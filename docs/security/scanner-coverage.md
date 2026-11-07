@@ -12,9 +12,10 @@ approval is implied here. See
 
 The blanket Sonar coverage exclusions for handwritten application code were
 removed. The measurement-binding implementation keeps schema version 1 and
-inventories 17 configurations and 49 annotations: the original 33 SAST rows
-remain unchanged, with 16 coverage-v8 rows covering five c8-bearing files. It
-binds the Vitest configuration, actual frontend toolchain configuration and
+inventories 17 configurations and 45 annotations: 33 SAST rows and 12
+coverage-v8 rows across four remaining c8-bearing files. The SAST row set and
+semantics are unchanged; source hashes and line positions are revision-bound.
+It binds the Vitest configuration, actual frontend toolchain configuration and
 supported c8/v8/istanbul/node:coverage ignore hints. The eight added
 configuration files are `web/.gitignore`, `web/package.json`,
 `web/package-lock.json`, `web/tsconfig.json`, `web/tsconfig.app.json`,
@@ -22,18 +23,27 @@ configuration files are `web/.gitignore`, `web/package.json`,
 binding also covers bounded future standard config
 variants and frontend ignore/version-hint files. Exact source hashes bind the
 configuration and marker hints. Canonical inventory SHA256:
-`4dad825b42bd4e4af340a7b47332d3fd6aa44c9df3c4084e11390df1018157fe`. Local
+`23e49e93a3ff1f75a80ae9954114f806926aa409cb048c85facf1b307cf81cf5`. Local
 binding and approval regression validation passed, including rejection after
 configuration/marker mutation. The bounded matcher covers c8/v8/istanbul/
 node:coverage `if`, `else`, `next`, `file`, `start` and `stop` hints in tracked
 `web/src` `.ts`, `.tsx` and `.js` files. Candidate text is conservatively
 included even inside strings; arbitrary JavaScript configuration imports,
-transformations or source maps are not parsed. Existing exclusions, including the Vitest
-exclusions for `src/main.tsx`, `src/test/**` and `src/types/**`, and all c8
-markers remain unchanged. Executable upload, delete, live-tail and Markdown
-paths remain subject to individual assessment; binding is not approval or proof
-that exclusions are structurally necessary. The changed revision still needs
-sequential code/security reviews and exact-head CI/archive. No
+transformations or source maps are not parsed. Existing exclusions, including
+the Vitest exclusions for `src/main.tsx`, `src/test/**` and `src/types/**`,
+remain unchanged. The 2026-11-07 Markdown viewer change removed only its four
+c8 markers and added 11 focused tests; all 11 focused tests and all 865 frontend
+tests across 55 files passed, as did the frontend build, scoped lint and
+`git diff --check`. Viewer coverage is 31/33 lines and statements (93.93%),
+13/17 branches (76.47%) and 8/8 functions. Uncovered helper conversion branches
+are not produced by real ReactMarkdown children. Sanitization tests use real
+ReactMarkdown, DOMPurify and supported highlighting, with Mermaid rendering
+controlled; real Mermaid layout is outside the jsdom renderer mock. The two
+private sanitizer-bypass controls failed as expected. Broad lint reports 20
+errors and two warnings in 13 files unchanged from base. Executable upload,
+delete and live-tail paths remain subject to individual assessment; binding is
+not approval or proof that exclusions are structurally necessary. Changed-head
+sequential review and CI/archive remain pending. No
 coverage/risk approval or scanner removal is recorded.
 
 ## Scan ownership
