@@ -243,8 +243,7 @@ def main():
     try:
         api = GitHub()
         if args.command == "prepare":
-            payload = prepare(api, args.record, args.revision, args.sha256, args.run_id)
-            Path(args.approval).write_bytes(canonical(payload) + b"\n")
+            raise ValueError("legacy operational proposals are unavailable")
         else:
             verify(api, args.record, strict_json(Path(args.approval).read_bytes()))
     except (ValueError, OSError, KeyError, TypeError, zipfile.BadZipFile):
