@@ -153,7 +153,6 @@ func (s *Server) applicationUnauthenticated(w http.ResponseWriter, r *http.Reque
 		}
 		// Origin/authority come solely from fixed operator configuration; the
 		// validated app path is encoded as a query value, never a redirect authority.
-		// nosemgrep: go.lang.security.injection.open-redirect.open-redirect
 		http.Redirect(w, r, destination, http.StatusFound)
 		return
 	}
@@ -218,7 +217,6 @@ func (s *Server) exchangeApplicationLaunch(w http.ResponseWriter, r *http.Reques
 	http.SetCookie(w, &http.Cookie{Name: applicationCookie, Value: credential, Path: "/", Secure: true, HttpOnly: true, SameSite: http.SameSiteLaxMode, Expires: expires, MaxAge: int(expires.Sub(s.now()).Seconds())})
 	// applicationPath validates this consumed ticket destination at the sink:
 	// root-relative only; no authority, scheme, backslash or control characters.
-	// nosemgrep: go.lang.security.injection.open-redirect.open-redirect
 	http.Redirect(w, r, path, http.StatusSeeOther)
 }
 func appRequestOriginAllowed(r *http.Request, host string) bool {

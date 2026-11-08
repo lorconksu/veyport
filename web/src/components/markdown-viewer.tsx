@@ -102,7 +102,7 @@ const markdownComponents: Components = {
       return (
         <code
           className="hljs"
-          dangerouslySetInnerHTML={{ /* nosemgrep: typescript.react.security.audit.react-dangerouslysetinnerhtml.react-dangerouslysetinnerhtml */ __html: sanitizeHljsHtml(result.value) }}
+          dangerouslySetInnerHTML={{ __html: sanitizeHljsHtml(result.value) }}
         />
       )
     } catch {

@@ -1,16 +1,17 @@
 # SSDF prototype operations and rollout status
 
-Current status (2026-11-07): PR #115's latest captured successful CI/CodeQL
+Current status (2026-11-08): PR #115's latest captured successful CI/CodeQL
 baseline is `49e96fd56eb2810c43a9ec98fea850f5406a7690`. At evidence capture, local combined frontend validation passed
 922 tests across 61 files and the TypeScript/Vite build; six c8 markers and the
 `src/main.tsx` exclusion are removed. Changed-lines lint passed, with five
 inherited diagnostics outside changed lines. No current-head CI or release
-qualification is claimed. The current inventory is unapproved: 17 configs, 33
-SAST annotations and zero coverage annotations (SHA256
-`6b1168b0ea10044827ed34a4002bf35bbfa6406356057992dd2932aa7f4ea5ac`). The
-scanner assessment recommends Snyk Open Source/Container, Sonar and CodeQL;
-Snyk + Sonar is still an explicit owner option. Keep existing gates pending
-that decision. Unknown first-seen ages remain governed by the current strict
+qualification is claimed. The current inventory is unapproved: 19 configs, 26
+Sonar annotations, zero Semgrep annotations and zero coverage annotations
+(canonical SHA256 `b65207e7573504426b57d14862db1e2c7cd63ed00957f9f19e11a4aa3e3c239c`).
+Scanner selection is approved; coverage and finding approvals remain separate.
+the owner approved Snyk Open Source/Container, SonarQube and CodeQL and explicitly
+approved Semgrep retirement. PR #115 implements that change; `main` retains its
+old policy until merge. Unknown first-seen ages remain governed by the current strict
 hold; no date was supplied, reset or fabricated.
 
 The 2026-11-07 retention qualification prepared disabled-by-default cleanup and
@@ -43,8 +44,9 @@ workflow; automatic release remains held.
 The coordinator credential successfully posted its signed candidate result
 during rehearsal. Cleanup-token write capability remains untested. Python CLI
 resolved ten dependencies in the verified sample; Python SCM coverage remains
-root-only. No PR #115 merge, release, risk acceptance, scanner retirement or
-Dependency-Track cutover is claimed. Staging remains v2.0.57 and timers remain
+root-only. PR #115 remains unmerged; no release, risk acceptance or
+Dependency-Track cutover is claimed. The owner approved Semgrep retirement, and
+its implementation is in PR #115. Staging remains v2.0.57 and timers remain
 OFF. DAST remains deferred.
 
 ## Established prototype state
@@ -114,9 +116,11 @@ OFF. DAST remains deferred.
   14 report bundles and 14 terminal logs. Temporary credentials and services
   were removed; normal staging remained unchanged. Sonar describes the first-branch behavior
   [here](https://community.sonarsource.com/t/quality-gate-status-failed-when-branch-does-not-exist/112706).
-- Collector and candidate timers are OFF. No release gate is active, and no
-  publication, merge, approval, scanner retirement or Dependency-Track cutover
-  has occurred.
+- In the 2026-11-07 operational snapshot, collector and candidate timers were
+  OFF; no publication, merge, risk approval, Semgrep retirement or
+  Dependency-Track cutover had occurred. The owner approved Semgrep retirement
+  on 2026-11-08; PR #115 implements it. Timers remain OFF and publication remains
+  held.
 - The frozen PR #115 frontend measurement inventory records 17 configurations
   and 39 rows: 33 SAST rows and six coverage-v8 rows across four c8-bearing
   files; the schema remains version 1. The SAST row set and semantics are
@@ -217,10 +221,12 @@ and any changed PR #115 head requires its own checks. This workflow installation
 coverage or risk approval. See
 [scanner coverage](scanner-coverage.md) for scope and remaining evidence.
 
-Keep SonarQube, CodeQL and Semgrep active until same-revision coverage and
-quality evidence justifies any change. DAST is deferred, not tested and not a
-passing gate. Revisit only after the owner has Snyk support's answer and the
-separate DAST provisioning and policy review are complete.
+SonarQube and CodeQL are the approved retained source SAST gates. Historical
+Semgrep artifacts remain evidence only; their findings have not been implicitly
+risk-accepted. Scanner choice does not change the strict hold for unknown ages,
+unapproved coverage or unresolved finding dispositions. DAST is deferred, not
+tested and not a passing gate; its provisioning and policy review remain
+separate.
 
 ## Operator pending checklist
 

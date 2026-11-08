@@ -125,14 +125,6 @@ jobs:
         env:
           SNYK_TOKEN: ${{ secrets.SNYK_TOKEN }}
         run: bash scripts/release/qualify_sca.sh "$RUNNER_TEMP/candidate.json" "$RUNNER_TEMP/security" "$RUNNER_TEMP/delivery" "$RUNNER_TEMP/snyk-tools/node_modules/.bin/snyk" "$RUNNER_TEMP/sca-python/bin/python"
-      - name: Run required Semgrep gate once in private delivery
-        run: |
-          set -euo pipefail
-          python3 -m venv "$RUNNER_TEMP/semgrep-tools"
-          "$RUNNER_TEMP/semgrep-tools/bin/pip" install semgrep==1.180.0 > "$RUNNER_TEMP/security/semgrep-install.log" 2>&1
-          mkdir -p "$RUNNER_TEMP/security/current-semgrep"
-          "$RUNNER_TEMP/semgrep-tools/bin/semgrep" scan --strict --timeout 30 --config p/golang --config p/typescript --config p/owasp-top-ten --sarif -o "$RUNNER_TEMP/security/current-semgrep/semgrep.sarif" . > "$RUNNER_TEMP/security/current-semgrep/semgrep-output.txt" 2>&1
-          python3 scripts/release/check_scan.py semgrep "$RUNNER_TEMP/security/current-semgrep/semgrep.sarif"
       - name: Select complete exact-source CodeQL baseline or prepare current-job full scan
         id: codeql_baseline
         env:
@@ -177,7 +169,7 @@ jobs:
           # The existing required CI job scans this exact dedicated LONG
           # branch once. Never export a PR/new-code or historical SHORT view.
           sonar_branch="release-ssdf-candidate-$GITHUB_SHA"
-          python3 scripts/release/source_sast.py --sonar-public-project --output "$RUNNER_TEMP/security/source-sast" --assessment "$RUNNER_TEMP/security/source-sast.json" --revision "$GITHUB_SHA" --version "$VERSION" --candidate-id "run-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT" --artifact-manifest "$RUNNER_TEMP/candidate.json" --semgrep "$RUNNER_TEMP/security/current-semgrep/semgrep.sarif" --sonar-branch "$sonar_branch" --codeql-evidence "$RUNNER_TEMP/security/codeql-evidence"
+          python3 scripts/release/source_sast.py --sonar-public-project --output "$RUNNER_TEMP/security/source-sast" --assessment "$RUNNER_TEMP/security/source-sast.json" --revision "$GITHUB_SHA" --version "$VERSION" --candidate-id "run-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT" --artifact-manifest "$RUNNER_TEMP/candidate.json" --sonar-branch "$sonar_branch" --codeql-evidence "$RUNNER_TEMP/security/codeql-evidence"
       - name: Await signed isolated candidate qualification
         env:
           GH_TOKEN: ${{ github.token }}

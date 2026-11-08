@@ -40,6 +40,7 @@
     ".github/workflows/risk-approval.yml",
     "scripts/release/candidate.py",
     "scripts/release/release_policy.py",
+    "scripts/release/scan_contract.py",
     "scripts/release/risk_acceptance.py",
     "scripts/release/evidence_manifest.py",
     "scripts/release/evaluate_candidate.sh",

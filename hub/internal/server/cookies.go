@@ -47,7 +47,6 @@ func setAuthCookies(w http.ResponseWriter, accessToken, refreshToken string) {
 	csrfToken := generateCSRFToken()
 	// The double-submit CSRF token must be readable by the browser. Access and
 	// refresh cookies remain HttpOnly; cookies_test.go checks both distinctions.
-	// nosemgrep: go.lang.security.audit.net.cookie-missing-httponly.cookie-missing-httponly
 	http.SetCookie(w, &http.Cookie{
 		Name:     cookieCSRF,
 		Value:    csrfToken,
@@ -89,7 +88,6 @@ func clearAuthCookies(w http.ResponseWriter) {
 	}
 	for _, name := range []string{cookieCSRF, "veyport_csrf", legacyCookieCSRF} {
 		// Clear the intentionally browser-readable CSRF cookie, matching issuance.
-		// nosemgrep: go.lang.security.audit.net.cookie-missing-httponly.cookie-missing-httponly
 		http.SetCookie(w, &http.Cookie{
 			Name:     name,
 			Path:     "/",

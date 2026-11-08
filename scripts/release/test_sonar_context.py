@@ -141,7 +141,7 @@ class SonarContext(unittest.TestCase):
     def test_workflow_requires_context_before_scanner_and_prototype_caller_requires_pr(self):
         repo = Path(__file__).resolve().parents[2]
         workflow = (repo / ".github/workflows/ci.yml").read_text()
-        sonar_job = workflow.split("  sonarcloud:\n", 1)[1].split("  sast:\n", 1)[0]
+        sonar_job = workflow.split("  sonarcloud:\n", 1)[1].split("  secret-scan:\n", 1)[0]
         self.assertLess(sonar_job.index("run: python3 scripts/release/sonar_context.py"), sonar_job.index("uses: SonarSource/sonarqube-scan-action@"))
         self.assertIn("${{ steps.sonar-context.outputs.args }}", sonar_job)
         self.assertIn("SONAR_PULL_REQUEST_REQUIRED: ${{ inputs.sonar_pull_request_required }}", sonar_job)

@@ -1,6 +1,6 @@
 # PR 115 closeout
 
-Status snapshot (2026-11-07): the latest fully captured CI/CodeQL baseline is revision
+Status snapshot (2026-11-08): the latest fully captured CI/CodeQL baseline is revision
 `49e96fd56eb2810c43a9ec98fea850f5406a7690`; all CI jobs and the five managed
 CodeQL analyses passed there. At capture time, the parallel batch's frontend
 coverage validation passed 922 tests across
@@ -11,9 +11,10 @@ local results do not establish current-head CI, review or release
 qualification; check [PR #115](https://github.com/lorconksu/veyport/pull/115)
 for current checks and review. Coverage/exclusion policy approval and finding
 dispositions remain pending; unknown first-seen dates continue to trigger the
-existing strict hold. Scanner assessment recommends Snyk Open Source/Container,
-Sonar and CodeQL; the owner's two-product Snyk + Sonar option remains open, and
-the current gates stay in place pending that choice. The candidate remains
+existing strict hold. The owner approved Snyk Open Source/Container, SonarQube
+and CodeQL and explicitly approved Semgrep retirement. Implementation is in PR
+#115; `main` retains its existing policy until merge. This does not approve
+coverage inventory or risk dispositions. The candidate remains
 unmerged and unpublished; staging remains v2.0.57 and timers remain OFF.
 
 The 2026-11-07 retention qualification prepared fail-closed, disabled-by-default
@@ -75,9 +76,9 @@ These results do not grant a policy exception or release qualification.
 | Password and encryption coverage | Boundary/reachable failures; normal and real FIPS-only profiles kept distinct | Implemented and verified; FIPS-only profile rejects caller-managed GCM nonces, so application is not claimed FIPS compatible |
 | Certificate-authority persistence | Fail-closed read errors/corruption/mismatch; atomic initial persistence and legacy migration; concurrency regressions | Implemented and verified; no rotation/expiry policy added |
 | Generated protobuf controls | Pinned verified generation, reproducibility and Buf schema compatibility checks; retain generated-code exclusion | Local controls and actionlint passed; captured baseline `28ad4dd` CI `41973613744` (15/15 passed); changed-head checks are tracked on PR #115 |
-| Coverage configuration | Six c8 markers removed; `src/main.tsx` exclusion removed | Current technical inventory is unapproved, with 17 configurations, 33 SAST rows and zero coverage rows (SHA256 `6b1168b0ea10044827ed34a4002bf35bbfa6406356057992dd2932aa7f4ea5ac`). Local frontend validation passed 922 tests across 61 files and build; changed-lines lint passed with five inherited diagnostics outside changed lines. Earlier marker-specific and browser fixture results below this closeout's history are dated snapshots; they do not establish current-head CI, policy approval or release qualification. |
+| Coverage configuration | Six c8 markers removed; `src/main.tsx` exclusion removed | Final technical inventory is unapproved: 19 configurations, 26 Sonar annotations, zero Semgrep/coverage annotations (SHA256 `b65207e7573504426b57d14862db1e2c7cd63ed00957f9f19e11a4aa3e3c239c`). Scanner selection is approved; coverage and finding approvals remain separate. Local frontend validation passed 922 tests across 61 files and build; changed-lines lint passed with five inherited diagnostics outside changed lines. Earlier marker-specific and browser fixture results are dated snapshots; they do not establish current-head CI, policy approval or release qualification. |
 | Finding history | Authenticated exact-match CodeQL history ledger retained with reports; unknown dates stay unknown | Historical ledger snapshot at `16ef348`: 8 dated and 8 unknown; use the exact-candidate sealed ledger for current findings/history. No risk dispositions are inherited. |
-| Scanner comparison | Read-only comparison assessed flows, history, scope and timing | Owner choice pending: recommendation is Snyk Open Source/Container + Sonar + CodeQL; Snyk + Sonar remains an option. Keep current gates. Semgrep retirement is not approved. |
+| Scanner comparison | Read-only comparison assessed flows, history, scope and timing | Owner approved Snyk Open Source/Container + SonarQube + CodeQL and Semgrep retirement on 2026-11-08; implementation is in PR #115. |
 | Snyk migration | Nonempty complete source graphs, exact-artifact coverage and preserved prior history before Dependency-Track cutover | Incomplete |
 | Final verification | Code review, then independent security review, final-revision CI, encrypted evidence/readback, candidate qualification and recovery | Earlier baseline `28ad4dd` CI `41973613744` (15/15) and CodeQL `41973608508` (5/5) passed, reviews were clear and encrypted archives/readback were verified; the later captured baseline is recorded above. Exact candidate qualification and delivery remain pending; these results do not validate a later revision. |
 
@@ -135,5 +136,6 @@ was used to reset a remediation clock.
 
 Web/API DAST remains explicitly deferred by the owner. It is not counted as
 passing, and its eventual activation needs its own reviewed configuration.
-No PR #115 merge, release, scanner retirement, policy exception, or destructive
-cleanup is recorded as approved by this closeout document.
+PR #115 remains unmerged and no release, policy exception or destructive cleanup
+is approved by this closeout document. The owner separately approved Semgrep
+retirement on 2026-11-08; its implementation remains part of this unmerged PR.

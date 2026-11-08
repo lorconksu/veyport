@@ -15,7 +15,7 @@ WORKFLOW = Path(__file__).resolve().parents[2] / ".github/workflows/ci.yml"
 REVISION = "${{ github.event.pull_request.head.sha || github.sha }}"
 SOURCE_JOBS = {
     "unit", "server-tests", "test", "integration", "smoke", "e2e",
-    "sonarcloud", "sast", "secret-scan", "vulnerability-scan",
+    "sonarcloud", "secret-scan", "vulnerability-scan",
 }
 
 
@@ -148,7 +148,7 @@ class CISourceIdentity(unittest.TestCase):
         # Preserve the prerequisites and original tag/dispatch flow for the
         # separately reviewed restoration; all source jobs still run above.
         jobs = source_jobs()
-        self.assertIn("    needs: [integration, smoke, e2e, sonarcloud, sast, secret-scan, vulnerability-scan]\n",
+        self.assertIn("    needs: [integration, smoke, e2e, sonarcloud, secret-scan, vulnerability-scan]\n",
                       jobs["auto-release"])
         self.assertNotIn("EXPECTED_SOURCE_SHA", jobs["auto-release"])
         self.assertNotIn("          ref:", jobs["auto-release"])

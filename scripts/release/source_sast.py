@@ -11,6 +11,7 @@ import subprocess
 import urllib.parse
 import urllib.request
 from risk_acceptance import GitHub, REPOSITORY, canonical, now, sha, strict_json, load_record, verify
+from scan_contract import SAST_SCANNERS
 
 CODEQL_CATEGORIES = {"/language:" + n for n in ("go", "javascript-typescript", "python", "ruby", "actions")}
 CODEQL_DEFAULT_KEY = "dynamic/github-code-scanning/codeql:analyze"
@@ -583,7 +584,7 @@ def suppression_inventory(root):
     configs, annotations = [], []
     for name in sorted(n for n in tracked if n):
         path = root / name
-        is_config = name in ("sonar-project.properties", ".github/workflows/ci.yml", ".github/workflows/delivery.yml", ".github/workflows/staging.yml", ".github/workflows/release.yml", ".github/workflows/ssdf-rehearsal.yml", "scripts/release/codeql_evidence.py", "scripts/release/source_sast.py", "scripts/release/sonar_context.py", "scripts/release/sonar_job_evidence.py", ".semgrepignore", ".snyk") or name.startswith((".github/codeql/", ".semgrep/")) or FRONTEND_MEASUREMENT_CONFIG.fullmatch(name) is not None
+        is_config = name in ("sonar-project.properties", ".github/workflows/ci.yml", ".github/workflows/delivery.yml", ".github/workflows/staging.yml", ".github/workflows/release.yml", ".github/workflows/ssdf-rehearsal.yml", "scripts/release/codeql_evidence.py", "scripts/release/source_sast.py", "scripts/release/scan_contract.py", "scripts/release/release_policy.py", "scripts/release/sonar_context.py", "scripts/release/sonar_job_evidence.py", ".semgrepignore", ".snyk") or name.startswith((".github/codeql/", ".semgrep/")) or FRONTEND_MEASUREMENT_CONFIG.fullmatch(name) is not None
         is_source = name.startswith(("hub/", "agent/", "cli/", "web/src/", "proto/")) and path.suffix in (".go", ".ts", ".tsx", ".js", ".py", ".rb") and not name.endswith(".pb.go")
         if not is_config and not is_source:
             continue
@@ -636,21 +637,12 @@ def reviewed_inventory(inventory_hash, directory, api):
 def collect(args, api=None, sonar=None):
     root = Path(args.output)
     root.mkdir(parents=True, exist_ok=False, mode=0o700)
-    envelope = {"schema_version": 1, "candidate_id": args.candidate_id, "revision": args.revision, "artifact_manifest_sha256": sha(Path(args.artifact_manifest).read_bytes()), "status": "failed", "required_scopes": ["source:sast:" + n for n in ("semgrep", "codeql", "sonar")], "scopes": []}
-    for scanner in ("semgrep", "codeql", "sonar"):
+    envelope = {"schema_version": 1, "candidate_id": args.candidate_id, "revision": args.revision, "artifact_manifest_sha256": sha(Path(args.artifact_manifest).read_bytes()), "status": "failed", "required_scopes": ["source:sast:" + n for n in SAST_SCANNERS], "scopes": []}
+    for scanner in SAST_SCANNERS:
         scope = {"id": "source:sast:" + scanner, "status": "failed", "authenticated": False, "coverage_complete": False, "findings": []}
         envelope["scopes"].append(scope)
         try:
-            if scanner == "semgrep":
-                source = Path(args.semgrep)
-                if source.is_symlink() or not 0 < source.stat().st_size <= MAX_BYTES:
-                    raise ValueError("current-run Semgrep report missing")
-                # The delivery caller runs the unchanged required Semgrep gate
-                # once locally; required-ci explicitly defers that same scan.
-                raw = strict_json(source.read_bytes())
-                save(root, "semgrep.sarif", raw)
-                findings = sarif_findings(raw, scanner, args.revision, args.version)
-            elif scanner == "codeql":
+            if scanner == "codeql":
                 if getattr(args, "codeql_evidence", None):
                     from codeql_evidence import consume
                     findings = consume(args.codeql_evidence, args.artifact_manifest, getattr(args, "root", "."), root, args.revision, args.version, args.candidate_id)
@@ -662,8 +654,8 @@ def collect(args, api=None, sonar=None):
                 public_project = getattr(args, "sonar_public_project", False)
                 findings = export_sonar(sonar or Sonar(public_project=public_project), root, args.revision, args.version, args.sonar_branch, public_project)
                 if public_project:
-                    # authenticated records trusted report provenance, as for
-                    # local same-run Semgrep; it is not a client login claim.
+                    # authenticated records trusted report provenance;
+                    # it is not a client login claim.
                     scope.update(provider_access="public-project-anonymous", client_authenticated=False)
             scope.update(status="completed", authenticated=True, coverage_complete=True, findings=findings)
         except (ValueError, OSError, KeyError, TypeError):
@@ -687,7 +679,7 @@ def collect(args, api=None, sonar=None):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    for flag in ("output", "assessment", "revision", "version", "candidate-id", "artifact-manifest", "semgrep", "sonar-branch"):
+    for flag in ("output", "assessment", "revision", "version", "candidate-id", "artifact-manifest", "sonar-branch"):
         parser.add_argument("--" + flag, required=True)
     parser.add_argument("--root", default=".")
     parser.add_argument("--coverage-reviews", default="docs/security/coverage-reviews")

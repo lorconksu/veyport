@@ -34,7 +34,6 @@ jobs:
     if: inputs.prototype
     uses: ./.github/workflows/ci.yml
     with:
-      defer_semgrep_to_delivery: true
       sonar_pull_request_required: true
       sonar_full_branch_required: true
     secrets:

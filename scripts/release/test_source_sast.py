@@ -5,6 +5,7 @@ import tempfile
 import io
 import urllib.error
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import patch
 import source_sast as sast
 
@@ -16,6 +17,44 @@ def sarif():
 
 
 class SourceEvidenceTests(unittest.TestCase):
+    def test_historical_semgrep_sarif_decoder_is_retained(self):
+        raw = sarif()
+        raw['runs'][0]['tool']['driver']['name'] = 'Semgrep OSS'
+        findings = sast.sarif_findings(raw, 'semgrep', REV, '2.0.58')
+        self.assertEqual(findings[0]['scanner'], 'semgrep')
+        self.assertEqual(findings[0]['classification'], 'authentication')
+        self.assertIsNone(findings[0]['first_seen'])
+
+    def test_collection_requires_only_retained_scanners_and_preserves_each_export_failure(self):
+        for failed in (None, "codeql", "sonar", "review"):
+            with self.subTest(failed=failed), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                manifest = root / 'candidate.json'
+                manifest.write_text('{}')
+                args = SimpleNamespace(output=root / 'raw', assessment=root / 'assessment.json',
+                    candidate_id='candidate-1', revision=REV, version='2.0.58',
+                    artifact_manifest=manifest, sonar_branch='main', root=root)
+                with patch.object(sast, 'export_codeql', side_effect=ValueError('missing exact CodeQL') if failed == 'codeql' else None, return_value=[]), \
+                     patch.object(sast, 'export_sonar', side_effect=ValueError('failed Sonar gate') if failed == 'sonar' else None, return_value=[]), \
+                     patch.object(sast, 'suppression_inventory', return_value={'configurations': [], 'annotations': []}), \
+                     patch.object(sast, 'reviewed_inventory', side_effect=ValueError('review absent') if failed == 'review' else None, return_value={'id': 'CR-test'}):
+                    result = sast.collect(args, api=object(), sonar=object())
+                evidence = sast.strict_json(args.assessment.read_bytes())
+                self.assertEqual(evidence['required_scopes'], ['source:sast:codeql', 'source:sast:sonar'])
+                self.assertEqual({s['id'] for s in evidence['scopes']}, set(evidence['required_scopes']))
+                if failed in ('codeql', 'sonar'):
+                    self.assertFalse(result)
+                    scope = next(s for s in evidence['scopes'] if s['id'] == 'source:sast:' + failed)
+                    self.assertEqual(scope['status'], 'failed')
+                    self.assertFalse(scope['authenticated'])
+                    self.assertFalse(scope['coverage_complete'])
+                elif failed == 'review':
+                    self.assertEqual(evidence['coverage_policy']['status'], 'pending-owner-policy-review')
+                    self.assertTrue(all(not s['coverage_complete'] for s in evidence['scopes']))
+                else:
+                    self.assertTrue(result)
+                    self.assertTrue(all(s['authenticated'] and s['coverage_complete'] for s in evidence['scopes']))
+
     def test_public_reader_omits_credentials_and_uses_fixed_https_without_redirects(self):
         api = sast.Sonar(public_project=True)
         response = lambda: io.BytesIO(b'{"component":{"key":"lorconksu_veyport","visibility":"public"}}')
@@ -369,7 +408,7 @@ class SourceEvidenceTests(unittest.TestCase):
                         sast.suppression_inventory(root)
 
     def test_policy_inventory_binds_full_scan_workflow_and_helper_configuration(self):
-        names = ['.github/workflows/delivery.yml', '.github/workflows/staging.yml', '.github/workflows/release.yml', 'scripts/release/codeql_evidence.py', 'scripts/release/sonar_context.py', 'scripts/release/source_sast.py']
+        names = ['.github/workflows/delivery.yml', '.github/workflows/staging.yml', '.github/workflows/release.yml', 'scripts/release/codeql_evidence.py', 'scripts/release/sonar_context.py', 'scripts/release/source_sast.py', 'scripts/release/scan_contract.py', 'scripts/release/release_policy.py']
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             for name in names:
@@ -379,9 +418,22 @@ class SourceEvidenceTests(unittest.TestCase):
             with patch.object(sast.subprocess, 'check_output', return_value=('\0'.join(names) + '\0').encode()):
                 before = sast.suppression_inventory(root)
                 self.assertEqual({c['path'] for c in before['configurations']}, set(names))
-                (root / names[0]).write_text('changed queries or language configuration\n')
-                after = sast.suppression_inventory(root)
-            self.assertNotEqual(sast.sha(sast.canonical(before)), sast.sha(sast.canonical(after)))
+                reviews = root / 'reviews'
+                reviews.mkdir()
+                (reviews / 'CR-0001.md').write_text('historical review fixture')
+                old_hash = sast.sha(sast.canonical(before))
+                for name in names:
+                    with self.subTest(configuration=name):
+                        path = root / name
+                        path.write_text('changed queries or active scanner policy\n')
+                        after = sast.suppression_inventory(root)
+                        new_hash = sast.sha(sast.canonical(after))
+                        self.assertNotEqual(old_hash, new_hash)
+                        with patch.object(sast, 'load_record', return_value=({'inventory_sha256': old_hash}, None)), \
+                             patch.object(sast, 'verify', side_effect=AssertionError('stale review must not be authenticated')):
+                            with self.assertRaisesRegex(ValueError, 'needs owner policy review'):
+                                sast.reviewed_inventory(new_hash, reviews, object())
+                        path.write_text('full scanner configuration\n')
 
     def test_codeql_missing_language_is_incomplete_not_clean(self):
         api = sast.ExportAPI('test-token')

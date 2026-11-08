@@ -181,6 +181,48 @@ class ReleasePolicyTests(unittest.TestCase):
     def test_clean_complete_bound_evidence_passes_with_dast_deferred(self):
         self.assertEqual(self.evaluate(report())["dast"], "deferred-owner-decision")
 
+    def test_active_policy_needs_no_semgrep_but_preserves_historical_approval_grammar(self):
+        self.assertNotIn("source:sast:semgrep", report()["required_scopes"])
+        self.assertEqual(self.evaluate(report())["policy_version"], "ssdf-2026-11-08-v2")
+        self.assertIn("source:sast:semgrep", risk.FINDING_SCOPES)
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "RA-0001.md"
+            item = record("source:sast:semgrep")
+            item["findings"][0]["scanner"] = "semgrep"
+            path.write_bytes(b"---\n" + risk.canonical(item) + b"\n---\nHistorical Semgrep approval.\n")
+            self.assertEqual(risk.load_record(path)[0]["findings"], item["findings"])
+
+    def test_retained_sast_is_required_complete_authenticated_and_cannot_bypass_findings(self):
+        for scanner in ("sonar", "codeql"):
+            identity = "source:sast:" + scanner
+            for failure in ("absent", "failed", "unauthenticated", "incomplete", "high", "unknown-age"):
+                with self.subTest(scanner=scanner, failure=failure):
+                    evidence = report()
+                    scope = next(s for s in evidence["scopes"] if s["id"] == identity)
+                    if failure == "absent":
+                        evidence["scopes"].remove(scope)
+                        evidence["required_scopes"].remove(identity)
+                    elif failure == "failed":
+                        scope["status"] = "failed"
+                    elif failure == "unauthenticated":
+                        scope["authenticated"] = False
+                    elif failure == "incomplete":
+                        scope["coverage_complete"] = False
+                    else:
+                        item = finding("medium" if failure == "unknown-age" else "high")
+                        item.update(scanner=scanner, first_seen=None)
+                        scope["findings"] = [item]
+                    with self.assertRaises(ValueError):
+                        self.evaluate(evidence)
+
+    def test_legacy_semgrep_evidence_cannot_satisfy_current_release_contract(self):
+        evidence = report()
+        evidence["required_scopes"].append("source:sast:semgrep")
+        evidence["scopes"].append({"id": "source:sast:semgrep", "status": "completed",
+                                   "authenticated": True, "coverage_complete": True, "findings": []})
+        with self.assertRaisesRegex(ValueError, "unknown scan scope"):
+            self.evaluate(evidence)
+
     def test_missing_authenticated_coverage_review_blocks(self):
         with self.assertRaises(ValueError):
             policy.evaluate([report()], "candidate-1", REV, HASH, at=AT)

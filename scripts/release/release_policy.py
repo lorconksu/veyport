@@ -5,11 +5,11 @@ import datetime as dt
 import os
 from pathlib import Path
 import re
-from risk_acceptance import GitHub, canonical, now, sha, strict_json, timestamp, verify, load_record, SOURCE_SCOPES, IMAGE_SCOPES, NATIVE_SCOPES
+from risk_acceptance import GitHub, canonical, now, sha, strict_json, timestamp, verify, load_record
+from scan_contract import POLICY_VERSION, SOURCE_SCOPES, IMAGE_SCOPES, NATIVE_SCOPES, REQUIRED_SCOPES
 
 BLOCKING_CLASSES = {"authentication", "authorization", "required-audit"}
 SEVERITIES = {"critical", "high", "medium", "low", "info"}
-POLICY_VERSION = "ssdf-2026-10-31-v1"
 
 
 def read_json(path):
@@ -49,7 +49,7 @@ def evaluate(reports, candidate_id, revision, artifact_hash, exceptions=(), api=
             coverage_reviews.append(validate_coverage(report, api, at))
         for scope in report["scopes"]:
             identity = scope.get("id")
-            if identity in scopes or identity not in SOURCE_SCOPES | IMAGE_SCOPES | NATIVE_SCOPES:
+            if identity in scopes or identity not in REQUIRED_SCOPES:
                 raise ValueError("duplicate or unknown scan scope")
             if scope.get("status") != "completed" or scope.get("authenticated") is not True or scope.get("coverage_complete") is not True:
                 raise ValueError("operational or coverage failure cannot be excepted")
@@ -57,7 +57,7 @@ def evaluate(reports, candidate_id, revision, artifact_hash, exceptions=(), api=
                 raise ValueError("invalid finding inventory")
             scopes[identity] = scope
             findings.extend((identity, finding) for finding in scope["findings"])
-    if set(scopes) != SOURCE_SCOPES | IMAGE_SCOPES | NATIVE_SCOPES:
+    if set(scopes) != REQUIRED_SCOPES:
         raise ValueError("required source, image or native coverage is absent")
     # Records are loaded/authorized independently; report-supplied waiver fields
     # and dashboard suppressions never create an approval.

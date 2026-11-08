@@ -7,10 +7,6 @@ on:
     branches: [main]
   workflow_call:
     inputs:
-      defer_semgrep_to_delivery:
-        description: Internal release caller runs the identical required Semgrep gate once in private delivery
-        type: boolean
-        default: false
       sonar_pull_request_required:
         description: Require an exact open PR context for a prototype scan
         type: boolean
@@ -606,58 +602,6 @@ jobs:
           if-no-files-found: error
           retention-days: 7
 
-  sast:
-    if: ${{ !inputs.defer_semgrep_to_delivery }}
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
-        with:
-          ref: ${{ github.event.pull_request.head.sha || github.sha }}
-      - name: Verify checked-out source revision
-        shell: bash
-        env:
-          EXPECTED_SOURCE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
-        run: |
-          set -euo pipefail
-          [[ "$EXPECTED_SOURCE_SHA" =~ ^[0-9a-f]{40}$ ]]
-          test "$(git rev-parse HEAD)" = "$EXPECTED_SOURCE_SHA"
-
-      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
-        with:
-          python-version: '3.13'
-
-      - name: Install Semgrep
-        run: pip3 install semgrep==1.180.0
-
-      - name: Semgrep SAST gate
-        run: |
-          set -euo pipefail
-          semgrep scan --strict --timeout 30 --config p/golang --config p/typescript --config p/owasp-top-ten --sarif -o semgrep.sarif . > semgrep-output.txt 2>&1
-          python3 scripts/release/check_scan.py semgrep semgrep.sarif
-
-      - name: Encrypt available private job evidence
-        if: always()
-        env:
-          EVIDENCE_JOB: sast
-          JOB_STATUS: ${{ job.status }}
-          AGE_RECIPIENT: ${{ vars.SSDF_AGE_RECIPIENT }}
-          EXPECTED_SOURCE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
-        run: |
-          set -euo pipefail
-          if ! command -v age >/dev/null; then
-            sudo apt-get update -qq
-            sudo apt-get install -y -qq age
-          fi
-          python3 scripts/release/ci_evidence.py --output "$RUNNER_TEMP/ssdf-job-$EVIDENCE_JOB" --recipient "$AGE_RECIPIENT" --job "$EVIDENCE_JOB" --status "$JOB_STATUS" --revision "$EXPECTED_SOURCE_SHA" --workflow "$GITHUB_WORKFLOW_REF" --runner-results "$RUNNER_TEMP/ssdf-results" --path "semgrep.sarif" --path "semgrep-output.txt"
-      - name: Transfer only encrypted job evidence
-        if: always()
-        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
-        with:
-          name: ssdf-job-v1-${{ github.run_id }}-${{ github.run_attempt }}-sast
-          path: ${{ runner.temp }}/ssdf-job-sast/chunk-*.age
-          if-no-files-found: error
-          retention-days: 7
-
   secret-scan:
     runs-on: ubuntu-latest
     steps:
@@ -785,7 +729,7 @@ jobs:
           retention-days: 7
 
   auto-release:
-    needs: [integration, smoke, e2e, sonarcloud, sast, secret-scan, vulnerability-scan]
+    needs: [integration, smoke, e2e, sonarcloud, secret-scan, vulnerability-scan]
     # Temporary publication hold for the trusted approval bootstrap: no tags or
     # release dispatch until reviewed qualification is complete. Restore only by
     # reviewed PR following docs/security/approval-bootstrap.md.

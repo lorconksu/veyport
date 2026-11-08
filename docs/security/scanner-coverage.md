@@ -1,23 +1,36 @@
 # Scanner coverage and migration record
 
-Current status (2026-11-07): the six inherited c8 markers have been removed
+Current status (2026-11-08, policy `ssdf-2026-11-08-v2`): the owner approved Snyk Open Source/Container,
+SonarQube and CodeQL as the retained scanner set and explicitly approved
+Semgrep retirement. Implementation is in PR #115; `main` retains its existing
+policy until merge. The active SAST gates are SonarQube and CodeQL. Historical
+Semgrep findings, SARIF and report decoding remain available as evidence and
+compatibility support; they are not active gates and are not implicitly
+risk-accepted. This scanner decision does not approve coverage inventory,
+finding dispositions, unknown discovery ages or release publication.
+
+The six inherited c8 markers have been removed
 and the Vitest exclusion for `src/main.tsx` has been removed. The combined
 frontend run passed 922 tests across 61 files and the TypeScript/Vite build;
 changed-lines lint passed with five inherited diagnostics outside changed
 lines. These local results do not establish current-head CI or release
 qualification; use the live PR #115 status for current checks and review. Coverage policy and all remaining configured
-exclusions still require owner review. Keep existing SAST and quality gates
-pending the scanner choice. The assessment recommends Snyk Open Source/Container,
-Sonar and CodeQL; Snyk + Sonar remains the owner's available two-product option.
-Semgrep retirement is a proposal for explicit review, not an approved change.
+exclusions still require owner review. SonarQube's quality gate and the approved
+CodeQL source gate apply to the PR implementation; `main` retains its existing
+required checks until merge.
+The assessment recommended Snyk Open Source/Container, SonarQube and CodeQL.
+The owner approved this set and Semgrep retirement on 2026-11-08.
 The latest fully captured CI/CodeQL baseline is `49e96fd56eb2810c43a9ec98fea850f5406a7690`;
 all CI jobs and five managed CodeQL analyses passed there.
-The recomputed technical inventory has 17 configurations, 33 SAST annotations
-(26 Sonar and 7 Semgrep), and zero coverage annotations; SHA256 is
-`6b1168b0ea10044827ed34a4002bf35bbfa6406356057992dd2932aa7f4ea5ac`. It is
-unapproved and does not contain an owner authority descriptor. The earlier
-inventory with six coverage rows and its hashes is a historical snapshot,
-superseded by this current inventory.
+The final implementation inventory has 19 configurations, 26 Sonar
+annotations, zero Semgrep annotations and zero coverage annotations; canonical
+SHA256 is `b65207e7573504426b57d14862db1e2c7cd63ed00957f9f19e11a4aa3e3c239c`.
+It is unapproved: scanner selection is approved, while coverage and finding
+approvals remain separate. The 2026-11-07 inventory snapshot (17
+configurations, 33 SAST
+annotations, including 7 Semgrep; SHA256
+`6b1168b0ea10044827ed34a4002bf35bbfa6406356057992dd2932aa7f4ea5ac`) and the
+earlier inventory with six coverage rows are historical evidence only.
 
 ## Historical validation snapshots (superseded by current status above)
 
@@ -103,7 +116,7 @@ lint passed against main; final-head CI/archive and sequential review remain
 pending. No
 coverage/risk approval or scanner removal is recorded.
 
-## Scanner comparison and pending owner choice (2026-11-07)
+## Scanner comparison and owner decision (2026-11-08)
 
 The read-only comparison found complementary, reviewable value for CodeQL:
 later security-extended candidate scans exposed and helped reproduce/fix request
@@ -117,13 +130,10 @@ are not proof of unique exploitable defects; removing it would still drop
 configured infrastructure and sink rule coverage. Snyk Code's 485 comparison
 results and 419 test-tagged results are counts, not actionable-defect totals.
 
-The recommendation is Snyk Open Source/Container + Sonar + CodeQL, with Semgrep
-retirement considered only after owner approval and policy/coverage review. The
-owner's Snyk + Sonar target remains an explicit option with documented loss of
-the demonstrated CodeQL findings and Actions coverage. Retaining all current
-scanners is also possible, with an explicit review point. No option has been
-approved. Keep the current gates and provider settings until the owner decides;
-do not add Snyk Code as a required gate. The private assessment packet contains
+The approved target is Snyk Open Source/Container + SonarQube + CodeQL; Semgrep
+retirement is being implemented in PR #115. The owner's former Snyk + Sonar
+option would omit demonstrated CodeQL findings and Actions coverage. Do not
+add Snyk Code as a required gate. The private assessment packet contains
 the detailed flows, timing and source references; public docs omit private
 provider identifiers and raw inventories.
 
@@ -135,7 +145,7 @@ provider identifiers and raw inventories.
 | Trusted release source baseline | One fresh Snyk CLI test per explicit manifest, including development dependencies | Full baseline is checked even when no dependency changed |
 | Exact release images | One Snyk Container test per selected native OCI manifest | Grype/Syft remain until replacement and failure behavior are fully qualified |
 | Every public Go binary | Existing exact-binary `govulncheck`, binary inventory and malware checks | Image OS inventory cannot substitute for binary symbol reachability or malware detection |
-| Source SAST | Existing SonarQube, CodeQL and Semgrep remain current gates pending owner choice | Snyk Code comparison stays nonblocking; no additional required Code gate |
+| Source SAST | SonarQube and CodeQL are the approved retained gates; Semgrep retirement is implemented by PR #115 | Snyk Code comparison stays nonblocking; no additional required Code gate |
 | gRPC/SSH source fixtures | Existing tests; export their existing Go JSON execution | Deployed candidate qualification is an additional boundary, requiring exact candidate bytes |
 
 The release CLI does not call `monitor`, `report`, or import a project. Repeating
@@ -356,7 +366,7 @@ severities, suppressions, locations, disposition and history.
 | Operator credential delivery and pinned TLS bootstrap | CodeQL reports existing flows without corresponding Snyk results in this sample | Preserve CodeQL and unresolved dispositions; custom verification is not proof of scanner equivalence |
 | Mail/header boundaries | CodeQL has existing flow results absent from Snyk's sample; header stripping and regression tests exist | Review envelope and header boundaries separately; no automatic dismissal |
 | Redirects/proxy responses | Existing CodeQL dismissals and Semgrep annotations have flow-specific guards | Preserve historical decisions and revalidate scope; a native dismissal is not an owner-approved exception |
-| React highlighted HTML sinks | Semgrep retains two explicit annotated sink findings; current Snyk results concern different JavaScript locations | No demonstrated equivalent sink coverage; retain Semgrep |
+| React highlighted HTML sinks (historical Semgrep comparison) | Archived Semgrep reports retain two explicit annotated sink findings; current Snyk results concern different JavaScript locations | The approved retirement records this as removed historical rule scope; it does not claim equivalent coverage |
 | Historical workflow permission fixes | CodeQL history contains fixed Actions findings; Sonar's configured source roots exclude workflows | Retain CodeQL; a fixed historical alert still demonstrates a relevant language/scope gap |
 | Historical SQL/transport fixes | Sonar preserves closed security issues and reviewed dynamic SQL findings | Keep history; current absence does not establish that a competitor detects the historical defect |
 
@@ -364,9 +374,10 @@ No competing scanner was run against deliberately reverted vulnerable code in
 this phase. Rule catalogs and raw counts do not establish detection equivalence.
 Test/fixture filename heuristics help triage; they never make a finding safe.
 All remaining findings, including test-located ones, remain unresolved unless
-explicitly reviewed. Keep current SAST gates and Sonar's new-code quality gate:
-90% coverage, 1% maximum duplication, 100% hotspot review and A ratings. No
-constitution or branch-protection change is justified by the current comparison.
+explicitly reviewed. Keep the approved CodeQL and SonarQube SAST gates and
+Sonar's new-code quality gate: 90% coverage, 1% maximum duplication, 100%
+hotspot review and A ratings. The owner approved updating the constitution and
+branch protection as part of PR #115; `main` remains unchanged until merge.
 
 ## Commands and private evidence contract
 
@@ -439,9 +450,10 @@ not prove the earlier failure was transient. Explicit public reads avoid
 expanding that analysis credential; permanent request/authentication failures
 remain partial evidence with their original failure reason.
 
-Assessment `authenticated` records trusted report provenance and exact source,
-as it already does for local same-run Semgrep; it does not assert a logged-in API
-client. Public Sonar exports additionally record
+Assessment `authenticated` records trusted report provenance and exact source.
+Historical same-run Semgrep used that provenance check, but policy v2 rejects
+current Semgrep reports; this historical comparison does not describe the active
+scanner set. The field does not assert a logged-in API client. Public Sonar exports additionally record
 `provider_access: public-project-anonymous` and `client_authenticated: false`.
 Public HTTP success alone cannot complete the scope: all source and coverage
 checks must pass, and PR new-code evidence still cannot establish a full baseline.

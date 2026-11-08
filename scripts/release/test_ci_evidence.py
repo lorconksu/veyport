@@ -145,8 +145,30 @@ class PrivateCaptureTests(unittest.TestCase):
         self.assertIn('name: coverage-integration', workflow)
         for name in ('semgrep-results', 'gitleaks-results', 'playwright-report', 'source-vulnerability-results'):
             self.assertNotIn('name: ' + name + '\n          path:', workflow)
-        self.assertEqual(workflow.count('name: Transfer only encrypted job evidence'), 10)
-        self.assertIn('if: ${{ !inputs.defer_semgrep_to_delivery }}', workflow)
+        self.assertEqual(workflow.count('name: Transfer only encrypted job evidence'), 9)
+        self.assertNotIn('semgrep', workflow.lower())
+
+    def test_retired_semgrep_has_no_active_workflow_or_collector_completeness_requirement(self):
+        for name in ('ci', 'delivery', 'release', 'staging'):
+            with self.subTest(workflow=name):
+                workflow = (ROOT / ('.github/workflows/' + name + '.yml')).read_text()
+                self.assertNotIn('semgrep', workflow.lower())
+                self.assertNotIn('  sast:\n', workflow)
+        delivery = (ROOT / '.github/workflows/delivery.yml').read_text()
+        self.assertIn('python3 scripts/release/source_sast.py ', delivery)
+        self.assertIn('--codeql-evidence ', delivery)
+        self.assertIn('--sonar-branch ', delivery)
+        self.assertIn('name: Initialize current-job full CodeQL analysis', delivery)
+        self.assertNotIn('continue-on-error', delivery)
+        config = json.loads((ROOT / 'infra/evidence-collector/config.example.json').read_text())
+        self.assertIn('scripts/release/scan_contract.py', config['trusted_helper_paths'])
+        # Historical encrypted chunks remain readable without making them a
+        # completeness prerequisite for new release/staging evidence.
+        self.assertIn('sast', config['allowed_job_chunks'])
+        self.assertIn('sast', ci_evidence.JOBS)
+        for jobs in config['required_complete_jobs'].values():
+            self.assertNotIn('sast', jobs)
+            self.assertIn('sonar', jobs)
 
 
 if __name__ == '__main__':

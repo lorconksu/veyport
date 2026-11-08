@@ -1,6 +1,6 @@
 # SSDF-aligned security pipeline implementation plan
 
-Current status snapshot (2026-11-07): the latest fully captured CI/CodeQL baseline is `49e96fd56eb2810c43a9ec98fea850f5406a7690`; all CI jobs and the five managed CodeQL analyses passed there. The parallel frontend batch passed 922 tests across 61 files and `tsc -b && vite build`; all six c8 markers and the `src/main.tsx` exclusion are removed. Changed-lines lint passed with five inherited diagnostics outside changed lines. These local results are not current-head CI/review; use live PR #115 status. Inventory approval, risk dispositions and unknown-age handling remain pending; the existing strict hold applies to unknown first-seen dates. Scanner recommendation: Snyk Open Source/Container + Sonar + CodeQL; the owner's Snyk + Sonar option remains open, so keep current gates. Retention source/config fixtures are locally qualified only; deployed cleanup/NFS roles and source/state isolation remain blockers. Timers remain OFF, publication is held, and DAST remains deferred.
+Current status snapshot (2026-11-08): PR #115's captured successful CI/CodeQL baseline is `49e96fd56eb2810c43a9ec98fea850f5406a7690`; all CI jobs and five managed CodeQL analyses passed there. The frontend batch passed 922 tests across 61 files and `tsc -b && vite build`; all six c8 markers and the `src/main.tsx` exclusion are removed. These results do not establish current-head CI/review; use live PR #115 checks. The owner approved Snyk Open Source/Container + SonarQube + CodeQL and Semgrep retirement; its implementation is in PR #115, while `main` remains unchanged until merge. Coverage inventory approval, risk dispositions and unknown-age handling remain pending under the strict hold. Retention source/config fixtures are locally qualified only; deployed cleanup/NFS roles and source/state isolation remain blockers. Timers remain OFF, publication is held, and DAST remains deferred.
 
 Historical validation snapshots (superseded by the current status above):
 Historical status (2026-11-06): PR #115 remained draft, unmerged and unpromoted. The latest
@@ -96,7 +96,7 @@ pending. The failed rehearsal archive is verified and temporary setup cleaned up
 
 Improve security coverage and retain reviewable SSDF evidence without adding unnecessary time to PR feedback. Publication may wait for required security results. Do not interpret parallel jobs as a guarantee of unchanged completion time.
 
-- Target two primary platforms, provisionally Snyk and SonarQube. Compare Snyk Code, SonarQube, CodeQL, and relevant Semgrep checks on the same revision before selecting the final SAST coverage and retiring any scanner. Preserve existing quality controls as well as security coverage; do not add Snyk Code as another required gate merely because it is licensed.
+- Use Snyk Open Source/Container, SonarQube and CodeQL as the owner-approved scanner set. SonarQube and CodeQL are the active source SAST gates; Semgrep is retired by the PR #115 implementation. Preserve historical Semgrep reports and compatibility decoding without treating historical findings as accepted risk. Do not add Snyk Code as another required gate merely because it is licensed.
 - Make Snyk the primary SCA interface after verifying complete project and artifact coverage. After migration is verified and required historical evidence is archived, stop Veyport's Dependency-Track imports and remove its projects/inventories. Preserve Dependency-Track for the owner's other projects.
 - Avoid equivalent duplicate scans and duplicate monitored projects. Assign an authoritative scan path to each scope/stage, reuse only verifiably matching and sufficiently fresh evidence, and archive every run's outcome without rerunning scans just to export reports.
 - Defer web/API DAST until the owner returns with Snyk support's answer. Its eventual design is authenticated testing through the external candidate endpoint before publication. Record it as deferred in the current phase's policy and evidence, never as a passing or completed scan.
@@ -131,7 +131,7 @@ Prefer dedicated automation identities with narrowly scoped permissions. Separat
 
 ## Current pipeline and timing baseline
 
-The existing pipeline uses `.github/workflows/ci.yml`, `release.yml`, `delivery.yml`, and `staging.yml`. Source tests, SonarQube, Semgrep, Gitleaks, and source vulnerability checks gate delivery. CodeQL runs through GitHub's configured analysis. The release workflow runs required CI again before building/scanning delivery artifacts. Existing artifact validation, malware checks, SBOM generation, and digest verification must remain covered.
+The existing pipeline uses `.github/workflows/ci.yml`, `release.yml`, `delivery.yml`, and `staging.yml`. Source tests, SonarQube, CodeQL, Gitleaks, and source vulnerability checks gate delivery. The release workflow runs required CI again before building/scanning delivery artifacts. Existing artifact validation, malware checks, SBOM generation, and digest verification must remain covered.
 
 Measured CI run [41001983872](https://github.com/lorconksu/veyport/actions/runs/41001983872) completed in 38m33s. Its longest server-test shard took 22m21s, followed by E2E at 15m36s; Sonar took 1m17s and Semgrep 51s and finished before E2E. This is a single baseline, not a percentile or performance guarantee. Removing Semgrep alone would not have shortened that run.
 
@@ -163,7 +163,13 @@ The comparison source is released revision `dfce2e6f584f27dec54f51be4992550bbf8d
 
 Initial source inspection found that Snyk's three error-level SQL findings execute build-embedded migration files. That supports a false-positive assessment for attacker-controlled SQL injection in this path, subject to recorded review. Other examined alerts involve intentional operator credential output, custom TLS verification, and input sanitization; their presence alone does not establish an exploitable defect or justify automatic dismissal. Complete flow and historical-defect coverage review remains part of P02.
 
-**Decision:** evidence collection is complete for this sample, but scanner retirement is not yet justified. Preserve current gates while recording per-finding dispositions and checking coverage across the configured source scope. Keep detailed reports and unresolved finding locations in the private operator archive. No scanner configuration, exception approval or finding state was changed during this comparison.
+**Historical assessment decision (superseded 2026-11-08):** at the time of this
+comparison, evidence collection was complete for the sample but scanner
+retirement had not been owner-approved. The owner subsequently approved the
+Snyk Open Source/Container + SonarQube + CodeQL set and Semgrep retirement.
+Preserve detailed reports and unresolved finding locations in the private
+operator archive. This scanner decision does not approve exceptions or change
+individual finding dispositions.
 
 The collector storage and cryptographic recovery prototype is deployed and tested as summarized in [SSDF operations](../security/ssdf-operations.md). Those checks establish the described storage path and recovery properties only; they do not enable collection or make NAS snapshots immutable. Timers remain disabled pending the checklist in that runbook.
 
@@ -200,11 +206,11 @@ The coordinator should pull or receive narrowly defined deployment requests. Use
 
 ### SAST comparison and consolidation
 
-Compare Snyk Code, SonarQube, CodeQL, and relevant Semgrep checks using the same source revision and relevant historical findings. Record configured languages, exclusions, query/rule sets, unresolved findings, reviewed suppressions, remediation history, scan triggers, project identity, and runtime. Distinguish configured rules from rules actually applicable/executed; raw rule counts are not coverage equivalence. The proposed two-platform target is Snyk plus SonarQube, subject to this comparison rather than a claim of equivalent detection.
+The same-revision comparison and historical findings support the approved target of Snyk Open Source/Container, SonarQube and CodeQL, with Semgrep retired. Record retained engine languages, exclusions, query/rule sets, unresolved findings, reviewed suppressions, remediation history, scan triggers, project identity, and runtime. Distinguish configured rules from rules actually applicable/executed; raw rule counts are not coverage equivalence. Retirement records the removed infrastructure and sink rule scope; it does not claim equivalent detection or accept Semgrep findings as risk dispositions.
 
 Classify each scanner's findings as duplicate, unique/actionable, reviewed non-security use, false positive, or unresolved. Review the reasoning behind existing suppressions rather than counting suppressions as proof of safety. Where useful, use isolated regression fixtures or existing historical fixes to check whether a competing scanner catches the same defect. No live exploit testing of user data is required for this comparison. Preserve SonarQube's existing new-code thresholds: at least 90% coverage, at most 1% duplication, 100% security-hotspot review, and A security/reliability/maintainability ratings. Document any proposed replacement before removing the system enforcing a threshold.
 
-If Semgrep has no demonstrated useful incremental coverage, remove its job and required check together, after equivalent gates are verified. Update release dependencies, branch protection, documentation, and the local constitution references in the same transition. If a small set of rules adds value, retain those targeted checks with a documented rationale. Preserve historical evidence. No blanket promise that two analyzers detect identical defects.
+The owner approved removing Semgrep's active job/check and updating dependent release and branch-protection requirements. Retain historical evidence and report decoding for prior Semgrep artifacts. No blanket promise that the retained analyzers detect identical defects.
 
 Snyk Code remains non-blocking during this assessment. Do not add a fourth required analyzer simply because its license is available.
 
@@ -301,7 +307,7 @@ Task tiers follow the owner's provider policy. On 2026-11-03, the official [Open
 | ID | Tier | Task | Depends on | Exit evidence | Current status |
 | --- | --- | --- | --- | --- | --- |
 | P01 | standard | Record current workflow graph, gates, manifests, scan triggers/project identities, timings, and access | None | Baseline report with exact revisions, duplicate-work inventory and blockers | Baseline and one-run timing documented; complete access/artifact inventory remains in progress |
-| P02 | complex | Compare Snyk Code, SonarQube, CodeQL and Semgrep; validate the proposed two-platform target | P01 | Security/quality coverage comparison, runtime and unresolved limits | Same-revision sample collected; coverage/quality and historical finding review incomplete; no retirement decision |
+| P02 | complex | Compare scanner coverage and document the approved Snyk Open Source/Container + SonarQube + CodeQL set | P01 | Security/quality coverage comparison, runtime and unresolved limits | Comparison captured; owner approved Semgrep retirement on 2026-11-08; implementation tracked in PR #115 |
 | P03 | complex | Design trusted candidate transfer, coordinator lease, private evidence and promotion binding | P01 | Reviewed trust boundaries, failure cases and least-privilege access | Prototype implemented and locally validated; collector read/status access and coordinator signed-post verified in rehearsal. Unattended activation and cleanup runtime/NFS access remain unqualified; cleanup-token write remains untested |
 | P04 | standard | Create isolated candidate deployment/configuration and disposable data lifecycle | P03 | Independent volumes/keys/ports, isolation and reset verification | Isolated native staging rehearsal and cleanup proven; complete candidate application lifecycle pending |
 | P05 | complex | Validate candidate hostname, login/TOTP/CSRF and network confinement | P04 | Positive/negative authentication and isolation checks | Pending |
@@ -311,7 +317,7 @@ Task tiers follow the owner's provider policy. On 2026-11-03, the official [Open
 | P09 | complex | Implement exception schema, verified approval binding and evaluator | P03 | Tampering/expiry/scope/bypass regression checks | Implementation and local tests passed; final CI is tracked on PR #115, no operational approval or release decision |
 | P10 | standard | Document risk policy/template, maintainer and operator procedures | P09 | Public-safe docs and usable approval workflow | Plan and operator status documented; operational adoption and evidence-backed procedure remain pending |
 | P11 | complex | Integrate gated promotion, personal NAS archival, per-run reconciliation and shared-evidence retention | P03, P06, P08, P09; P07 only in the later DAST phase | No-publication failure tests, complete run manifests, safe deduplication/cleanup and identical tested/published digests | Exact-candidate rehearsal `41739668223` acquired evidence and passed 18 standard native cases, then correctly blocked on unapproved source-coverage policy. Collector read/status and coordinator signed-post were verified; cleanup-token write and runtime/NFS access remain unqualified. End-to-end release evidence remains pending; gates off |
-| P12 | complex | Apply supported scanner consolidation and required-check migration | P02, P11 | No uncovered checks; branch protection and constitution synchronized | Deferred pending P02/P11 evidence; current scanners remain active |
+| P12 | complex | Apply approved scanner consolidation and required-check migration | P02, P11 | Documented coverage scope; branch protection and constitution synchronized | In progress in PR #115; current `main` policy remains until merge |
 | P13 | standard | Publish SSDF evidence mapping and measure PR/release completion | P10-P12 | Comparison against baseline, retained readable evidence | Mapping documented; post-change completion comparison awaits an activated, qualified pipeline |
 | P14 | complex | Code review, then security review; resolve findings and re-qualify | P11-P13 | Reviewed exact final head with no unresolved blocking findings | Baseline `28ad4dd` reviews were clear; changed measurement-binding revision requires its own sequential reviews and exact-head checks/archive |
 | P15 | complex | Candidate rehearsal, rollback drill and final monitoring | P14 | Complete passing run, intentional blocking cases, verified rollback | Prior rehearsal passed 18 standard native cases and correctly blocked on unapproved coverage policy. Final candidate run, rollback, publication and staging promotion remain pending |
@@ -337,6 +343,6 @@ Keep the work in PR #115 unmerged until reviewed. PR #112 is the earlier paused 
 
 ## Constitution check
 
-Preserve current quality, test, authentication, and mTLS requirements throughout the transition. The local constitution currently names Semgrep as mandatory; conditional removal must update that requirement and dependent references after the coverage comparison justifies it. The owner approved the comparison and conditional consolidation, not an unverified removal.
+Preserve current quality, test, authentication, and mTLS requirements throughout the transition. The owner explicitly approved Semgrep retirement on 2026-11-08; this PR updates the local constitution and dependent policy documentation. Approval authorizes the scanner policy change only, not inventory approval, risk acceptance or publication.
 
 Respect collaborative planning: this document formalizes the agreed design at the owner's request. It does not claim the new gates are active, DAST entitlement is confirmed, or risk exceptions have been granted. Access verification comes before lengthy unattended implementation when the owner is preparing to leave.
