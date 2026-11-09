@@ -9,6 +9,9 @@ on:
 permissions:
   contents: write
   actions: write
+  checks: read
+  statuses: read
+  security-events: read
 
 jobs:
   identity:
@@ -41,6 +44,10 @@ jobs:
       version: ${{ needs.identity.outputs.version }}
       tag: ${{ github.ref_name }}
       prototype: false
+      source_workflow: .github/workflows/release.yml
+      publish: true
     secrets:
       DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
       DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
+      SNYK_TOKEN: ${{ secrets.SNYK_TOKEN }}
+      SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}

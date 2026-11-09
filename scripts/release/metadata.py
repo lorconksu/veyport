@@ -7,7 +7,7 @@ import re
 
 # Prototype feature names are deliberately explicit. A generic prototype-* tag
 # would silently admit unrelated publication channels.
-PROTOTYPE_TAG = re.compile(r"prototype-(?:ssh-passthrough|application-access)\.[1-9][0-9]*")
+PROTOTYPE_TAG = re.compile(r"prototype-(?:ssh-passthrough|application-access|ssdf)\.[1-9][0-9]*")
 
 
 def identity(version, tag, revision, ref, prototype):

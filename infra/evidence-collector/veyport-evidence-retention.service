@@ -1,0 +1,34 @@
+[Unit]
+Description=Veyport reference-safe archive retention (manual only)
+Wants=network-online.target
+After=network-online.target
+RequiresMountsFor=/var/lib/veyport-evidence/archive
+
+[Service]
+Type=oneshot
+User=1002
+Group=1002
+UMask=0077
+LimitCORE=0
+LoadCredential=github-token:/etc/veyport-retention/retention-token
+ExecStartPre=/usr/bin/python3 /opt/veyport-evidence/evidence.py preflight --config /etc/veyport-retention/config.json
+ExecStart=/usr/bin/python3 /opt/veyport-evidence/evidence.py retain --config /etc/veyport-retention/config.json
+TimeoutStartSec=12min
+MemoryMax=768M
+MemorySwapMax=0
+TasksMax=24
+NoNewPrivileges=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectSystem=strict
+ProtectHome=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+CapabilityBoundingSet=
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+ReadWritePaths=/var/lib/veyport-evidence/archive
+ReadOnlyPaths=-/var/lib/veyport-evidence/archive/publications /var/lib/veyport-evidence/archive/.archive-id
+InaccessiblePaths=-/etc/veyport-evidence -/etc/veyport-cleanup -/var/lib/veyport-evidence/spool

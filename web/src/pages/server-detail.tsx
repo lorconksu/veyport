@@ -359,6 +359,7 @@ function DropzoneUpload({ serverId }: Readonly<{ serverId: string }>) {
   const [dragOver, setDragOver] = useState(false)
   const [confirmDelete, setConfirmDelete] = useState<string | null>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
+  const uploadInFlight = useRef(false)
   const queryClient = useQueryClient()
 
   const { data: dropzoneData } = useQuery({
@@ -371,7 +372,6 @@ function DropzoneUpload({ serverId }: Readonly<{ serverId: string }>) {
   const [deleteState, setDeleteState] = useState<'idle' | 'deleting' | 'done' | 'error'>('idle')
   const [deleteError, setDeleteError] = useState('')
 
-  /* c8 ignore start */
   const handleConfirmDelete = async () => {
     if (!confirmDelete) return
     setDeleteState('deleting')
@@ -385,7 +385,6 @@ function DropzoneUpload({ serverId }: Readonly<{ serverId: string }>) {
       setDeleteState('error')
     }
   }
-  /* c8 ignore stop */
 
   const closeDeleteModal = () => {
     setConfirmDelete(null)
@@ -393,8 +392,10 @@ function DropzoneUpload({ serverId }: Readonly<{ serverId: string }>) {
     setDeleteError('')
   }
 
-  /* c8 ignore start */
   const handleUpload = async (file: File) => {
+    // Disabled buttons can still receive drops, including before React renders.
+    if (uploadInFlight.current) return
+    uploadInFlight.current = true
     setUploading(true)
     setUploadResult(null)
     setUploadError(null)
@@ -412,10 +413,10 @@ function DropzoneUpload({ serverId }: Readonly<{ serverId: string }>) {
     } catch (err) {
       setUploadError(err instanceof Error ? err.message : 'Upload failed')
     } finally {
+      uploadInFlight.current = false
       setUploading(false)
     }
   }
-  /* c8 ignore stop */
 
   const handleDrop = (e: React.DragEvent<HTMLButtonElement>) => {
     e.preventDefault()
@@ -656,7 +657,6 @@ function DropzoneUpload({ serverId }: Readonly<{ serverId: string }>) {
 }
 
 // --- LiveTail Component ---
-/* c8 ignore start */
 
 type LiveTailStatus = 'connecting' | 'streaming' | 'disconnected'
 
@@ -746,20 +746,24 @@ function LiveTail({
 
   // Appends new log lines into a pending buffer, flushed at most once per frame.
   const appendLogLines = useCallback((newLogLines: string[]) => {
-    pendingLinesRef.current.push(...newLogLines)
+    // Frames can stall in background tabs while network reads continue. Bound
+    // the pending buffer as well as the rendered lines, without spreading a
+    // potentially huge batch into a function's argument list.
+    pendingLinesRef.current = [...pendingLinesRef.current, ...newLogLines.slice(-MAX_LINES)].slice(-MAX_LINES)
     rafIdRef.current ??= requestAnimationFrame(flushPendingLines)
   }, [flushPendingLines])
 
   // Reads an SSE stream and forwards reassembled log lines via appendLogLines.
   // Frames are not line-aligned, so the assembler carries partial lines across
   // frames and emits the remainder once the stream ends.
-  const readStream = useCallback(async (reader: ReadableStreamDefaultReader<Uint8Array>) => {
+  const readStream = useCallback(async (reader: ReadableStreamDefaultReader<Uint8Array>, signal: AbortSignal) => {
     const decoder = new TextDecoder()
     const assembler = createLogLineAssembler()
     let sseBuffer = ''
 
     while (true) {
       const { done, value } = await reader.read()
+      if (signal.aborted) return
       if (done) break
 
       sseBuffer += decoder.decode(value, { stream: true })
@@ -799,6 +803,8 @@ function LiveTail({
           signal,
         })
 
+        if (signal.aborted) return
+
         if (!response.ok) {
           const errBody = await response.json().catch(() => ({ error: `HTTP ${response.status}` }))
           throw new Error((errBody as { error?: string }).error || `HTTP ${response.status}`)
@@ -809,7 +815,8 @@ function LiveTail({
         const reader = response.body?.getReader()
         if (!reader) throw new Error('Response body is not readable')
 
-        await readStream(reader)
+        await readStream(reader, signal)
+        if (signal.aborted) return
 
         // Stream ended normally
         setStatus('disconnected')
@@ -825,6 +832,11 @@ function LiveTail({
 
     return () => {
       controller.abort()
+      // Pending output belongs to this connection and must not enter the next
+      // grep result or survive a stop/unmount.
+      if (rafIdRef.current !== null) cancelAnimationFrame(rafIdRef.current)
+      rafIdRef.current = null
+      pendingLinesRef.current = []
     }
   }, [serverId, filePath, grep, readStream])
 
@@ -923,7 +935,6 @@ function LiveTail({
     </div>
   )
 }
-/* c8 ignore stop */
 
 // --- FileViewerContent Component ---
 
@@ -1014,7 +1025,7 @@ function HighlightedCodeBlock({ html }: Readonly<{ html: string }>) {
   // NOTE: html here is sanitized output from sanitizeHljsHtml() — safe to render.
   return (
     <pre className="p-4 text-sm font-mono leading-relaxed overflow-x-auto">
-      <code className="hljs" dangerouslySetInnerHTML={{ /* nosemgrep: typescript.react.security.audit.react-dangerouslysetinnerhtml.react-dangerouslysetinnerhtml */ __html: html }} />
+      <code className="hljs" dangerouslySetInnerHTML={{ __html: html }} />
     </pre>
   )
 }
@@ -1790,7 +1801,6 @@ export function ServerDetailPage() {
   }, [])
 
   // Scroll current match into view when it changes
-  /* c8 ignore next 6 */
   useEffect(() => {
     if (effectiveSearchTerm && matchCount > 0) {
       const el = document.getElementById('current-search-match')
@@ -1928,7 +1938,7 @@ export function ServerDetailPage() {
             <ReEnrollApproval request={pendingRequest} />
           )}
           <PathManagement serverId={serverId ?? ''} />
-          <DropzoneUpload serverId={serverId ?? ''} />
+          <DropzoneUpload key={serverId} serverId={serverId ?? ''} />
         </div>
       )}
     </div>

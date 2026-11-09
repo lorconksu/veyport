@@ -21,6 +21,12 @@ import type {
 } from '@/types/api'
 
 const PAGE_SIZE = 50
+const HEALTH_STATUS_CLASS_NAMES = {
+  Checking: 'text-text-muted',
+  Unavailable: 'text-status-error',
+  Healthy: 'text-status-online',
+  Degraded: 'text-status-error',
+} as const
 
 export function AuditLogsPage() {
   const { user } = useAuth()
@@ -60,10 +66,30 @@ export function AuditLogsPage() {
     queryKey: ['audit-users'],
     queryFn: async () => (await apiFetch<{ users: User[] }>('/audit-users')) ?? { users: [] },
   })
-  const { data: health } = useQuery({
+  const healthQuery = useQuery({
     queryKey: ['audit-health'],
-    queryFn: async () => (await apiFetch<AuditHealth>('/audit-logs/health')) ?? { degraded: false, failure_count: 0 },
+    queryFn: async () => {
+      const response = await apiFetch<AuditHealth>('/audit-logs/health')
+      if (!response
+        || typeof response.degraded !== 'boolean'
+        || !Number.isInteger(response.failure_count)
+        || response.failure_count < 0) {
+        throw new Error('Audit health response was invalid')
+      }
+      return response
+    },
   })
+  const health = healthQuery.data
+  let healthStatus: keyof typeof HEALTH_STATUS_CLASS_NAMES = 'Unavailable'
+  if (healthQuery.isError) {
+    healthStatus = 'Unavailable'
+  } else if (healthQuery.isPending) {
+    healthStatus = 'Checking'
+  } else if (health?.degraded) {
+    healthStatus = 'Degraded'
+  } else if (health) {
+    healthStatus = 'Healthy'
+  }
   const { data: settings } = useQuery({
     queryKey: ['audit-settings'],
     queryFn: async () => (await apiFetch<AuditSettings>('/audit-logs/settings')) ?? {
@@ -324,10 +350,11 @@ export function AuditLogsPage() {
       <div className="grid gap-4 md:grid-cols-4">
         <div className="bg-surface border border-border rounded p-4">
           <div className="text-xs uppercase tracking-wider text-text-muted mb-1">Audit Health</div>
-          <div className={`text-sm font-semibold ${health?.degraded ? 'text-status-error' : 'text-status-online'}`}>
-            {health?.degraded ? 'Degraded' : 'Healthy'}
+          <div className={`text-sm font-semibold ${HEALTH_STATUS_CLASS_NAMES[healthStatus]}`}>
+            {healthStatus}
           </div>
-          <div className="text-xs text-text-muted mt-2">Write failures: {health?.failure_count ?? 0}</div>
+          {healthStatus === 'Unavailable' && <div className="text-xs text-status-error mt-2">Audit health could not be loaded.</div>}
+          <div className="text-xs text-text-muted mt-2">Write failures: {health ? health.failure_count : '—'}</div>
           <div className="text-xs text-text-muted mt-1">Last failure: {health?.last_failure_at ? formatDate(health.last_failure_at) : '—'}</div>
           <div className="text-xs text-text-muted mt-1">
             {health?.last_failure_reason ? `Reason: ${health.last_failure_reason}` : 'Counts are cumulative until reset.'}

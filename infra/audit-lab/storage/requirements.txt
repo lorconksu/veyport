@@ -1,2 +1,2 @@
 boto3==1.40.72
-cryptography==46.0.5
+cryptography==50.0.0

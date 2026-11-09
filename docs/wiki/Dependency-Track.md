@@ -33,6 +33,6 @@ OSV supplies Go, npm, and Wolfi package advisories; NVD supplies CPE-based advis
 
 ## Interpreting findings
 
-A finding requires investigation; it is not proof that the vulnerable code is reachable. Development-only packages and Go reachability assessments can explain differences from pipeline results. Existing release scanners and gates are unchanged. Dependency-Track does not currently block releases or automatically apply the pipeline's findings assessments as VEX.
+A finding requires investigation; it is not proof that the vulnerable code is reachable. Development-only packages and Go reachability assessments can explain differences from pipeline results. PR #115 implements the approved Snyk Open Source/Container, SonarQube and CodeQL scanner set, with Semgrep retired; `main` retains its current gate configuration until that PR merges. Dependency-Track does not currently block releases or automatically apply the pipeline's findings assessments as VEX.
 
 For installation, token rotation, scheduling, failure handling, and recovery, see the [integration runbook](https://github.com/lorconksu/veyport/tree/main/infra/dependency-track). Automation failures are visible in systemd and its journal; an external alert destination has not been configured.

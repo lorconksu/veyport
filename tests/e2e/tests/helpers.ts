@@ -1,6 +1,6 @@
 import { APIRequestContext, Page, request as apiRequest } from '@playwright/test'
 import { authenticator } from 'otplib'
-import { execSync } from 'child_process'
+import { execFileSync } from 'child_process'
 import fs from 'fs'
 import path from 'path'
 
@@ -175,8 +175,11 @@ export async function adminApiContext(baseURL: string): Promise<APIRequestContex
  */
 export async function mintApiToken(username: string, name = 'e2e'): Promise<string> {
   const container = process.env.E2E_CONTAINER || 'veyport-e2e'
-  const output = execSync(
-    `docker exec ${container} /app/veyport admin create-api-token --db /data/veyport.db --username ${username} --name ${name}`,
+  // Keep caller-controlled values as arguments instead of interpreting shell syntax.
+  const output = execFileSync(
+    'docker',
+    ['exec', container, '/app/veyport', 'admin', 'create-api-token',
+      '--db', '/data/veyport.db', '--username', username, '--name', name],
     { encoding: 'utf-8' },
   )
   // Match the "Token:" line specifically — the command also prints a

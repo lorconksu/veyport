@@ -2,6 +2,7 @@ package server
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"strings"
@@ -85,27 +86,25 @@ func (s *Server) handleUpdateAuditSettings(w http.ResponseWriter, r *http.Reques
 		respondError(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	if err := s.store.UpdateAuditSettings(settings); err != nil {
-		securityError(w, err)
+	actor := s.accountManagementActor(r)
+	entry := s.accountManagementAudit(r, actor.UserID, "audit-settings", model.AuditAuditRetentionUpdated)
+	if err := s.store.UpdateAuditSettingsAudited(settings, s.now(), entry, actor); err != nil {
+		auditSettingsError(w, err)
 		return
 	}
 
-	userID := UserIDFromContext(r.Context())
-	detail := fmt.Sprintf(
-		"retention_days=%d review_reminder_days=%d password_history_count=%d temporary_password_ttl_hours=%d login_failures_per_hour=%d registration_failures_per_hour=%d privileged_actions_per_hour=%d",
-		settings.RetentionDays, settings.ReviewReminderDays, settings.PasswordHistoryCount, settings.TemporaryPasswordTTLHours,
-		settings.Thresholds.LoginFailuresPerHour, settings.Thresholds.RegistrationFailuresPerHour,
-		settings.Thresholds.PrivilegedActionsPerHour,
-	)
-	resourceType := "audit"
-	s.auditLogRequest(r, model.AuditEntry{
-		UserID:       &userID,
-		Action:       model.AuditAuditRetentionUpdated,
-		Detail:       &detail,
-		ResourceType: &resourceType,
-	})
-
 	respondJSON(w, http.StatusOK, settings)
+}
+
+func auditSettingsError(w http.ResponseWriter, err error) {
+	switch {
+	case errors.Is(err, store.ErrAccountManagementActor), errors.Is(err, store.ErrProtectedChange):
+		respondError(w, http.StatusForbidden, err.Error())
+	case errors.Is(err, store.ErrSecurityConflict):
+		respondError(w, http.StatusConflict, err.Error())
+	default:
+		respondError(w, http.StatusInternalServerError, "audit settings update failed")
+	}
 }
 
 func (s *Server) handleExportAuditLogs(w http.ResponseWriter, r *http.Request) {

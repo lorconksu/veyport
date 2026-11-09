@@ -4,13 +4,38 @@ import (
 	"context"
 	"crypto/sha256"
 	"database/sql"
+	"database/sql/driver"
 	"fmt"
 	"strings"
 	"time"
 
 	"github.com/google/uuid"
 	"github.com/wyiu/veyport/hub/internal/model"
+	"modernc.org/sqlite"
 )
+
+func init() {
+	sqlite.MustRegisterDeterministicScalarFunction("veyport_audit_time_compare", 2, compareAuditTimes)
+}
+
+// compareAuditTimes preserves the nanoseconds and timezone offsets that SQLite's
+// built-in time functions round. SQL applies it before COUNT, LIMIT and OFFSET.
+func compareAuditTimes(_ *sqlite.FunctionContext, values []driver.Value) (driver.Value, error) {
+	left, leftOK := values[0].(string)
+	right, rightOK := values[1].(string)
+	if !leftOK || !rightOK {
+		return nil, nil
+	}
+	a, err := auditInstant(left)
+	if err != nil {
+		return nil, nil
+	}
+	b, err := auditInstant(right)
+	if err != nil {
+		return nil, nil
+	}
+	return int64(a.Compare(b)), nil
+}
 
 func (s *Store) LogAudit(entry model.AuditEntry) (err error) {
 	entry = normalizeAuditEntry(entry)
@@ -112,12 +137,7 @@ func (s *Store) ListAuditLogs(filter model.AuditFilter) ([]model.AuditEntry, int
 	if filter.ResourceType != nil {
 		qb.Where("resource_type = ?", *filter.ResourceType)
 	}
-	if filter.From != nil {
-		qb.Where("created_at >= ?", *filter.From)
-	}
-	if filter.To != nil {
-		qb.Where("created_at <= ?", *filter.To)
-	}
+	addAuditTimeFilters(qb, filter)
 
 	// Get total count
 	var total int
@@ -149,6 +169,30 @@ func (s *Store) ListAuditLogs(filter model.AuditFilter) ([]model.AuditEntry, int
 	return entries, total, rows.Err()
 }
 
+func addAuditTimeFilters(qb *queryBuilder, filter model.AuditFilter) {
+	if filter.From != nil {
+		// Widen the indexed candidate range because unixepoch itself may round
+		// a fractional timestamp across a second boundary. The Go comparator
+		// then enforces the exact inclusive bound inside the SQL query.
+		bound, err := auditInstant(*filter.From)
+		if err != nil {
+			qb.Where("0")
+		} else {
+			// SQLite cannot parse every RFC3339 offset accepted by Go. Include
+			// its NULL epoch bucket and let the exact comparator decide.
+			qb.Where("(created_at_epoch >= ? OR created_at_epoch IS NULL) AND veyport_audit_time_compare(created_at, ?) >= 0", bound.Unix()-1, *filter.From)
+		}
+	}
+	if filter.To != nil {
+		bound, err := auditInstant(*filter.To)
+		if err != nil {
+			qb.Where("0")
+		} else {
+			qb.Where("(created_at_epoch <= ? OR created_at_epoch IS NULL) AND veyport_audit_time_compare(created_at, ?) <= 0", bound.Unix()+1, *filter.To)
+		}
+	}
+}
+
 // scanAuditRows scans all audit log rows into a slice.
 func scanAuditRows(rows interface {
 	Next() bool
@@ -163,7 +207,7 @@ func scanAuditRows(rows interface {
 			&e.Outcome, &e.ActorType, &e.CorrelationID, &e.ResourceType, &e.PrevHash, &createdAt); err != nil {
 			return nil, fmt.Errorf("scan audit entry: %w", err)
 		}
-		e.CreatedAt, _ = time.Parse(sqliteTimeFormat, createdAt)
+		e.CreatedAt, _ = auditInstant(createdAt)
 		entries = append(entries, e)
 	}
 	return entries, nil
@@ -249,6 +293,7 @@ func (s *Store) DeleteAuditLogsBefore(cutoff string) (int, error) {
 	total := 0
 	scan := func(startEpoch int64, startID string) (int64, string, int, error) {
 		count := 0
+		deleted := 0
 		epoch, id := startEpoch, startID
 		err := s.withImmediateTx(func(ctx context.Context, conn *sql.Conn) error {
 			rows, err := conn.QueryContext(ctx, auditRetentionCandidates, epoch, id, before.Unix()+1, auditRetentionBatch)
@@ -291,13 +336,14 @@ func (s *Store) DeleteAuditLogsBefore(cutoff string) (int, error) {
 				if err != nil {
 					return err
 				}
-				total += int(n)
+				deleted += int(n)
 			}
 			return nil
 		})
 		if err != nil {
 			return startEpoch, startID, count, fmt.Errorf("delete audit batch: %w", err)
 		}
+		total += deleted
 		return epoch, id, count, nil
 	}
 	batches := auditRetentionBatches

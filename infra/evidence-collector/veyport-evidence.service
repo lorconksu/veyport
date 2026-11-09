@@ -1,0 +1,31 @@
+[Unit]
+Description=Veyport encrypted evidence collection and reconciliation
+Wants=network-online.target
+After=network-online.target
+RequiresMountsFor=/var/lib/veyport-evidence/archive
+
+[Service]
+Type=oneshot
+User=1000
+Group=1000
+UMask=0077
+LimitCORE=0
+ExecStartPre=/usr/bin/python3 /opt/veyport-evidence/evidence.py preflight --config /etc/veyport-evidence/collector.json
+ExecStart=/usr/bin/python3 /opt/veyport-evidence/evidence.py collect --config /etc/veyport-evidence/collector.json
+TimeoutStartSec=12min
+MemoryMax=768M
+MemorySwapMax=0
+TasksMax=24
+NoNewPrivileges=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectSystem=strict
+ProtectHome=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+ReadWritePaths=/var/lib/veyport-evidence/archive /var/lib/veyport-evidence/spool
+InaccessiblePaths=-/etc/veyport-evidence/cleanup-token

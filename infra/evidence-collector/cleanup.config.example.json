@@ -1,0 +1,16 @@
+{
+  "repository": "OWNER/REPOSITORY",
+  "archive_root": "/var/lib/veyport-evidence/archive",
+  "mount_source": "NAS:/PRIVATE-EXPORT",
+  "archive_id": "OPERATOR-SELECTED-UUID",
+  "allowed_workflows": [".github/workflows/ci.yml", ".github/workflows/release.yml", ".github/workflows/staging.yml"],
+  "allowed_branches": ["main"],
+  "allowed_events": ["push", "workflow_dispatch", "workflow_run", "release"],
+  "allowed_job_chunks": [],
+  "delete_token_file": "/run/credentials/veyport-evidence-cleanup.service/github-token",
+  "signing_public_key_file": "/etc/veyport-cleanup/receipt-public.pem",
+  "audited_release_publications": [],
+  "cleanup_enabled": false,
+  "retention_enabled": false,
+  "api_calls_per_poll": 60
+}

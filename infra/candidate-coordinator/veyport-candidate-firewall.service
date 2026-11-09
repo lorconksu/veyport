@@ -1,0 +1,14 @@
+[Unit]
+Description=Isolate Veyport candidate bridge from host and other networks
+Requires=docker.service
+After=docker.service
+Before=veyport-candidate.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/bin/python3 /opt/veyport-candidate/firewall.py install
+ExecReload=/usr/bin/python3 /opt/veyport-candidate/firewall.py verify
+
+[Install]
+WantedBy=multi-user.target

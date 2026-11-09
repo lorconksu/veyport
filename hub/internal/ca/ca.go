@@ -7,9 +7,9 @@ import (
 	"crypto/rand"
 	"crypto/x509"
 	"crypto/x509/pkix"
+	"database/sql"
 	"encoding/hex"
 	"fmt"
-	"log"
 	"math/big"
 	"net"
 	"time"
@@ -18,9 +18,28 @@ import (
 	"github.com/wyiu/veyport/hub/internal/store"
 )
 
+// caConfig uses the same transaction for the trust pair and legacy migration.
+// SQLite rejects a concurrent read-to-write upgrade rather than allowing one
+// initializer to overwrite a trust root committed by another initializer.
+type caConfig struct{ tx *sql.Tx }
+
+func (c caConfig) lookup(key string) (string, bool, error) {
+	var value string
+	err := c.tx.QueryRow("SELECT value FROM _config WHERE key = ?", key).Scan(&value)
+	if err == sql.ErrNoRows {
+		return "", false, nil
+	}
+	return value, err == nil, err
+}
+
+func (c caConfig) set(key, value string) error {
+	_, err := c.tx.Exec("INSERT INTO _config (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value", key, value)
+	return err
+}
+
 // loadExistingCA decodes and decrypts an existing CA from hex-encoded DER values.
 // If the key is stored unencrypted (pre-migration), it re-saves it encrypted.
-func loadExistingCA(st *store.Store, certHex, keyHex string, encKey []byte) (*x509.Certificate, *ecdsa.PrivateKey, error) {
+func loadExistingCA(config caConfig, certHex, keyHex string, encKey []byte) (*x509.Certificate, *ecdsa.PrivateKey, error) {
 	certDER, err := hex.DecodeString(certHex)
 	if err != nil {
 		return nil, nil, fmt.Errorf("decode CA cert hex: %w", err)
@@ -28,6 +47,9 @@ func loadExistingCA(st *store.Store, certHex, keyHex string, encKey []byte) (*x5
 	cert, err := x509.ParseCertificate(certDER)
 	if err != nil {
 		return nil, nil, fmt.Errorf("parse CA cert: %w", err)
+	}
+	if !cert.IsCA || !cert.BasicConstraintsValid || cert.KeyUsage&x509.KeyUsageCertSign == 0 {
+		return nil, nil, fmt.Errorf("stored certificate is not a signing CA")
 	}
 
 	keyDER, err := hex.DecodeString(keyHex)
@@ -44,18 +66,24 @@ func loadExistingCA(st *store.Store, certHex, keyHex string, encKey []byte) (*x5
 			key = pk
 		}
 	}
-	if key == nil {
-		// Fall back to raw DER (pre-encryption migration)
+	legacy := key == nil
+	if legacy {
 		pk, parseErr := x509.ParseECPrivateKey(keyDER)
 		if parseErr != nil {
 			return nil, nil, fmt.Errorf("parse CA key: %w", parseErr)
 		}
 		key = pk
-		// Re-save encrypted
+	}
+	if !key.PublicKey.Equal(cert.PublicKey) {
+		return nil, nil, fmt.Errorf("CA private key does not match certificate")
+	}
+	if legacy {
 		encrypted, err := auth.Encrypt(keyDER, encKey)
-		if err == nil {
-			_ = st.SetConfig("ca_key", hex.EncodeToString(encrypted))
-			log.Println("CA key migrated to encrypted storage")
+		if err != nil {
+			return nil, nil, fmt.Errorf("encrypt migrated CA key: %w", err)
+		}
+		if err := config.set("ca_key", hex.EncodeToString(encrypted)); err != nil {
+			return nil, nil, fmt.Errorf("store migrated CA key: %w", err)
 		}
 	}
 
@@ -63,14 +91,14 @@ func loadExistingCA(st *store.Store, certHex, keyHex string, encKey []byte) (*x5
 }
 
 // generateAndSaveCA creates a new CA keypair and persists it encrypted in the store.
-func generateAndSaveCA(st *store.Store, encKey []byte) (*x509.Certificate, *ecdsa.PrivateKey, error) {
+func generateAndSaveCA(config caConfig, encKey []byte) (*x509.Certificate, *ecdsa.PrivateKey, error) {
 	cert, key, err := GenerateCA()
 	if err != nil {
 		return nil, nil, fmt.Errorf("generate CA: %w", err)
 	}
 
 	// Store cert as hex-encoded DER
-	if err := st.SetConfig("ca_cert", hex.EncodeToString(cert.Raw)); err != nil {
+	if err := config.set("ca_cert", hex.EncodeToString(cert.Raw)); err != nil {
 		return nil, nil, fmt.Errorf("store CA cert: %w", err)
 	}
 
@@ -83,11 +111,10 @@ func generateAndSaveCA(st *store.Store, encKey []byte) (*x509.Certificate, *ecds
 	if err != nil {
 		return nil, nil, fmt.Errorf("encrypt CA key: %w", err)
 	}
-	if err := st.SetConfig("ca_key", hex.EncodeToString(encrypted)); err != nil {
+	if err := config.set("ca_key", hex.EncodeToString(encrypted)); err != nil {
 		return nil, nil, fmt.Errorf("store CA key: %w", err)
 	}
 
-	log.Println("Generated new CA certificate and key")
 	return cert, key, nil
 }
 
@@ -98,15 +125,38 @@ func generateAndSaveCA(st *store.Store, encKey []byte) (*x509.Certificate, *ecds
 func InitCA(st *store.Store, storageKey string) (*x509.Certificate, *ecdsa.PrivateKey, error) {
 	encKey := auth.DeriveKey(storageKey)
 
-	// Try to load existing CA from database
-	certHex, certErr := st.GetConfig("ca_cert")
-	keyHex, keyErr := st.GetConfig("ca_key")
-
-	if certErr == nil && keyErr == nil && certHex != "" && keyHex != "" {
-		return loadExistingCA(st, certHex, keyHex, encKey)
+	tx, err := st.DB().Begin()
+	if err != nil {
+		return nil, nil, fmt.Errorf("begin CA initialization: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+	config := caConfig{tx: tx}
+	certHex, certPresent, err := config.lookup("ca_cert")
+	if err != nil {
+		return nil, nil, fmt.Errorf("load CA cert: %w", err)
+	}
+	keyHex, keyPresent, err := config.lookup("ca_key")
+	if err != nil {
+		return nil, nil, fmt.Errorf("load CA key: %w", err)
 	}
 
-	return generateAndSaveCA(st, encKey)
+	var cert *x509.Certificate
+	var key *ecdsa.PrivateKey
+	switch {
+	case !certPresent && !keyPresent:
+		cert, key, err = generateAndSaveCA(config, encKey)
+	case certPresent && keyPresent && certHex != "" && keyHex != "":
+		cert, key, err = loadExistingCA(config, certHex, keyHex, encKey)
+	default:
+		return nil, nil, fmt.Errorf("incomplete stored CA certificate and key; restore the existing CA")
+	}
+	if err != nil {
+		return nil, nil, err
+	}
+	if err := tx.Commit(); err != nil {
+		return nil, nil, fmt.Errorf("commit CA initialization: %w", err)
+	}
+	return cert, key, nil
 }
 
 // GenerateCA creates an ECDSA P-256 CA keypair with a self-signed certificate.

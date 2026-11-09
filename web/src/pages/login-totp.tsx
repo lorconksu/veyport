@@ -50,7 +50,6 @@ export function LoginTOTPPage() {
     if (!totpToken) navigate('/login')
   }, [totpToken, navigate])
 
-  /* c8 ignore next */
   const handleVerifyClick = () => submitCode(digits.join(''))
 
   if (recovery) {

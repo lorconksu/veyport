@@ -368,8 +368,10 @@ Create a new page in `web/src/pages/` and add the route in `web/src/App.tsx`. Us
 
 Published release inventories are available through [[Dependency Track]]. The
 private importer verifies release evidence and maintains versioned dependency
-projects; its setup and tests live in `infra/dependency-track/`. Existing release
-scanner gates remain unchanged.
+projects; its setup and tests live in `infra/dependency-track/`. PR #115
+implements the approved Snyk Open Source/Container, SonarQube and CodeQL scanner
+set with Semgrep retired; `main` retains its current gate configuration until
+that PR merges.
 
 ### Terminal and session architecture
 

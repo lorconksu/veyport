@@ -125,20 +125,8 @@ func (s *Server) authenticateRequestToken(tokenStr string) (userID, role, tokenT
 		if claims.ID != "" && s.tokenBlacklist != nil && s.tokenBlacklist.IsBlacklisted(claims.ID) {
 			return "", "", "", "", fmt.Errorf("token has been revoked")
 		}
-		if claims.TokenType == auth.TokenTypeAccess {
-			user, err := s.store.GetUserByID(claims.Subject)
-			if err != nil || claims.TokenGeneration != user.TokenGeneration {
-				return "", "", "", "", fmt.Errorf("token has been revoked")
-			}
-			if user.MustChangePassword {
-				return "", "", "", "", errPasswordChangeRequired
-			}
-			if accountErr := s.accountAccessError(user); accountErr != nil {
-				return "", "", "", "", accountErr
-			}
-			if sessionErr := s.sessionAccessError(claims); sessionErr != nil {
-				return "", "", "", "", sessionErr
-			}
+		if err := s.validateAccessTokenAuthority(claims); err != nil {
+			return "", "", "", "", err
 		}
 		if claims.TokenType == auth.TokenTypeSetup || claims.TokenType == auth.TokenTypeTOTP || claims.TokenType == auth.TokenTypePasswordRecovery {
 			if err := s.validateChallengeAuthority(claims); err != nil {
@@ -187,6 +175,25 @@ func (s *Server) authenticateRequestToken(tokenStr string) (userID, role, tokenT
 	// failure here must never fail an otherwise valid request.
 	_ = s.store.TouchUserActivity(user.ID, s.now())
 	return user.ID, string(user.Role), auth.TokenTypeAPIToken, "", nil
+}
+
+// validateAccessTokenAuthority keeps account checks ahead of session activity.
+// Challenge tokens and API tokens follow their own authority checks.
+func (s *Server) validateAccessTokenAuthority(claims *auth.Claims) error {
+	if claims.TokenType != auth.TokenTypeAccess {
+		return nil
+	}
+	user, err := s.store.GetUserByID(claims.Subject)
+	if err != nil || claims.TokenGeneration != user.TokenGeneration {
+		return fmt.Errorf("token has been revoked")
+	}
+	if user.MustChangePassword {
+		return errPasswordChangeRequired
+	}
+	if accountErr := s.accountAccessError(user); accountErr != nil {
+		return accountErr
+	}
+	return s.sessionAccessError(claims)
 }
 
 func isAllowedTokenType(requiredType, tokenType string) bool {
@@ -250,7 +257,8 @@ func loggingMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		start := time.Now()
 		next.ServeHTTP(w, r)
-		log.Printf("%s %s %s request_id=%s", r.Method, r.URL.Path, time.Since(start), RequestIDFromContext(r.Context()))
+		// Quote the decoded path so client input cannot forge log lines or terminal controls.
+		log.Printf("%s %q %s request_id=%s", r.Method, r.URL.Path, time.Since(start), RequestIDFromContext(r.Context()))
 	})
 }
 

@@ -14,9 +14,9 @@ The page is divided into three main areas:
 
 1. **Header** - displays the server name, current status, hostname, IP address, OS, and agent version.
 2. **File Explorer sidebar** - a collapsible panel on the left for navigating the remote filesystem.
-3. **Main panel** - shows the currently viewed file, the Live Tail console, the Terminal workspace, or the Dropzone uploader depending on what you have selected.
+3. **Main panel** - shows the currently viewed file, Live Tail console, or Terminal workspace.
 
-An additional **Admin Tools sidebar** is available on the right for admins, providing path access management controls.
+An additional admin-only controls section appears below the server workspace. It contains path access management and Dropzone controls.
 
 ---
 
@@ -137,46 +137,46 @@ Both admins and viewers can use Live Tail on paths they have been granted access
 
 ### Grep Filter
 
-Type a filter string into the **Grep** field at the top of the console. Only lines containing that string (case-insensitive) are shown. Clear the field to see all lines again. The filter applies to incoming lines in real time.
+Type a filter string into the **Grep** field at the top of the console. Only lines containing that string (case-insensitive) are shown. After the filter change is applied, Live Tail reconnects and clears the previous buffered output; the new stream shows matching incoming lines. Clear the field to reconnect without a filter.
 
 ### Pausing and Resuming
 
-- Click **Pause** to freeze the output. New lines continue to buffer in the background.
-- Click **Resume** to flush the buffer and continue live display.
+- The **Auto-scroll** toggle controls automatic scrolling only; the stream and displayed output continue while it is paused.
+- Scrolling up disables automatic stick-to-bottom behavior. Automatic scrolling resumes near the bottom while **Auto-scroll** is enabled.
+- The display and pending frame buffer are each bounded to the newest 2,000 lines.
 
 ### Stopping a Tail Session
 
-Click **Stop** to end the tail session. The console retains the lines that were received so you can scroll and read them after stopping.
+Click **Stop** to end the stream and return to the file view. Leaving Live Tail also cancels the stream. The displayed output is cleared when the Live Tail console closes.
 
 ---
 
 ## Dropzone
 
-The Dropzone lets you transfer files from your local machine to the server without SCP, SFTP, or any other external tool.
+The Dropzone lets administrators transfer files from their local machine to the agent's configured dropzone directory.
 
-> **Admin only:** The Dropzone tab is only available to admin users. Viewers will not see this tab.
+> **Admin only:** The Dropzone section appears below the server workspace for admins. Viewers do not see it.
 
-### Uploading Files
+### Opening the Dropzone
 
-1. Click **Dropzone** in the main panel toolbar, or select the Dropzone tab if it is visible.
-2. Drag one or more files from your desktop or file manager and drop them onto the highlighted drop area.
-3. Alternatively, click inside the drop area to open a file picker.
-4. Each file shows an upload progress indicator. When complete, a confirmation appears.
+Expand **Dropzone** below the server workspace. The file list refreshes every 30 seconds while the section is open.
 
-Files are uploaded to the path configured by an admin for your account. If no upload path has been set, the Dropzone will display an error - contact an admin.
+### Uploading a File
 
-When a file is uploaded, a notification is sent to users who have email notifications enabled for file upload events.
+Drag a file onto the drop area or click it to choose a file. Each action uploads one file. While the upload is in progress, the control shows a spinner and “Uploading...” status; it does not show byte-level progress. On success, the UI displays the filename and file size. Upload errors appear in the section.
+
+The agent stores uploads in its configured dropzone directory. The default is `/tmp/veyport-dropzone`; `--dropzone-dir` can set another directory, and using a non-default agent config path without that flag places the directory beside that config file. The agent must be online for upload. A successful upload is recorded in the audit log and can trigger email notifications for users who enabled file-upload notifications.
 
 ### Dropped Files List
 
-Below the drop area, a list shows all files that have been successfully uploaded in the current session:
+The list shows files currently present in the agent's dropzone directory, including files from earlier sessions:
 
-- **Filename** and upload timestamp
-- **Delete** button - removes the file from the server immediately
+- **Name** and **Size**
+- **Delete** button - opens a confirmation prompt before removal
 
 ### Deleting an Uploaded File
 
-Click the **Delete** (trash) icon next to a file in the dropped files list. You will be asked to confirm before the file is permanently removed from the server.
+Click the trash icon next to a file and confirm deletion. While deletion is pending, the dialog shows a spinner. On success, it confirms the deletion and the list refreshes; on failure, it displays the error and offers a retry.
 
 ---
 

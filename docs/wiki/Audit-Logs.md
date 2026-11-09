@@ -28,6 +28,12 @@ require a protected request and two independent approvals, including after an
 approved return to Standard. Audit readers can review, export, filter, and flag
 events without gaining settings authority.
 
+Saving audit settings succeeds only when both the settings and their
+`audit.retention_updated` event are durably recorded. In Standard mode, the
+settings update and local audit event commit together, so a failed write does
+not leave an unaudited settings change. Governed updates retain the approval
+and external audit protocol and also require the local event to be saved.
+
 ---
 
 ## Viewing the Audit Log
@@ -52,6 +58,27 @@ At the top of the page you will also see summary cards for:
 - **Last review** - the most recent recorded audit review
 
 If the system detects unusual patterns, an **Active Detections** panel appears above the log table.
+
+Time filters compare timestamps as instants, including SQLite's stored timestamp
+format and RFC3339 inputs with offsets. Same-day events remain eligible for the
+login-failure, registration-failure and privileged-action threshold checks.
+
+The health card uses four states:
+
+- **Checking** - the health request is still loading.
+- **Unavailable** - the Hub could not load or validate the health response. This
+  says nothing about whether audit writes succeeded or whether stored logs are
+  intact; treat audit health as unverified until it can be read again.
+- **Degraded** - the Hub recorded an audit write failure. The card remains
+  degraded until a subsequent audit write succeeds and records recovery.
+- **Healthy** - the Hub can read its audit-health state and has no recorded
+  outstanding audit write failure. This status is not an integrity verification
+  and does not prove that every expected event was logged or that the log chain
+  is intact. Use the audit verification and review procedures for those checks.
+
+If health becomes unavailable, retry after the storage problem is resolved and
+investigate any suspected audit gaps separately. Do not interpret an unavailable
+health response as a healthy state.
 
 ---
 
@@ -141,6 +168,8 @@ revisits recovery provenance that has since expired without rewinding or
 starving the main cleanup sweep. Each cursor restarts after reaching the end;
 a Hub restart also begins new sweeps.
 Cutoffs compare exact instants, including offsets and subsecond timestamps.
+Cleanup reports only deletions from committed batches. If a later deletion fails
+and its batch rolls back, those rows are not included in the deleted count.
 Unexpired recovery grants retain their audit provenance until completion or
 expiry; malformed provenance expiry is retained for review.
 

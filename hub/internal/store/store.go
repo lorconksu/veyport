@@ -34,7 +34,9 @@ type Store struct {
 	auditRetentionCutoff string
 	auditRetentionCalls  uint64
 	auditStateMu         sync.Mutex
-	auditDegraded        bool
+	auditHealth          model.AuditHealth
+	auditHealthDirty     bool
+	auditHealthErr       error
 	onAuditFailure       func(model.AuditHealth)
 	onAuditRecovery      func(model.AuditHealth)
 }
@@ -92,9 +94,7 @@ func New(dbPath string) (*Store, error) {
 		db.Close()
 		return nil, fmt.Errorf("reconcile executions: %w", err)
 	}
-	if health, err := st.GetAuditHealth(); err == nil {
-		st.auditDegraded = health.Degraded
-	}
+	_, _ = st.GetAuditHealth()
 	st.credentialDB, err = openCredentialDB(dbPath)
 	if err != nil {
 		db.Close()
