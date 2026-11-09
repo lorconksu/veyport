@@ -1,15 +1,12 @@
 # Trusted approval bootstrap
 
-This change establishes the approval workflow and verifier on `main` without
-publishing a release. It does not approve any proposed risk acceptance or source
-coverage review. No proposal or approval descriptor is imported by the bootstrap.
-The two trusted files are copied unchanged from PR #115 at
-`16ef34879397d9f5e1ac08a9c3c0c9dd0aaa148a`:
-
-| File | SHA256 |
-| --- | --- |
-| `.github/workflows/risk-approval.yml` | `863d4c40b8022e49358ebc6eea5df5352706049cf33266d828194a36c87979f5` |
-| `scripts/release/risk_acceptance.py` | `2ddfc8f26c9088c8deb68e4ffe2c120a133f84a041fc533c2698eec917151b1e` |
+This bootstrap installs `.github/workflows/private-risk-approval.yml` and the
+descriptor-only `scripts/release/private_descriptor.py` on trusted `main`. It
+retires the public Markdown proposal workflow and operational CLI preparation;
+historical record parsing and validation remain available. It imports no proposal
+or approval and approves no finding, source coverage review, or policy exception.
+The helper uses only Python's standard library and the existing
+`scripts/release/risk_acceptance.py`; existing risk policy constants are unchanged.
 
 ## Protected owner decision
 
@@ -20,26 +17,44 @@ deployment branch policies with exactly `main` of type `branch`; protected-branc
 mode must be off. An automatically created, unprotected environment is rejected.
 This document does not authorize changing provider settings or dispatching runs.
 
-After the reviewed bootstrap lands, each decision requires the owner to review
-the full proposed Markdown record and its exact scope, then dispatch
-`risk-approval.yml` on `main` with its record ID, immutable 40-character record
-revision, and SHA256 of the entire record. Fetching a proposal at that revision
-reads its bytes without executing its code. The owner must also approve the
-protected environment gate. A new or expanded scope needs a new explicit decision.
-Coverage reviews bind an exact inventory hash; they do not approve findings.
+After the reviewed bootstrap lands, the owner must review the complete private
+bundle independently, then dispatch `private-risk-approval.yml` on `main` with
+only its opaque `bundle_id`, exact `bundle_sha256`, and UTC `expires_at`. The owner
+must also approve the protected environment gate for that original run. The
+workflow fetches no private proposal or LAN content. Its public artifact contains
+exactly `id`, `status`, `expires_at`, and `bundle_sha256`; `status: approved` records
+owner intent for those bytes, not a release-policy decision. Do not dispatch the
+retired `risk-approval.yml` or publish records, reasons, findings, or support files.
 
-The verifier requires owner identity, first-attempt manual dispatch, trusted main
-history, unchanged workflow/helper bytes, exact record and scope hashes, a bounded
-validity window, and a matching artifact from the successful run. A rerun,
-descriptor file alone, or successful CI does not grant approval. Changing either
-trusted file invalidates earlier approvals while its bytes differ from `main`;
-renew explicit approvals rather than assuming they survive an implementation change.
+Preparation and verification require exact owner identity, first-attempt manual
+dispatch, trusted main history, unchanged original/current-main/local workflow
+and helper bytes, bounded expiry, and one recorded owner environment approval
+for this exact run and current environment ID/name. Current protections alone
+are insufficient. Verification also requires the original successful run and
+its matching artifact. Missing, unavailable, rejected, or ambiguous review
+history fails closed. A rerun, descriptor file alone, or successful CI grants no
+authority. Changes to any pinned file require renewed explicit approval.
+
+The read-only workflow token grants `contents: read` and `actions: read`.
+GitHub documents Actions read access for [getting an environment](https://docs.github.com/en/rest/deployments/environments#get-an-environment),
+[listing deployment branch policies](https://docs.github.com/en/rest/deployments/branch-policies#list-deployment-branch-policies),
+and [reading a run's review history](https://docs.github.com/en/rest/actions/workflow-runs#get-the-review-history-for-a-workflow-run).
+These public read endpoints do not require an administration token. The history
+schema supplies reviewer, state and environments; it supplies no review timestamp
+or attempt field, so the verifier independently enforces original run attempt 1.
+
+Private LAN policy evaluation, hosted consumption, retention, current bundle
+state/revocation checks and release qualification remain unqualified. A descriptor
+does not resolve unknown finding discovery dates or authorize a temporary policy
+exception. Any downstream consumer must use independently installed trusted
+tooling and receive its own review and qualification before activation.
 
 ## Publication hold and restoration
 
-The `auto-release` job in `.github/workflows/ci.yml` has an unconditional hold:
+The existing `auto-release` job in `.github/workflows/ci.yml` has an unconditional hold:
 leading `false &&` in its job condition. This prevents that job from creating a
-patch tag or dispatching `release.yml`, including for the bootstrap merge. Every existing CI test and
+patch tag or dispatching `release.yml`, including for the bootstrap merge. This
+bootstrap does not change CI, release workflows, or that existing hold. Every existing CI test and
 security gate remains required and runs normally. The hold remains across later
 main pushes until removed by a reviewed PR; there is no automatic expiry.
 

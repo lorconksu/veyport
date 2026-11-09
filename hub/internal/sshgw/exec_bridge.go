@@ -164,9 +164,7 @@ func (s *Server) runExec(ch ssh.Channel, p execParams, command string) {
 				_ = s.cfg.Store.MarkExecutionAdmissionUnused(p.session.ID)
 			}
 		}
-		if reason != "execution transport lost" && ctx.Err() != nil {
-			state = "cancelled"
-		}
+		state = executionFailureDisposition(ctx, p.session.Done, reason, state)
 		p.session.Cancel(reason)
 		cancel()
 		s.cancelPreparedExecution(p)
@@ -354,6 +352,24 @@ func (s *Server) execute(ctx context.Context, ch ssh.Channel, p execParams, comm
 		}
 	}
 	return result, nil
+}
+
+func executionFailureDisposition(ctx context.Context, done <-chan struct{}, reason, state string) string {
+	if reason == "execution transport lost" {
+		return state
+	}
+	// Session cancellation publishes its reason and closes Done before the
+	// watchdog cancels ctx. Observe that published signal directly rather than
+	// making the recorded disposition depend on the goroutine wakeup order.
+	select {
+	case <-done:
+		return "cancelled"
+	default:
+	}
+	if ctx.Err() != nil {
+		return "cancelled"
+	}
+	return state
 }
 
 func cancelExecutionWriter(p execParams) func() {

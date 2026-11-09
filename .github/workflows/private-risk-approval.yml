@@ -1,0 +1,67 @@
+name: Approve private review descriptor v1
+
+# This records owner intent for opaque bytes only. It cannot evaluate LAN
+# policy, qualify evidence/retention, or authorize release/publication.
+on:
+  workflow_dispatch:
+    inputs:
+      bundle_id:
+        description: Opaque private review reference
+        required: true
+        type: string
+      bundle_sha256:
+        description: Exact bundle digest
+        required: true
+        type: string
+      expires_at:
+        description: Exact UTC expiry
+        required: true
+        type: string
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: private-security-approval-${{ inputs.bundle_id }}
+  cancel-in-progress: false
+
+jobs:
+  approve:
+    if: github.ref == 'refs/heads/main' && github.run_attempt == 1 && github.actor == 'lorconksu' && github.triggering_actor == 'lorconksu'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    environment: ssdf-risk-approval
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: Validate opaque descriptor and trusted owner dispatch
+        env:
+          GH_TOKEN: ${{ github.token }}
+          BUNDLE_ID: ${{ inputs.bundle_id }}
+          BUNDLE_SHA256: ${{ inputs.bundle_sha256 }}
+          EXPIRES_AT: ${{ inputs.expires_at }}
+        run: |
+          python3 - <<'PY'
+          import os, sys
+          from pathlib import Path
+          sys.path.insert(0, 'scripts/release')
+          from private_descriptor import canonical, prepare_private
+          from risk_acceptance import GitHub
+          try:
+              descriptor = prepare_private(GitHub(), os.environ['BUNDLE_ID'], os.environ['BUNDLE_SHA256'], os.environ['EXPIRES_AT'], int(os.environ['GITHUB_RUN_ID']))
+              root = Path(os.environ['RUNNER_TEMP']) / 'private-approval'
+              root.mkdir(mode=0o700)
+              (root / 'approval.json').write_bytes(canonical(descriptor) + b'\n')
+          except Exception:
+              raise SystemExit('private approval unavailable') from None
+          PY
+      - name: Retain opaque approval descriptor
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: ssdf-private-approval-${{ inputs.bundle_id }}
+          path: ${{ runner.temp }}/private-approval/approval.json
+          if-no-files-found: error
+          retention-days: 90
