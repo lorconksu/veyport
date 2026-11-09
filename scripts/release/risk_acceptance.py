@@ -120,7 +120,7 @@ class GitHub:
 
     def get(self, path, raw=False):
         # Never forward authentication to artifact redirect hosts.
-        url = "https://api.github.com/repos/" + REPOSITORY + "/" + path
+        url = "https://api.github.com/repos/" + REPOSITORY + ("/" + path if path != "" else "")
         request = urllib.request.Request(url, headers={"Authorization": "Bearer " + self.token, "Accept": "application/vnd.github.raw+json" if raw else "application/vnd.github+json", "X-GitHub-Api-Version": "2022-11-28"})
         class NoRedirect(urllib.request.HTTPRedirectHandler):
             def redirect_request(self, req, fp, code, msg, headers, newurl):
