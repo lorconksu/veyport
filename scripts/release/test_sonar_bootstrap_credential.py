@@ -199,7 +199,7 @@ exec(compile(_native_script, '<legacy-native>', 'exec'))
 
     def test_native_preparation_and_scanner_are_pinned_with_no_candidate_command(self):
         workflow = (ROOT / '.github/workflows/ci.yml').read_text()
-        job = workflow.split('  sonarcloud:\n', 1)[1].split('  sast:\n', 1)[0]
+        job = workflow.split('  sonarcloud:\n', 1)[1].split('  secret-scan:\n', 1)[0]
         self.assertNotIn('run: python3 scripts/release/sonar_context.py', job)
         self.assertIn('ref: ' + PIN, job)
         self.assertEqual(job.count('persist-credentials: false'), 2)

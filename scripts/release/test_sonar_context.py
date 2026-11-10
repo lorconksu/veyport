@@ -154,7 +154,7 @@ class SonarContext(unittest.TestCase):
 
     def test_bootstrap_legacy_stable_tag_hold_precedes_any_scanner_or_helper(self):
         workflow = (Path(__file__).resolve().parents[2] / '.github/workflows/ci.yml').read_text()
-        job = workflow.split('  sonarcloud:\n', 1)[1].split('  sast:\n', 1)[0]
+        job = workflow.split('  sonarcloud:\n', 1)[1].split('  secret-scan:\n', 1)[0]
         marker = '      - name: Hold legacy stable-tag Sonar scans\n'
         self.assertIn(marker, job)
         step = job.split(marker, 1)[1].split('      - ', 1)[0]
@@ -237,7 +237,7 @@ class SonarContext(unittest.TestCase):
     def test_workflow_requires_context_before_scanner_and_prototype_caller_requires_pr(self):
         repo = Path(__file__).resolve().parents[2]
         workflow = (repo / ".github/workflows/ci.yml").read_text()
-        sonar_job = workflow.split("  sonarcloud:\n", 1)[1].split("  sast:\n", 1)[0]
+        sonar_job = workflow.split("  sonarcloud:\n", 1)[1].split("  secret-scan:\n", 1)[0]
         self.assertLess(sonar_job.index("Prepare source data with independently pinned main tooling"), sonar_job.index("uses: SonarSource/sonarqube-scan-action@"))
         self.assertIn("${{ steps.sonar-context.outputs.gate_args }}", sonar_job)
         self.assertIn("SONAR_PULL_REQUEST_REQUIRED: ${{ inputs.sonar_pull_request_required }}", sonar_job)

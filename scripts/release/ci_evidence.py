@@ -53,11 +53,10 @@ HEADER_LINES = re.compile(
     r'(?:\r?\n(?:[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9:.]+Z[ \t])?'
     r'(?(log_debug)(?:(?:##)?\[debug\](?P=log_debug_space))?|)'
     r'(?:[<>][ \t])?[ \t]+[^\r\n]*)*', re.I | re.M)
-JSON_KEYS = re.compile(rb'("(?:[^"\\]|\\.)*")\s*:')
 FORMAT_SPACE = re.compile(rb'[ \t\r\n]*(?:\xef\xbb\xbf[ \t\r\n]*)?')
 XML_PREFIX = re.compile(rb'<(?:\?xml\b|!--|!DOCTYPE\b|!\[CDATA\[|/?[A-Za-z_][A-Za-z0-9_.:-]*[ \t\r\n/>])', re.I)
 XML_BODY_CARRIER = re.compile(
-    rb'<[ \t\r\n]*/?[ \t\r\n]*(?:[A-Za-z_][A-Za-z0-9_.-]*:)?'
+    rb'<[ \t\r\n]*(?:/[ \t\r\n]*)?(?:[A-Za-z_][A-Za-z0-9_.-]*:)?'
     rb'(?:body|request[-_]?body|response[-_]?body|post[-_]?data|storage[-_]?state|credentials|auth[-_]?state)'
     rb'(?=[ \t\r\n/>]|$)', re.I)
 TEXT_BODY_MAPPING = re.compile(
@@ -160,14 +159,25 @@ def field_name(value):
 
 
 def report_hints(raw):
-    # Decode only candidate JSON keys, including escaped key spellings. This
-    # also detects sensitive carriers in mixed or malformed JSON diagnostics.
+    # Walk adjacent raw quote positions once. Any older candidate spanning an
+    # escaped quote decodes to a literal quote in its name, which cannot match
+    # a known sensitive/media/header carrier. Adjacent pairing still recognizes
+    # known keys after malformed log prefixes without rescanning the remainder.
     names = set()
-    for match in JSON_KEYS.finditer(raw):
-        try:
-            names.add(field_name(json.loads(match[1])))
-        except (ValueError, UnicodeError):
-            continue
+    opening = raw.find(b'"')
+    while opening != -1:
+        closing = raw.find(b'"', opening + 1)
+        if closing == -1:
+            break
+        cursor = closing + 1
+        while cursor < len(raw) and raw[cursor] in b' \t\r\n\v\f':
+            cursor += 1
+        if cursor < len(raw) and raw[cursor] == 58:  # JSON-like member colon
+            try:
+                names.add(field_name(json.loads(raw[opening:closing + 1])))
+            except (ValueError, UnicodeError):
+                pass
+        opening = closing
     return names
 
 

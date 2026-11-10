@@ -28,6 +28,143 @@ def provider_alert(number=7, state='dismissed', dismissed_reason="won't fix", **
     return value
 
 
+class ProviderShapeEnvelopeTests(unittest.TestCase):
+    class Provider:
+        def __init__(self, case):
+            self.case, self.calls = case, []
+            self.now = dt.datetime.now(dt.timezone.utc).isoformat()
+
+        def get(self, endpoint, params=None):
+            self.calls.append(endpoint)
+            if endpoint == 'code-scanning/default-setup':
+                if self.case == 'codeql-configuration': return ['private-provider-canary']
+                return {'state': 'configured', 'query_suite': 'default', 'updated_at': self.now,
+                        'languages': [category.removeprefix('/language:') for category in sast.CODEQL_CATEGORIES]}
+            if endpoint == 'project_branches/list':
+                if self.case == 'sonar-response': return ['private-provider-canary']
+                if self.case == 'sonar-branch-row': return {'branches': [None]}
+                return {'branches': [{'name': 'main', 'type': 'LONG', 'isMain': True, 'commit': {'sha': REV}}]}
+            if endpoint == 'project_analyses/search':
+                return {'analyses': [{'revision': REV, 'key': 'analysis-kept', 'date': self.now}]}
+            if endpoint == 'qualitygates/project_status': return {'projectStatus': {'status': 'OK'}}
+            raise AssertionError('unexpected provider endpoint: ' + endpoint)
+
+        def pages(self, endpoint, params=None, key=None):
+            self.calls.append(endpoint)
+            if endpoint.startswith('code-scanning/analyses?'): return [None]
+            if endpoint == 'issues/search':
+                rows = [{'key': 'issue-1', 'type': 'VULNERABILITY', 'impacts': [None]}] if self.case == 'sonar-impact-row' else []
+                return rows, [{'issues': rows}]
+            if endpoint == 'hotspots/search': return [], [{'hotspots': []}]
+            raise AssertionError('unexpected provider page: ' + endpoint)
+
+    @staticmethod
+    def args(root):
+        manifest = root / 'candidate.json'; manifest.write_text('{}')
+        args = SimpleNamespace(output=root / 'raw', assessment=root / 'assessment.json', candidate_id='candidate-1',
+            revision=REV, version='2.0.58', artifact_manifest=manifest, sonar_branch='main', root=root)
+        argv = ['source_sast.py', '--output', str(args.output), '--assessment', str(args.assessment),
+                '--revision', REV, '--version', args.version, '--candidate-id', args.candidate_id,
+                '--artifact-manifest', str(manifest), '--sonar-branch', 'main', '--root', str(root)]
+        return args, argv
+
+    def test_real_provider_shape_failures_preserve_other_scope_policy_and_controlled_cli(self):
+        for case in ('sonar-response', 'sonar-branch-row', 'sonar-impact-row',
+                     'codeql-configuration', 'codeql-analysis-row', 'sonar-valid'):
+            for mode in ('collect', 'cli'):
+                with self.subTest(case=case, mode=mode), tempfile.TemporaryDirectory() as directory:
+                    args, argv = self.args(Path(directory)); provider = self.Provider(case)
+                    scanner = 'codeql' if case.startswith('codeql-') else 'sonar'
+                    other = 'sonar' if scanner == 'codeql' else 'codeql'
+                    kept = {'id': 'other-scanner-kept', 'scanner': other, 'severity': 'low', 'first_seen': None}
+                    with patch.object(sast, 'export_' + other, return_value=[kept]), \
+                            patch.object(sast, 'ExportAPI', return_value=provider), \
+                            patch.object(sast, 'Sonar', return_value=provider), \
+                            patch.object(sast, 'suppression_inventory', return_value={'configurations': [], 'annotations': []}), \
+                            patch('sys.argv', argv), patch('sys.stderr', new_callable=io.StringIO) as stderr:
+                        try:
+                            if mode == 'collect':
+                                self.assertEqual(sast.collect(args, api=provider, sonar=provider), case == 'sonar-valid')
+                            elif case == 'sonar-valid': self.assertIsNone(sast.main())
+                            else:
+                                with self.assertRaises(SystemExit) as stopped: sast.main()
+                                self.assertEqual(stopped.exception.code, 1)
+                                self.assertEqual(stderr.getvalue(), 'full-baseline SAST export incomplete; publication prohibited\n')
+                        except AttributeError:
+                            self.fail('parseable provider shape escaped before the failed assessment envelope')
+                    self.assertIn('code-scanning/default-setup' if scanner == 'codeql' else 'project_branches/list', provider.calls)
+                    if case == 'sonar-impact-row': self.assertIn('issues/search', provider.calls)
+                    if case == 'codeql-analysis-row': self.assertTrue(any(call.startswith('code-scanning/analyses?') for call in provider.calls))
+                    evidence = sast.strict_json(args.assessment.read_bytes())
+                    self.assertEqual(evidence, sast.strict_json((args.output / 'assessment.json').read_bytes()))
+                    scopes = {scope['id']: scope for scope in evidence['scopes']}
+                    failed = scopes['source:sast:' + scanner]; completed = scopes['source:sast:' + other]
+                    self.assertEqual(evidence['status'], 'completed' if case == 'sonar-valid' else 'failed')
+                    self.assertEqual(failed['status'], 'completed' if case == 'sonar-valid' else 'failed')
+                    self.assertEqual(failed['authenticated'], case == 'sonar-valid')
+                    self.assertEqual(failed['technical_coverage_complete'], case == 'sonar-valid')
+                    if case != 'sonar-valid':
+                        self.assertEqual(failed['findings'], [])
+                        self.assertEqual(failed['error'], 'Exact-source full baseline export incomplete; private diagnostics required.')
+                    self.assertEqual(completed['findings'], [kept])
+                    self.assertTrue(completed['authenticated'] and completed['technical_coverage_complete'])
+                    self.assertEqual(completed['status'], 'completed')
+                    self.assertEqual(evidence['coverage_policy']['technical_status'], 'completed')
+                    self.assertEqual(evidence['coverage_policy']['status'], 'pending-owner-policy-review')
+                    self.assertTrue(all(not scope['coverage_complete'] for scope in scopes.values()))
+                    self.assertNotIn('private-provider-canary', args.assessment.read_text() + stderr.getvalue())
+                    self.assertNotIn('Traceback', stderr.getvalue())
+
+    def test_inventory_attribute_failure_keeps_completed_scanners_and_failed_policy(self):
+        for mode in ('collect', 'cli'):
+            with self.subTest(mode=mode), tempfile.TemporaryDirectory() as directory:
+                args, argv = self.args(Path(directory)); kept = {'id': 'scanner-kept', 'severity': 'low', 'first_seen': None}
+                with patch.object(sast, 'export_codeql', return_value=[kept]), patch.object(sast, 'export_sonar', return_value=[kept]), \
+                        patch.object(sast, 'ExportAPI', return_value=object()), patch.object(sast, 'Sonar', return_value=object()), \
+                        patch.object(sast, 'suppression_inventory', side_effect=AttributeError('private-inventory-canary')), \
+                        patch('sys.argv', argv), patch('sys.stderr', new_callable=io.StringIO) as stderr:
+                    try:
+                        if mode == 'collect': self.assertFalse(sast.collect(args, api=object(), sonar=object()))
+                        else:
+                            with self.assertRaises(SystemExit) as stopped: sast.main()
+                            self.assertEqual(stopped.exception.code, 1)
+                            self.assertEqual(stderr.getvalue(), 'full-baseline SAST export incomplete; publication prohibited\n')
+                    except AttributeError: self.fail('inventory shape failure escaped before assessment serialization')
+                evidence = sast.strict_json(args.assessment.read_bytes())
+                self.assertEqual(evidence, sast.strict_json((args.output / 'assessment.json').read_bytes()))
+                self.assertEqual(evidence['status'], 'failed')
+                self.assertEqual(evidence['coverage_policy'], {'status': 'pending-owner-policy-review',
+                    'inventory_sha256': None, 'technical_status': 'failed'})
+                self.assertTrue(all(scope['status'] == 'completed' and scope['authenticated']
+                    and scope['technical_coverage_complete'] and not scope['coverage_complete'] for scope in evidence['scopes']))
+                self.assertTrue(all(scope['findings'] == [kept] for scope in evidence['scopes']))
+                self.assertNotIn('private-inventory-canary', args.assessment.read_text() + stderr.getvalue())
+
+    def test_assessment_writer_attribute_failure_has_controlled_main_error(self):
+        for failure in ('archive', 'assessment-output'):
+            with self.subTest(failure=failure), tempfile.TemporaryDirectory() as directory:
+                args, argv = self.args(Path(directory)); original_save = sast.save; original_write = Path.write_bytes
+                def save(destination, name, value):
+                    if failure == 'archive' and name == 'assessment.json': raise AttributeError('private-writer-canary')
+                    return original_save(destination, name, value)
+                def write(path, raw):
+                    if failure == 'assessment-output' and path == args.assessment: raise AttributeError('private-writer-canary')
+                    return original_write(path, raw)
+                with patch.object(sast, 'export_codeql', return_value=[]), patch.object(sast, 'export_sonar', return_value=[]), \
+                        patch.object(sast, 'ExportAPI', return_value=object()), patch.object(sast, 'Sonar', return_value=object()), \
+                        patch.object(sast, 'suppression_inventory', return_value={'configurations': [], 'annotations': []}), \
+                        patch.object(sast, 'save', side_effect=save), patch.object(Path, 'write_bytes', write), \
+                        patch('sys.argv', argv), patch('sys.stderr', new_callable=io.StringIO) as stderr:
+                    try:
+                        with self.assertRaises(SystemExit) as stopped: sast.main()
+                    except AttributeError: self.fail('assessment writer exception escaped controlled main exit')
+                self.assertEqual(stopped.exception.code, 1)
+                self.assertEqual(stderr.getvalue(), 'source SAST evidence failed; publication prohibited\n')
+                self.assertFalse(args.assessment.exists())
+                self.assertEqual((args.output / 'assessment.json').exists(), failure == 'assessment-output')
+                self.assertNotIn('private-writer-canary', stderr.getvalue())
+
+
 class SourceEvidenceTests(unittest.TestCase):
     def test_historical_semgrep_sarif_decoder_is_retained(self):
         raw = sarif()

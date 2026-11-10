@@ -130,6 +130,7 @@ class PrivateJobEvidenceTests(unittest.TestCase):
         unsafe = {'document.xml': b'<request><body>XML_BODY_CANARY</body></request>',
                   'empty.XML': b'', 'misnamed.json': b'<?xml version="1.0"?><response><body>XML_BODY_CANARY</body></response>',
                   'prefixed.log': b'provider diagnostic\n<ns:requestBody>XML_BODY_CANARY</ns:requestBody>',
+                  'mixed-carrier.log': b'x<' + b' \t\r\n' * (1 << 14) + b'ns:BODY>XML_BODY_CANARY',
                   'junit.xml': b'<testsuite><testcase><failure><body>XML_BODY_CANARY</body></failure></testcase></testsuite>',
                   'yaml.out': b'request:\n  body:\n    sessionId: YAML_BODY_CANARY\n',
                   'properties.txt': b'request_body=PROPERTY_BODY_CANARY\n'}
@@ -156,6 +157,24 @@ class PrivateJobEvidenceTests(unittest.TestCase):
         self.assertEqual(retained['signature'], native['signature'])
         self.assertEqual(retained['body'], '[REDACTED]')
         self.assertFalse(chunks[0][0]['complete'])
+
+    def test_escaped_sensitive_key_after_malformed_prefix_is_omitted_before_real_age(self):
+        raw = b'provider "unterminated prefix "b\\u006fdy": "BODY_CANARY"'
+        (self.source / 'diagnostic.log').write_bytes(raw)
+        safe = b'{"ceTaskId":"task-kept","snippet":"<body>source example</body>","token_count":3}'
+        (self.source / 'native.json').write_bytes(safe)
+        chunks = self.encrypt(['*.log', '*.json'], 'failure', job='sonar')
+        details = chunks[0][0]['details']
+        self.assertEqual(details['omitted_files'], [{'name': 'diagnostic.log',
+            'original_sha256': hashlib.sha256(raw).hexdigest(), 'size': len(raw),
+            'reason': 'unparseable-sensitive-diagnostic-excluded'}])
+        blobs = {digest: data for _, contents in chunks for digest, data in contents.items()}
+        self.assertNotIn(b'BODY_CANARY', b'\n'.join(blobs.values()))
+        self.assertEqual([item['name'] for item in details['original_files']], ['native.json'])
+        original = details['original_files'][0]
+        self.assertEqual(b''.join(blobs[part['sha256']] for part in original['parts']), safe)
+        self.assertFalse(chunks[0][0]['complete'])
+        self.assertEqual(details['status'], 'failure')
 
     def test_missing_outputs_are_explicit_partial_evidence(self):
         chunks = self.encrypt(['missing.json'], 'failure')
@@ -446,6 +465,112 @@ print(json.dumps({'bytes': len(raw), 'seconds': time.monotonic() - began}))
                     str(Path(ci_evidence.__file__).resolve()), kind, str(8 << 20)], capture_output=True, timeout=10)
                 self.assertEqual(result.returncode, 0, result.stderr.decode())
                 self.assertGreater(json.loads(result.stdout)['bytes'], 7 << 20)
+
+    def test_mixed_xml_carriers_preserve_exact_ascii_whitespace_and_label_boundaries(self):
+        for whitespace in (b'', b' ', b'\t\r\n ', b' ' * 64):
+            for slash in (b'', b'/'):
+                for label in (b'body', b'REQUEST-body', b'response_body', b'postData',
+                              b'storage-state', b'Credentials', b'auth_state'):
+                    raw = b'provider x<' + whitespace + slash + whitespace + b'ns:' + label + b'>CANARY'
+                    with self.subTest(raw=raw):
+                        self.assertEqual(ci_evidence.diagnostic_omission(Path('report.log'), raw), 'xml-diagnostic-excluded')
+                        with self.assertRaisesRegex(ci_evidence.UnsafeDiagnostic, '^xml-diagnostic-excluded$'):
+                            ci_evidence.redact(raw)
+        for raw in (b'x< bodyX>ordinary', b'x< / /body>ordinary', b'x<\vbody>ordinary',
+                    b'x<\fbody>ordinary', b'x<\x01body>ordinary', b'x<\xc2\xa0body>ordinary',
+                    b'x< ns::body>ordinary', b'x< :body>ordinary', b'x< ns:bodyX>ordinary',
+                    b'x< body\v>ordinary', b'x< body\x01>ordinary'):
+            with self.subTest(raw=raw):
+                self.assertIsNone(ci_evidence.diagnostic_omission(Path('report.log'), raw))
+                self.assertEqual(ci_evidence.redact(raw), raw)
+
+    def test_mixed_xml_carrier_search_is_bounded_in_a_child(self):
+        # The mixed prefix bypasses XML_PREFIX and reaches the carrier search.
+        # Both successful and failing searches must finish without overlapping
+        # whitespace backtracking; failures also traverse normal text redaction.
+        program = r'''
+from pathlib import Path
+import json, resource, sys, time
+resource.setrlimit(resource.RLIMIT_AS, (256 << 20, 256 << 20))
+resource.setrlimit(resource.RLIMIT_CPU, (4, 4))
+sys.path.insert(0, str(Path(sys.argv[1]).parent))
+import ci_evidence
+kind, size = sys.argv[2], int(sys.argv[3])
+space = (b' \t\r\n' * ((size + 3) // 4))[:size]
+endings = {'missing': b'', 'near-label': b'bodyX>', 'slash-missing': b'/ ',
+           'slash-near-label': b'/ ' + space + b'ns:requestBodyX>',
+           'control': b'\x01body>', 'slashes': b'/' * size + b'body>',
+           'body': b'ns:requestBody>CANARY', 'closing-body': b'/ ' + space + b'NS:BODY>CANARY'}
+raw = b'x<' + space + endings[kind]
+began = time.monotonic()
+expected = 'xml-diagnostic-excluded' if kind in {'body', 'closing-body'} else None
+assert ci_evidence.diagnostic_omission(Path('report.out'), raw) == expected
+if expected:
+    try: ci_evidence.redact(raw)
+    except ci_evidence.UnsafeDiagnostic as error: assert str(error) == expected
+    else: raise AssertionError('recognized XML carrier was retained')
+else:
+    assert ci_evidence.redact(raw) == raw
+print(json.dumps({'bytes': len(raw), 'seconds': time.monotonic() - began}))
+'''
+        for kind in ('missing', 'near-label', 'slash-missing', 'slash-near-label',
+                     'control', 'slashes', 'body', 'closing-body'):
+            with self.subTest(kind=kind):
+                result = subprocess.run([sys.executable, '-I', '-S', '-c', program,
+                    str(Path(ci_evidence.__file__).resolve()), kind, str(1 << 20)],
+                    capture_output=True, timeout=8)
+                self.assertEqual(result.returncode, 0, result.stderr.decode())
+                self.assertGreater(json.loads(result.stdout)['bytes'], 1 << 20)
+
+    def test_json_key_hints_preserve_escaped_sensitive_fields_after_malformed_prefixes(self):
+        for key, expected in ((b'"b\\u006fdy"', 'body'), (b'"requ\\u0065st_body"', 'requestbody'),
+                              (b'"HEADERS"', 'headers'), (b'"\\u0063redentials"', 'credentials')):
+            for prefix in (b'{', b'provider: ', b'log "unterminated prefix ', b'\\"quoted\\" log '):
+                raw = prefix + key + b' \t\r\n: "BODY_CANARY"'
+                with self.subTest(raw=raw):
+                    self.assertIn(expected, ci_evidence.report_hints(raw))
+                    self.assertEqual(ci_evidence.diagnostic_omission(Path('report.log'), raw),
+                                     'unparseable-sensitive-diagnostic-excluded')
+                    self.assertEqual(ci_evidence.redact(raw), b'[OMITTED unparseable credential report]\n')
+        for raw in (b'"body', b'"body\\"', b'"body\\q": "ordinary"',
+                    b'"b\\uZZZZdy": "ordinary"', b'"not\\\"Xbody": "ordinary"',
+                    b'"bodyX": "ordinary"', b'"token_count": 4'):
+            with self.subTest(raw=raw):
+                self.assertFalse(ci_evidence.report_hints(raw) & ci_evidence.SENSITIVE_FIELDS)
+                self.assertIsNone(ci_evidence.diagnostic_omission(Path('report.log'), raw))
+                self.assertEqual(ci_evidence.redact(raw), raw)
+        # Malformed whitespace and escaped-quote prefixes remain conservative.
+        for raw in (b'"body"\v\f: "BODY_CANARY"', b'"not\\\"body": "BODY_CANARY"'):
+            self.assertIn('body', ci_evidence.report_hints(raw))
+            self.assertEqual(ci_evidence.diagnostic_omission(Path('report.log'), raw),
+                             'unparseable-sensitive-diagnostic-excluded')
+            self.assertEqual(ci_evidence.redact(raw), b'[OMITTED unparseable credential report]\n')
+        quoted_name = json.dumps({'not"ordinary': 'ordinary metadata', 'ceTaskId': 'task-kept'}).encode()
+        self.assertIsNone(ci_evidence.diagnostic_omission(Path('native.json'), quoted_name))
+        self.assertEqual(ci_evidence.redact(quoted_name), quoted_name)
+        native = b'{"b\\u006fdy":{"session":"BODY_CANARY"},"ceTaskId":"task-kept"}'
+        self.assertIsNone(ci_evidence.diagnostic_omission(Path('report.json'), native))
+        self.assertEqual(json.loads(ci_evidence.redact(native)), {'body': '[REDACTED]', 'ceTaskId': 'task-kept'})
+
+    def test_escaped_quote_hint_search_is_bounded_in_a_child(self):
+        program = r'''
+from pathlib import Path
+import json, resource, sys, time
+resource.setrlimit(resource.RLIMIT_AS, (256 << 20, 256 << 20))
+resource.setrlimit(resource.RLIMIT_CPU, (4, 4))
+sys.path.insert(0, str(Path(sys.argv[1]).parent))
+import ci_evidence
+raw = bytes([92, 34]) * (1 << 15) + b'x'
+began = time.monotonic()
+assert not ci_evidence.report_hints(raw)
+assert ci_evidence.diagnostic_omission(Path('diagnostic.log'), raw) is None
+assert ci_evidence.redact(raw) == raw
+print(json.dumps({'bytes': len(raw), 'seconds': time.monotonic() - began}))
+'''
+        result = subprocess.run([sys.executable, '-I', '-S', '-c', program,
+            str(Path(ci_evidence.__file__).resolve())], capture_output=True, timeout=8)
+        self.assertEqual(result.returncode, 0, result.stderr.decode())
+        self.assertEqual(json.loads(result.stdout)['bytes'], 65537)
 
     def test_configured_native_scanner_formats_remain_supported_and_metadata_exact(self):
         native = {'ceTaskId': 'task-kept', 'analysisId': 'analysis-kept', 'status': 'completed',

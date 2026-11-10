@@ -1132,14 +1132,14 @@ def collect(args, api=None, sonar=None):
                     # it is not a client login claim.
                     scope.update(provider_access="public-project-anonymous", client_authenticated=False)
             scope.update(status="completed", authenticated=True, coverage_complete=True, findings=findings)
-        except (ValueError, OSError, KeyError, TypeError, ImportError):
+        except (ValueError, OSError, KeyError, TypeError, ImportError, AttributeError):
             scope["error"] = "Exact-source full baseline export incomplete; private diagnostics required."
     try:
         inventory = suppression_inventory(getattr(args, "root", "."))
         inventory_hash = sha(canonical(inventory))
         save(root, "source-policy-inventory.json", inventory)
         inventory_complete = True
-    except (ValueError, OSError, KeyError, TypeError):
+    except (ValueError, OSError, KeyError, TypeError, AttributeError):
         inventory_complete = False
     # Preserve exporter truth separately from the missing owner policy decision.
     # Legacy consumers still see coverage_complete:false and cannot pass. Only a
@@ -1170,7 +1170,7 @@ def main():
             raise ValueError("exact candidate identity required")
         if not collect(args):
             parser.exit(1, "full-baseline SAST export incomplete; publication prohibited\n")
-    except (ValueError, OSError, KeyError, TypeError):
+    except (ValueError, OSError, KeyError, TypeError, AttributeError):
         parser.exit(1, "source SAST evidence failed; publication prohibited\n")
 
 
