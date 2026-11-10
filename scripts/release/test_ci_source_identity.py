@@ -39,12 +39,17 @@ class CISourceIdentity(unittest.TestCase):
         for name in SOURCE_JOBS:
             with self.subTest(job=name):
                 block = jobs[name]
-                self.assertEqual(block.count("uses: actions/checkout@"), 1)
+                self.assertEqual(block.count("uses: actions/checkout@"), 2 if name == "sonarcloud" else 1)
                 checkout = re.search(r"      - uses: actions/checkout@[^\n]+\n"
                                      r"        with:\n          ref: ([^\n]+)\n"
                                      r"(?:          [^\n]+\n)*", block)
                 self.assertIsNotNone(checkout)
                 self.assertEqual(checkout[1], REVISION)
+                if name == "sonarcloud":
+                    self.assertIn("          path: candidate-source\n", checkout[0])
+                    self.assertIn("        working-directory: candidate-source\n", block)
+                    trusted = re.findall(r"          ref: ([^\n]+)\n          path: trusted-bootstrap\n          persist-credentials: false\n", block)
+                    self.assertEqual(trusted, ["da509180b0de5725a5059e9aa031f22d39aa5856"])
                 self.assertTrue(block[checkout.end():].startswith("      - name: Verify checked-out source revision\n"))
                 guard(block)
         self.assertIn("-Dsonar.scm.revision=" + REVISION, jobs["sonarcloud"])

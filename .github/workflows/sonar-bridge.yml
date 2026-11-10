@@ -1,0 +1,257 @@
+name: Trusted Sonar Bridge
+
+# This file runs from default main. in_progress also fires for source retries;
+# requested does not. Never wait for source completion: sonarcloud waits for us.
+on:
+  workflow_run:
+    workflows: [CI, Release, Staging Build]
+    types: [in_progress]
+
+permissions:
+  contents: read
+  actions: read
+  attestations: read
+
+concurrency:
+  group: sonar-bridge-${{ github.event.workflow_run.id }}-${{ github.event.workflow_run.run_attempt }}
+  cancel-in-progress: false
+
+jobs:
+  intake:
+    if: vars.SONAR_CREDENTIAL_MODE == 'bridge'
+    runs-on: ubuntu-latest
+    timeout-minutes: 130
+    outputs:
+      revision: ${{ steps.intake.outputs.revision }}
+      source_key: ${{ steps.intake.outputs.source_key }}
+      destination: ${{ steps.intake.outputs.destination }}
+    steps:
+      - name: Record exact platform source attempt before intake
+        id: lifecycle
+        run: |
+          set -euo pipefail
+          python3 -I -S - <<'PYCODE'
+          import json, os, re, stat
+          from pathlib import Path
+          def require(ok):
+              if not ok:
+                  raise ValueError('Exact main workflow event required for lifecycle marker')
+          def unique(items):
+              result = {}
+              for key, value in items:
+                  require(key not in result)
+                  result[key] = value
+              return result
+          require(os.environ['GITHUB_REPOSITORY'] == 'lorconksu/veyport'
+                  and os.environ['GITHUB_EVENT_NAME'] == 'workflow_run'
+                  and os.environ['GITHUB_REF'] == 'refs/heads/main'
+                  and os.environ['GITHUB_WORKFLOW_REF'] == 'lorconksu/veyport/.github/workflows/sonar-bridge.yml@refs/heads/main')
+          path = Path(os.environ['GITHUB_EVENT_PATH'])
+          info = path.lstat()
+          require(stat.S_ISREG(info.st_mode) and 0 < info.st_size <= 1 << 20)
+          with path.open('rb') as stream:
+              raw = stream.read((1 << 20) + 1)
+          require(len(raw) == info.st_size)
+          event = json.loads(raw, object_pairs_hook=unique)
+          require(event.get('action') == 'in_progress' and event.get('repository', {}).get('full_name') == 'lorconksu/veyport')
+          source = {key: event['workflow_run'][key] for key in ('id', 'run_attempt', 'head_sha')}
+          producer = {'id': int(os.environ['GITHUB_RUN_ID']), 'run_attempt': int(os.environ['GITHUB_RUN_ATTEMPT']),
+                      'head_sha': os.environ['GITHUB_SHA']}
+          for value in (source, producer):
+              require(all(type(value[key]) is int and 0 < value[key] < 10**20 for key in ('id', 'run_attempt'))
+                      and isinstance(value['head_sha'], str) and re.fullmatch(r'[0-9a-f]{40}', value['head_sha']))
+          value = {'schema': 1, 'source': source, 'producer': producer, 'authority': 'negative-lifecycle-only'}
+          directory = Path(os.environ['RUNNER_TEMP']) / 'sonar-lifecycle'
+          directory.mkdir(mode=0o700)
+          data = json.dumps(value, sort_keys=True, separators=(',', ':')).encode() + b'\n'
+          require(len(data) <= 2048)
+          descriptor = os.open(directory / 'lifecycle.json', os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+          with os.fdopen(descriptor, 'wb') as stream:
+              stream.write(data)
+          with Path(os.environ['GITHUB_OUTPUT']).open('a') as stream:
+              stream.write('source_key=' + str(source['id']) + '-' + str(source['run_attempt']) + '\n')
+          PYCODE
+      - name: Retain negative-only intake lifecycle marker
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: sonar-lifecycle-v1-${{ steps.lifecycle.outputs.source_key }}
+          path: ${{ runner.temp }}/sonar-lifecycle/lifecycle.json
+          if-no-files-found: error
+          retention-days: 7
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          ref: ${{ vars.SONAR_BRIDGE_TOOLING_REVISION }}
+          persist-credentials: false
+      - name: Independently admit main tooling before checkout code executes
+        id: admit-control
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          SONAR_BRIDGE_TOOLING_REVISION: ${{ vars.SONAR_BRIDGE_TOOLING_REVISION }}
+        run: |
+          set -euo pipefail
+          [[ "$SONAR_BRIDGE_TOOLING_REVISION" =~ ^[0-9a-f]{40}$ ]]
+          test "$(git rev-parse HEAD)" = "$SONAR_BRIDGE_TOOLING_REVISION"
+          python3 -I -S - <<'PY'
+          import json, os, re, urllib.request
+          pin = os.environ['SONAR_BRIDGE_TOOLING_REVISION']
+          if os.environ['GITHUB_REPOSITORY'] != 'lorconksu/veyport' or not re.fullmatch(r'[0-9a-f]{40}', pin):
+              raise ValueError('reviewed main tooling pin required')
+          class NoRedirect(urllib.request.HTTPRedirectHandler):
+              def redirect_request(self, *args):
+                  return None
+          request = urllib.request.Request('https://api.github.com/repos/lorconksu/veyport/compare/' + pin + '...main',
+              headers={'Authorization': 'Bearer ' + os.environ['GITHUB_TOKEN'],
+                       'Accept': 'application/vnd.github+json', 'X-GitHub-Api-Version': '2026-03-10'})
+          with urllib.request.build_opener(NoRedirect()).open(request, timeout=20) as response:
+              raw = response.read((16 << 20) + 1)
+          if len(raw) > 16 << 20:
+              raise ValueError('main ancestry response exceeds bound')
+          value = json.loads(raw)
+          if value.get('status') not in ('ahead', 'identical') or value.get('merge_base_commit', {}).get('sha') != pin:
+              raise ValueError('Sonar tooling is outside main ancestry')
+          PY
+      - name: Install pinned official attestation verifier
+        run: python3 -I scripts/release/sonar_bridge.py install-verifier
+      - name: Validate source attempt and wait for exact coverage
+        id: intake
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          SONAR_CREDENTIAL_MODE: ${{ vars.SONAR_CREDENTIAL_MODE }}
+          SONAR_BRIDGE_TOOLING_REVISION: ${{ vars.SONAR_BRIDGE_TOOLING_REVISION }}
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$SONAR_BRIDGE_TOOLING_REVISION"
+          python3 -I scripts/release/sonar_bridge.py intake --output "$RUNNER_TEMP/sonar-intake" --timeout 7200
+      - name: Transfer validated scan inputs
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: sonar-intake-v1-${{ steps.intake.outputs.source_key }}
+          path: |
+            ${{ runner.temp }}/sonar-intake/intake.json
+            ${{ runner.temp }}/sonar-intake/unit/
+            ${{ runner.temp }}/sonar-intake/integration/
+            ${{ runner.temp }}/sonar-intake/provenance/
+          if-no-files-found: error
+          retention-days: 7
+      # A durable trusted claim is written before the credentialed job starts.
+      # An orphan claim holds closed; operators rerun the entire source CI as a
+      # new attempt rather than automatically resubmitting an uncertain scan.
+      - name: Claim this source attempt before credential issuance
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: sonar-claim-v1-${{ steps.intake.outputs.source_key }}
+          path: ${{ runner.temp }}/sonar-intake/claim.json
+          if-no-files-found: error
+          retention-days: 90
+
+  scan:
+    needs: intake
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    # Configure this environment for main only before bridge activation. The
+    # Veyport repository/organization copies of SONAR_TOKEN must be removed.
+    # Preserve shared provider credentials used by other integrations; mode alone
+    # is not a credential boundary.
+    environment: ssdf-sonar-scan
+    concurrency:
+      group: trusted-sonar-project-${{ needs.intake.outputs.destination }}
+      cancel-in-progress: false
+    steps:
+      - name: Checkout reviewed main control
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          ref: ${{ vars.SONAR_BRIDGE_TOOLING_REVISION }}
+          path: trusted-control
+          persist-credentials: false
+      - name: Checkout source as scanner data
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          ref: ${{ needs.intake.outputs.revision }}
+          path: candidate-source
+          persist-credentials: false
+          fetch-depth: 0
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
+        with:
+          name: sonar-intake-v1-${{ needs.intake.outputs.source_key }}
+          path: ${{ runner.temp }}/sonar-intake
+      - name: Independently admit main tooling before checkout code executes
+        id: admit-control
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          SONAR_BRIDGE_TOOLING_REVISION: ${{ vars.SONAR_BRIDGE_TOOLING_REVISION }}
+        run: |
+          set -euo pipefail
+          [[ "$SONAR_BRIDGE_TOOLING_REVISION" =~ ^[0-9a-f]{40}$ ]]
+          test "$(git -C trusted-control rev-parse HEAD)" = "$SONAR_BRIDGE_TOOLING_REVISION"
+          python3 -I -S - <<'PY'
+          import json, os, re, urllib.request
+          pin = os.environ['SONAR_BRIDGE_TOOLING_REVISION']
+          if os.environ['GITHUB_REPOSITORY'] != 'lorconksu/veyport' or not re.fullmatch(r'[0-9a-f]{40}', pin):
+              raise ValueError('reviewed main tooling pin required')
+          class NoRedirect(urllib.request.HTTPRedirectHandler):
+              def redirect_request(self, *args):
+                  return None
+          request = urllib.request.Request('https://api.github.com/repos/lorconksu/veyport/compare/' + pin + '...main',
+              headers={'Authorization': 'Bearer ' + os.environ['GITHUB_TOKEN'],
+                       'Accept': 'application/vnd.github+json', 'X-GitHub-Api-Version': '2026-03-10'})
+          with urllib.request.build_opener(NoRedirect()).open(request, timeout=20) as response:
+              raw = response.read((16 << 20) + 1)
+          if len(raw) > 16 << 20:
+              raise ValueError('main ancestry response exceeds bound')
+          value = json.loads(raw)
+          if value.get('status') not in ('ahead', 'identical') or value.get('merge_base_commit', {}).get('sha') != pin:
+              raise ValueError('Sonar tooling is outside main ancestry')
+          PY
+      - name: Install pinned official attestation verifier
+        run: python3 -I trusted-control/scripts/release/sonar_bridge.py install-verifier
+      - name: Independently revalidate source and immutable scanner inputs
+        id: inputs
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          SONAR_CREDENTIAL_MODE: ${{ vars.SONAR_CREDENTIAL_MODE }}
+          SONAR_BRIDGE_TOOLING_REVISION: ${{ vars.SONAR_BRIDGE_TOOLING_REVISION }}
+          SOURCE_REVISION: ${{ needs.intake.outputs.revision }}
+        run: |
+          set -euo pipefail
+          test "$(git -C trusted-control rev-parse HEAD)" = "$SONAR_BRIDGE_TOOLING_REVISION"
+          test "$(git -C candidate-source rev-parse HEAD)" = "$SOURCE_REVISION"
+          python3 -I trusted-control/scripts/release/sonar_bridge.py prepare --intake "$RUNNER_TEMP/sonar-intake/intake.json" --workspace "$GITHUB_WORKSPACE/candidate-source" --timeout 300
+      - name: Submit isolated Sonar analysis
+        timeout-minutes: 10
+        id: scanner
+        uses: SonarSource/sonarqube-scan-action@c7ee0f9df90b7aa20e8dcf9695dcfe2e7da5b4f2 # v7
+        with:
+          projectBaseDir: candidate-source
+          args: >
+            -Dsonar.host.url=https://sonarcloud.io
+            -Dsonar.scanner.sonarcloudUrl=https://sonarcloud.io
+            -Dsonar.scanner.apiBaseUrl=https://api.sonarcloud.io
+            -Dsonar.projectKey=lorconksu_veyport
+            -Dsonar.organization=lorconksu
+            -Dsonar.scanner.metadataFilePath=${{ runner.temp }}/sonar-scan-metadata/report-task.txt
+            -Dsonar.working.directory=${{ runner.temp }}/sonar-scan-work
+            -Dsonar.qualitygate.wait=${{ steps.inputs.outputs.quality_gate_wait }}
+            -Dsonar.qualitygate.timeout=300
+            -Dsonar.scm.revision=${{ needs.intake.outputs.revision }}
+            ${{ steps.inputs.outputs.args }}
+        env:
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+          SONAR_USER_HOME: ${{ runner.temp }}/sonar-user-home
+          FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+      - name: Produce bounded public task descriptor
+        id: descriptor
+        if: always() && steps.scanner.outcome != 'skipped'
+        env:
+          SCAN_OUTCOME: ${{ steps.scanner.outcome }}
+          GITHUB_TOKEN: ${{ github.token }}
+          SONAR_CREDENTIAL_MODE: ${{ vars.SONAR_CREDENTIAL_MODE }}
+          SONAR_BRIDGE_TOOLING_REVISION: ${{ vars.SONAR_BRIDGE_TOOLING_REVISION }}
+        run: python3 -I trusted-control/scripts/release/sonar_bridge.py descriptor --intake "$RUNNER_TEMP/sonar-intake/intake.json" --report-task "$RUNNER_TEMP/sonar-scan-metadata/report-task.txt" --output "$RUNNER_TEMP/descriptor.json" --timeout 300
+      - name: Transfer public task identity only
+        if: always() && steps.descriptor.outcome == 'success'
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: sonar-bridge-v1-${{ needs.intake.outputs.source_key }}
+          path: ${{ runner.temp }}/descriptor.json
+          if-no-files-found: error
+          retention-days: 7
