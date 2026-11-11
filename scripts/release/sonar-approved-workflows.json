@@ -1,0 +1,14 @@
+{
+  "authority": "approved-workflow-and-producer-source-bytes/v2",
+  "producer_sha256": {
+    "hub/internal/integration/main_test.go": "cf866f0eaae63a595efc4bb3fbbbf6e4d8bf3b35f6dfe587241066261ca999d4",
+    "scripts/release/capture_step.py": "b86dfbabd1f7f7e8fc39a668fa7d2c825ce44a10f7d20d52d488d244e33a0882",
+    "scripts/release/server_test_shards.py": "04b0ae01d7cc1f899e8fa2437733eba5bdbcaee563a0516ac2cd8e241271c7b6"
+  },
+  "schema": 2,
+  "workflow_sha256": {
+    ".github/workflows/ci.yml": "486ecdac3ebf0e39f6d5100bc18ac5e124327db0026879e2f8f5ce85e8880822",
+    ".github/workflows/release.yml": "15caa86cfdaef78133baef43114ac231179373da2b95bb9da90769b50358bef8",
+    ".github/workflows/staging.yml": "8cbf66b2138c6aa00b5ab66779f8080dee9df4e5d06f375fdeb71dae1b92bbb9"
+  }
+}

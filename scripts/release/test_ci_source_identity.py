@@ -11,7 +11,7 @@ WORKFLOW = Path(__file__).resolve().parents[2] / ".github/workflows/ci.yml"
 REVISION = "${{ github.event.pull_request.head.sha || github.sha }}"
 SOURCE_JOBS = {
     "unit", "server-tests", "test", "integration", "smoke", "e2e",
-    "sonarcloud", "sast", "secret-scan", "vulnerability-scan",
+    "sonarcloud", "secret-scan", "vulnerability-scan",
 }
 
 
@@ -33,18 +33,41 @@ def guard(block):
 
 
 class CISourceIdentity(unittest.TestCase):
+    def test_retired_scanner_has_no_job_artifact_or_dependent_requirement(self):
+        workflow = WORKFLOW.read_text()
+        jobs = source_jobs()
+        self.assertNotIn('sast', set(jobs))
+        self.assertNotIn('semgrep', workflow.lower())
+        self.assertNotIn('semgrep-results', workflow)
+        self.assertIn('if: false &&', jobs['auto-release'])
+        self.assertNotRegex(jobs['auto-release'], r'needs:.*\bsast\b')
+        self.assertIn('sonarcloud', jobs['auto-release'])
+        # Retiring a producer does not remove historical evidence decoding or
+        # alter the active CodeQL/Sonar source-assessment contract.
+        import ci_evidence
+        import ci_evidence_crypto
+        import scan_contract
+        self.assertIn('sast', ci_evidence.JOBS)
+        self.assertIn('sast', ci_evidence_crypto.JOBS)
+        self.assertEqual(scan_contract.SAST_SCANNERS, ('codeql', 'sonar'))
+
     def test_every_source_job_pins_and_guards_before_consuming_source(self):
         jobs = source_jobs()
         self.assertEqual(set(jobs), SOURCE_JOBS | {"auto-release"})
         for name in SOURCE_JOBS:
             with self.subTest(job=name):
                 block = jobs[name]
-                self.assertEqual(block.count("uses: actions/checkout@"), 1)
+                self.assertEqual(block.count("uses: actions/checkout@"), 2 if name == "sonarcloud" else 1)
                 checkout = re.search(r"      - uses: actions/checkout@[^\n]+\n"
                                      r"        with:\n          ref: ([^\n]+)\n"
                                      r"(?:          [^\n]+\n)*", block)
                 self.assertIsNotNone(checkout)
                 self.assertEqual(checkout[1], REVISION)
+                if name == "sonarcloud":
+                    self.assertIn("          path: candidate-source\n", checkout[0])
+                    self.assertIn("        working-directory: candidate-source\n", block)
+                    trusted = re.findall(r"          ref: ([^\n]+)\n          path: trusted-bootstrap\n          persist-credentials: false\n", block)
+                    self.assertEqual(trusted, ["da509180b0de5725a5059e9aa031f22d39aa5856"])
                 self.assertTrue(block[checkout.end():].startswith("      - name: Verify checked-out source revision\n"))
                 guard(block)
         self.assertIn("-Dsonar.scm.revision=" + REVISION, jobs["sonarcloud"])
@@ -54,7 +77,7 @@ class CISourceIdentity(unittest.TestCase):
         # Preserve the prerequisites and original tag/dispatch flow for the
         # separately reviewed restoration; all source jobs still run above.
         jobs = source_jobs()
-        self.assertIn("    needs: [integration, smoke, e2e, sonarcloud, sast, secret-scan, vulnerability-scan]\n",
+        self.assertIn("    needs: [integration, smoke, e2e, sonarcloud, secret-scan, vulnerability-scan]\n",
                       jobs["auto-release"])
         self.assertNotIn("EXPECTED_SOURCE_SHA", jobs["auto-release"])
         self.assertNotIn("          ref:", jobs["auto-release"])

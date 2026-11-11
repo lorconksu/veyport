@@ -27,6 +27,7 @@ permissions:
 jobs:
   unit:
     runs-on: ubuntu-latest
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
@@ -83,6 +84,8 @@ jobs:
         run: |
           bash scripts/release/install_tools.sh actionlint "$RUNNER_TEMP/release-tools"
           "$RUNNER_TEMP/release-tools/actionlint"
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq age
 
       - name: Release and approval helper tests
         run: python3 -m unittest discover -s scripts/release -p "test_*.py"
@@ -190,6 +193,7 @@ jobs:
     needs: [unit, server-tests]
     if: always()
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - name: Require all complete test jobs
         env:
@@ -239,6 +243,7 @@ jobs:
   integration:
     needs: test
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
@@ -264,15 +269,19 @@ jobs:
       - name: Integration tests with coverage
         run: cd hub && go test -race ./internal/integration/ -v -timeout 10m -coverprofile=../coverage-integration.out -covermode=atomic -coverpkg=./internal/...
 
-      - name: Report agent binary coverage
+      - name: Require and report complete integration coverage
         if: always()
         run: |
-          if [ -f coverage-agent-integration.out ]; then
-            echo "=== Agent Binary Integration Coverage ==="
-            cd agent && go tool cover -func=../coverage-agent-integration.out | tail -1
-          else
-            echo "No agent binary coverage file found"
-          fi
+          set -euo pipefail
+          for profile in coverage-integration.out coverage-agent-integration.out; do
+            test -f "$profile"
+            test ! -L "$profile"
+            test -s "$profile"
+          done
+          echo "=== Hub Integration Coverage ==="
+          (cd hub && go tool cover -func=../coverage-integration.out | tail -1)
+          echo "=== Agent Binary Integration Coverage ==="
+          (cd agent && go tool cover -func=../coverage-agent-integration.out | tail -1)
 
       - name: Upload integration coverage
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
@@ -281,6 +290,7 @@ jobs:
           path: |
             coverage-integration.out
             coverage-agent-integration.out
+          if-no-files-found: error
 
   smoke:
     needs: test
@@ -360,11 +370,25 @@ jobs:
   sonarcloud:
     needs: [test, integration]
     runs-on: ubuntu-latest
+    timeout-minutes: 20
+    environment: ssdf-sonar-scan
     steps:
+      - name: Hold legacy stable-tag Sonar scans
+        shell: bash
+        run: |
+          set -euo pipefail
+          case "$GITHUB_REF" in
+            refs/tags/v*)
+              echo "Stable-tag Sonar analysis is held until the protected bridge replaces this legacy scanner" >&2
+              exit 1
+              ;;
+          esac
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          path: candidate-source
           fetch-depth: 0
+          persist-credentials: false
       - name: Verify checked-out source revision
         shell: bash
         env:
@@ -373,69 +397,155 @@ jobs:
           set -euo pipefail
           [[ "$EXPECTED_SOURCE_SHA" =~ ^[0-9a-f]{40}$ ]]
           test "$(git rev-parse HEAD)" = "$EXPECTED_SOURCE_SHA"
-
+        working-directory: candidate-source
+      # Exact already-reviewed main tooling avoids candidate execution before
+      # this supervised bootstrap scan. It is separate from the future bridge.
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          ref: da509180b0de5725a5059e9aa031f22d39aa5856
+          path: trusted-bootstrap
+          persist-credentials: false
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
         with:
           name: coverage
-
+          path: ${{ runner.temp }}/bootstrap-coverage-unit
+          skip-decompress: true
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
         with:
           name: coverage-integration
-
-      - name: Resolve exact Sonar analysis context
+          path: ${{ runner.temp }}/bootstrap-coverage-integration
+          skip-decompress: true
+      - name: Prepare source data with independently pinned main tooling
         id: sonar-context
         env:
           EXPECTED_SOURCE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
           SONAR_PULL_REQUEST_REQUIRED: ${{ inputs.sonar_pull_request_required }}
-        run: python3 scripts/release/sonar_context.py
+        run: |
+          set -euo pipefail
+          python3 -I -S - <<'BOOTSTRAP_PY'
+          import hashlib, io, json, os, re, runpy, shutil, stat, subprocess, sys, zipfile
+          from pathlib import Path
+          PIN = 'da509180b0de5725a5059e9aa031f22d39aa5856'
+          HASHES = {'scripts/release/sonar_context.py': 'b12ca76d392313aa5c1755741dd94e2d118033fdfa5af98e685679bc75508bba', 'scripts/release/metadata.py': '16678327293492e3305b3c3ef8fc9cbeaf4c435448a5901f5c226ee7f53f95ac', 'sonar-project.properties': '331c1f8687167567590f0de0c7c3d3fcb920aa4a25e4612ff33407b8782ff121'}
+          COVERAGE = {
+              'unit': {'coverage-hub.out', 'coverage-hub-cmd.out', 'coverage-agent.out', 'coverage-cli.out', 'coverage-proto.out', 'web/coverage/lcov.info'},
+              'integration': {'coverage-integration.out', 'coverage-agent-integration.out'}}
+          def require(ok):
+              if not ok:
+                  raise ValueError('Protected legacy Sonar preparation refused')
+          def regular(path, maximum):
+              fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+              with os.fdopen(fd, 'rb') as stream:
+                  info = os.fstat(stream.fileno())
+                  require(stat.S_ISREG(info.st_mode) and info.st_nlink == 1 and 0 < info.st_size <= maximum)
+                  value = stream.read(maximum + 1)
+              require(len(value) == info.st_size)
+              return value
+          def write(path, value):
+              path.parent.mkdir(parents=True, exist_ok=True)
+              fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC | os.O_NOFOLLOW, 0o600)
+              with os.fdopen(fd, 'wb') as stream:
+                  os.fchmod(stream.fileno(), 0o600)
+                  stream.write(value)
+          def unique(items):
+              value = {}
+              for key, item in items:
+                  require(key not in value)
+                  value[key] = item
+              return value
+          workspace = Path(os.environ['GITHUB_WORKSPACE'])
+          source, control = workspace / 'candidate-source', workspace / 'trusted-bootstrap'
+          require(source.is_dir() and not source.is_symlink() and control.is_dir() and not control.is_symlink())
+          require(subprocess.check_output(['git', '-C', str(control), 'rev-parse', 'HEAD'], text=True).strip() == PIN)
+          trusted = {}
+          for name, digest in HASHES.items():
+              target = control
+              for part in name.split('/'):
+                  target = target / part
+                  require(not target.is_symlink())
+              trusted[name] = regular(target, 1 << 20)
+              require(hashlib.sha256(trusted[name]).hexdigest() == digest)
+          revision = os.environ['EXPECTED_SOURCE_SHA']
+          require(re.fullmatch(r'[0-9a-f]{40}', revision) and os.environ['GITHUB_REPOSITORY'] == 'lorconksu/veyport')
+          require(subprocess.check_output(['git', '-C', str(source), 'rev-parse', 'HEAD'], text=True).strip() == revision)
+          for base, dirs, files in os.walk(source, followlinks=False):
+              if Path(base) == source:
+                  dirs[:] = [name for name in dirs if name != '.git']
+                  files = [name for name in files if name != '.git']
+              require(all(not (Path(base) / name).is_symlink() for name in dirs + files))
+              require(all(stat.S_ISREG((Path(base) / name).lstat().st_mode) for name in files))
+          require(not (source / '.gitmodules').exists())
+          received, total = {}, 0
+          for group, expected in COVERAGE.items():
+              root = Path(os.environ['RUNNER_TEMP']) / ('bootstrap-coverage-' + group)
+              require(root.is_dir() and not root.is_symlink())
+              rows = list(root.iterdir())
+              require(len(rows) == 1)
+              raw = regular(rows[0], 128 << 20)
+              parents = {name.rsplit('/', level)[0] + '/' for name in expected for level in range(1, name.count('/') + 1)}
+              with zipfile.ZipFile(io.BytesIO(raw)) as archive:
+                  entries = archive.infolist()
+                  require(1 <= len(entries) <= len(expected) + len(parents))
+                  found, seen = set(), set()
+                  for entry in entries:
+                      kind = (entry.external_attr >> 16) & 0o170000
+                      require(entry.filename not in seen and not entry.flag_bits & 1)
+                      seen.add(entry.filename)
+                      if entry.is_dir():
+                          require(entry.filename in parents and kind in (0, stat.S_IFDIR) and entry.file_size == 0)
+                          continue
+                      require(entry.filename in expected and kind in (0, stat.S_IFREG) and 0 < entry.file_size <= 64 << 20)
+                      require(entry.compress_type in (zipfile.ZIP_STORED, zipfile.ZIP_DEFLATED))
+                      total += entry.file_size
+                      require(total <= 512 << 20)
+                      value = archive.read(entry)
+                      require(len(value) == entry.file_size and b'\x00' not in value)
+                      value.decode('utf-8')
+                      found.add(entry.filename)
+                      received[entry.filename] = value
+                  require(found == expected)
+          for name, value in received.items():
+              write(source / name, value)
+          # The legacy required scan uses only the old reviewed main profile, not the
+          # forthcoming full-source coverage/exclusion inventory. Candidate config is data.
+          write(source / 'sonar-project.properties', trusted['sonar-project.properties'])
+          if (source / '.scannerwork').exists():
+              require((source / '.scannerwork').is_dir())
+              shutil.rmtree(source / '.scannerwork')
+          private = Path(os.environ['RUNNER_TEMP']) / 'bootstrap-sonar'
+          private.mkdir(mode=0o700)
+          event = json.loads(regular(Path(os.environ['GITHUB_EVENT_PATH']), 1 << 20), object_pairs_hook=unique)
+          if os.environ['GITHUB_EVENT_NAME'] == 'pull_request':
+              require(event['pull_request']['head']['repo']['full_name'] == 'lorconksu/veyport')
+          required = os.environ.get('SONAR_PULL_REQUEST_REQUIRED', '')
+          require(required in ('', 'false', 'true'))
+          os.chdir(source)
+          # -I -S excludes candidate cwd/PYTHONPATH; only the admitted old main helper and
+          # metadata are repository imports. No candidate command/helper is executed.
+          sys.path.insert(0, str(control / 'scripts/release'))
+          helper = runpy.run_path(str(control / 'scripts/release/sonar_context.py'))
+          args = helper['resolve'](os.environ['GITHUB_EVENT_NAME'], event, os.environ['GITHUB_REPOSITORY'],
+                                   os.environ['GITHUB_REF'], revision, required == 'true')
+          require(args == '-Dsonar.branch.name=main' or re.fullmatch(
+              r'-Dsonar.pullrequest.key=[1-9][0-9]* -Dsonar.pullrequest.branch=[A-Za-z0-9_./+@-]{1,240} -Dsonar.pullrequest.base=main', args))
+          with Path(os.environ['GITHUB_OUTPUT']).open('a') as stream:
+              stream.write('gate_args=' + args + '\n')
+          BOOTSTRAP_PY
 
       - uses: SonarSource/sonarqube-scan-action@c7ee0f9df90b7aa20e8dcf9695dcfe2e7da5b4f2 # v7
         with:
+          projectBaseDir: candidate-source
           args: >
+            -Dsonar.host.url=https://sonarcloud.io
             -Dsonar.qualitygate.wait=true
+            -Dsonar.scanner.metadataFilePath=${{ runner.temp }}/bootstrap-sonar/report-task.txt
             -Dsonar.qualitygate.timeout=300
             -Dsonar.scm.revision=${{ github.event.pull_request.head.sha || github.sha }}
-            ${{ steps.sonar-context.outputs.args }}
+            ${{ steps.sonar-context.outputs.gate_args }}
         env:
           SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+          SONAR_HOST_URL: https://sonarcloud.io
           FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
-
-  sast:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
-        with:
-          ref: ${{ github.event.pull_request.head.sha || github.sha }}
-      - name: Verify checked-out source revision
-        shell: bash
-        env:
-          EXPECTED_SOURCE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
-        run: |
-          set -euo pipefail
-          [[ "$EXPECTED_SOURCE_SHA" =~ ^[0-9a-f]{40}$ ]]
-          test "$(git rev-parse HEAD)" = "$EXPECTED_SOURCE_SHA"
-
-      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
-        with:
-          python-version: '3.13'
-
-      - name: Install Semgrep
-        run: pip3 install semgrep==1.180.0
-
-      - name: Semgrep SAST gate
-        run: |
-          set -euo pipefail
-          semgrep scan --strict --timeout 30 --config p/golang --config p/typescript --config p/owasp-top-ten --sarif -o semgrep.sarif . 2>&1 | tee semgrep-output.txt
-          python3 scripts/release/check_scan.py semgrep semgrep.sarif
-
-      - name: Upload SAST evidence
-        if: always()
-        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
-        with:
-          name: semgrep-results
-          path: |
-            semgrep.sarif
-            semgrep-output.txt
 
   secret-scan:
     runs-on: ubuntu-latest
@@ -530,7 +640,7 @@ jobs:
           echo '```' >> "$GITHUB_STEP_SUMMARY"
 
   auto-release:
-    needs: [integration, smoke, e2e, sonarcloud, sast, secret-scan, vulnerability-scan]
+    needs: [integration, smoke, e2e, sonarcloud, secret-scan, vulnerability-scan]
     # Temporary publication hold for the trusted approval bootstrap: no tags or
     # release dispatch until reviewed qualification is complete. Restore only by
     # reviewed PR following docs/security/approval-bootstrap.md.
