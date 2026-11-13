@@ -234,7 +234,56 @@ def revision(directory):
                                    text=True, stderr=subprocess.DEVNULL).strip()
 
 
-def resolver_permissions(root, source):
+def resolver_workspace_scope(root, source, control):
+    """Accept only this job's canonical checkout and temporary-directory layout."""
+    workspace = Path(os.environ.get("GITHUB_WORKSPACE", ""))
+    temporary = Path(os.environ.get("RUNNER_TEMP", ""))
+    common = temporary.parent
+    directories = (root, source, control, workspace, workspace.parent, temporary, common)
+    if (os.environ.get("GITHUB_ACTIONS") != "true"
+            or any(not path.is_absolute() or not path.is_dir() or path.resolve() != path for path in directories)
+            or temporary.name != "_temp" or workspace.parent.parent != common
+            or workspace.name != workspace.parent.name or workspace.parent == temporary
+            or source != workspace / "source" or control != workspace / "diagnostic"
+            or root != temporary / "snyk-runner-trial"
+            or any(path.stat().st_uid != os.geteuid() for path in (root, source, workspace, workspace.parent))):
+        raise ValueError("Unapproved resolver workspace scope or layout")
+    manifest = source / PROJECTS[-1]
+    if manifest.resolve() != manifest or not manifest.is_file():
+        raise ValueError("Unapproved resolver manifest scope")
+    return workspace, temporary, common
+
+
+def resolver_permissions(root, source, control):
+    workspace, temporary, common = resolver_workspace_scope(root, source, control)
+    manifest = source / PROJECTS[-1]
+    # Metadata and UID65534 access results stay only in encrypted raw evidence.
+    paths = dict.fromkeys((*manifest.parents, manifest, root, *root.parents, root / "raw", root / "tools"))
+    paths = [path for path in paths if path.exists()]
+
+    def access_snapshot():
+        modes = {str(path): {"mode": f"{stat.S_IMODE(path.stat().st_mode):04o}", "uid": path.stat().st_uid}
+                 for path in paths}
+        program = ('import json, os, sys; print(json.dumps({p: {"readable": os.access(p, os.R_OK), '
+                   '"searchable": os.path.isdir(p) and os.access(p, os.X_OK)} for p in sys.argv[1:]}))')
+        result = subprocess.run(["/usr/bin/sudo", "-n", "/usr/bin/setpriv", "--reuid=65534", "--regid=65534",
+                                 "--clear-groups", "--no-new-privs", sys.executable, "-I", "-S", "-c", program,
+                                 *map(str, paths)], capture_output=True, text=True, timeout=10)
+        if result.returncode != 0:
+            return {"probe_exit_code": result.returncode, **modes}
+        for name, access in json.loads(result.stdout).items():
+            modes[name].update(access)
+        return {"probe_exit_code": 0, **modes}
+
+    evidence = {"before": access_snapshot()}
+    evidence_path = root / "raw/resolver-path-access.json"
+    write_json(evidence_path, evidence)
+    if (evidence["before"]["probe_exit_code"] != 0
+            or not all(evidence["before"][str(path)]["searchable"] for path in (common, temporary))):
+        raise ValueError("Resolver workspace common ancestry is not traversable")
+    # Grant traversal only below the common runner-work parent; never chmod that parent or home.
+    for directory in (workspace.parent, workspace):
+        directory.chmod(stat.S_IMODE(directory.stat().st_mode) | stat.S_IXOTH)
     # Public dependencies and the pinned Python manifest may be read, never private evidence.
     root.chmod(0o711)
     venv = root / "venv"
@@ -243,15 +292,18 @@ def resolver_permissions(root, source):
             if not path.is_symlink():
                 mode = stat.S_IMODE(path.stat().st_mode)
                 path.chmod(mode | (0o555 if path.is_dir() or mode & 0o111 else 0o444))
-    manifest = source / PROJECTS[-1]
     manifest.chmod(stat.S_IMODE(manifest.stat().st_mode) | 0o444)
     directory = manifest.parent
     while directory != source.parent:
         directory.chmod(stat.S_IMODE(directory.stat().st_mode) | 0o555)
         directory = directory.parent
+    evidence["after"] = access_snapshot()
+    write_json(evidence_path, evidence)
 
 
 def prepare(args, raw):
+    # Reject path/environment mismatches before any preparation permission changes.
+    resolver_workspace_scope(args.root, args.source, args.control)
     if (args.sha not in SOURCES or not re.fullmatch(r"[0-9a-f]{40}", args.control_sha)
             or revision(args.source) != args.sha or revision(args.control) != args.control_sha):
         raise ValueError("Revision verification failed")
@@ -279,7 +331,7 @@ def prepare(args, raw):
         commands.append((["go", "list", "-deps", "./..."], (args.source / project).parent))
     codes = [capture(cmd, cwd, raw / f"prepare-{index}", timeout=600)
              for index, (cmd, cwd) in enumerate(commands)]
-    resolver_permissions(args.root, args.source)
+    resolver_permissions(args.root, args.source, args.control)
     # Check ancestor traversal without opening the runner home or private evidence.
     codes.append(capture(["/usr/bin/sudo", "-n", "/usr/bin/setpriv", "--reuid=65534", "--regid=65534",
                           "--clear-groups", "--no-new-privs", "/usr/bin/test", "-r", args.source / PROJECTS[-1]],

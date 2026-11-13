@@ -4,6 +4,7 @@ import hashlib
 import importlib.util
 import json
 import os
+import stat
 import subprocess
 import sys
 import tarfile
@@ -27,11 +28,100 @@ def report():
 
 
 class AcceptanceTests(unittest.TestCase):
+    def test_resolver_workspace_traversal_preserves_private_evidence(self):
+        with tempfile.TemporaryDirectory() as directory:
+            common = Path(directory)
+            common.chmod(0o755)
+            workspace, temporary = common / "repo/repo", common / "_temp"
+            workspace.mkdir(parents=True)
+            temporary.mkdir()
+            root, source, control = temporary / "snyk-runner-trial", workspace / "source", workspace / "diagnostic"
+            control.mkdir()
+            manifest = source / trial.PROJECTS[-1]
+            manifest.parent.mkdir(parents=True)
+            manifest.write_text("public fixture\n")
+            manifest.chmod(0o444)
+            for name in ("raw", "tools"):
+                (root / name).mkdir(parents=True, mode=0o700)
+                (root / name / "private").write_text("private fixture")
+            workspace.parent.chmod(0o700)
+            workspace.chmod(0o700)
+
+            def access(path, flag):
+                return subprocess.run(["/usr/bin/sudo", "-n", "/usr/bin/setpriv", "--reuid=65534", "--regid=65534",
+                                       "--clear-groups", "--no-new-privs", "/usr/bin/test", flag, path],
+                                      capture_output=True).returncode == 0
+
+            self.assertFalse(access(manifest, "-r"))
+            environment = {"GITHUB_ACTIONS": "true", "GITHUB_WORKSPACE": str(workspace), "RUNNER_TEMP": str(temporary)}
+            with mock.patch.dict(os.environ, environment):
+                trial.resolver_permissions(root, source, control)
+            self.assertTrue(access(manifest, "-r"))
+            self.assertEqual(manifest.read_text(), "public fixture\n")
+            self.assertEqual(stat.S_IMODE(manifest.stat().st_mode), 0o444)
+            for ancestor in (workspace.parent, workspace):
+                self.assertEqual(stat.S_IMODE(ancestor.stat().st_mode), 0o701)
+                self.assertFalse(access(ancestor, "-r"))
+            for name in ("raw", "tools"):
+                self.assertEqual(stat.S_IMODE((root / name).stat().st_mode), 0o700)
+                self.assertFalse(access(root / name / "private", "-r"))
+            evidence = json.loads((root / "raw/resolver-path-access.json").read_text())
+            self.assertFalse(evidence["before"][str(manifest)]["readable"])
+            self.assertTrue(evidence["after"][str(manifest)]["readable"])
+
+    def test_resolver_workspace_scope_rejects_mismatches_without_chmod(self):
+        for invalid in ("workspace", "temporary", "source", "control", "root", "layout", "symlink", "common", "environment"):
+            with self.subTest(invalid=invalid), tempfile.TemporaryDirectory() as directory:
+                common = Path(directory)
+                if invalid != "common":
+                    common.chmod(0o755)
+                workspace, temporary = common / "repo/repo", common / "_temp"
+                workspace.mkdir(parents=True)
+                temporary.mkdir()
+                root, source, control = temporary / "snyk-runner-trial", workspace / "source", workspace / "diagnostic"
+                for path in (root / "raw", source, control):
+                    path.mkdir(parents=True)
+                manifest = source / trial.PROJECTS[-1]
+                manifest.parent.mkdir(parents=True)
+                manifest.write_text("public fixture\n")
+                environment = {"GITHUB_ACTIONS": "true", "GITHUB_WORKSPACE": str(workspace), "RUNNER_TEMP": str(temporary)}
+                if invalid == "workspace":
+                    environment["GITHUB_WORKSPACE"] = str(common)
+                elif invalid == "temporary":
+                    environment["RUNNER_TEMP"] = str(common)
+                elif invalid == "source":
+                    source = control
+                elif invalid == "control":
+                    control = source
+                elif invalid == "root":
+                    root = root / "raw"
+                elif invalid == "layout":
+                    environment["RUNNER_TEMP"] = str(workspace / "_temp")
+                elif invalid == "symlink":
+                    alias = workspace / "alias"
+                    alias.symlink_to(source, target_is_directory=True)
+                    source = alias
+                elif invalid == "environment":
+                    environment["GITHUB_WORKSPACE"] = ""
+                paths = [common, *common.rglob("*")]
+                before = {path: path.lstat().st_mode for path in paths}
+                error = ("^Resolver workspace common ancestry is not traversable$" if invalid == "common"
+                         else "^Unapproved resolver workspace scope or layout$")
+                with mock.patch.dict(os.environ, environment):
+                    with self.assertRaisesRegex(ValueError, error):
+                        trial.resolver_permissions(root, source, control)
+                self.assertEqual({path: path.lstat().st_mode for path in paths}, before)
+
     def test_prepare_cli_gates_on_prerequisites_and_retains_state(self):
         for failure in (None, "dependency", "access", "version", "version-exit", "manifest"):
             with self.subTest(failure=failure), tempfile.TemporaryDirectory() as directory:
-                root = Path(directory)
-                source, control, raw = root / "source", root / "control", root / "raw"
+                common = Path(directory)
+                common.chmod(0o755)
+                workspace, temporary = common / "repo/repo", common / "_temp"
+                workspace.mkdir(parents=True)
+                temporary.mkdir()
+                root = temporary / "snyk-runner-trial"
+                source, control, raw = workspace / "source", workspace / "diagnostic", root / "raw"
                 names = (*trial.PROJECTS, *(p.replace("go.mod", "go.sum") for p in trial.PROJECTS if p.endswith("go.mod")),
                          "web/package-lock.json")
                 for name in names:
@@ -63,7 +153,9 @@ class AcceptanceTests(unittest.TestCase):
                         "--root", str(root), "--scanner", str(root / "scanner"), "--sha", sha, "--control-sha", control_sha]
                 saved_umask = os.umask(0o077)
                 try:
-                    with mock.patch.object(sys, "argv", argv), \
+                    with mock.patch.dict(os.environ, {"GITHUB_ACTIONS": "true", "GITHUB_WORKSPACE": str(workspace),
+                                                      "RUNNER_TEMP": str(temporary)}), \
+                            mock.patch.object(sys, "argv", argv), \
                             mock.patch.object(trial, "revision", side_effect=[sha, control_sha]), \
                             mock.patch.object(trial, "capture", side_effect=external), \
                             mock.patch.object(trial, "scan_projects", side_effect=AssertionError("Scanner started")):
@@ -82,9 +174,14 @@ class AcceptanceTests(unittest.TestCase):
 
     def test_prepare_requires_hash_locked_wheels_and_original_requirements(self):
         with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            source, control, raw = root / "source", root / "control", root / "raw"
-            raw.mkdir()
+            common = Path(directory)
+            common.chmod(0o755)
+            workspace, temporary = common / "repo/repo", common / "_temp"
+            workspace.mkdir(parents=True)
+            temporary.mkdir()
+            root = temporary / "snyk-runner-trial"
+            source, control, raw = workspace / "source", workspace / "diagnostic", root / "raw"
+            raw.mkdir(parents=True, mode=0o700)
             names = (*trial.PROJECTS, *(p.replace("go.mod", "go.sum") for p in trial.PROJECTS if p.endswith("go.mod")),
                      "web/package-lock.json")
             for name in names:
@@ -110,7 +207,9 @@ class AcceptanceTests(unittest.TestCase):
                     prefix.with_suffix(".stdout").write_text(versions[prefix.name.removeprefix("version-")])
                 return 0
 
-            with mock.patch.object(trial, "revision", side_effect=[args.sha, args.control_sha]), \
+            with mock.patch.dict(os.environ, {"GITHUB_ACTIONS": "true", "GITHUB_WORKSPACE": str(workspace),
+                                              "RUNNER_TEMP": str(temporary)}), \
+                    mock.patch.object(trial, "revision", side_effect=[args.sha, args.control_sha]), \
                     mock.patch.object(trial, "capture", side_effect=external):
                 trial.prepare(args, raw)
             state = json.loads((raw / "state.json").read_text())
