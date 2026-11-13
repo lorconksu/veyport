@@ -1,0 +1,185 @@
+# Owner-authorized throwaway diagnostic; success means technical completion only.
+# Findings remain findings. This does not replace any existing required gate.
+name: Snyk runner trial (PR127)
+
+on:
+  push:
+    branches: [diagnostic/snyk-runner-pr127]
+
+permissions:
+  contents: read
+
+jobs:
+  trial:
+    if: github.repository == 'lorconksu/veyport' && github.actor == 'lorconksu' && github.triggering_actor == 'lorconksu' && github.ref == 'refs/heads/diagnostic/snyk-runner-pr127'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 180
+    strategy:
+      fail-fast: false
+      max-parallel: 1
+      matrix:
+        include:
+          - label: base
+            source: 75ab7490e73aee6d4094da7ece988417e92c519d
+          - label: head
+            source: 9add3445d449083319a0d1cb334d13729bccbb85
+    env:
+      GOWORK: 'off'
+      GOFLAGS: -mod=readonly
+      GOTOOLCHAIN: local
+      CONTROL: ${{ github.workspace }}/diagnostic
+      SOURCE: ${{ github.workspace }}/source
+      SOURCE_SHA: ${{ matrix.source }}
+      CONTROL_SHA: ${{ github.sha }}
+      # No lifecycle scripts, secret-bearing caches, or persisted Snyk config.
+      SNYK_CFG_DISABLE_ANALYTICS: '1'
+    steps:
+      - name: Initialize private evidence directory
+        shell: bash
+        run: |
+          set -euo pipefail
+          umask 077
+          trial_root="$RUNNER_TEMP/snyk-runner-trial"
+          printf 'TRIAL_ROOT=%s\n' "$trial_root" >> "$GITHUB_ENV"
+          mkdir -p "$trial_root/raw" "$trial_root/tools"
+
+      - name: Checkout diagnostic helper separately
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          ref: ${{ github.sha }}
+          path: diagnostic
+          persist-credentials: false
+
+      - name: Checkout exact unchanged source
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          ref: ${{ matrix.source }}
+          path: source
+          persist-credentials: false
+
+      - name: Verify both source revisions
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "$CONTROL_SHA" =~ ^[0-9a-f]{40}$ ]]
+          test "$(git -C "$CONTROL" rev-parse HEAD)" = "$CONTROL_SHA"
+          test "$(git -C "$SOURCE" rev-parse HEAD)" = "$SOURCE_SHA"
+
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
+        with:
+          go-version-file: source/hub/go.mod
+          cache: false
+
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: 25
+          package-manager-cache: false
+
+      - name: Install Python, age, and checksummed official Snyk binary before credentials
+        shell: bash
+        run: |
+          set -euo pipefail
+          umask 077
+          # Ubuntu 24.04's authenticated apt repositories supply Python 3.12 and age.
+          # All bootstrap output stays private and is included in encrypted evidence.
+          {
+            sudo apt-get update -qq
+            sudo apt-get install -y -qq age python3.12-venv
+            curl --fail --silent --show-error --location --proto '=https' \
+              --connect-timeout 10 --max-time 180 \
+              https://downloads.snyk.io/cli/v1.1308.3/snyk-linux \
+              -o "$TRIAL_ROOT/tools/snyk"
+            printf '%s  %s\n' \
+              5f323f45885341ea1473639859271925912ece82a2f77bc146bb4468f9838840 \
+              "$TRIAL_ROOT/tools/snyk" | sha256sum --check --status
+            chmod 0700 "$TRIAL_ROOT/tools/snyk"
+            test "$("$TRIAL_ROOT/tools/snyk" --version)" = 1.1308.3
+          } >"$TRIAL_ROOT/raw/bootstrap.stdout" 2>"$TRIAL_ROOT/raw/bootstrap.stderr"
+
+      - name: Test diagnostic privacy and resolver boundaries before credentials
+        shell: bash
+        run: |
+          set -euo pipefail
+          umask 077
+          {
+            test "$(id -u)" -ne 0
+            sudo -n /usr/bin/true
+            cd "$CONTROL"
+            # Cross-UID tests create public synthetic probes; log files are already private.
+            (
+              umask 022
+              PYTHONDONTWRITEBYTECODE=1 /usr/bin/python3.12 -m unittest discover \
+                -s scripts/diagnostics -p 'test_*.py'
+            )
+          } >"$TRIAL_ROOT/raw/tests.stdout" 2>"$TRIAL_ROOT/raw/tests.stderr"
+
+      - name: Prepare dependencies and record provenance before credentials
+        shell: bash
+        run: |
+          set -euo pipefail
+          umask 077
+          /usr/bin/python3.12 -I "$CONTROL/scripts/diagnostics/snyk_runner_trial.py" prepare \
+            --source "$SOURCE" --control "$CONTROL" --sha "$SOURCE_SHA" \
+            --control-sha "$CONTROL_SHA" --root "$TRIAL_ROOT" --scanner "$TRIAL_ROOT/tools/snyk"
+
+      - name: Attempt all seven scans with private output
+        id: scan
+        shell: bash
+        env:
+          SNYK_TOKEN: ${{ secrets.SNYK_TOKEN }}
+        run: |
+          set -euo pipefail
+          umask 077
+          /usr/bin/python3.12 -I "$CONTROL/scripts/diagnostics/snyk_runner_trial.py" scan \
+            --source "$SOURCE" --control "$CONTROL" --sha "$SOURCE_SHA" \
+            --control-sha "$CONTROL_SHA" --root "$TRIAL_ROOT" --scanner "$TRIAL_ROOT/tools/snyk"
+
+      - name: Encrypt raw evidence and build allowlisted public summary
+        id: encrypt
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          umask 077
+          /usr/bin/python3.12 -I "$CONTROL/scripts/diagnostics/snyk_runner_trial.py" seal \
+            --source "$SOURCE" --control "$CONTROL" --sha "$SOURCE_SHA" \
+            --control-sha "$CONTROL_SHA" --root "$TRIAL_ROOT" --scanner "$TRIAL_ROOT/tools/snyk"
+
+      - name: Upload only ciphertext and sanitized counts
+        id: upload
+        if: always() && steps.encrypt.outcome == 'success'
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: snyk-runner-trial-${{ matrix.label }}-${{ matrix.source }}
+          path: |
+            ${{ runner.temp }}/snyk-runner-trial/public/evidence.tar.gz.age
+            ${{ runner.temp }}/snyk-runner-trial/public/summary.json
+          if-no-files-found: error
+          retention-days: 3
+
+      - name: Publish sanitized technical summary
+        if: always() && steps.encrypt.outcome == 'success'
+        shell: bash
+        run: |
+          set -euo pipefail
+          cat "$TRIAL_ROOT/public/summary.json" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Require completed scans and encrypted evidence upload
+        if: always()
+        shell: bash
+        env:
+          SCAN_OUTCOME: ${{ steps.scan.outcome }}
+          ENCRYPT_OUTCOME: ${{ steps.encrypt.outcome }}
+          UPLOAD_OUTCOME: ${{ steps.upload.outcome }}
+        run: |
+          set -euo pipefail
+          test "$SCAN_OUTCOME" = success
+          test "$ENCRYPT_OUTCOME" = success
+          test "$UPLOAD_OUTCOME" = success
+
+      - name: Best-effort plaintext cleanup
+        if: always()
+        shell: bash
+        run: |
+          rm -rf -- "$TRIAL_ROOT/raw" "$TRIAL_ROOT/venv"
+          rm -f -- "$TRIAL_ROOT/evidence.tar.gz" "$TRIAL_ROOT/encryption.stdout" "$TRIAL_ROOT/encryption.stderr"
