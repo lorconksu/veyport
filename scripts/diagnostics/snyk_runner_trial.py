@@ -25,13 +25,12 @@ SOURCES = {
     "75ab7490e73aee6d4094da7ece988417e92c519d": "1.26.10",
     "9add3445d449083319a0d1cb334d13729bccbb85": "1.26.11",
 }
-CLI_VERSION = "1.1308.3"
 ORG = "28d5c9da-7ca3-45df-954e-9d83d811ae0d"
 RECIPIENT = "age1xr200qhckma63jw9rwsemeca4ypc02r9cpkr6kk8t4k6f30lka6q824feg"
 PYTHON_REQUIREMENTS_SHA256 = "62b9aed312adedeba09dcc1e858e70831c0f955c976edc1ccc90457cc51adc52"
 COMPLETE = {"scan_complete_clean", "scan_complete_with_findings"}
 VERSION_PATTERNS = {
-    "snyk": r"1\.1308\.3", "go": r"go1\.26\.(10|11)",
+    "snyk": r"(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)", "go": r"go1\.26\.(10|11)",
     "node": r"v25\.\d+\.\d+", "npm": r"\d+\.\d+\.\d+",
     "python": r"Python 3\.12\.\d+", "age": r"v?\d+\.\d+\.\d+",
 }
@@ -389,6 +388,24 @@ def cleanup_public_workspace(public_root):
     shutil.rmtree(public_root)
 
 
+def verify_snyk_resolution(raw, scanner):
+    """Detect intermediate client changes relative to the private bootstrap record."""
+    resolution = load_report(raw / "snyk-cli.json")
+    if (type(resolution) is not dict or resolution.get("verified") is not True
+            or type(resolution.get("version")) is not str
+            or not re.fullmatch(VERSION_PATTERNS["snyk"], resolution["version"])
+            or resolution.get("url") != f'https://downloads.snyk.io/cli/v{resolution["version"]}/snyk-linux'
+            or any(type(resolution.get(key)) is not str or not re.fullmatch(r"[0-9a-f]{64}", resolution[key])
+                   for key in ("expected_sha256", "actual_sha256"))
+            or resolution["expected_sha256"] != resolution["actual_sha256"]):
+        raise ValueError("Snyk bootstrap resolution invalid")
+    with scanner.open("rb") as binary:
+        digest = hashlib.file_digest(binary, "sha256").hexdigest()
+    if digest != resolution["actual_sha256"]:
+        raise ValueError("Snyk bootstrap scanner hash mismatch")
+    return resolution["version"]
+
+
 def prepare(args, raw):
     # Validate the dedicated public scope before any dependency or permission mutation.
     public_workspace_scope(args.public_root, empty=True)
@@ -429,6 +446,7 @@ def prepare(args, raw):
     python_command = python_resolver_command(raw, args.public_root / "venv/bin/python", args.public_root)
     private_tmp = raw / "snyk-tmp"
     private_tmp.mkdir(mode=0o700, exist_ok=True)
+    resolved_version = verify_snyk_resolution(raw, args.scanner)
     version_commands = {
         "snyk": [args.scanner, "--version"], "go": ["go", "version"],
         "node": ["node", "--version"], "npm": ["npm", "--version"],
@@ -446,6 +464,7 @@ def prepare(args, raw):
     state.update(preparation_exit_codes=codes, manifests_unchanged=unchanged,
                  preparation_complete=all(code == 0 for code in codes) and unchanged
                  and all(value != "unavailable" for value in state["versions"].values())
+                 and state["versions"]["snyk"] == resolved_version
                  and state["versions"]["go"] == "go" + SOURCES[args.sha])
     write_json(raw / "state.json", state)
     # Preserve failed preparation evidence while preventing the credential-bearing step.
@@ -462,6 +481,9 @@ def scan(args, raw):
     verify_python_mirror(args.public_root, args.source, args.sha, state.get("python_mirror"))
     if manifest_hashes(args.source) != state["manifest_hashes"]:
         raise ValueError("Scan manifests changed after preparation")
+    resolved_version = verify_snyk_resolution(raw, args.scanner)
+    if state.get("versions", {}).get("snyk") != resolved_version:
+        raise ValueError("Snyk bootstrap prepared version mismatch")
     state["projects"] = scan_projects(args.source, args.scanner, raw, args.public_root / "venv/bin/python", args.public_root)
     state["manifests_unchanged"] = manifest_hashes(args.source) == state["manifest_hashes"]
     write_json(raw / "state.json", state)

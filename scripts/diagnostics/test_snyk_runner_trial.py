@@ -32,6 +32,20 @@ SOURCE_SHA = "9add3445d449083319a0d1cb334d13729bccbb85"
 PYTHON_REQUIREMENTS = b"boto3==1.40.72\ncryptography==46.0.5\n"
 
 
+def scanner_resolution(raw, scanner, version="1.1308.3"):
+    raw.mkdir(parents=True, exist_ok=True)
+    if not scanner.exists():
+        scanner.write_text("#!/bin/sh\nprintf executed >> " + shlex.quote(str(raw / "scanner-executed"))
+                           + "\nprintf '%s\\n' " + shlex.quote(version) + "\n")
+        scanner.chmod(0o700)
+    digest = hashlib.sha256(scanner.read_bytes()).hexdigest()
+    resolution = {"verified": True, "version": version,
+                  "url": f"https://downloads.snyk.io/cli/v{version}/snyk-linux",
+                  "expected_sha256": digest, "actual_sha256": digest}
+    trial.write_json(raw / "snyk-cli.json", resolution)
+    return resolution
+
+
 class AcceptanceTests(unittest.TestCase):
     def setUp(self):
         self.addCleanup(os.umask, os.umask(0o022))
@@ -194,6 +208,7 @@ class AcceptanceTests(unittest.TestCase):
                 lock = control / "scripts/diagnostics/snyk_runner_trial_requirements.lock"
                 lock.parent.mkdir(parents=True)
                 lock.write_text("synthetic lock provenance\n")
+                scanner_resolution(raw, root / "scanner")
                 sha, control_sha = "9add3445d449083319a0d1cb334d13729bccbb85", "a" * 40
                 versions = {"snyk": "1.1308.3", "go": "go version go1.26.11 linux/amd64", "node": "v25.2.0",
                             "npm": "11.6.2", "python": "Python 3.12.13", "age": "v1.2.1"}
@@ -256,6 +271,7 @@ class AcceptanceTests(unittest.TestCase):
             lock = control / "scripts/diagnostics/snyk_runner_trial_requirements.lock"
             lock.parent.mkdir(parents=True)
             lock.write_text("synthetic lock provenance\n")
+            scanner_resolution(raw, root / "scanner")
             original = (source / trial.PROJECTS[-1]).read_bytes()
             args = SimpleNamespace(source=source, control=control, root=root, public_root=public_root, scanner=root / "scanner",
                                    sha="9add3445d449083319a0d1cb334d13729bccbb85", control_sha="a" * 40)
@@ -364,6 +380,262 @@ class AcceptanceTests(unittest.TestCase):
         self.assertNotIn("PRIVATE", json.dumps(trial.public_summary(poisoned)))
 
 
+class ScannerBindingTests(unittest.TestCase):
+    def fixture(self, root, public_root):
+        source, control, raw = root / "source", root / "control", root / "raw"
+        names = (*trial.PROJECTS, *(p.replace("go.mod", "go.sum") for p in trial.PROJECTS if p.endswith("go.mod")),
+                 "web/package-lock.json")
+        for name in names:
+            path = source / name
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_bytes(PYTHON_REQUIREMENTS if name == trial.PROJECTS[-1] else b"fixture\n")
+        lock = control / "scripts/diagnostics/snyk_runner_trial_requirements.lock"
+        lock.parent.mkdir(parents=True)
+        lock.write_text("synthetic lock provenance\n")
+        args = SimpleNamespace(source=source, control=control, root=root, public_root=public_root,
+                               scanner=root / "scanner", sha=SOURCE_SHA, control_sha="a" * 40)
+        resolution = scanner_resolution(raw, args.scanner)
+        return args, raw, resolution
+
+    def prepare(self, args, raw, *, tamper_during_dependencies=False):
+        capture = trial.capture
+        versions = {"go": "go version go1.26.11 linux/amd64", "node": "v25.2.0", "npm": "11.6.2",
+                    "python": "Python 3.12.13", "age": "v1.2.1"}
+
+        def external(command, cwd, prefix, timeout, **options):
+            if tamper_during_dependencies and prefix.name == "prepare-7":
+                args.scanner.write_text(args.scanner.read_text() + "# changed during preparation\n")
+            if prefix.name == "version-snyk":
+                return capture(command, cwd, prefix, timeout, **options)
+            if prefix.name.startswith("version-"):
+                prefix.with_suffix(".stdout").write_text(versions[prefix.name.removeprefix("version-")])
+            return 0
+
+        with mock.patch.object(trial, "revision", side_effect=[args.sha, args.control_sha]), \
+                mock.patch.object(trial, "resolver_permissions"), \
+                mock.patch.object(trial, "capture", side_effect=external):
+            return trial.prepare(args, raw)
+
+    def invalidate(self, failure, raw, scanner, resolution):
+        path = raw / "snyk-cli.json"
+        if failure == "missing":
+            path.unlink()
+        elif failure == "malformed":
+            path.write_text("not JSON")
+        elif failure == "duplicate":
+            path.write_text('{"verified":false,' + json.dumps(resolution)[1:])
+        elif failure == "tampered":
+            scanner.write_text(scanner.read_text() + "# changed after bootstrap\n")
+        else:
+            field, value = {
+                "unverified": ("verified", False), "truthy": ("verified", 1),
+                "version": ("version", "1.2.3-beta"), "version-type": ("version", 123),
+                "hash": ("actual_sha256", "not a hash"), "hash-type": ("actual_sha256", 123),
+                "mismatch": ("expected_sha256", "0" * 64), "url": ("url", "https://evil.example/snyk"),
+            }[failure]
+            resolution[field] = value
+            trial.write_json(path, resolution)
+
+    def test_prepare_rejects_invalid_bootstrap_resolution_before_version_execution(self):
+        for failure in ("missing", "malformed", "duplicate", "unverified", "truthy", "version", "version-type",
+                        "hash", "hash-type", "mismatch", "url", "tampered", "dependency-tamper"):
+            with self.subTest(failure=failure), tempfile.TemporaryDirectory() as directory, tempfile.TemporaryDirectory(
+                    prefix="veyport-snyk-public.", dir="/tmp") as public_directory:
+                args, raw, resolution = self.fixture(Path(directory), Path(public_directory))
+                if failure != "dependency-tamper":
+                    self.invalidate(failure, raw, args.scanner, resolution)
+                with self.assertRaisesRegex(ValueError, "Snyk bootstrap"):
+                    self.prepare(args, raw, tamper_during_dependencies=failure == "dependency-tamper")
+                self.assertFalse((raw / "scanner-executed").exists())
+                self.assertFalse(json.loads((raw / "state.json").read_text())["preparation_complete"])
+
+    def test_prepare_binds_observed_version_to_bootstrap_resolution(self):
+        with tempfile.TemporaryDirectory() as directory, tempfile.TemporaryDirectory(
+                prefix="veyport-snyk-public.", dir="/tmp") as public_directory:
+            args, raw, resolution = self.fixture(Path(directory), Path(public_directory))
+            resolution.update(version="1.1308.4", url="https://downloads.snyk.io/cli/v1.1308.4/snyk-linux")
+            trial.write_json(raw / "snyk-cli.json", resolution)
+            self.assertFalse(self.prepare(args, raw))
+            self.assertEqual((raw / "scanner-executed").read_text(), "executed")
+            state = json.loads((raw / "state.json").read_text())
+            self.assertEqual(state["versions"]["snyk"], "1.1308.3")
+            self.assertFalse(state["preparation_complete"])
+
+    def test_scan_rechecks_bootstrap_binding_immediately_before_scanner(self):
+        for failure in (None, "missing", "malformed", "duplicate", "unverified", "truthy", "version", "version-type",
+                        "hash", "hash-type", "mismatch", "url", "tampered", "prepared-version"):
+            with self.subTest(failure=failure), tempfile.TemporaryDirectory() as directory, tempfile.TemporaryDirectory(
+                    prefix="veyport-snyk-public.", dir="/tmp") as public_directory:
+                args, raw, resolution = self.fixture(Path(directory), Path(public_directory))
+                self.assertTrue(self.prepare(args, raw))
+                (raw / "scanner-executed").unlink()
+                if failure == "prepared-version":
+                    state = json.loads((raw / "state.json").read_text())
+                    state["versions"]["snyk"] = "1.1308.4"
+                    trial.write_json(raw / "state.json", state)
+                elif failure:
+                    self.invalidate(failure, raw, args.scanner, resolution)
+
+                def scans(*unused):
+                    if failure:
+                        self.fail("Scanner started with invalid bootstrap binding")
+                    (raw / "scanner-executed").write_text("scanned")
+                    return [{"path": path, "status": "scan_complete_clean"} for path in trial.PROJECTS]
+
+                with mock.patch.object(trial, "revision", side_effect=[args.sha, args.control_sha]), \
+                        mock.patch.object(trial, "scan_projects", side_effect=scans):
+                    if failure:
+                        with self.assertRaisesRegex(ValueError, "Snyk bootstrap"):
+                            trial.scan(args, raw)
+                        self.assertFalse((raw / "scanner-executed").exists())
+                    else:
+                        self.assertTrue(trial.scan(args, raw))
+                        self.assertEqual((raw / "scanner-executed").read_text(), "scanned")
+
+
+class LatestClientTests(unittest.TestCase):
+    def fixture(self, directory, *, version="2.3.4", printed_version=None):
+        root = Path(directory)
+        (root / "raw").mkdir()
+        (root / "tools").mkdir()
+        fixtures = root / "fixtures"
+        fixtures.mkdir()
+        # Execution leaves a marker; a bad digest must never create it.
+        binary = ("#!/bin/sh\nprintf executed >> " + shlex.quote(str(root / "executed"))
+                  + "\nprintf '%s' \"${SNYK_TMP_PATH-}\" > " + shlex.quote(str(root / "bootstrap-tmp-path"))
+                  + "\npwd > " + shlex.quote(str(root / "bootstrap-cwd"))
+                  + "\nprintf '%s\\n' " + shlex.quote(printed_version or version) + "\n").encode()
+        (fixtures / "binary").write_bytes(binary)
+        metadata = {"version": version, "schemaVersion": 1, "assets": {"snyk-linux": {
+            "url": f"https://downloads.snyk.io/cli/v{version}/snyk-linux",
+            "sha256": hashlib.sha256(binary).hexdigest() + "  snyk-linux",
+            "sha256Url": f"https://downloads.snyk.io/cli/v{version}/snyk-linux.sha256"}}}
+        fake_bin = root / "bin"
+        fake_bin.mkdir()
+        curl = fake_bin / "curl"
+        curl.write_text("#!" + sys.executable + r'''
+import json, os, pathlib, sys
+args = sys.argv[1:]
+root = pathlib.Path(os.environ["DOWNLOAD_FIXTURE"])
+with (root / "requests.jsonl").open("a") as log:
+    print(json.dumps(args), file=log)
+assert args[:6] == ["--fail", "--silent", "--show-error", "--location", "--proto", "=https"]
+assert args[6:12] == ["--proto-redir", "=https", "--connect-timeout", "10", "--max-time", "180"]
+url, option, target = args[12:]
+assert option == "--output"
+if url == "https://downloads.snyk.io/cli/stable/release.json":
+    name = "release.json"
+elif url == json.loads((root / "fixtures/release.json").read_text())["assets"]["snyk-linux"]["url"]:
+    name = "binary"
+else:
+    sys.exit(5)
+if os.environ.get("FAIL_DOWNLOAD") == name:
+    sys.exit(22)
+pathlib.Path(target).write_bytes((root / "fixtures" / name).read_bytes())
+''')
+        curl.chmod(0o700)
+        return root, metadata
+
+    def bootstrap(self, root, metadata, *, fail_download=""):
+        (root / "fixtures/release.json").write_text(metadata if isinstance(metadata, str) else json.dumps(metadata))
+        helper = Path(__file__).with_name("snyk_latest_cli.py")
+        # No inherited credentials or configuration: model precredential bootstrap.
+        environment = {"PATH": str(root / "bin") + ":/usr/bin:/bin", "DOWNLOAD_FIXTURE": str(root),
+                       "FAIL_DOWNLOAD": fail_download}
+        return subprocess.run([sys.executable, "-I", str(helper), "--root", str(root)],
+                              env=environment, capture_output=True, text=True, timeout=10)
+
+    def test_latest_metadata_download_is_verified_before_execution_and_keeps_evidence(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root, metadata = self.fixture(directory)
+            result = self.bootstrap(root, metadata)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(result.stdout + result.stderr, "")
+            self.assertEqual((root / "executed").read_text(), "executed")
+            self.assertEqual(stat.S_IMODE((root / "tools/snyk").stat().st_mode), 0o700)
+            self.assertEqual(json.loads((root / "raw/snyk-release.json").read_text()), metadata)
+            resolution = json.loads((root / "raw/snyk-cli.json").read_text())
+            self.assertEqual(resolution, {"version": "2.3.4", "url": "https://downloads.snyk.io/cli/v2.3.4/snyk-linux",
+                                         "expected_sha256": hashlib.sha256((root / "fixtures/binary").read_bytes()).hexdigest(),
+                                         "actual_sha256": hashlib.sha256((root / "tools/snyk").read_bytes()).hexdigest(),
+                                         "verified": True})
+            self.assertEqual((root / "raw/snyk-version.stdout").read_text(), "2.3.4\n")
+            self.assertEqual((root / "bootstrap-tmp-path").read_text(), str(root / "raw/snyk-bootstrap-tmp"))
+            self.assertEqual((root / "bootstrap-cwd").read_text(), str(root / "raw") + "\n")
+            self.assertEqual(stat.S_IMODE((root / "raw/snyk-bootstrap-tmp").stat().st_mode), 0o700)
+            requests = [json.loads(line)[12] for line in (root / "requests.jsonl").read_text().splitlines()]
+            self.assertEqual(requests, ["https://downloads.snyk.io/cli/stable/release.json",
+                                       "https://downloads.snyk.io/cli/v2.3.4/snyk-linux"])
+
+    def test_malformed_metadata_aborts_before_binary_download_or_execution(self):
+        mutations = [
+            ("version", value) for value in ("1.2.3-beta", "1.2.3\n", "v1.2.3", "01.2.3", "1.2", "١.2.3", None, 123)
+        ] + [("url", value) for value in (
+            "http://downloads.snyk.io/cli/v2.3.4/snyk-linux", "https://evil.example/cli/v2.3.4/snyk-linux",
+            "https://downloads.snyk.io.evil.example/cli/v2.3.4/snyk-linux", "https://downloads.snyk.io/cli/stable/snyk-linux",
+            "https://downloads.snyk.io/cli/v2.3.5/snyk-linux", "https://downloads.snyk.io/cli/v2.3.4/snyk-linux?x=1",
+            "https://downloads.snyk.io/cli/v2.3.4/snyk-macos", None,
+        )] + [("sha256", value) for value in ("a" * 64, "g" * 64 + "  snyk-linux", "a" * 64 + "  snyk-macos",
+                                              "a" * 64 + "  snyk-linux\n", None)] + [
+            ("sha256Url", "https://evil.example/snyk-linux.sha256"), ("schemaVersion", 2),
+            ("assets", {}), ("assets", []), ("asset", []), ("schemaVersion", True),
+        ]
+        for field, value in mutations:
+            with self.subTest(field=field, value=value), tempfile.TemporaryDirectory() as directory:
+                root, metadata = self.fixture(directory)
+                if field in ("version", "schemaVersion", "assets"):
+                    metadata[field] = value
+                elif field == "asset":
+                    metadata["assets"]["snyk-linux"] = value
+                else:
+                    metadata["assets"]["snyk-linux"][field] = value
+                result = self.bootstrap(root, metadata)
+                self.assertNotEqual(result.returncode, 0)
+                self.assertFalse((root / "executed").exists())
+                self.assertFalse((root / "tools/snyk").exists())
+                self.assertTrue((root / "requests.jsonl").exists(), result.stderr)
+                self.assertEqual(len((root / "requests.jsonl").read_text().splitlines()), 1)
+
+    def test_checksum_mismatch_never_executes_binary_or_keeps_cached_client(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root, metadata = self.fixture(directory)
+            metadata["assets"]["snyk-linux"]["sha256"] = "0" * 64 + "  snyk-linux"
+            (root / "tools/snyk").write_text("old cached binary")
+            result = self.bootstrap(root, metadata)
+            self.assertNotEqual(result.returncode, 0)
+            self.assertFalse((root / "executed").exists())
+            self.assertFalse((root / "tools/snyk").exists())
+            self.assertFalse((root / "tools/snyk.download").exists())
+
+    def test_malformed_or_ambiguous_json_aborts_before_binary_download(self):
+        for failure in ("broken", "null", "[]", "duplicate"):
+            with self.subTest(failure=failure), tempfile.TemporaryDirectory() as directory:
+                root, metadata = self.fixture(directory)
+                contents = ('{"version":"9.9.9",' + json.dumps(metadata)[1:]) if failure == "duplicate" else failure
+                result = self.bootstrap(root, contents)
+                self.assertNotEqual(result.returncode, 0)
+                self.assertFalse((root / "executed").exists())
+                self.assertEqual(len((root / "requests.jsonl").read_text().splitlines()), 1)
+
+    def test_wrong_binary_version_and_failed_downloads_abort_without_fallback(self):
+        for failure in ("version", "release.json", "binary"):
+            with self.subTest(failure=failure), tempfile.TemporaryDirectory() as directory:
+                root, metadata = self.fixture(directory, printed_version="9.9.9" if failure == "version" else None)
+                (root / "tools/snyk").write_text("old cached binary")
+                result = self.bootstrap(root, metadata, fail_download=failure)
+                self.assertNotEqual(result.returncode, 0)
+                self.assertEqual((root / "executed").exists(), failure == "version")
+                self.assertFalse((root / "tools/snyk").exists())
+                self.assertFalse((root / "tools/snyk.download").exists())
+
+    def test_public_version_accepts_stable_updates_and_rejects_untrusted_text(self):
+        for version in ("1.1308.4", "2.0.0", "0.1.0", "1.2.3-beta", "01.2.3", "1.2.3\n", "١.2.3", "PRIVATE", 123):
+            with self.subTest(version=version):
+                state = {"source_sha": SOURCE_SHA, "versions": {"snyk": version}}
+                expected = version if version in ("1.1308.4", "2.0.0", "0.1.0") else "unavailable"
+                self.assertEqual(trial.public_summary(state)["versions"]["snyk"], expected)
+
+
 class ExecutionTests(unittest.TestCase):
     def setUp(self):
         self.addCleanup(os.umask, os.umask(0o022))
@@ -405,6 +677,7 @@ else:
     output.write_text(json.dumps({"ok":True,"dependencyCount":12,"vulnerabilities":[],"licensesPolicy":{"orgLicenseRules":None,"severities":None},"org":"lorconksu","targetFile":target,"packageManager":manager}))
 ''')
             scanner.chmod(0o700)
+            scanner_resolution(raw, scanner)
             args = SimpleNamespace(source=source, control=control, root=root, public_root=public_root,
                                    scanner=scanner, sha=SOURCE_SHA, control_sha="a" * 40)
             versions = {"go": "go version go1.26.11 linux/amd64", "node": "v25.2.0",
@@ -530,7 +803,9 @@ sys.exit(2)
 ''')
             scanner.chmod(0o700)
             sha, control_sha = "9add3445d449083319a0d1cb334d13729bccbb85", "a" * 40
+            scanner_resolution(raw, scanner)
             trial.write_json(raw / "state.json", {"source_sha": sha, "control_sha": control_sha,
+                                                   "versions": {"snyk": "1.1308.3"},
                                                    "preparation_complete": True, "manifest_hashes": {},
                                                    "python_mirror": trial.create_python_mirror(public_root, source, sha)})
             args = SimpleNamespace(root=root, source=source, control=root / "control", scanner=scanner,

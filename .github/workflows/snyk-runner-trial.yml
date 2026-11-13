@@ -85,15 +85,8 @@ jobs:
           {
             sudo apt-get update -qq
             sudo apt-get install -y -qq age python3.12-venv
-            curl --fail --silent --show-error --location --proto '=https' \
-              --connect-timeout 10 --max-time 180 \
-              https://downloads.snyk.io/cli/v1.1308.3/snyk-linux \
-              -o "$TRIAL_ROOT/tools/snyk"
-            printf '%s  %s\n' \
-              5f323f45885341ea1473639859271925912ece82a2f77bc146bb4468f9838840 \
-              "$TRIAL_ROOT/tools/snyk" | sha256sum --check --status
-            chmod 0700 "$TRIAL_ROOT/tools/snyk"
-            test "$("$TRIAL_ROOT/tools/snyk" --version)" = 1.1308.3
+            /usr/bin/python3.12 -I "$CONTROL/scripts/diagnostics/snyk_latest_cli.py" \
+              --root "$TRIAL_ROOT"
           } >"$TRIAL_ROOT/raw/bootstrap.stdout" 2>"$TRIAL_ROOT/raw/bootstrap.stderr"
 
       - name: Test diagnostic privacy and resolver boundaries before credentials
