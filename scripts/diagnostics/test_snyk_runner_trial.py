@@ -4,6 +4,7 @@ import hashlib
 import importlib.util
 import json
 import os
+import shlex
 import stat
 import subprocess
 import sys
@@ -27,95 +28,157 @@ def report():
             "targetFile": "go.mod", "packageManager": "gomodules", "org": "lorconksu"}
 
 
+SOURCE_SHA = "9add3445d449083319a0d1cb334d13729bccbb85"
+PYTHON_REQUIREMENTS = b"boto3==1.40.72\ncryptography==46.0.5\n"
+
+
 class AcceptanceTests(unittest.TestCase):
-    def test_resolver_workspace_traversal_preserves_private_evidence(self):
-        with tempfile.TemporaryDirectory() as directory:
-            common = Path(directory)
-            common.chmod(0o755)
-            workspace, temporary = common / "repo/repo", common / "_temp"
-            workspace.mkdir(parents=True)
-            temporary.mkdir()
-            root, source, control = temporary / "snyk-runner-trial", workspace / "source", workspace / "diagnostic"
-            control.mkdir()
+    def setUp(self):
+        self.addCleanup(os.umask, os.umask(0o022))
+
+    def test_public_python_workspace_bypasses_private_home_without_permission_changes(self):
+        with tempfile.TemporaryDirectory() as directory, tempfile.TemporaryDirectory(
+                prefix="veyport-snyk-public.", dir="/tmp") as public_directory:
+            home, public_root = Path(directory), Path(public_directory)
+            home.chmod(0o750)
+            source, root = home / "work/repo/source", home / "work/_temp/snyk-runner-trial"
             manifest = source / trial.PROJECTS[-1]
             manifest.parent.mkdir(parents=True)
-            manifest.write_text("public fixture\n")
-            manifest.chmod(0o444)
+            manifest.write_bytes(PYTHON_REQUIREMENTS)
             for name in ("raw", "tools"):
                 (root / name).mkdir(parents=True, mode=0o700)
                 (root / name / "private").write_text("private fixture")
-            workspace.parent.chmod(0o700)
-            workspace.chmod(0o700)
-
-            def access(path, flag):
-                return subprocess.run(["/usr/bin/sudo", "-n", "/usr/bin/setpriv", "--reuid=65534", "--regid=65534",
-                                       "--clear-groups", "--no-new-privs", "/usr/bin/test", flag, path],
-                                      capture_output=True).returncode == 0
-
-            self.assertFalse(access(manifest, "-r"))
-            environment = {"GITHUB_ACTIONS": "true", "GITHUB_WORKSPACE": str(workspace), "RUNNER_TEMP": str(temporary)}
-            with mock.patch.dict(os.environ, environment):
-                trial.resolver_permissions(root, source, control)
-            self.assertTrue(access(manifest, "-r"))
-            self.assertEqual(manifest.read_text(), "public fixture\n")
-            self.assertEqual(stat.S_IMODE(manifest.stat().st_mode), 0o444)
-            for ancestor in (workspace.parent, workspace):
-                self.assertEqual(stat.S_IMODE(ancestor.stat().st_mode), 0o701)
-                self.assertFalse(access(ancestor, "-r"))
-            for name in ("raw", "tools"):
-                self.assertEqual(stat.S_IMODE((root / name).stat().st_mode), 0o700)
-                self.assertFalse(access(root / name / "private", "-r"))
+            root.chmod(0o700)
+            original_modes = {p: p.lstat().st_mode for p in (home, *home.rglob("*"))}
+            binding = trial.create_python_mirror(public_root, source, SOURCE_SHA)
+            subprocess.run([sys.executable, "-m", "venv", "--copies", "--without-pip", str(public_root / "venv")], check=True)
+            trial.resolver_permissions(root, source, public_root)
+            wrapper = trial.python_resolver_command(root / "raw", public_root / "venv/bin/python", public_root)
+            assets = public_root / "resolver-assets/fixture"
+            assets.mkdir(mode=0o700)
+            script = assets / "pip_resolve.py"
+            script.write_text("import pathlib; print(pathlib.Path('requirements.txt').read_text(), end='')")
+            code = trial.capture([wrapper, script], (public_root / "mirror" / trial.PROJECTS[-1]).parent,
+                                 root / "raw/actual-resolution", timeout=10)
+            self.assertEqual(code, 0)
+            self.assertEqual((root / "raw/actual-resolution.stdout").read_bytes(), PYTHON_REQUIREMENTS)
+            self.assertEqual({p: p.lstat().st_mode for p in original_modes}, original_modes)
+            self.assertEqual(stat.S_IMODE(root.stat().st_mode), 0o700)
+            self.assertEqual(binding, trial.verify_python_mirror(public_root, source, SOURCE_SHA, binding))
             evidence = json.loads((root / "raw/resolver-path-access.json").read_text())
-            self.assertFalse(evidence["before"][str(manifest)]["readable"])
-            self.assertTrue(evidence["after"][str(manifest)]["readable"])
+            self.assertFalse(evidence["after"][str(manifest)]["readable"])
+            self.assertTrue(evidence["after"][str(public_root / "mirror" / trial.PROJECTS[-1])]["readable"])
+            for name in ("raw", "tools"):
+                self.assertFalse(evidence["after"][str(root / name)]["searchable"])
 
-    def test_resolver_workspace_scope_rejects_mismatches_without_chmod(self):
-        for invalid in ("workspace", "temporary", "source", "control", "root", "layout", "symlink", "common", "environment"):
-            with self.subTest(invalid=invalid), tempfile.TemporaryDirectory() as directory:
-                common = Path(directory)
-                if invalid != "common":
-                    common.chmod(0o755)
-                workspace, temporary = common / "repo/repo", common / "_temp"
-                workspace.mkdir(parents=True)
-                temporary.mkdir()
-                root, source, control = temporary / "snyk-runner-trial", workspace / "source", workspace / "diagnostic"
-                for path in (root / "raw", source, control):
-                    path.mkdir(parents=True)
-                manifest = source / trial.PROJECTS[-1]
-                manifest.parent.mkdir(parents=True)
-                manifest.write_text("public fixture\n")
-                environment = {"GITHUB_ACTIONS": "true", "GITHUB_WORKSPACE": str(workspace), "RUNNER_TEMP": str(temporary)}
-                if invalid == "workspace":
-                    environment["GITHUB_WORKSPACE"] = str(common)
-                elif invalid == "temporary":
-                    environment["RUNNER_TEMP"] = str(common)
+    def test_public_workspace_scope_rejects_unsafe_paths_before_mutation(self):
+        for invalid in ("relative", "name", "nested", "symlink", "writable", "owner", "unexpected", "nested-link", "hardlink", "mirror-path"):
+            with self.subTest(invalid=invalid), tempfile.TemporaryDirectory(
+                    prefix="veyport-snyk-public.", dir="/tmp") as directory:
+                public_root = Path(directory)
+                candidate = public_root
+                alias = None
+                try:
+                    if invalid == "relative":
+                        candidate = Path("relative")
+                    elif invalid == "name":
+                        candidate = Path("/tmp")
+                    elif invalid == "nested":
+                        candidate = public_root / "veyport-snyk-public.12345678"
+                        candidate.mkdir()
+                    elif invalid == "symlink":
+                        # Atomic exclusive creation: exercise the canonical-root guard, not its parent check.
+                        while True:
+                            candidate = Path("/tmp") / f"veyport-snyk-public.{os.urandom(4).hex()}"
+                            try:
+                                candidate.symlink_to(public_root, target_is_directory=True)
+                            except FileExistsError:
+                                continue
+                            alias = candidate
+                            break
+                    elif invalid == "writable":
+                        public_root.chmod(0o777)
+                    elif invalid == "unexpected":
+                        (public_root / "raw").mkdir()
+                    elif invalid == "nested-link":
+                        (public_root / "venv").mkdir()
+                        (public_root / "venv/outside").symlink_to("/tmp", target_is_directory=True)
+                    elif invalid == "hardlink":
+                        (public_root / "venv").mkdir()
+                        original = public_root / "venv/original"
+                        original.write_text("public fixture")
+                        (public_root / "venv/alias").hardlink_to(original)
+                    elif invalid == "mirror-path":
+                        (public_root / "mirror").mkdir()
+                        (public_root / "mirror/extra").write_text("unapproved fixture")
+                    before = {p: p.lstat().st_mode for p in (public_root, *public_root.rglob("*"))}
+                    if alias:
+                        before[alias] = alias.lstat().st_mode
+                    message = ("^Unapproved public Python workspace scope or ownership$" if alias
+                               else "public Python workspace")
+                    with mock.patch.object(trial.os, "geteuid", return_value=os.geteuid() + (1 if invalid == "owner" else 0)):
+                        with self.assertRaisesRegex(ValueError, message):
+                            trial.public_workspace_scope(candidate, inspect_tree=True)
+                    self.assertEqual({p: p.lstat().st_mode for p in before}, before)
+                finally:
+                    if alias:
+                        alias.unlink()
+
+    def test_python_mirror_binding_rejects_tampering_before_scanner(self):
+        for invalid in ("mirror", "source", "sha", "binding", "symlink"):
+            with self.subTest(invalid=invalid), tempfile.TemporaryDirectory() as directory, tempfile.TemporaryDirectory(
+                    prefix="veyport-snyk-public.", dir="/tmp") as public_directory:
+                root, public_root = Path(directory), Path(public_directory)
+                source, raw = root / "source", root / "raw"
+                raw.mkdir()
+                original = source / trial.PROJECTS[-1]
+                original.parent.mkdir(parents=True)
+                original.write_bytes(PYTHON_REQUIREMENTS)
+                binding = trial.create_python_mirror(public_root, source, SOURCE_SHA)
+                mirror = public_root / "mirror" / trial.PROJECTS[-1]
+                if invalid == "mirror":
+                    mirror.chmod(0o600)
+                    mirror.write_text("boto3==0\n")
                 elif invalid == "source":
-                    source = control
-                elif invalid == "control":
-                    control = source
-                elif invalid == "root":
-                    root = root / "raw"
-                elif invalid == "layout":
-                    environment["RUNNER_TEMP"] = str(workspace / "_temp")
+                    original.write_text("changed\n")
+                elif invalid == "sha":
+                    binding["source_sha"] = "b" * 40
+                elif invalid == "binding":
+                    binding["source_sha256"] = "0" * 64
                 elif invalid == "symlink":
-                    alias = workspace / "alias"
-                    alias.symlink_to(source, target_is_directory=True)
-                    source = alias
-                elif invalid == "environment":
-                    environment["GITHUB_WORKSPACE"] = ""
-                paths = [common, *common.rglob("*")]
-                before = {path: path.lstat().st_mode for path in paths}
-                error = ("^Resolver workspace common ancestry is not traversable$" if invalid == "common"
-                         else "^Unapproved resolver workspace scope or layout$")
-                with mock.patch.dict(os.environ, environment):
-                    with self.assertRaisesRegex(ValueError, error):
-                        trial.resolver_permissions(root, source, control)
-                self.assertEqual({path: path.lstat().st_mode for path in paths}, before)
+                    mirror.unlink()
+                    mirror.symlink_to(original)
+                state = {"source_sha": SOURCE_SHA, "control_sha": "a" * 40, "preparation_complete": True,
+                         "python_mirror": binding, "manifest_hashes": {}}
+                trial.write_json(raw / "state.json", state)
+                args = SimpleNamespace(root=root, source=source, control=root / "control", scanner=root / "scanner",
+                                       public_root=public_root, sha=SOURCE_SHA, control_sha="a" * 40)
+                with mock.patch.object(trial, "revision", side_effect=[SOURCE_SHA, "a" * 40]), \
+                        mock.patch.object(trial, "scan_projects", side_effect=AssertionError("Scanner started")):
+                    with self.assertRaisesRegex(ValueError, "mirror|public Python workspace"):
+                        trial.scan(args, raw)
+
+    def test_public_cleanup_is_owner_scoped_and_does_not_follow_links(self):
+        with tempfile.TemporaryDirectory() as outside, tempfile.TemporaryDirectory(
+                prefix="veyport-snyk-public.", dir="/tmp") as directory:
+            public_root, sentinel = Path(directory), Path(outside) / "keep"
+            sentinel.write_text("private fixture")
+            link = public_root / "mirror" / trial.PROJECTS[-1]
+            link.parent.mkdir(parents=True)
+            link.symlink_to(sentinel)
+            with self.assertRaisesRegex(ValueError, "public Python workspace symlink"):
+                trial.cleanup_public_workspace(public_root)
+            self.assertEqual(sentinel.read_text(), "private fixture")
+            link.unlink()
+            trial.cleanup_public_workspace(public_root)
+            self.assertFalse(public_root.exists())
+            self.assertEqual(sentinel.read_text(), "private fixture")
 
     def test_prepare_cli_gates_on_prerequisites_and_retains_state(self):
         for failure in (None, "dependency", "access", "version", "version-exit", "manifest"):
-            with self.subTest(failure=failure), tempfile.TemporaryDirectory() as directory:
-                common = Path(directory)
+            with self.subTest(failure=failure), tempfile.TemporaryDirectory() as directory, tempfile.TemporaryDirectory(
+                    prefix="veyport-snyk-public.", dir="/tmp") as public_directory:
+                common, public_root = Path(directory), Path(public_directory)
                 common.chmod(0o755)
                 workspace, temporary = common / "repo/repo", common / "_temp"
                 workspace.mkdir(parents=True)
@@ -127,7 +190,7 @@ class AcceptanceTests(unittest.TestCase):
                 for name in names:
                     path = source / name
                     path.parent.mkdir(parents=True, exist_ok=True)
-                    path.write_text("fixture\n")
+                    path.write_bytes(PYTHON_REQUIREMENTS if name == trial.PROJECTS[-1] else b"fixture\n")
                 lock = control / "scripts/diagnostics/snyk_runner_trial_requirements.lock"
                 lock.parent.mkdir(parents=True)
                 lock.write_text("synthetic lock provenance\n")
@@ -135,7 +198,7 @@ class AcceptanceTests(unittest.TestCase):
                 versions = {"snyk": "1.1308.3", "go": "go version go1.26.11 linux/amd64", "node": "v25.2.0",
                             "npm": "11.6.2", "python": "Python 3.12.13", "age": "v1.2.1"}
 
-                def external(command, cwd, prefix, timeout):
+                def external(command, cwd, prefix, timeout, env=None):
                     if prefix.name.startswith("version-"):
                         name = prefix.name.removeprefix("version-")
                         prefix.with_suffix(".stdout").write_text("unsupported" if failure == "version" and name == "python"
@@ -150,7 +213,8 @@ class AcceptanceTests(unittest.TestCase):
                     return 0
 
                 argv = ["snyk_runner_trial.py", "prepare", "--source", str(source), "--control", str(control),
-                        "--root", str(root), "--scanner", str(root / "scanner"), "--sha", sha, "--control-sha", control_sha]
+                        "--root", str(root), "--public-root", str(public_root), "--scanner", str(root / "scanner"),
+                        "--sha", sha, "--control-sha", control_sha]
                 saved_umask = os.umask(0o077)
                 try:
                     with mock.patch.dict(os.environ, {"GITHUB_ACTIONS": "true", "GITHUB_WORKSPACE": str(workspace),
@@ -173,8 +237,9 @@ class AcceptanceTests(unittest.TestCase):
                 self.assertFalse((root / "public").exists())
 
     def test_prepare_requires_hash_locked_wheels_and_original_requirements(self):
-        with tempfile.TemporaryDirectory() as directory:
-            common = Path(directory)
+        with tempfile.TemporaryDirectory() as directory, tempfile.TemporaryDirectory(
+                prefix="veyport-snyk-public.", dir="/tmp") as public_directory:
+            common, public_root = Path(directory), Path(public_directory)
             common.chmod(0o755)
             workspace, temporary = common / "repo/repo", common / "_temp"
             workspace.mkdir(parents=True)
@@ -187,17 +252,17 @@ class AcceptanceTests(unittest.TestCase):
             for name in names:
                 path = source / name
                 path.parent.mkdir(parents=True, exist_ok=True)
-                path.write_text("fixture\n")
+                path.write_bytes(PYTHON_REQUIREMENTS if name == trial.PROJECTS[-1] else b"fixture\n")
             lock = control / "scripts/diagnostics/snyk_runner_trial_requirements.lock"
             lock.parent.mkdir(parents=True)
             lock.write_text("synthetic lock provenance\n")
             original = (source / trial.PROJECTS[-1]).read_bytes()
-            args = SimpleNamespace(source=source, control=control, root=root, scanner=root / "scanner",
+            args = SimpleNamespace(source=source, control=control, root=root, public_root=public_root, scanner=root / "scanner",
                                    sha="9add3445d449083319a0d1cb334d13729bccbb85", control_sha="a" * 40)
             versions = {"snyk": "1.1308.3", "go": "go version go1.26.11 linux/amd64", "node": "v25.2.0",
                         "npm": "11.6.2", "python": "Python 3.12.13", "age": "v1.2.1"}
 
-            def external(command, cwd, prefix, timeout):
+            def external(command, cwd, prefix, timeout, env=None):
                 if "pip" in command:
                     self.assertIn("--require-hashes", command)
                     self.assertIn("--only-binary=:all:", command)
@@ -217,6 +282,7 @@ class AcceptanceTests(unittest.TestCase):
             self.assertEqual(state["python_lock"], {"path": "scripts/diagnostics/snyk_runner_trial_requirements.lock",
                                                    "sha256": hashlib.sha256(lock.read_bytes()).hexdigest()})
             self.assertEqual((source / trial.PROJECTS[-1]).read_bytes(), original)
+            self.assertEqual(state["python_mirror"], trial.verify_python_mirror(public_root, source, args.sha, state["python_mirror"]))
 
     def test_distinguishes_clean_from_vulnerability_and_license_findings(self):
         clean = trial.assess(report(), 0, "hub/go.mod")
@@ -299,6 +365,89 @@ class AcceptanceTests(unittest.TestCase):
 
 
 class ExecutionTests(unittest.TestCase):
+    def setUp(self):
+        self.addCleanup(os.umask, os.umask(0o022))
+
+    def test_snyk_temp_scope_and_caller_environment_are_preserved(self):
+        with tempfile.TemporaryDirectory() as directory, tempfile.TemporaryDirectory(
+                prefix="veyport-snyk-public.", dir="/tmp") as public_directory:
+            root, public_root = Path(directory), Path(public_directory)
+            root.chmod(0o700)
+            source, control, raw = root / "source", root / "control", root / "raw"
+            raw.mkdir(mode=0o700)
+            names = (*trial.PROJECTS, *(p.replace("go.mod", "go.sum") for p in trial.PROJECTS if p.endswith("go.mod")),
+                     "web/package-lock.json")
+            for name in names:
+                path = source / name
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_bytes(PYTHON_REQUIREMENTS if name == trial.PROJECTS[-1] else b"fixture\n")
+            lock = control / "scripts/diagnostics/snyk_runner_trial_requirements.lock"
+            lock.parent.mkdir(parents=True)
+            lock.write_text("synthetic lock provenance\n")
+            scanner = root / "scanner"
+            scanner.write_text('''#!/usr/bin/env python3
+import json, os, pathlib, stat, sys, tempfile, time
+target = "--version" if "--version" in sys.argv else next(a.split("=", 1)[1] for a in sys.argv if a.startswith("--file="))
+tmp = pathlib.Path(os.environ["SNYK_TMP_PATH"])
+record = {"target":target,"tmp":str(tmp),"mode":stat.S_IMODE(tmp.stat().st_mode),
+          "token_present":"SNYK_TOKEN" in os.environ,"extra":os.environ.get("CALLER_VALUE"),
+          "deadline_remaining":float(os.environ["SNYK_TRIAL_RESOLVER_DEADLINE"]) - time.monotonic()}
+with pathlib.Path(os.environ["ENV_LOG"]).open("a") as log:
+    print(json.dumps(record), file=log)
+if target != "requirements.txt":
+    # Other CLI temp data must never contaminate the strictly inspected public assets tree.
+    (pathlib.Path(tempfile.mkdtemp(dir=tmp)) / "private-cli-link").symlink_to("/tmp", target_is_directory=True)
+if target == "--version":
+    print("1.1308.3")
+else:
+    output = pathlib.Path(next(a.split("=", 1)[1] for a in sys.argv if a.startswith("--json-file-output=")))
+    manager = "pip" if target == "requirements.txt" else "npm" if target == "package.json" else "gomodules"
+    output.write_text(json.dumps({"ok":True,"dependencyCount":12,"vulnerabilities":[],"licensesPolicy":{"orgLicenseRules":None,"severities":None},"org":"lorconksu","targetFile":target,"packageManager":manager}))
+''')
+            scanner.chmod(0o700)
+            args = SimpleNamespace(source=source, control=control, root=root, public_root=public_root,
+                                   scanner=scanner, sha=SOURCE_SHA, control_sha="a" * 40)
+            versions = {"go": "go version go1.26.11 linux/amd64", "node": "v25.2.0",
+                        "npm": "11.6.2", "python": "Python 3.12.13", "age": "v1.2.1"}
+            capture = trial.capture
+
+            def preparation(command, cwd, prefix, timeout, **options):
+                if prefix.name == "version-snyk":
+                    return capture(command, cwd, prefix, timeout, **options)
+                if prefix.name.startswith("version-"):
+                    prefix.with_suffix(".stdout").write_text(versions[prefix.name.removeprefix("version-")])
+                return 0
+
+            environment = {"PATH": os.environ["PATH"], "SNYK_TMP_PATH": str(root / "ambient-temp"),
+                           "SNYK_TRIAL_RESOLVER_DEADLINE": "caller-deadline", "CALLER_VALUE": "retained",
+                           "ENV_LOG": str(raw / "environments.jsonl")}
+            with mock.patch.dict(os.environ, environment, clear=True):
+                before = dict(os.environ)
+                with mock.patch.object(trial, "revision", side_effect=[args.sha, args.control_sha]), \
+                        mock.patch.object(trial, "resolver_permissions"), \
+                        mock.patch.object(trial, "capture", side_effect=preparation):
+                    self.assertTrue(trial.prepare(args, raw))
+                version = json.loads((raw / "environments.jsonl").read_text())
+                self.assertTrue(Path(version["tmp"]).is_relative_to(raw), "Snyk version temp must stay private")
+                self.assertEqual(version["mode"], 0o700)
+                self.assertFalse(version["token_present"])
+                self.assertEqual(dict(os.environ), before)
+                os.environ["SNYK_TOKEN"] = "synthetic-test-only"
+                before = dict(os.environ)
+                rows = trial.scan_projects(source, scanner, raw, public_root / "venv/bin/python", public_root, timeout=5)
+                self.assertEqual(dict(os.environ), before)
+            records = [json.loads(line) for line in (raw / "environments.jsonl").read_text().splitlines()]
+            self.assertEqual(len(records), 8)
+            self.assertEqual([record["target"] for record in records[1:]], [Path(p).name for p in trial.PROJECTS])
+            self.assertTrue(all(row["status"] == "scan_complete_clean" and len(row["attempts"]) == 1 for row in rows))
+            for record in records[:-1]:
+                self.assertTrue(Path(record["tmp"]).is_relative_to(raw))
+                self.assertEqual(record["mode"], 0o700)
+            self.assertEqual(records[-1]["tmp"], str(public_root / "resolver-assets"))
+            self.assertTrue(all(record["token_present"] for record in records[1:]))
+            self.assertTrue(all(record["extra"] == "retained" and record["deadline_remaining"] > 0 for record in records))
+            self.assertEqual(stat.S_IMODE(root.stat().st_mode), 0o700)
+
     def test_scan_rejects_incomplete_preparation_before_starting_scanner(self):
         for preparation in (False, None, 1, "true", "missing"):
             with self.subTest(preparation=preparation), tempfile.TemporaryDirectory() as directory:
@@ -349,8 +498,9 @@ class ExecutionTests(unittest.TestCase):
                 self.assertEqual(state_path.read_bytes() if state_path.exists() else None, before)
 
     def test_all_seven_attempted_findings_not_retried_errors_bounded_and_logs_private(self):
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
+        with tempfile.TemporaryDirectory() as directory, tempfile.TemporaryDirectory(
+                prefix="veyport-snyk-public.", dir="/tmp") as public_directory:
+            root, public_root = Path(directory), Path(public_directory)
             source = root / "source"
             raw = root / "raw"
             source.mkdir()
@@ -358,13 +508,14 @@ class ExecutionTests(unittest.TestCase):
             for name in trial.PROJECTS:
                 manifest = source / name
                 manifest.parent.mkdir(parents=True, exist_ok=True)
-                manifest.write_text("fixture")
+                manifest.write_bytes(PYTHON_REQUIREMENTS if name == trial.PROJECTS[-1] else b"fixture")
             scanner = root / "scanner"
             scanner.write_text('''#!/usr/bin/env python3
 import json, pathlib, sys
 output = pathlib.Path(next(a.split("=", 1)[1] for a in sys.argv if a.startswith("--json-file-output=")))
 print("PRIVATE_TOKEN_RAW_STDOUT")
 print("PRIVATE_TOKEN_RAW_STDERR", file=sys.stderr)
+print(str(pathlib.Path.cwd()), file=sys.stderr)
 if pathlib.Path.cwd().name == "hub":
     output.write_text(json.dumps({"ok":False,"dependencyCount":12,"vulnerabilities":[{"id":"PRIVATE"}],"licensesPolicy":{"orgLicenseRules":None,"severities":None},"org":"lorconksu","targetFile":"go.mod","packageManager":"gomodules"}))
     sys.exit(1)
@@ -380,9 +531,10 @@ sys.exit(2)
             scanner.chmod(0o700)
             sha, control_sha = "9add3445d449083319a0d1cb334d13729bccbb85", "a" * 40
             trial.write_json(raw / "state.json", {"source_sha": sha, "control_sha": control_sha,
-                                                   "preparation_complete": True, "manifest_hashes": {}})
+                                                   "preparation_complete": True, "manifest_hashes": {},
+                                                   "python_mirror": trial.create_python_mirror(public_root, source, sha)})
             args = SimpleNamespace(root=root, source=source, control=root / "control", scanner=scanner,
-                                   sha=sha, control_sha=control_sha)
+                                   public_root=public_root, sha=sha, control_sha=control_sha)
             with mock.patch.object(trial, "revision", side_effect=[sha, control_sha]), \
                     mock.patch.object(trial, "manifest_hashes", return_value={}):
                 self.assertFalse(trial.scan(args, raw))
@@ -395,16 +547,46 @@ sys.exit(2)
             self.assertIn("PRIVATE_TOKEN_RAW_STDOUT", (raw / "project-0-attempt-1.stdout").read_text())
             self.assertIn("PRIVATE_TOKEN_RAW_STDERR", (raw / "project-0-attempt-1.stderr").read_text())
             self.assertNotIn("PRIVATE", json.dumps(rows))
+            for index, project in enumerate(trial.PROJECTS):
+                cwd = (public_root / "mirror" / project).parent if index == 6 else (source / project).parent
+                self.assertIn(str(cwd), (raw / f"project-{index}-attempt-1.stderr").read_text())
+
+    def test_python_mirror_is_rechecked_immediately_before_resolution(self):
+        with tempfile.TemporaryDirectory() as directory, tempfile.TemporaryDirectory(
+                prefix="veyport-snyk-public.", dir="/tmp") as public_directory:
+            root, public_root = Path(directory), Path(public_directory)
+            source, raw = root / "source", root / "raw"
+            raw.mkdir()
+            manifest = source / trial.PROJECTS[-1]
+            manifest.parent.mkdir(parents=True)
+            manifest.write_bytes(PYTHON_REQUIREMENTS)
+            trial.create_python_mirror(public_root, source, SOURCE_SHA)
+            seen = []
+
+            def external(command, cwd, prefix, timeout, env=None):
+                seen.append(cwd)
+                if len(seen) == 12:
+                    mirror = public_root / "mirror" / trial.PROJECTS[-1]
+                    mirror.chmod(0o600)
+                    mirror.write_text("tampered after six scans\n")
+                return 2
+
+            with mock.patch.object(trial, "capture", side_effect=external):
+                with self.assertRaisesRegex(ValueError, "mirror.*hash mismatch"):
+                    trial.scan_projects(source, root / "scanner", raw, Path(sys.executable), public_root)
+            self.assertEqual(len(seen), 12)
+            self.assertNotIn((public_root / "mirror" / trial.PROJECTS[-1]).parent, seen)
 
     def test_python_resolver_has_separate_identity_and_arguments_are_preserved(self):
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
+        with tempfile.TemporaryDirectory() as directory, tempfile.TemporaryDirectory(
+                prefix="veyport-snyk-public.", dir="/tmp") as public_directory:
+            root, public_root = Path(directory), Path(public_directory)
             root.chmod(0o711)
             probe = root / "probe"
             probe.mkdir(mode=0o777)
             probe.chmod(0o1777)
-            subprocess.run([sys.executable, "-m", "venv", "--without-pip", str(root / "venv")], check=True)
-            site = next((root / "venv/lib").glob("python*/site-packages"))
+            subprocess.run([sys.executable, "-m", "venv", "--copies", "--without-pip", str(public_root / "venv")], check=True)
+            site = next((public_root / "venv/lib").glob("python*/site-packages"))
             hook = """import json, os, pathlib, subprocess
 root = pathlib.Path(ROOT_PATH)
 scanner = (root / "probe/scanner-pid").read_text()
@@ -430,7 +612,8 @@ result = {"token_present": "SNYK_TOKEN" in os.environ, "uid": os.geteuid(), "gid
             source, raw = root / "source", root / "raw"
             project = "infra/audit-lab/storage/requirements.txt"
             (source / project).parent.mkdir(parents=True)
-            (source / project).write_text("fixture")
+            (source / project).write_bytes(PYTHON_REQUIREMENTS)
+            trial.create_python_mirror(public_root, source, SOURCE_SHA)
             raw.mkdir(mode=0o700)
             (raw / "private-probe").write_text("synthetic private evidence")
             scanner = root / "scanner"
@@ -452,7 +635,8 @@ output.write_text(json.dumps({"ok":True,"dependencyCount":12,"vulnerabilities":[
             scanner.chmod(0o700)
             environment = {"SNYK_TOKEN": "synthetic-test-only", "PROBE": str(probe), "PATH": os.environ["PATH"]}
             with mock.patch.dict(os.environ, environment, clear=True), mock.patch.object(trial, "PROJECTS", (project,)):
-                rows = trial.scan_projects(source, scanner, raw, root / "venv/bin/python", timeout=5)
+                trial.resolver_permissions(root, source, public_root)
+                rows = trial.scan_projects(source, scanner, raw, public_root / "venv/bin/python", public_root, timeout=5)
             self.assertEqual(rows[0]["status"], "scan_complete_clean")
             self.assertEqual((probe / "scanner-env").read_text(), "present")
             startup = json.loads((probe / "startup.json").read_text())
@@ -472,10 +656,56 @@ output.write_text(json.dumps({"ok":True,"dependencyCount":12,"vulnerabilities":[
             self.assertEqual(result, 124)
             self.assertIn("PRIVATE", (root / "deadline.stdout").read_text())
 
-    def test_scan_deadline_terminates_late_cross_uid_resolver_and_descendant(self):
+    def test_resolver_rejects_symlinked_asset_directory_before_canonicalization(self):
+        with tempfile.TemporaryDirectory() as directory, tempfile.TemporaryDirectory(
+                prefix="veyport-snyk-public.", dir="/tmp") as public_directory:
+            root, public_root = Path(directory), Path(public_directory)
+            wrapper = trial.python_resolver_command(root, Path(sys.executable), public_root)
+            contents = wrapper.read_text()
+            canonical_check = '    test "$(/usr/bin/realpath -e -- "$directory")" = "$directory"\n'
+            self.assertEqual(contents.count(canonical_check), 1)
+            # A success checkpoint isolates the explicit guards from canonicalization,
+            # traversal, chmod and privileged execution in this test-only launcher copy.
+            wrapper.write_text(contents.replace(canonical_check, '    exit 0\n'))
+            assets = public_root / "resolver-assets"
+            target = assets / "fixture"
+            target.mkdir()
+            (target / "pip_resolve.py").write_text("raise AssertionError('Must not execute')\n")
+            linked = assets / "linked"
+            linked.symlink_to(target, target_is_directory=True)
+            accepted = subprocess.run([wrapper, target / "pip_resolve.py"], capture_output=True, timeout=5)
+            self.assertEqual(accepted.returncode, 0)
+            rejected = subprocess.run([wrapper, linked / "pip_resolve.py"], capture_output=True, timeout=5)
+            self.assertNotEqual(rejected.returncode, 0)
+            self.assertEqual(accepted.stdout + accepted.stderr + rejected.stdout + rejected.stderr, b"")
+
+    def test_resolver_refuses_unavailable_cgroups_before_python_starts(self):
+        with tempfile.TemporaryDirectory() as directory, tempfile.TemporaryDirectory(
+                prefix="veyport-snyk-public.", dir="/tmp") as public_directory:
+            root, public_root = Path(directory), Path(public_directory)
+            raw, unavailable = root / "raw", root / "unavailable-cgroupfs"
+            raw.mkdir()
+            unavailable.mkdir()
+            wrapper = trial.python_resolver_command(raw, Path(sys.executable), public_root)
+            command = shlex.split(wrapper.read_text().split("\nexec ", 1)[1])
+            program = command[command.index("-c") + 1]
+            # A regular filesystem lacks kernel cgroup interfaces; alter only this test copy's root.
+            self.assertEqual(program.count("dir='/sys/fs/cgroup'"), 1)
+            program = program.replace("dir='/sys/fs/cgroup'", "dir=" + repr(str(unavailable)))
+            result = subprocess.run(["/usr/bin/sudo", "-n", sys.executable, "-I", "-S", "-c", program,
+                                     str(time.monotonic() + 5), "/usr/bin/setpriv", "--reuid=65534", "--regid=65534",
+                                     "--clear-groups", "--no-new-privs", sys.executable, "-I", "-S", "-c",
+                                     "print('Downloaded Python started')"], env={"PATH": os.environ["PATH"]},
+                                    capture_output=True, text=True, timeout=10)
+            self.assertNotEqual(result.returncode, 0)
+            self.assertEqual(result.stdout, "")
+            self.assertEqual(list(unavailable.iterdir()), [])
+
+    def test_scan_deadline_terminates_late_cross_uid_resolver_and_detached_descendant(self):
         self.assertNotEqual(os.geteuid(), 0, "Exercise the runner user's signal permissions")
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
+        with tempfile.TemporaryDirectory() as directory, tempfile.TemporaryDirectory(
+                prefix="veyport-snyk-public.", dir="/tmp") as public_directory:
+            root, public_root = Path(directory), Path(public_directory)
             root.chmod(0o711)
             raw, probe = root / "raw", root / "probe"
             raw.mkdir(mode=0o700)
@@ -484,7 +714,8 @@ output.write_text(json.dumps({"ok":True,"dependencyCount":12,"vulnerabilities":[
             source = root / "source"
             project = "infra/audit-lab/storage/requirements.txt"
             (source / project).parent.mkdir(parents=True)
-            (source / project).write_text("fixture")
+            (source / project).write_bytes(PYTHON_REQUIREMENTS)
+            trial.create_python_mirror(public_root, source, SOURCE_SHA)
             scanner = root / "scanner"
             scanner.write_text('''#!/usr/bin/env python3
 import os, pathlib, subprocess, sys, tempfile, time
@@ -498,8 +729,16 @@ for name, contents in (("planted.json", json.dumps({"pids": [1]})), ("malformed.
         (pathlib.Path(sys.argv[1]) / name).write_text(contents)
     except PermissionError:
         denied += 1
-child = subprocess.Popen([sys.executable, "-I", "-S", "-c", "import time; time.sleep(20)"], stdout=subprocess.DEVNULL)
-print(json.dumps({"uid": os.geteuid(), "mode": sys.argv[2], "pids": [os.getpid(), child.pid], "marker_writes_denied": denied}), flush=True)
+child = subprocess.Popen([sys.executable, "-I", "-S", "-c", "import time; time.sleep(20)"], stdout=subprocess.DEVNULL, start_new_session=True)
+group = pathlib.Path("/sys/fs/cgroup") / pathlib.Path("/proc/self/cgroup").read_text().strip().removeprefix("0::/")
+controls_denied = 0
+for control in (group / "cgroup.procs", group / "cgroup.kill", pathlib.Path("/sys/fs/cgroup/cgroup.procs")):
+    try:
+        fd = os.open(control, os.O_WRONLY)
+        os.close(fd)
+    except PermissionError:
+        controls_denied += 1
+print(json.dumps({"uid": os.geteuid(), "mode": sys.argv[2], "pids": [os.getpid(), child.pid], "sessions": [os.getsid(0), os.getsid(child.pid)], "marker_writes_denied": denied, "cgroup":str(group), "cgroup_owner":group.stat().st_uid, "cgroup_mode":group.stat().st_mode & 0o777, "controls_denied":controls_denied}), flush=True)
 if sys.argv[2] == "sleep":
     time.sleep(20)
 """)
@@ -528,11 +767,14 @@ sys.exit(2)
             try:
                 environment = {"PROBE": str(probe), "PATH": os.environ["PATH"]}
                 with mock.patch.dict(os.environ, environment, clear=True), mock.patch.object(trial, "PROJECTS", (project,)):
-                    rows = trial.scan_projects(source, scanner, raw, Path(sys.executable), timeout=6)
+                    trial.resolver_permissions(root, source, public_root)
+                    rows = trial.scan_projects(source, scanner, raw, Path(sys.executable), public_root, timeout=6)
                 markers = [json.loads(path.read_text()) for path in probe.iterdir()]
                 self.assertEqual(len(markers), 2, "Both attempts must really start the resolver")
                 self.assertEqual(sorted(marker["mode"] for marker in markers), ["exit", "sleep"])
                 self.assertTrue(all(marker["uid"] == 65534 for marker in markers))
+                self.assertTrue(all(marker["sessions"][1] == marker["pids"][1]
+                                    and marker["sessions"][0] != marker["sessions"][1] for marker in markers))
                 self.assertTrue(all(marker["marker_writes_denied"] == 2 for marker in markers))
                 self.assertFalse((probe / "planted.json").exists())
                 self.assertFalse((probe / "malformed.json").exists())
@@ -542,6 +784,10 @@ sys.exit(2)
                 while any(alive(pid) for pid in pids) and time.monotonic() < limit:
                     time.sleep(0.01)
                 self.assertFalse([pid for pid in pids if alive(pid)], "Resolver or descendant survived the scan deadline")
+                for marker in markers:
+                    self.assertRegex(marker["cgroup"], r"^/sys/fs/cgroup/veyport-snyk-resolver\.[A-Za-z0-9_]{8}$")
+                    self.assertEqual((marker["cgroup_owner"], marker["cgroup_mode"], marker["controls_denied"]), (0, 0o700, 3))
+                    self.assertFalse(Path(marker["cgroup"]).exists(), "Dedicated cgroup survived resolver cleanup")
                 failed = False
             finally:
                 if failed:
@@ -550,6 +796,76 @@ sys.exit(2)
 
 
 class SealingTests(unittest.TestCase):
+    def setUp(self):
+        self.addCleanup(os.umask, os.umask(0o022))
+
+    def test_workflow_cleanup_attempts_all_actions_and_preserves_failures(self):
+        repo = Path(__file__).resolve().parents[2]
+        workflow = (repo / ".github/workflows/snyk-runner-trial.yml").read_text()
+        step = next(block for block in workflow.split("      - name: ") if 'snyk_runner_trial.py" cleanup' in block)
+        script = "\n".join(line[10:] for line in step.split("        run: |\n", 1)[1].splitlines()) + "\n"
+        self.assertEqual(script.count("/usr/bin/python3.12"), 1)
+        script = script.replace("/usr/bin/python3.12", shlex.quote(sys.executable))
+        for failure in ("public", "raw", "archive", None):
+            with self.subTest(failure=failure), tempfile.TemporaryDirectory() as directory, tempfile.TemporaryDirectory(
+                    prefix="veyport-snyk-public.", dir="/tmp") as public_directory:
+                fixture, public_root = Path(directory), Path(public_directory)
+                root, control, tools = fixture / "trial", fixture / "control", fixture / "tools"
+                raw = root / "raw"
+                raw.mkdir(parents=True, mode=0o700)
+                sentinels = [raw / "private.txt", root / "evidence.tar.gz", root / "encryption.stdout", root / "encryption.stderr"]
+                for path in sentinels:
+                    path.write_text("synthetic private plaintext")
+                (root / "public").mkdir()
+                ciphertext = root / "public/evidence.tar.gz.age"
+                ciphertext.write_bytes(b"synthetic ciphertext")
+                (public_root / "resolver-assets").mkdir()
+                public_sentinel = public_root / "resolver-assets/public.txt"
+                public_sentinel.write_text("public fixture")
+                helper = control / "scripts/diagnostics/snyk_runner_trial.py"
+                helper.parent.mkdir(parents=True)
+                helper.write_text('''import os, pathlib, shutil, sys
+assert sys.argv[1] == "cleanup"
+with pathlib.Path(os.environ["CLEANUP_EVENTS"]).open("a") as log:
+    print("public", file=log)
+# Even a helper that recreates plaintext must run before the private cleanup.
+raw = pathlib.Path(os.environ["TRIAL_ROOT"]) / "raw"
+raw.mkdir(exist_ok=True)
+(raw / "helper-error.txt").write_text("synthetic helper error")
+code = int(os.environ["PUBLIC_CLEANUP_EXIT"])
+if code == 0:
+    shutil.rmtree(os.environ["PUBLIC_PYTHON_ROOT"])
+sys.exit(code)
+''')
+                tools.mkdir()
+                rm = tools / "rm"
+                rm.write_text('''#!/usr/bin/env python3
+import os, pathlib, subprocess, sys
+with pathlib.Path(os.environ["CLEANUP_EVENTS"]).open("a") as log:
+    print(sys.argv[1], file=log)
+if os.environ.get("RM_FAILURE") == sys.argv[1]:
+    sys.exit(1)
+sys.exit(subprocess.run(["/bin/rm", *sys.argv[1:]]).returncode)
+''')
+                rm.chmod(0o700)
+                events = fixture / "events"
+                environment = {"PATH": str(tools) + os.pathsep + os.environ["PATH"], "TRIAL_ROOT": str(root),
+                               "CONTROL": str(repo if failure is None else control), "SOURCE": str(fixture / "source"),
+                               "SOURCE_SHA": SOURCE_SHA, "CONTROL_SHA": "a" * 40, "PUBLIC_PYTHON_ROOT": str(public_root),
+                               "CLEANUP_EVENTS": str(events), "PUBLIC_CLEANUP_EXIT": "1" if failure == "public" else "0",
+                               "RM_FAILURE": "-rf" if failure == "raw" else "-f" if failure == "archive" else ""}
+                result = subprocess.run(["bash", "--noprofile", "--norc", "-e", "-o", "pipefail", "-c", script],
+                                        env=environment, capture_output=True, text=True, timeout=10)
+                self.assertEqual(result.returncode, 0 if failure is None else 1)
+                self.assertEqual(result.stdout + result.stderr, "")
+                self.assertEqual([p.exists() for p in sentinels],
+                                 [failure == "raw", *([failure == "archive"] * 3)])
+                self.assertEqual((raw / "helper-error.txt").exists(), failure == "raw")
+                self.assertEqual(events.read_text().splitlines(),
+                                 ["-rf", "-f"] if failure is None else ["public", "-rf", "-f"])
+                self.assertEqual(public_sentinel.exists(), failure == "public")
+                self.assertEqual(ciphertext.read_bytes(), b"synthetic ciphertext")
+
     def test_seal_publishes_summary_then_removes_plaintext_only_after_encryption(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

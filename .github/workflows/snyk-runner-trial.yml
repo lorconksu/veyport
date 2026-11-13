@@ -113,6 +113,14 @@ jobs:
             )
           } >"$TRIAL_ROOT/raw/tests.stdout" 2>"$TRIAL_ROOT/raw/tests.stderr"
 
+      - name: Create dedicated public Python workspace before credentials
+        shell: bash
+        run: |
+          set -euo pipefail
+          umask 077
+          public_python_root="$(mktemp -d /tmp/veyport-snyk-public.XXXXXXXX)"
+          printf 'PUBLIC_PYTHON_ROOT=%s\n' "$public_python_root" >> "$GITHUB_ENV"
+
       - name: Prepare dependencies and record provenance before credentials
         shell: bash
         run: |
@@ -120,7 +128,8 @@ jobs:
           umask 077
           /usr/bin/python3.12 -I "$CONTROL/scripts/diagnostics/snyk_runner_trial.py" prepare \
             --source "$SOURCE" --control "$CONTROL" --sha "$SOURCE_SHA" \
-            --control-sha "$CONTROL_SHA" --root "$TRIAL_ROOT" --scanner "$TRIAL_ROOT/tools/snyk"
+            --control-sha "$CONTROL_SHA" --root "$TRIAL_ROOT" --scanner "$TRIAL_ROOT/tools/snyk" \
+            --public-root "$PUBLIC_PYTHON_ROOT"
 
       - name: Attempt all seven scans with private output
         id: scan
@@ -132,7 +141,8 @@ jobs:
           umask 077
           /usr/bin/python3.12 -I "$CONTROL/scripts/diagnostics/snyk_runner_trial.py" scan \
             --source "$SOURCE" --control "$CONTROL" --sha "$SOURCE_SHA" \
-            --control-sha "$CONTROL_SHA" --root "$TRIAL_ROOT" --scanner "$TRIAL_ROOT/tools/snyk"
+            --control-sha "$CONTROL_SHA" --root "$TRIAL_ROOT" --scanner "$TRIAL_ROOT/tools/snyk" \
+            --public-root "$PUBLIC_PYTHON_ROOT"
 
       - name: Encrypt raw evidence and build allowlisted public summary
         id: encrypt
@@ -143,7 +153,8 @@ jobs:
           umask 077
           /usr/bin/python3.12 -I "$CONTROL/scripts/diagnostics/snyk_runner_trial.py" seal \
             --source "$SOURCE" --control "$CONTROL" --sha "$SOURCE_SHA" \
-            --control-sha "$CONTROL_SHA" --root "$TRIAL_ROOT" --scanner "$TRIAL_ROOT/tools/snyk"
+            --control-sha "$CONTROL_SHA" --root "$TRIAL_ROOT" --scanner "$TRIAL_ROOT/tools/snyk" \
+            --public-root "${PUBLIC_PYTHON_ROOT:-/tmp/uninitialized-public-python}"
 
       - name: Upload only ciphertext and sanitized counts
         id: upload
@@ -177,9 +188,18 @@ jobs:
           test "$ENCRYPT_OUTCOME" = success
           test "$UPLOAD_OUTCOME" = success
 
-      - name: Best-effort plaintext cleanup
+      - name: Remove public workspace and private plaintext
         if: always()
         shell: bash
         run: |
-          rm -rf -- "$TRIAL_ROOT/raw" "$TRIAL_ROOT/venv"
-          rm -f -- "$TRIAL_ROOT/evidence.tar.gz" "$TRIAL_ROOT/encryption.stdout" "$TRIAL_ROOT/encryption.stderr"
+          set -euo pipefail
+          cleanup_status=0
+          if [[ -n "${PUBLIC_PYTHON_ROOT:-}" ]]; then
+            /usr/bin/python3.12 -I "$CONTROL/scripts/diagnostics/snyk_runner_trial.py" cleanup \
+              --source "$SOURCE" --control "$CONTROL" --sha "$SOURCE_SHA" \
+              --control-sha "$CONTROL_SHA" --root "$TRIAL_ROOT" --scanner "$TRIAL_ROOT/tools/snyk" \
+              --public-root "$PUBLIC_PYTHON_ROOT" || cleanup_status=$?
+          fi
+          rm -rf -- "$TRIAL_ROOT/raw" || cleanup_status=$?
+          rm -f -- "$TRIAL_ROOT/evidence.tar.gz" "$TRIAL_ROOT/encryption.stdout" "$TRIAL_ROOT/encryption.stderr" || cleanup_status=$?
+          exit "$cleanup_status"

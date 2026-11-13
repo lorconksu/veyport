@@ -9,6 +9,7 @@ from pathlib import Path
 import re
 import shlex
 import signal
+import shutil
 import stat
 import subprocess
 import sys
@@ -27,6 +28,7 @@ SOURCES = {
 CLI_VERSION = "1.1308.3"
 ORG = "28d5c9da-7ca3-45df-954e-9d83d811ae0d"
 RECIPIENT = "age1xr200qhckma63jw9rwsemeca4ypc02r9cpkr6kk8t4k6f30lka6q824feg"
+PYTHON_REQUIREMENTS_SHA256 = "62b9aed312adedeba09dcc1e858e70831c0f955c976edc1ccc90457cc51adc52"
 COMPLETE = {"scan_complete_clean", "scan_complete_with_findings"}
 VERSION_PATTERNS = {
     "snyk": r"1\.1308\.3", "go": r"go1\.26\.(10|11)",
@@ -104,9 +106,10 @@ def assess(value, exit_code, project):
             "license_path_records": license_path_records, "license_enabled": True}
 
 
-def capture(command, cwd, prefix, timeout=300):
+def capture(command, cwd, prefix, timeout=300, env=None):
     """Bound runner-owned processes; the privileged resolver shares this deadline."""
     environment = os.environ.copy()
+    environment.update(env or {})
     # Leave teardown time before the outer deadline, even for a resolver started late.
     environment["SNYK_TRIAL_RESOLVER_DEADLINE"] = str(time.monotonic() + timeout - min(5, timeout / 4))
     with prefix.with_suffix(".stdout").open("wb") as stdout, prefix.with_suffix(".stderr").open("wb") as stderr:
@@ -128,24 +131,49 @@ def capture(command, cwd, prefix, timeout=300):
             return 124
 
 
-def python_resolver_command(raw, python):
-    # Only public plugin code is exposed; reports/tools remain in separate private directories.
-    assets = raw.parent / "resolver-assets"
+def python_resolver_command(raw, python, public_root):
+    # Only public plugin code is exposed; reports/tools remain in the private root.
+    public_workspace_scope(public_root)
+    assets = public_root / "resolver-assets"
     assets.mkdir(mode=0o711, exist_ok=True)
     assets.chmod(0o711)
-    os.environ["SNYK_TMP_PATH"] = str(assets)
     python_command = raw / "snyk-python"
     supervisor_program = (
-        "import os, signal, subprocess, sys, time\n"
+        "import os, subprocess, sys, tempfile, time\n"
+        "from pathlib import Path\n"
         "deadline = float(sys.argv[1])\n"
         "if deadline <= time.monotonic():\n    sys.exit(124)\n"
-        "child = subprocess.Popen(sys.argv[2:], start_new_session=True)\n"
-        "try:\n    code = child.wait(timeout=max(0, deadline - time.monotonic()))\n"
-        "except subprocess.TimeoutExpired:\n    code = 124\n"
+        "if os.geteuid() != 0:\n    sys.exit(125)\n"
+        "group = Path(tempfile.mkdtemp(prefix='veyport-snyk-resolver.', dir='/sys/fs/cgroup'))\n"
+        "child = kill_fd = None\n"
+        "try:\n"
+        "    group.chmod(0o700)\n"
+        "    if 'populated 0' not in (group / 'cgroup.events').read_text().splitlines():\n"
+        "        raise RuntimeError('Resolver cgroup is not empty')\n"
+        "    kill_fd = os.open(group / 'cgroup.kill', os.O_WRONLY | os.O_CLOEXEC | os.O_NOFOLLOW)\n"
+        "    def enter_group():\n"
+        "        fd = os.open(group / 'cgroup.procs', os.O_WRONLY | os.O_CLOEXEC | os.O_NOFOLLOW)\n"
+        "        try:\n            os.write(fd, str(os.getpid()).encode())\n"
+        "        finally:\n            os.close(fd)\n"
+        "        if deadline <= time.monotonic():\n            os._exit(124)\n"
+        "    # This isolated supervisor is single-threaded; membership precedes exec and UID drop.\n"
+        "    child = subprocess.Popen(sys.argv[2:], start_new_session=True, preexec_fn=enter_group)\n"
+        "    try:\n        code = child.wait(timeout=max(0, deadline - time.monotonic()))\n"
+        "    except subprocess.TimeoutExpired:\n        code = 124\n"
         "finally:\n"
-        "    try:\n        os.killpg(child.pid, signal.SIGKILL)\n"
-        "    except ProcessLookupError:\n        pass\n"
-        "child.wait()\n"
+        "    try:\n"
+        "        if kill_fd is not None:\n"
+        "            os.write(kill_fd, b'1')\n"
+        "            cleanup_deadline = time.monotonic() + 1\n"
+        "            if child is not None:\n"
+        "                child.wait(timeout=max(0, cleanup_deadline - time.monotonic()))\n"
+        "            while 'populated 0' not in (group / 'cgroup.events').read_text().splitlines():\n"
+        "                if time.monotonic() >= cleanup_deadline:\n"
+        "                    raise TimeoutError('Resolver cgroup did not empty')\n"
+        "                time.sleep(0.01)\n"
+        "        group.rmdir()\n"
+        "    finally:\n"
+        "        if kill_fd is not None:\n            os.close(kill_fd)\n"
         "sys.exit(code)\n")
     python_command.write_text(
         '#!/bin/sh\nset -eu\nunset SNYK_TOKEN\nasset_root=' + shlex.quote(str(assets)) + '\n'
@@ -155,6 +183,11 @@ def python_resolver_command(raw, python):
         '    directory=${1%/pip_resolve.py}\n'
         '    relative=${directory#"$asset_root/"}\n'
         '    case "$relative" in ""|.|..|*/*) exit 2 ;; esac\n'
+        '    test ! -L "$directory"\n'
+        '    test ! -L "$1"\n'
+        '    test "$(/usr/bin/realpath -e -- "$directory")" = "$directory"\n'
+        '    test -z "$(/usr/bin/find "$directory" -type l -print -quit)"\n'
+        '    test -z "$(/usr/bin/find "$directory" ! -uid ' + str(os.geteuid()) + ' -print -quit)"\n'
         '    /usr/bin/chmod -R a+rX -- "$directory"\n'
         '    ;;\n'
         '  *) exit 2 ;;\n'
@@ -167,8 +200,10 @@ def python_resolver_command(raw, python):
     return python_command
 
 
-def scan_projects(source, scanner, raw, python, timeout=300):
-    python_command = python_resolver_command(raw, python)
+def scan_projects(source, scanner, raw, python, public_root, timeout=300):
+    python_command = python_resolver_command(raw, python, public_root)
+    private_tmp = raw / "snyk-tmp"
+    private_tmp.mkdir(mode=0o700, exist_ok=True)
     rows = []
     for index, project in enumerate(PROJECTS):
         attempts = []
@@ -178,11 +213,16 @@ def scan_projects(source, scanner, raw, python, timeout=300):
             output = prefix.with_suffix(".json")
             command = [scanner, "test", f"--org={ORG}", f"--file={Path(project).name}",
                        "--json", f"--json-file-output={output}"]
+            environment = {"SNYK_TMP_PATH": str(private_tmp)}
             if project == "web/package.json":
                 command.append("--dev")
             if project.endswith("requirements.txt"):
+                # Recheck immediately before each Python invocation, after the other six projects.
+                verify_python_mirror_files(public_root, source)
                 command.extend(["--package-manager=pip", f"--command={python_command}"])
-            code = capture(command, (source / project).parent, prefix, timeout)
+                environment["SNYK_TMP_PATH"] = str(public_root / "resolver-assets")
+            cwd = (public_root / "mirror" / project).parent if project.endswith("requirements.txt") else (source / project).parent
+            code = capture(command, cwd, prefix, timeout, env=environment)
             result = assess(load_report(output), code, project)
             attempts.append({"exit_code": code, "status": result["status"]})
             # A completed scan with findings is final; only processing failures retry.
@@ -234,31 +274,84 @@ def revision(directory):
                                    text=True, stderr=subprocess.DEVNULL).strip()
 
 
-def resolver_workspace_scope(root, source, control):
-    """Accept only this job's canonical checkout and temporary-directory layout."""
-    workspace = Path(os.environ.get("GITHUB_WORKSPACE", ""))
-    temporary = Path(os.environ.get("RUNNER_TEMP", ""))
-    common = temporary.parent
-    directories = (root, source, control, workspace, workspace.parent, temporary, common)
-    if (os.environ.get("GITHUB_ACTIONS") != "true"
-            or any(not path.is_absolute() or not path.is_dir() or path.resolve() != path for path in directories)
-            or temporary.name != "_temp" or workspace.parent.parent != common
-            or workspace.name != workspace.parent.name or workspace.parent == temporary
-            or source != workspace / "source" or control != workspace / "diagnostic"
-            or root != temporary / "snyk-runner-trial"
-            or any(path.stat().st_uid != os.geteuid() for path in (root, source, workspace, workspace.parent))):
-        raise ValueError("Unapproved resolver workspace scope or layout")
-    manifest = source / PROJECTS[-1]
-    if manifest.resolve() != manifest or not manifest.is_file():
-        raise ValueError("Unapproved resolver manifest scope")
-    return workspace, temporary, common
+def public_workspace_scope(public_root, *, empty=False, inspect_tree=False):
+    """Accept only the owner's dedicated mktemp directory directly under canonical /tmp."""
+    if (not public_root.is_absolute() or public_root.parent != Path("/tmp")
+            or not re.fullmatch(r"veyport-snyk-public\.[A-Za-z0-9_]{8}", public_root.name)
+            or Path("/tmp").resolve() != Path("/tmp") or public_root.resolve() != public_root
+            or not public_root.is_dir() or public_root.stat().st_uid != os.geteuid()
+            or stat.S_IMODE(public_root.stat().st_mode) & 0o022):
+        raise ValueError("Unapproved public Python workspace scope or ownership")
+    children = list(public_root.iterdir())
+    if ((empty and children) or any(path.name not in ("venv", "mirror", "resolver-assets") for path in children)):
+        raise ValueError("Unapproved public Python workspace contents")
+    paths = list(public_root.rglob("*")) if inspect_tree else children
+    mirror = public_root / "mirror" / PROJECTS[-1]
+    mirror_paths = {mirror, *mirror.parents}
+    for path in paths:
+        if public_root / "mirror" in path.parents and path not in mirror_paths:
+            raise ValueError("Unapproved public Python workspace mirror path")
+        info = path.lstat()
+        # --copies avoids interpreter links; venv's standard lib64 alias stays inside its tree.
+        if path.is_symlink():
+            if path != public_root / "venv/lib64" or os.readlink(path) != "lib":
+                raise ValueError("Unapproved public Python workspace symlink")
+        elif (not (stat.S_ISDIR(info.st_mode) or stat.S_ISREG(info.st_mode))
+              or path.resolve() != path or info.st_mode & 0o022
+              or (stat.S_ISREG(info.st_mode) and info.st_nlink != 1)):
+            raise ValueError("Unapproved public Python workspace path or permissions")
+        if info.st_uid != os.geteuid():
+            raise ValueError("Unapproved public Python workspace owner")
+    return public_root
 
 
-def resolver_permissions(root, source, control):
-    workspace, temporary, common = resolver_workspace_scope(root, source, control)
-    manifest = source / PROJECTS[-1]
+def create_python_mirror(public_root, source, sha):
+    public_workspace_scope(public_root, inspect_tree=True)
+    original = source / PROJECTS[-1]
+    if original.resolve() != original or not original.is_file():
+        raise ValueError("Unapproved Python mirror source")
+    content = original.read_bytes()
+    digest = hashlib.sha256(content).hexdigest()
+    if sha not in SOURCES or digest != PYTHON_REQUIREMENTS_SHA256:
+        raise ValueError("Python mirror source hash mismatch")
+    mirror = public_root / "mirror" / PROJECTS[-1]
+    directory = public_root / "mirror"
+    directory.mkdir(mode=0o700)
+    for name in Path(PROJECTS[-1]).parent.parts:
+        directory = directory / name
+        directory.mkdir(mode=0o700)
+    mirror.write_bytes(content)
+    mirror.chmod(0o444)
+    return {"source_sha": sha, "source_path": PROJECTS[-1], "source_sha256": digest,
+            "mirror_sha256": hashlib.sha256(mirror.read_bytes()).hexdigest(), "public_root": str(public_root)}
+
+
+def verify_python_mirror_files(public_root, source):
+    public_workspace_scope(public_root, inspect_tree=True)
+    original, mirror = source / PROJECTS[-1], public_root / "mirror" / PROJECTS[-1]
+    if (original.resolve() != original or mirror.resolve() != mirror
+            or not original.is_file() or not mirror.is_file()):
+        raise ValueError("Python mirror scope mismatch")
+    if (hashlib.sha256(original.read_bytes()).hexdigest() != PYTHON_REQUIREMENTS_SHA256
+            or hashlib.sha256(mirror.read_bytes()).hexdigest() != PYTHON_REQUIREMENTS_SHA256):
+        raise ValueError("Python mirror source or content hash mismatch")
+
+
+def verify_python_mirror(public_root, source, sha, binding):
+    verify_python_mirror_files(public_root, source)
+    expected = {"source_sha": sha, "source_path": PROJECTS[-1], "source_sha256": PYTHON_REQUIREMENTS_SHA256,
+                "mirror_sha256": PYTHON_REQUIREMENTS_SHA256, "public_root": str(public_root)}
+    if sha not in SOURCES or binding != expected:
+        raise ValueError("Python mirror provenance or hash mismatch")
+    return expected
+
+
+def resolver_permissions(root, source, public_root):
+    public_workspace_scope(public_root, inspect_tree=True)
+    manifest, mirror = source / PROJECTS[-1], public_root / "mirror" / PROJECTS[-1]
     # Metadata and UID65534 access results stay only in encrypted raw evidence.
-    paths = dict.fromkeys((*manifest.parents, manifest, root, *root.parents, root / "raw", root / "tools"))
+    paths = dict.fromkeys((*manifest.parents, manifest, root, *root.parents, root / "raw", root / "tools",
+                          public_root, mirror, public_root / "venv/bin/python"))
     paths = [path for path in paths if path.exists()]
 
     def access_snapshot():
@@ -276,34 +369,29 @@ def resolver_permissions(root, source, control):
         return {"probe_exit_code": 0, **modes}
 
     evidence = {"before": access_snapshot()}
-    evidence_path = root / "raw/resolver-path-access.json"
-    write_json(evidence_path, evidence)
-    if (evidence["before"]["probe_exit_code"] != 0
-            or not all(evidence["before"][str(path)]["searchable"] for path in (common, temporary))):
-        raise ValueError("Resolver workspace common ancestry is not traversable")
-    # Grant traversal only below the common runner-work parent; never chmod that parent or home.
-    for directory in (workspace.parent, workspace):
-        directory.chmod(stat.S_IMODE(directory.stat().st_mode) | stat.S_IXOTH)
-    # Public dependencies and the pinned Python manifest may be read, never private evidence.
-    root.chmod(0o711)
-    venv = root / "venv"
-    if venv.exists():
-        for path in (venv, *venv.rglob("*")):
-            if not path.is_symlink():
-                mode = stat.S_IMODE(path.stat().st_mode)
-                path.chmod(mode | (0o555 if path.is_dir() or mode & 0o111 else 0o444))
-    manifest.chmod(stat.S_IMODE(manifest.stat().st_mode) | 0o444)
-    directory = manifest.parent
-    while directory != source.parent:
-        directory.chmod(stat.S_IMODE(directory.stat().st_mode) | 0o555)
-        directory = directory.parent
+    write_json(root / "raw/resolver-path-access.json", evidence)
+    # Never mutate the original checkout, runner home, or private evidence permissions.
+    for name in ("venv", "mirror"):
+        subtree = public_root / name
+        if subtree.exists():
+            for path in (subtree, *subtree.rglob("*")):
+                if not path.is_symlink():
+                    mode = stat.S_IMODE(path.stat().st_mode)
+                    path.chmod(mode | (0o555 if path.is_dir() or mode & 0o111 else 0o444))
+    public_root.chmod(0o711)
     evidence["after"] = access_snapshot()
-    write_json(evidence_path, evidence)
+    write_json(root / "raw/resolver-path-access.json", evidence)
+
+
+def cleanup_public_workspace(public_root):
+    # rmtree never follows the single approved internal venv alias; no privileged cleanup.
+    public_workspace_scope(public_root, inspect_tree=True)
+    shutil.rmtree(public_root)
 
 
 def prepare(args, raw):
-    # Reject path/environment mismatches before any preparation permission changes.
-    resolver_workspace_scope(args.root, args.source, args.control)
+    # Validate the dedicated public scope before any dependency or permission mutation.
+    public_workspace_scope(args.public_root, empty=True)
     if (args.sha not in SOURCES or not re.fullmatch(r"[0-9a-f]{40}", args.control_sha)
             or revision(args.source) != args.sha or revision(args.control) != args.control_sha):
         raise ValueError("Revision verification failed")
@@ -314,13 +402,15 @@ def prepare(args, raw):
              "manifest_hashes": manifest_hashes(args.source),
              "python_lock": {"path": lock_name, "sha256": hashlib.sha256(lock.read_bytes()).hexdigest()}}
     write_json(raw / "state.json", state)
+    state["python_mirror"] = create_python_mirror(args.public_root, args.source, args.sha)
+    write_json(raw / "state.json", state)
     stub = args.source / "hub/web/dist/index.html"
     stub.parent.mkdir(parents=True, exist_ok=True)
     stub.touch()
     commands = [
         (["npm", "ci", "--ignore-scripts", "--include=dev", "--no-audit", "--no-fund"], args.source / "web"),
-        (["/usr/bin/python3.12", "-I", "-m", "venv", str(args.root / "venv")], args.source),
-        ([args.root / "venv/bin/python", "-I", "-m", "pip", "--isolated", "install", "--require-hashes",
+        (["/usr/bin/python3.12", "-I", "-m", "venv", "--copies", str(args.public_root / "venv")], args.source),
+        ([args.public_root / "venv/bin/python", "-I", "-m", "pip", "--isolated", "install", "--require-hashes",
           "--only-binary=:all:", "--disable-pip-version-check", "-r", lock,
           "-r", args.source / PROJECTS[-1]], args.source),
     ]
@@ -331,12 +421,14 @@ def prepare(args, raw):
         commands.append((["go", "list", "-deps", "./..."], (args.source / project).parent))
     codes = [capture(cmd, cwd, raw / f"prepare-{index}", timeout=600)
              for index, (cmd, cwd) in enumerate(commands)]
-    resolver_permissions(args.root, args.source, args.control)
-    # Check ancestor traversal without opening the runner home or private evidence.
+    resolver_permissions(args.root, args.source, args.public_root)
+    # Prove mirror readability without opening the runner home or private evidence.
     codes.append(capture(["/usr/bin/sudo", "-n", "/usr/bin/setpriv", "--reuid=65534", "--regid=65534",
-                          "--clear-groups", "--no-new-privs", "/usr/bin/test", "-r", args.source / PROJECTS[-1]],
+                          "--clear-groups", "--no-new-privs", "/usr/bin/test", "-r", args.public_root / "mirror" / PROJECTS[-1]],
                          args.source, raw / "resolver-access", timeout=30))
-    python_command = python_resolver_command(raw, args.root / "venv/bin/python")
+    python_command = python_resolver_command(raw, args.public_root / "venv/bin/python", args.public_root)
+    private_tmp = raw / "snyk-tmp"
+    private_tmp.mkdir(mode=0o700, exist_ok=True)
     version_commands = {
         "snyk": [args.scanner, "--version"], "go": ["go", "version"],
         "node": ["node", "--version"], "npm": ["npm", "--version"],
@@ -344,7 +436,7 @@ def prepare(args, raw):
     }
     for name, command in version_commands.items():
         prefix = raw / f"version-{name}"
-        code = capture(command, args.source, prefix, timeout=30)
+        code = capture(command, args.source, prefix, timeout=30, env={"SNYK_TMP_PATH": str(private_tmp)})
         text = prefix.with_suffix(".stdout").read_text(errors="replace").strip()
         if name == "go":
             match = re.fullmatch(r"go version (go[\d.]+) linux/amd64", text)
@@ -367,7 +459,10 @@ def scan(args, raw):
         raise ValueError("Scan provenance verification failed")
     if state.get("preparation_complete") is not True:
         raise ValueError("Scan preparation incomplete")
-    state["projects"] = scan_projects(args.source, args.scanner, raw, args.root / "venv/bin/python")
+    verify_python_mirror(args.public_root, args.source, args.sha, state.get("python_mirror"))
+    if manifest_hashes(args.source) != state["manifest_hashes"]:
+        raise ValueError("Scan manifests changed after preparation")
+    state["projects"] = scan_projects(args.source, args.scanner, raw, args.public_root / "venv/bin/python", args.public_root)
     state["manifests_unchanged"] = manifest_hashes(args.source) == state["manifest_hashes"]
     write_json(raw / "state.json", state)
     return public_summary(state)["processing_status"] == "trial_complete"
@@ -399,14 +494,22 @@ def seal(args, raw):
 def main():
     os.umask(0o077)
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("mode", choices=("prepare", "scan", "seal"))
+    parser.add_argument("mode", choices=("prepare", "scan", "seal", "cleanup"))
     parser.add_argument("--source", type=Path, required=True)
     parser.add_argument("--control", type=Path, required=True)
     parser.add_argument("--sha", required=True, choices=SOURCES)
     parser.add_argument("--control-sha", required=True)
     parser.add_argument("--root", type=Path, required=True)
     parser.add_argument("--scanner", type=Path, required=True)
+    parser.add_argument("--public-root", type=Path, required=True)
     args = parser.parse_args()
+    if args.mode == "cleanup":
+        try:
+            cleanup_public_workspace(args.public_root)
+        except Exception:
+            print("Public Python workspace cleanup incomplete.", file=sys.stderr)
+            return 1
+        return 0
     raw = args.root / "raw"
     raw.mkdir(mode=0o700, parents=True, exist_ok=True)
     try:
