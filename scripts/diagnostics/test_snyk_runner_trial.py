@@ -268,7 +268,7 @@ class AcceptanceTests(unittest.TestCase):
                 path = source / name
                 path.parent.mkdir(parents=True, exist_ok=True)
                 path.write_bytes(PYTHON_REQUIREMENTS if name == trial.PROJECTS[-1] else b"fixture\n")
-            lock = control / "scripts/diagnostics/snyk_runner_trial_requirements.lock"
+            lock = control / trial.PYTHON_LOCK_PATH
             lock.parent.mkdir(parents=True)
             lock.write_text("synthetic lock provenance\n")
             scanner_resolution(raw, root / "scanner")
@@ -278,12 +278,14 @@ class AcceptanceTests(unittest.TestCase):
             versions = {"snyk": "1.1308.3", "go": "go version go1.26.11 linux/amd64", "node": "v25.2.0",
                         "npm": "11.6.2", "python": "Python 3.12.13", "age": "v1.2.1"}
 
+            installed_locks = []
             def external(command, cwd, prefix, timeout, env=None):
                 if "pip" in command:
                     self.assertIn("--require-hashes", command)
                     self.assertIn("--only-binary=:all:", command)
                     requirements = [Path(command[index + 1]) for index, item in enumerate(command) if item == "-r"]
                     self.assertEqual(requirements, [lock, source / trial.PROJECTS[-1]])
+                    installed_locks.append(requirements[0])
                 if prefix.name.startswith("version-"):
                     prefix.with_suffix(".stdout").write_text(versions[prefix.name.removeprefix("version-")])
                 return 0
@@ -295,7 +297,8 @@ class AcceptanceTests(unittest.TestCase):
                 trial.prepare(args, raw)
             state = json.loads((raw / "state.json").read_text())
             self.assertTrue(state["preparation_complete"])
-            self.assertEqual(state["python_lock"], {"path": "scripts/diagnostics/snyk_runner_trial_requirements.lock",
+            self.assertEqual(len(installed_locks), 1)
+            self.assertEqual(state["python_lock"], {"path": str(installed_locks[0].relative_to(control)),
                                                    "sha256": hashlib.sha256(lock.read_bytes()).hexdigest()})
             self.assertEqual((source / trial.PROJECTS[-1]).read_bytes(), original)
             self.assertEqual(state["python_mirror"], trial.verify_python_mirror(public_root, source, args.sha, state["python_mirror"]))

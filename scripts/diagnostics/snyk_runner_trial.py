@@ -28,6 +28,7 @@ SOURCES = {
 ORG = "28d5c9da-7ca3-45df-954e-9d83d811ae0d"
 RECIPIENT = "age1xr200qhckma63jw9rwsemeca4ypc02r9cpkr6kk8t4k6f30lka6q824feg"
 PYTHON_REQUIREMENTS_SHA256 = "62b9aed312adedeba09dcc1e858e70831c0f955c976edc1ccc90457cc51adc52"
+PYTHON_LOCK_PATH = "scripts/diagnostics/snyk_runner_trial_requirements.lock"
 COMPLETE = {"scan_complete_clean", "scan_complete_with_findings"}
 VERSION_PATTERNS = {
     "snyk": r"(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)", "go": r"go1\.26\.(10|11)",
@@ -215,7 +216,7 @@ def report_digest(path):
 
 def scan_projects(source, scanner, raw, python, public_root, timeout=300, *,
                   projects=None, assessor=None, ignore_policy=False, verify_source=None,
-                  attempt_binding=None):
+                  attempt_binding=None, expected_requirements_sha256=PYTHON_REQUIREMENTS_SHA256):
     projects = PROJECTS if projects is None else projects
     assessor = assess if assessor is None else assessor
     if attempt_binding is not None and (type(attempt_binding) is not str
@@ -243,7 +244,8 @@ def scan_projects(source, scanner, raw, python, public_root, timeout=300, *,
                 command.append("--dev")
             if project.endswith("requirements.txt"):
                 # Recheck immediately before each Python invocation, after the other six projects.
-                verify_python_mirror_files(public_root, source)
+                verify_python_mirror_files(public_root, source,
+                                           expected_requirements_sha256=expected_requirements_sha256)
                 command.extend(["--package-manager=pip", f"--command={python_command}"])
                 # Python extraction is the temp-root exception: the wrapper
                 # exposes the selected subtree via a+rX, without content classification.
@@ -335,14 +337,15 @@ def public_workspace_scope(public_root, *, empty=False, inspect_tree=False):
     return public_root
 
 
-def create_python_mirror(public_root, source, sha, *, sources=SOURCES):
+def create_python_mirror(public_root, source, sha, *, sources=SOURCES,
+                         expected_requirements_sha256=PYTHON_REQUIREMENTS_SHA256):
     public_workspace_scope(public_root, inspect_tree=True)
     original = source / PROJECTS[-1]
     if original.resolve() != original or not original.is_file():
         raise ValueError("Unapproved Python mirror source")
     content = original.read_bytes()
     digest = hashlib.sha256(content).hexdigest()
-    if sha not in sources or digest != PYTHON_REQUIREMENTS_SHA256:
+    if sha not in sources or digest != expected_requirements_sha256:
         raise ValueError("Python mirror source hash mismatch")
     mirror = public_root / "mirror" / PROJECTS[-1]
     directory = public_root / "mirror"
@@ -356,21 +359,22 @@ def create_python_mirror(public_root, source, sha, *, sources=SOURCES):
             "mirror_sha256": hashlib.sha256(mirror.read_bytes()).hexdigest(), "public_root": str(public_root)}
 
 
-def verify_python_mirror_files(public_root, source):
+def verify_python_mirror_files(public_root, source, *, expected_requirements_sha256=PYTHON_REQUIREMENTS_SHA256):
     public_workspace_scope(public_root, inspect_tree=True)
     original, mirror = source / PROJECTS[-1], public_root / "mirror" / PROJECTS[-1]
     if (original.resolve() != original or mirror.resolve() != mirror
             or not original.is_file() or not mirror.is_file()):
         raise ValueError("Python mirror scope mismatch")
-    if (hashlib.sha256(original.read_bytes()).hexdigest() != PYTHON_REQUIREMENTS_SHA256
-            or hashlib.sha256(mirror.read_bytes()).hexdigest() != PYTHON_REQUIREMENTS_SHA256):
+    if (hashlib.sha256(original.read_bytes()).hexdigest() != expected_requirements_sha256
+            or hashlib.sha256(mirror.read_bytes()).hexdigest() != expected_requirements_sha256):
         raise ValueError("Python mirror source or content hash mismatch")
 
 
-def verify_python_mirror(public_root, source, sha, binding, *, sources=SOURCES):
-    verify_python_mirror_files(public_root, source)
-    expected = {"source_sha": sha, "source_path": PROJECTS[-1], "source_sha256": PYTHON_REQUIREMENTS_SHA256,
-                "mirror_sha256": PYTHON_REQUIREMENTS_SHA256, "public_root": str(public_root)}
+def verify_python_mirror(public_root, source, sha, binding, *, sources=SOURCES,
+                         expected_requirements_sha256=PYTHON_REQUIREMENTS_SHA256):
+    verify_python_mirror_files(public_root, source, expected_requirements_sha256=expected_requirements_sha256)
+    expected = {"source_sha": sha, "source_path": PROJECTS[-1], "source_sha256": expected_requirements_sha256,
+                "mirror_sha256": expected_requirements_sha256, "public_root": str(public_root)}
     if sha not in sources or binding != expected:
         raise ValueError("Python mirror provenance or hash mismatch")
     return expected
@@ -437,9 +441,9 @@ def verify_snyk_resolution(raw, scanner):
     return resolution["version"]
 
 
-def dependency_commands(args, *, projects=PROJECTS):
+def dependency_commands(args, *, projects=PROJECTS, python_lock_path=PYTHON_LOCK_PATH):
     """Trusted runner commands shared by the fixed trial and policy candidate."""
-    lock = args.control / "scripts/diagnostics/snyk_runner_trial_requirements.lock"
+    lock = args.control / python_lock_path
     commands = [
         (["npm", "ci", "--ignore-scripts", "--include=dev", "--no-audit", "--no-fund"], args.source / "web"),
         (["/usr/bin/python3.12", "-I", "-m", "venv", "--copies", str(args.public_root / "venv")], args.source),
@@ -468,7 +472,7 @@ def prepare(args, raw):
     if (args.sha not in SOURCES or not re.fullmatch(r"[0-9a-f]{40}", args.control_sha)
             or revision(args.source) != args.sha or revision(args.control) != args.control_sha):
         raise ValueError("Revision verification failed")
-    lock_name = "scripts/diagnostics/snyk_runner_trial_requirements.lock"
+    lock_name = PYTHON_LOCK_PATH
     lock = args.control / lock_name
     state = {"source_sha": args.sha, "control_sha": args.control_sha, "versions": {}, "projects": [],
              "preparation_complete": False, "manifests_unchanged": False,

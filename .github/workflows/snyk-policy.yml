@@ -29,8 +29,6 @@ jobs:
       GOPROXY: https://proxy.golang.org
       GOSUMDB: sum.golang.org
       CGO_ENABLED: '0'
-      NPM_CONFIG_USERCONFIG: /dev/null
-      NPM_CONFIG_GLOBALCONFIG: /dev/null
       NPM_CONFIG_IGNORE_SCRIPTS: 'true'
       SNYK_CFG_DISABLE_ANALYTICS: '1'
       PYTHONDONTWRITEBYTECODE: '1'
@@ -45,12 +43,16 @@ jobs:
           candidate_root="$RUNNER_TEMP/snyk-policy"
           mkdir -p "$candidate_root/raw" "$candidate_root/tools" "$candidate_root/home" "$candidate_root/config" "$candidate_root/cache"
           chmod 700 "$candidate_root"
+          : > "$candidate_root/config/npm-user.npmrc"
+          : > "$candidate_root/config/npm-global.npmrc"
           public_python_root="$(mktemp -d /tmp/veyport-snyk-public.XXXXXXXX)"
           {
             printf 'TRIAL_ROOT=%s\n' "$candidate_root"
             printf 'HOME=%s/home\n' "$candidate_root"
             printf 'XDG_CONFIG_HOME=%s/config\n' "$candidate_root"
             printf 'XDG_CACHE_HOME=%s/cache\n' "$candidate_root"
+            printf 'NPM_CONFIG_USERCONFIG=%s/config/npm-user.npmrc\n' "$candidate_root"
+            printf 'NPM_CONFIG_GLOBALCONFIG=%s/config/npm-global.npmrc\n' "$candidate_root"
             printf 'NPM_CONFIG_CACHE=%s/cache/npm\n' "$candidate_root"
             printf 'GOCACHE=%s/cache/go-build\n' "$candidate_root"
             printf 'GOMODCACHE=%s/cache/go-mod\n' "$candidate_root"

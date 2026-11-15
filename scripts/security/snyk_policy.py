@@ -28,6 +28,8 @@ PROJECTS = (*trial.PROJECTS[:-1], 'tests/e2e/package.json', trial.PROJECTS[-1])
 MANIFESTS = (*PROJECTS, *(p.replace('go.mod', 'go.sum') for p in PROJECTS if p.endswith('go.mod')),
              'web/package-lock.json', 'tests/e2e/package-lock.json')
 GO_VERSION = '1.26.11'
+PYTHON_REQUIREMENTS_SHA256 = '692f262c74acca037f2042c023dff0835f59775428f62bba6fb017b71021c49e'
+PYTHON_LOCK_PATH = 'scripts/security/snyk_policy_requirements.lock'
 HIGH_LICENSES = frozenset({'AGPL-1.0', 'AGPL-3.0', 'CPOL-1.02', 'GPL-2.0', 'GPL-3.0', 'SimPL-2.0'})
 SEVERITIES = ('low', 'medium', 'high', 'critical')
 COUNTS = ('dependency_count', 'vulnerability_path_records', 'license_path_records',
@@ -524,7 +526,7 @@ def validate_source(source, sha):
         elif project.endswith('package.json'):
             validate_npm(source, project)
     hashes = trial.manifest_hashes(source, PROJECTS)
-    if hashes[PROJECTS[-1]] != trial.PYTHON_REQUIREMENTS_SHA256:
+    if hashes[PROJECTS[-1]] != PYTHON_REQUIREMENTS_SHA256:
         raise ValueError('Python wheel closure unqualified')
     return hashes
 
@@ -537,6 +539,16 @@ def verify_revisions(args):
     return validate_source(args.source, args.sha)
 
 
+def python_lock_binding(args):
+    return {'path': PYTHON_LOCK_PATH,
+            'sha256': hashlib.sha256(regular(args.control / PYTHON_LOCK_PATH)).hexdigest()}
+
+
+def verify_python_lock(args, state):
+    if state.get('python_lock') != python_lock_binding(args):
+        raise ValueError('Python lock preparation binding mismatch')
+
+
 def prepare(args, raw):
     if os.environ.get('SNYK_TOKEN'):
         raise ValueError('Credentials present during preparation')
@@ -544,13 +556,13 @@ def prepare(args, raw):
     trial.public_workspace_scope(args.public_root, empty=True)
     hashes = verify_revisions(args)
     resolution = trial.verify_snyk_resolution(raw, args.scanner)
-    lock_name = 'scripts/diagnostics/snyk_runner_trial_requirements.lock'
     state = {'source_sha': args.sha, 'control_sha': args.control_sha, 'versions': {}, 'projects': [],
              'preparation_complete': False, 'manifests_unchanged': False, 'manifest_hashes': hashes,
-             'python_lock': {'path': lock_name, 'sha256': hashlib.sha256(regular(args.control / lock_name)).hexdigest()}}
+             'python_lock': python_lock_binding(args)}
     trial.write_json(raw / 'state.json', state)
-    state['python_mirror'] = trial.create_python_mirror(args.public_root, args.source, args.sha,
-                                                       sources={args.sha: GO_VERSION})
+    state['python_mirror'] = trial.create_python_mirror(
+        args.public_root, args.source, args.sha, sources={args.sha: GO_VERSION},
+        expected_requirements_sha256=PYTHON_REQUIREMENTS_SHA256)
     trial.write_json(raw / 'state.json', state)
     # Source Go embed support: only this generated stub, with canonical parents.
     stub = args.source / 'hub/web/dist/index.html'
@@ -558,7 +570,7 @@ def prepare(args, raw):
     if stub.resolve() != stub or stub.is_symlink():
         raise ValueError('Noncanonical embed stub')
     stub.touch()
-    commands = trial.dependency_commands(args, projects=PROJECTS)
+    commands = trial.dependency_commands(args, projects=PROJECTS, python_lock_path=PYTHON_LOCK_PATH)
     codes = [trial.capture(cmd, cwd, raw / f'prepare-{index}', timeout=600)
              for index, (cmd, cwd) in enumerate(commands)]
     trial.resolver_permissions(args.root, args.source, args.public_root)
@@ -578,6 +590,7 @@ def prepare(args, raw):
             match = re.fullmatch(r'go version (go[\d.]+) linux/amd64', value)
             value = match[1] if match else 'unavailable'
         state['versions'][name] = value if code == 0 and re.fullmatch(trial.VERSION_PATTERNS[name], value) else 'unavailable'
+    verify_python_lock(args, state)
     unchanged = verify_revisions(args) == hashes
     state.update(preparation_exit_codes=codes, manifests_unchanged=unchanged,
                  preparation_complete=all(code == 0 for code in codes) and unchanged
@@ -599,13 +612,16 @@ def scan(args, raw):
             or state.get('preparation_complete') is not True or hashes != state.get('manifest_hashes')):
         raise ValueError('Scan preparation binding mismatch')
     trial.verify_python_mirror(args.public_root, args.source, args.sha, state.get('python_mirror'),
-                               sources={args.sha: GO_VERSION})
+                               sources={args.sha: GO_VERSION},
+                               expected_requirements_sha256=PYTHON_REQUIREMENTS_SHA256)
     if trial.verify_snyk_resolution(raw, args.scanner) != state.get('versions', {}).get('snyk'):
         raise ValueError('Scanner bootstrap binding mismatch')
+    verify_python_lock(args, state)
     def recheck():
         if verify_revisions(args) != hashes:
             raise ValueError('Scan source drift')
         trial.verify_snyk_resolution(raw, args.scanner)
+        verify_python_lock(args, state)
     state['projects'] = []
     state['manifests_unchanged'] = False
     trial.write_json(raw / 'state.json', state)
@@ -615,7 +631,9 @@ def scan(args, raw):
     state['projects'] = trial.scan_projects(args.source, args.scanner, raw, args.public_root / 'venv/bin/python',
                                             args.public_root, projects=PROJECTS, assessor=assess,
                                             ignore_policy=True, verify_source=recheck,
-                                            attempt_binding=state['run_identity_sha256'])
+                                            attempt_binding=state['run_identity_sha256'],
+                                            expected_requirements_sha256=PYTHON_REQUIREMENTS_SHA256)
+    verify_python_lock(args, state)
     state['manifests_unchanged'] = verify_revisions(args) == hashes
     state['scan_elapsed_seconds'] = round(time.monotonic() - started, 3)
     trial.write_json(raw / 'state.json', state)
@@ -669,6 +687,7 @@ def evaluate_result(args, raw):
                         for key, pattern in trial.VERSION_PATTERNS.items())
                 and state['versions']['go'] == 'go' + GO_VERSION
                 and verify_revisions(args) == state.get('manifest_hashes')
+                and state.get('python_lock') == python_lock_binding(args)
                 and type(state.get('projects')) is list and len(state['projects']) == len(PROJECTS)
                 and all(type(row) is dict and type(row.get('path')) is str for row in state['projects'])
                 and sorted(row['path'] for row in state['projects']) == sorted(PROJECTS))

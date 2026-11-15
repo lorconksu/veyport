@@ -3,6 +3,9 @@ import copy
 import importlib.util
 import json
 import os
+import re
+import shutil
+import stat
 from pathlib import Path
 import subprocess
 import tempfile
@@ -12,6 +15,16 @@ import unittest
 from unittest import mock
 
 POLICY_PATH = Path(__file__).with_name('snyk_policy.py')
+WORKFLOW_PATHS = tuple(POLICY_PATH.parents[2] / '.github/workflows' / name for name in
+                       ('snyk-policy.yml', 'snyk-policy-qualification.yml'))
+
+
+def workflows():
+    return ((path.name, path.read_text()) for path in WORKFLOW_PATHS)
+
+
+def final_gate(workflow):
+    return textwrap.dedent(workflow.rsplit('run: |', 1)[1])
 
 
 def report(project='hub/go.mod', issues=None):
@@ -195,25 +208,26 @@ class PolicyTests(unittest.TestCase):
 
     def test_final_gate_requires_every_outcome(self):
         good = dict(scan='success', policy='success', encrypt='success', upload='success', cleanup='success')
-        workflow=(POLICY_PATH.parents[2]/'.github/workflows/snyk-policy.yml').read_text()
-        gate=textwrap.dedent(workflow.rsplit('run: |', 1)[1])
-        def check(outcomes, fresh='0'):
-            environment={key.upper()+'_OUTCOME': value for key,value in outcomes.items()}
-            if fresh is not None: environment['SEALED_POLICY_EXIT']=fresh
-            return subprocess.run(['/bin/bash', '-c', gate], env=environment, capture_output=True).returncode
-        self.assertEqual(check(good), 0)
-        for fresh in ['1', '2', '', '00', 'true', 'clean', '0\n', None]:
-            self.assertNotEqual(check(good, fresh), 0)
-        for step in good:
-            for outcome in ['failure', 'skipped', 'cancelled', '']:
-                self.assertNotEqual(check(dict(good, **{step: outcome})), 0)
+        for name, workflow in workflows():
+            with self.subTest(workflow=name):
+                gate = final_gate(workflow)
+                def check(outcomes, fresh='0'):
+                    environment={key.upper()+'_OUTCOME': value for key,value in outcomes.items()}
+                    if fresh is not None: environment['SEALED_POLICY_EXIT']=fresh
+                    return subprocess.run(['/bin/bash', '-c', gate], env=environment, capture_output=True).returncode
+                self.assertEqual(check(good), 0)
+                for fresh in ['1', '2', '', '00', 'true', 'clean', '0\n', None]:
+                    self.assertNotEqual(check(good, fresh), 0)
+                for step in good:
+                    for outcome in ['failure', 'skipped', 'cancelled', '']:
+                        self.assertNotEqual(check(dict(good, **{step: outcome})), 0)
 
     def make_source(self, root):
         subprocess.run(['git', 'init', '-q', str(root)], check=True)
         for name in self.policy.MANIFESTS:
             path = root / name; path.parent.mkdir(parents=True, exist_ok=True)
             content = ('module example.test/module\n\ngo 1.26.11\n' if name.endswith('go.mod') else
-                       'boto3==1.40.72\ncryptography==46.0.5\n' if name.endswith('requirements.txt') else
+                       'boto3==1.40.72\ncryptography==50.0.2\n' if name.endswith('requirements.txt') else
                        '{"lockfileVersion":3,"packages":{}}\n' if name.endswith('package-lock.json') else
                        '{}\n' if name.endswith('package.json') else '')
             path.write_text(content)
@@ -221,6 +235,89 @@ class PolicyTests(unittest.TestCase):
         subprocess.run(['git', '-C', str(root), '-c', 'user.name=Synthetic', '-c',
                         'user.email=synthetic@example.invalid', 'commit', '-qm', 'fixture'], check=True)
         return self.policy.trial.revision(root)
+
+    def test_candidate_requires_new_exact_python_bytes_even_when_old_bytes_are_committed(self):
+        for content, accepted in [('boto3==1.40.72\ncryptography==50.0.2\n', True),
+                                  ('boto3==1.40.72\ncryptography==46.0.5\n', False),
+                                  ('boto3==1.40.72\ncryptography==50.0.2\n\n', False)]:
+            with self.subTest(content=content), tempfile.TemporaryDirectory() as directory:
+                root=Path(directory); self.make_source(root)
+                (root/self.policy.PROJECTS[-1]).write_text(content)
+                subprocess.run(['git', '-C', str(root), 'add', '.'], check=True)
+                subprocess.run(['git', '-C', str(root), '-c', 'user.name=Synthetic', '-c',
+                    'user.email=synthetic@example.invalid', 'commit', '--allow-empty', '-qm', 'requirements'], check=True)
+                sha=self.policy.trial.revision(root)
+                if accepted:
+                    self.assertIn(self.policy.PROJECTS[-1], self.policy.validate_source(root, sha))
+                else:
+                    with self.assertRaisesRegex(ValueError, 'Python wheel closure unqualified'):
+                        self.policy.validate_source(root, sha)
+
+    def test_candidate_python_hash_reaches_mirror_and_every_scan_attempt(self):
+        for tamper in (False, True):
+            with self.subTest(tamper=tamper), tempfile.TemporaryDirectory() as directory, \
+                 tempfile.TemporaryDirectory(prefix='veyport-snyk-public.', dir='/tmp') as public_directory:
+                root=Path(directory); source=root/'source'; source.mkdir(); sha=self.make_source(source)
+                public=Path(public_directory); raw=root/'raw'; raw.mkdir()
+                trial=self.policy.trial
+                binding=trial.create_python_mirror(public, source, sha, sources={sha:self.policy.GO_VERSION},
+                    expected_requirements_sha256=self.policy.PYTHON_REQUIREMENTS_SHA256)
+                args=SimpleNamespace(source=source, control=root/'control', sha=sha, control_sha='b'*40,
+                    scanner=root/'scanner', public_root=public)
+                lock=args.control/'scripts/security/snyk_policy_requirements.lock'
+                lock.parent.mkdir(parents=True); lock.write_text('synthetic candidate lock')
+                hashes=self.policy.validate_source(source, sha)
+                state={'source_sha':sha, 'control_sha':args.control_sha, 'preparation_complete':True,
+                    'manifest_hashes':hashes, 'python_mirror':binding, 'versions':{'snyk':'1.2.3'},
+                    'run_identity_sha256':'f'*64,
+                    'python_lock':{'path':'scripts/security/snyk_policy_requirements.lock',
+                                   'sha256':self.policy.file_digest(lock)}}
+                trial.write_json(raw/'state.json', state)
+                python_attempts=[]
+                def capture(command, cwd, prefix, timeout, env=None):
+                    project=self.policy.PROJECTS[int(prefix.name.split('-')[1])]
+                    if project.endswith('requirements.txt'):
+                        python_attempts.append(prefix.name)
+                        self.assertEqual((cwd/'requirements.txt').read_text(),
+                            'boto3==1.40.72\ncryptography==50.0.2\n')
+                        if len(python_attempts)==1:
+                            if tamper:
+                                mirror=cwd/'requirements.txt'; mirror.chmod(0o600); mirror.write_text('tampered\n')
+                            return 2
+                    trial.write_json(prefix.with_suffix('.json'), report(project))
+                    return 0
+                with mock.patch.dict(os.environ, {'SNYK_TOKEN':'synthetic-test-token'}), \
+                     mock.patch.object(self.policy, 'verify_revisions', return_value=hashes), \
+                     mock.patch.object(trial, 'verify_snyk_resolution', return_value='1.2.3'), \
+                     mock.patch.object(trial, 'python_resolver_command', return_value=root/'wrapper'), \
+                     mock.patch.object(self.policy, 'run_controls', return_value=True), \
+                     mock.patch.object(trial, 'capture', side_effect=capture):
+                    if tamper:
+                        with self.assertRaisesRegex(ValueError, 'Python mirror source or content hash mismatch'):
+                            self.policy.scan(args, raw)
+                        self.assertEqual(len(python_attempts), 1)
+                    else:
+                        self.assertTrue(self.policy.scan(args, raw))
+                        self.assertEqual(len(python_attempts), 2)
+
+    def test_historical_python_defaults_bind_original_bytes_and_original_lock(self):
+        trial=self.policy.trial
+        sha=next(iter(trial.SOURCES))
+        for version, accepted in [('46.0.5', True), ('50.0.2', False)]:
+            with self.subTest(version=version), tempfile.TemporaryDirectory() as directory, \
+                 tempfile.TemporaryDirectory(prefix='veyport-snyk-public.', dir='/tmp') as public_directory:
+                root=Path(directory); source=root/'source'; manifest=source/trial.PROJECTS[-1]
+                manifest.parent.mkdir(parents=True); manifest.write_text('boto3==1.40.72\ncryptography=='+version+'\n')
+                if accepted:
+                    binding=trial.create_python_mirror(Path(public_directory), source, sha)
+                    self.assertEqual(trial.verify_python_mirror(Path(public_directory), source, sha, binding), binding)
+                else:
+                    with self.assertRaises(ValueError): trial.create_python_mirror(Path(public_directory), source, sha)
+                args=SimpleNamespace(source=source, control=root/'control', public_root=Path(public_directory))
+                commands=trial.dependency_commands(args, projects=(trial.PROJECTS[-1],))
+                install=commands[2][0]
+                self.assertEqual([install[i+1] for i,item in enumerate(install) if item=='-r'],
+                    [args.control/'scripts/diagnostics/snyk_runner_trial_requirements.lock', manifest])
 
     def test_inventory_and_canonical_source_bound_to_git_bytes(self):
         for change in ['none', 'missing_e2e', 'extra', 'symlink', 'drift', 'go', 'python', 'npmrc', 'toolchain', 'generated-link']:
@@ -313,7 +410,7 @@ class PolicyTests(unittest.TestCase):
             with self.subTest(failure=failure), tempfile.TemporaryDirectory() as directory, \
                  tempfile.TemporaryDirectory(prefix='veyport-snyk-public.', dir='/tmp') as public_directory:
                 root=Path(directory); source=root/'source'; source.mkdir(); sha=self.make_source(source)
-                control=root/'controller'; lock=control/'scripts/diagnostics/snyk_runner_trial_requirements.lock'
+                control=root/'controller'; lock=control/'scripts/security/snyk_policy_requirements.lock'
                 lock.parent.mkdir(parents=True); lock.write_text('synthetic trusted lock')
                 raw=root/'raw'; raw.mkdir(mode=0o700)
                 args=SimpleNamespace(root=root, source=source, control=control, sha=sha, control_sha='b'*40,
@@ -340,6 +437,11 @@ class PolicyTests(unittest.TestCase):
                     self.assertEqual(self.policy.prepare(args, raw), failure is None)
                 state=self.policy.trial.load_report(raw/'state.json')
                 self.assertEqual(state['source_sha'], sha)
+                self.assertEqual(state['python_lock'], {'path':'scripts/security/snyk_policy_requirements.lock',
+                    'sha256':self.policy.file_digest(lock)})
+                install=next(cmd for cmd in seen if '--require-hashes' in cmd)
+                self.assertEqual([install[i+1] for i,item in enumerate(install) if item=='-r'],
+                    [lock, source/'infra/audit-lab/storage/requirements.txt'])
                 self.assertEqual(state['preparation_complete'], failure is None)
                 npm=[command for command in seen if command[:2]==['npm', 'ci']]
                 self.assertEqual(len(npm), 2)
@@ -444,18 +546,102 @@ class PolicyTests(unittest.TestCase):
             for name in ['home', 'config', 'cache', 'license-control']: self.assertFalse((root/name).exists())
             self.assertNotIn('SENTINEL', result.stdout+result.stderr)
 
-    def test_workflow_is_manual_trusted_controller_and_final_cleanup_gated(self):
-        text = (POLICY_PATH.parents[2] / '.github/workflows/snyk-policy.yml').read_text()
-        self.assertIn('workflow_dispatch:', text)
-        self.assertNotIn('pull_request', text)
-        self.assertNotIn('continue-on-error', text)
-        self.assertIn("github.ref == 'refs/heads/main'", text)
-        self.assertIn('go-version: 1.26.11', text)
-        self.assertNotIn('go-version-file:', text)
-        self.assertEqual(text.count('secrets.SNYK_TOKEN'), 1)
-        self.assertLess(text.index('id: cleanup'), text.index('name: Final policy and evidence gate'))
-        for step in ['scan', 'policy', 'encrypt', 'upload', 'cleanup']:
-            self.assertIn('steps.' + step + '.outcome', text)
+    def test_workflows_restrict_launch_credentials_and_cleanup(self):
+        for name, workflow in workflows():
+            diagnostic = name == 'snyk-policy-qualification.yml'
+            event, ref = ('push', 'diagnostic/snyk-policy-qualification') if diagnostic else ('workflow_dispatch', 'main')
+            with self.subTest(workflow=name):
+                triggers = workflow.split('on:\n', 1)[1].split('\npermissions:', 1)[0]
+                self.assertEqual(re.findall(r'^  ([a-z_]+):', triggers, re.M), [event])
+                if diagnostic:
+                    self.assertEqual(re.search(r'branches: \[(.*)\]', triggers)[1], ref)
+                self.assertNotIn('pull_request', workflow)
+                self.assertNotIn('continue-on-error', workflow)
+                self.assertIn('go-version: 1.26.11', workflow)
+                self.assertNotIn('go-version-file:', workflow)
+                permissions = re.findall(r'^ *permissions:\n((?: +[^\n]+\n)+)', workflow, re.M)
+                self.assertEqual(workflow.count('permissions:'), 1)
+                self.assertEqual([block.strip() for block in permissions], ['contents: read'])
+                guard = re.search(r'^    if: (.*)$', workflow, re.M)[1]
+                self.assertRegex(guard, r"^github\.[a-z_]+ == '[^']+'(?: && github\.[a-z_]+ == '[^']+')*$")
+                shell = re.sub(r'github\.([a-z_]+)', lambda m: '"$GH_' + m[1].upper() + '"', guard)
+                good = dict(event_name=event, repository='lorconksu/veyport', repository_owner_id='13374789',
+                            actor_id='13374789', actor='lorconksu', triggering_actor='lorconksu', ref='refs/heads/'+ref)
+                def allowed(context):
+                    env = {'GH_'+key.upper(): value for key, value in context.items()}
+                    return subprocess.run(['/bin/bash', '-c', '[[ '+shell+' ]]'], env=env,
+                                          capture_output=True).returncode == 0
+                self.assertTrue(allowed(good))
+                for key in good:
+                    for bad in ['', 'other', '0']:
+                        with self.subTest(boundary=key, value=bad):
+                            self.assertFalse(allowed(dict(good, **{key: bad})))
+                for bad in ['pull_request', 'pull_request_target', 'workflow_run',
+                            'workflow_dispatch' if diagnostic else 'push']:
+                    self.assertFalse(allowed(dict(good, event_name=bad)))
+                self.assertFalse(allowed(dict(good, ref='refs/heads/'+ref+'-other')))
+                steps = workflow.split('\n      - ')[1:]
+                token_steps = [step for step in steps if 'secrets.' in step]
+                self.assertEqual(len(token_steps), 1)
+                self.assertIn('id: scan\n', token_steps[0])
+                self.assertEqual(workflow.count('secrets.SNYK_TOKEN'), 1)
+                self.assertEqual(workflow.count('secrets.'), 1)
+                checkouts = [step for step in steps if 'uses: actions/checkout@' in step]
+                self.assertEqual(len(checkouts), 2)
+                for checkout in checkouts:
+                    self.assertIn('persist-credentials: false', checkout)
+                    self.assertIn('repository: lorconksu/veyport', checkout)
+                cleanup = next(step for step in steps if 'id: cleanup\n' in step)
+                self.assertIn('if: always()', cleanup)
+                self.assertLess(steps.index(cleanup), len(steps)-1)
+                self.assertIn('if: always()', steps[-1])
+                self.assertIn('steps.encrypt.outputs.sealed_policy_exit', steps[-1])
+                for step in ['scan', 'policy', 'encrypt', 'upload', 'cleanup']:
+                    self.assertIn(step.upper()+'_OUTCOME: ${{ steps.'+step+'.outcome }}', steps[-1])
+
+    def test_initializers_export_private_npm_configs_that_real_npm_loads(self):
+        npm = shutil.which('npm')
+        for name, workflow in workflows():
+            with self.subTest(workflow=name), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory); output = root/'github-env'; output.touch()
+                env = {'PATH': os.environ.get('PATH', os.defpath), 'RUNNER_TEMP': str(root),
+                       'HOME': str(root/'initial-home'), 'GITHUB_ENV': str(output),
+                       'SOURCE_SHA': 'a'*40, 'CONTROL_SHA': 'b'*40}
+                job_env = workflow.split('    env:\n', 1)[1].split('    steps:', 1)[0]
+                for key, value in re.findall(r'^      ([A-Z_]+): (.+)$', job_env, re.M):
+                    if '${{' not in value: env[key] = value.strip("'")
+                initializer = textwrap.dedent(workflow.split('run: |', 1)[1].split('\n      - ', 1)[0])
+                self.assertLess(workflow.index('run: |'), workflow.index('uses: actions/setup-node@'))
+                for key in ['SOURCE_SHA', 'CONTROL_SHA']:
+                    invalid = subprocess.run(['/bin/bash', '-c', initializer], env=dict(env, **{key: 'bad-sha'}),
+                                             cwd=root, capture_output=True)
+                    self.assertNotEqual(invalid.returncode, 0)
+                    self.assertEqual(output.read_bytes(), b'')
+                result = subprocess.run(['/bin/bash', '-c', initializer], env=env, cwd=root, capture_output=True)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                env.update(line.split('=', 1) for line in output.read_text().splitlines())
+                self.addCleanup(shutil.rmtree, env['PUBLIC_PYTHON_ROOT'], ignore_errors=True)
+                private = Path(env['TRIAL_ROOT']); user = Path(env['NPM_CONFIG_USERCONFIG']); global_ = Path(env['NPM_CONFIG_GLOBALCONFIG'])
+                self.assertNotEqual(user, global_)
+                self.assertEqual(stat.S_IMODE(private.stat().st_mode), 0o700)
+                for config in [user, global_]:
+                    self.assertEqual(config.parent, private/'config')
+                    self.assertEqual(config.read_bytes(), b'')
+                    self.assertEqual(stat.S_IMODE(config.stat().st_mode), 0o600)
+                self.assertEqual(env['HOME'], str(private/'home'))
+                self.assertEqual(env['NPM_CONFIG_CACHE'], str(private/'cache/npm'))
+                self.assertEqual(env['NPM_CONFIG_IGNORE_SCRIPTS'], 'true')
+                if not npm:
+                    with self.subTest(real_npm='unavailable'):
+                        self.skipTest('npm absent: initializer checks passed; real loader subcheck unavailable')
+                    continue
+                if npm:
+                    for key, expected in [('userconfig', str(user)), ('globalconfig', str(global_)),
+                                          ('cache', str(private/'cache/npm')), ('ignore-scripts', 'true')]:
+                        loaded = subprocess.run([npm, 'config', 'get', key], env=env, cwd=root,
+                                                capture_output=True, text=True, timeout=30)
+                        self.assertEqual(loaded.returncode, 0, loaded.stderr)
+                        self.assertEqual(loaded.stdout.strip(), expected)
 
 
 
@@ -491,6 +677,8 @@ class LicenseControlTests(unittest.TestCase):
             scanner=scanner, sha='a'*40, control_sha='b'*40, public_root=root/'unused')
         state = {'source_sha': args.sha, 'control_sha': args.control_sha, 'preparation_complete': True,
             'manifests_unchanged': True, 'manifest_hashes': {'fixture': 'unchanged'}, 'projects': [],
+            'python_lock': {'path':'scripts/security/snyk_policy_requirements.lock',
+                'sha256':self.policy.file_digest(args.control/'scripts/security/snyk_policy_requirements.lock')},
             'versions': {'snyk': '1.1308.4', 'go': 'go1.26.11', 'node': 'v25.2.0',
                          'npm': '11.6.2', 'python': 'Python 3.12.13', 'age': 'v1.2.1'}}
         self.policy.initialize_controls(args, raw, state)
@@ -650,6 +838,22 @@ class LicenseControlTests(unittest.TestCase):
                 with mock.patch.object(self.policy, 'verify_revisions', return_value=state['manifest_hashes']):
                     self.assertEqual(self.policy.evaluate(args, raw), 2)
 
+    def test_scan_and_evaluation_reject_wrong_candidate_lock_provenance(self):
+        for change in ['old-lock', 'wrong-digest', 'missing']:
+            with self.subTest(change=change), tempfile.TemporaryDirectory() as directory, \
+                 mock.patch.dict(os.environ, {}, clear=True):
+                args, raw, state=self.context(Path(directory)); self.complete(args, raw, state)
+                if change=='old-lock': state['python_lock']['path']='scripts/diagnostics/snyk_runner_trial_requirements.lock'
+                elif change=='wrong-digest': state['python_lock']['sha256']='0'*64
+                else: state.pop('python_lock')
+                self.policy.trial.write_json(raw/'state.json', state)
+                with mock.patch.object(self.policy, 'verify_revisions', return_value=state['manifest_hashes']), \
+                     mock.patch.object(self.policy.trial, 'verify_python_mirror'), \
+                     mock.patch.object(self.policy, 'run_controls', side_effect=AssertionError('controls started')):
+                    with self.assertRaisesRegex(ValueError, 'Python lock preparation binding mismatch'):
+                        self.policy.scan(args, raw)
+                    self.assertEqual(self.policy.evaluate(args, raw), 2)
+
     def test_scan_controls_precede_apps_and_negative_controls_stop_apps(self):
         for verified in (True, False):
             with self.subTest(verified=verified), tempfile.TemporaryDirectory() as directory, \
@@ -703,8 +907,6 @@ class LicenseControlTests(unittest.TestCase):
                     self.assertEqual(self.policy.evaluate(args, raw), 2)
 
     def test_seal_exports_actual_fresh_verdict_without_hiding_failure_evidence(self):
-        workflow=(POLICY_PATH.parents[2]/'.github/workflows/snyk-policy.yml').read_text()
-        gate=textwrap.dedent(workflow.rsplit('run: |', 1)[1])
         for findings, expected in [(None, 0), ([issue()], 1)]:
             with self.subTest(expected=expected), tempfile.TemporaryDirectory() as directory, \
                  mock.patch.dict(os.environ, {}, clear=True):
@@ -722,11 +924,11 @@ class LicenseControlTests(unittest.TestCase):
                 self.assertEqual(summary['policy']['exit_code'], expected)
                 environment={key.upper()+'_OUTCOME':'success' for key in ['scan','policy','encrypt','upload','cleanup']}
                 environment['SEALED_POLICY_EXIT']=exported.get('sealed_policy_exit','')
-                status=subprocess.run(['/bin/bash','-c',gate],env=environment,capture_output=True).returncode
-                self.assertEqual(status==0, expected==0)
-        self.assertIn("if: always() && steps.encrypt.outcome == 'success'", workflow)
-        cleanup=workflow.split('id: cleanup',1)[1].split('      - name:',1)[0]
-        self.assertIn('if: always()', cleanup)
+                for name, workflow in workflows():
+                    with self.subTest(workflow=name):
+                        status=subprocess.run(['/bin/bash','-c',final_gate(workflow)],env=environment,capture_output=True).returncode
+                        self.assertEqual(status==0, expected==0)
+                        self.assertIn("if: always() && steps.encrypt.outcome == 'success'", workflow)
 
     def test_changed_bound_evidence_after_policy_success_cannot_finish_green(self):
         with tempfile.TemporaryDirectory() as directory, mock.patch.dict(os.environ, {}, clear=True):
@@ -751,11 +953,11 @@ class LicenseControlTests(unittest.TestCase):
             self.assertEqual(cleanup.returncode,0)
             self.assertFalse((args.root/'license-control').exists())
             self.assertFalse((args.root/'run-identity.json').exists())
-            workflow=(POLICY_PATH.parents[2]/'.github/workflows/snyk-policy.yml').read_text()
-            gate=textwrap.dedent(workflow.rsplit('run: |',1)[1])
             environment={key.upper()+'_OUTCOME':'success' for key in ['scan','policy','encrypt','upload','cleanup']}
             environment['SEALED_POLICY_EXIT']=exported.get('sealed_policy_exit','')
-            self.assertNotEqual(subprocess.run(['/bin/bash','-c',gate],env=environment,capture_output=True).returncode,0)
+            for name, workflow in workflows():
+                with self.subTest(workflow=name):
+                    self.assertNotEqual(subprocess.run(['/bin/bash','-c',final_gate(workflow)],env=environment,capture_output=True).returncode,0)
 
     def test_public_summary_separates_controls_and_keeps_raw_identities_private(self):
         with tempfile.TemporaryDirectory() as directory, mock.patch.dict(os.environ, {}, clear=True):
