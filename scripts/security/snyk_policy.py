@@ -16,6 +16,7 @@ import stat
 import subprocess
 import sys
 import tarfile
+import tempfile
 import time
 import traceback
 from urllib.parse import urlsplit
@@ -746,6 +747,46 @@ def seal(args, raw):
             stream.write(f"sealed_policy_exit={summary['policy']['exit_code']}\n")
 
 
+def cleanup_private_root_scope(root):
+    """Cleanup must never traverse a linked or noncanonical private root."""
+    if (not root.is_absolute() or root.resolve() != root or not root.is_dir()
+            or root.stat().st_uid != os.geteuid() or root.stat().st_mode & 0o022):
+        raise ValueError('Unapproved private cleanup root')
+
+
+def cleanup_go_module_cache(root):
+    """Only Go's owned, exact module cache needs its read-only-directory remover."""
+    cache = root / 'cache'
+    module_cache = cache / 'go-mod'
+    for path in (cache, module_cache):
+        if path.is_symlink():
+            raise ValueError('Unapproved Go cleanup cache')
+        if not path.exists():
+            return
+        if (path.resolve() != path or not path.is_dir() or path.stat().st_uid != os.geteuid()
+                or path.stat().st_mode & 0o022):
+            raise ValueError('Unapproved Go cleanup cache')
+    go = shutil.which('go')
+    if go is None:
+        raise ValueError('Go cleanup unavailable')
+    # A fresh owned cwd/HOME prevents source config, credentials and telemetry
+    # from escaping the private root. Dispose it before the remaining cleanup.
+    with tempfile.TemporaryDirectory(prefix='go-clean.', dir=root) as directory:
+        environment = {
+            'PATH': os.defpath, 'HOME': directory,
+            'XDG_CONFIG_HOME': directory + '/config', 'XDG_CACHE_HOME': directory + '/cache',
+            'GOPATH': directory + '/go', 'GOCACHE': directory + '/build',
+            'GOMODCACHE': str(module_cache), 'GOENV': 'off', 'GOTOOLCHAIN': 'local',
+            'GOWORK': 'off', 'GOPROXY': 'off', 'GOSUMDB': 'off',
+        }
+        for command in (['telemetry', 'off'], ['clean', '-modcache']):
+            result = subprocess.run([str(Path(go).resolve()), *command], cwd=directory,
+                                    env=environment, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                                    timeout=30)
+            if result.returncode != 0:
+                raise ValueError('Go cleanup incomplete')
+
+
 def main():
     os.umask(0o077)
     parser = argparse.ArgumentParser(description=__doc__)
@@ -758,10 +799,18 @@ def main():
     raw = args.root / 'raw'
     try:
         if args.mode == 'cleanup':
+            try:
+                cleanup_private_root_scope(args.root)
+            except Exception:
+                return 2
             failed = False
             try:
                 if args.public_root.exists():
                     trial.cleanup_public_workspace(args.public_root)
+            except Exception:
+                failed = True
+            try:
+                cleanup_go_module_cache(args.root)
             except Exception:
                 failed = True
             for path in (raw, args.root / 'home', args.root / 'config', args.root / 'cache',

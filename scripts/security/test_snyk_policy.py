@@ -546,6 +546,147 @@ class PolicyTests(unittest.TestCase):
             for name in ['home', 'config', 'cache', 'license-control']: self.assertFalse((root/name).exists())
             self.assertNotIn('SENTINEL', result.stdout+result.stderr)
 
+    def cleanup_command(self, root, public_root):
+        return [os.sys.executable, '-I', '-B', str(POLICY_PATH), 'cleanup', '--source', str(root/'source'),
+                '--control', str(root/'control'), '--sha', 'a'*40, '--control-sha', 'b'*40,
+                '--root', str(root), '--scanner', str(root/'scanner'), '--public-root', str(public_root)]
+
+    def populate_cleanup_plaintext(self, root):
+        for name in ['raw', 'home', 'config', 'cache', 'license-control']:
+            (root/name).mkdir(mode=0o700, parents=True)
+            (root/name/'private').write_text('SENTINEL')
+        for name in ['run-identity.json', 'evidence.tar.gz', 'encryption.stdout', 'encryption.stderr']:
+            (root/name).write_text('SENTINEL')
+
+    def assert_cleanup_plaintext_removed(self, root):
+        for name in ['raw', 'home', 'config', 'cache', 'license-control', 'run-identity.json',
+                     'evidence.tar.gz', 'encryption.stdout', 'encryption.stderr']:
+            self.assertFalse((root/name).exists(), name)
+
+    @unittest.skipUnless(shutil.which('go'), 'Local Go is required for the real module-cache regression')
+    def test_cli_cleanup_removes_owned_readonly_go_cache_without_touching_inherited_cache(self):
+        with tempfile.TemporaryDirectory() as directory, tempfile.TemporaryDirectory(
+                prefix='veyport-snyk-public.', dir='/tmp') as public_directory:
+            base=Path(directory); root=base/'private'; root.mkdir(mode=0o700)
+            self.populate_cleanup_plaintext(root)
+            module=root/'cache/go-mod/example.com/fixture@v1.0.0'
+            nested=module/'nested'; nested.mkdir(parents=True)
+            (root/'cache/go-mod').chmod(0o700)
+            (nested/'fixture.go').write_text('package fixture\n')
+            shared=base/'shared'; shared.mkdir(); (shared/'keep').write_text('SHARED')
+            (module/'external-link').symlink_to(shared, target_is_directory=True)
+            (nested/'fixture.go').chmod(0o444); nested.chmod(0o555); module.chmod(0o555)
+            shared.chmod(0o500)
+            environment={**os.environ, 'GOMODCACHE':str(shared), 'GOFLAGS':'--invalid-source-flag',
+                         'GOTOOLCHAIN':'invalid', 'GOENV':str(base/'source-go-env')}
+            try:
+                result=subprocess.run(self.cleanup_command(root, public_directory), env=environment,
+                                      capture_output=True, text=True, timeout=45)
+            finally:
+                # Let the fixture be disposed even when the old implementation fails RED.
+                for path in [module, nested]:
+                    if path.exists(): path.chmod(0o700)
+            self.assertEqual(result.returncode, 0, result.stdout+result.stderr)
+            self.assert_cleanup_plaintext_removed(root)
+            self.assertFalse(Path(public_directory).exists())
+            self.assertEqual((shared/'keep').read_text(), 'SHARED')
+            self.assertEqual(stat.S_IMODE(shared.stat().st_mode), 0o500)
+            self.assertEqual(result.stdout+result.stderr, '')
+
+    def test_cli_cleanup_rejects_external_go_cache_symlinks_and_still_removes_plaintext(self):
+        for link_name in ['cache', 'cache/go-mod']:
+            with self.subTest(link=link_name), tempfile.TemporaryDirectory() as directory:
+                base=Path(directory); root=base/'private'; root.mkdir(mode=0o700)
+                self.populate_cleanup_plaintext(root)
+                external=base/'shared'; external.mkdir(); (external/'keep').write_text('SHARED')
+                if link_name == 'cache': shutil.rmtree(root/'cache')
+                (root/link_name).symlink_to(external, target_is_directory=True)
+                result=subprocess.run(self.cleanup_command(root, base/'absent-public'),
+                                      capture_output=True, text=True, timeout=10)
+                self.assertEqual(result.returncode, 2)
+                self.assertEqual((external/'keep').read_text(), 'SHARED')
+                for name in ['raw', 'home', 'config', 'license-control', 'run-identity.json',
+                             'evidence.tar.gz', 'encryption.stdout', 'encryption.stderr']:
+                    self.assertFalse((root/name).exists(), name)
+                self.assertEqual(result.stdout+result.stderr, '')
+
+    def test_cli_cleanup_rejects_symlink_or_noncanonical_private_root_before_deletion(self):
+        for invalid in ['symlink', 'relative']:
+            with self.subTest(root=invalid), tempfile.TemporaryDirectory() as directory, tempfile.TemporaryDirectory(
+                    prefix='veyport-snyk-public.', dir='/tmp') as public_directory:
+                base=Path(directory); external=base/'outside'; external.mkdir()
+                self.populate_cleanup_plaintext(external)
+                root=base/'link'; root.symlink_to(external, target_is_directory=True)
+                if invalid == 'relative': root=Path(os.path.relpath(external))
+                result=subprocess.run(self.cleanup_command(root, public_directory),
+                                      capture_output=True, text=True, timeout=10)
+                self.assertEqual(result.returncode, 2)
+                self.assertTrue(Path(public_directory).exists())
+                for name in ['raw', 'home', 'config', 'cache', 'license-control']:
+                    self.assertEqual((external/name/'private').read_text(), 'SENTINEL')
+                self.assertEqual(result.stdout+result.stderr, '')
+
+    def test_cli_cleanup_go_failure_is_private_isolated_and_still_removes_plaintext(self):
+        with tempfile.TemporaryDirectory() as directory:
+            base=Path(directory); root=base/'private'; root.mkdir(mode=0o700)
+            self.populate_cleanup_plaintext(root); (root/'cache/go-mod').mkdir(mode=0o700)
+            tools=base/'tools'; tools.mkdir(); observation=base/'go-invocation.json'
+            fake=tools/'go'
+            fake.write_text('#!'+os.sys.executable+'\nimport json, os, pathlib, sys\n'
+                +'with pathlib.Path('+repr(str(observation))+').open("a") as stream:\n'
+                +' stream.write(json.dumps({"argv":sys.argv[1:], "cwd":os.getcwd(), '
+                +'"env":dict(os.environ)})+"\\n")\n'
+                +'print("PRIVATE CLEANER OUTPUT"); print("PRIVATE CLEANER OUTPUT", file=sys.stderr)\n'
+                +'sys.exit(0 if sys.argv[1:]==["telemetry", "off"] else 1)\n')
+            fake.chmod(0o700)
+            environment={**os.environ, 'PATH':str(tools), 'SNYK_TOKEN':'SYNTHETIC-NOT-A-CREDENTIAL',
+                         'GOMODCACHE':str(base/'shared'), 'GOFLAGS':'--invalid', 'GOTOOLCHAIN':'invalid'}
+            result=subprocess.run(self.cleanup_command(root, base/'absent-public'), env=environment,
+                                  capture_output=True, text=True, timeout=10)
+            self.assertEqual(result.returncode, 2)
+            self.assert_cleanup_plaintext_removed(root)
+            self.assertEqual(result.stdout+result.stderr, '')
+            invocations=[json.loads(line) for line in observation.read_text().splitlines()]
+            self.assertEqual([item['argv'] for item in invocations], [['telemetry', 'off'], ['clean', '-modcache']])
+            invocation=invocations[-1]; child=invocation['env']
+            self.assertEqual(invocation['argv'], ['clean', '-modcache'])
+            self.assertEqual(child['GOMODCACHE'], str(root/'cache/go-mod'))
+            self.assertEqual(child['GOENV'], 'off'); self.assertEqual(child['GOTOOLCHAIN'], 'local')
+            self.assertEqual(child['GOWORK'], 'off'); self.assertEqual(child['GOPROXY'], 'off')
+            self.assertEqual(child['GOSUMDB'], 'off')
+            self.assertNotIn('SNYK_TOKEN', child); self.assertNotIn('GOFLAGS', child)
+            self.assertTrue(Path(invocation['cwd']).is_relative_to(root))
+            self.assertFalse(Path(invocation['cwd']).exists())
+            self.assertFalse(Path(child['HOME']).exists())
+
+    def test_cleanup_go_timeout_or_setup_failure_still_attempts_all_plaintext(self):
+        for failure in [subprocess.TimeoutExpired(['go', 'clean', '-modcache'], 30),
+                        FileNotFoundError('Go unavailable')]:
+            with self.subTest(failure=type(failure).__name__), tempfile.TemporaryDirectory() as directory:
+                root=Path(directory); self.populate_cleanup_plaintext(root); (root/'cache/go-mod').mkdir(mode=0o700)
+                command=self.cleanup_command(root, root/'absent-public')
+                with mock.patch.object(os.sys, 'argv', command[3:]), \
+                        mock.patch.object(self.policy.os, 'umask'), \
+                        mock.patch.object(self.policy.shutil, 'which', return_value=str(root/'tools/go')), \
+                        mock.patch.object(self.policy.subprocess, 'run', side_effect=[
+                            subprocess.CompletedProcess(['go', 'telemetry', 'off'], 0), failure]) as run:
+                    self.assertEqual(self.policy.main(), 2)
+                self.assertGreater(run.call_args.kwargs['timeout'], 0)
+                self.assertLessEqual(run.call_args.kwargs['timeout'], 30)
+                self.assert_cleanup_plaintext_removed(root)
+
+    def test_cli_cleanup_missing_go_fails_only_when_module_cache_exists(self):
+        for cache_exists in [False, True]:
+            with self.subTest(cache_exists=cache_exists), tempfile.TemporaryDirectory() as directory:
+                root=Path(directory); self.populate_cleanup_plaintext(root)
+                if cache_exists: (root/'cache/go-mod').mkdir(mode=0o700)
+                result=subprocess.run(self.cleanup_command(root, root/'absent-public'),
+                                      env={'PATH':str(root/'absent-tools')}, capture_output=True,
+                                      text=True, timeout=10)
+                self.assertEqual(result.returncode, 2 if cache_exists else 0)
+                self.assert_cleanup_plaintext_removed(root)
+                self.assertEqual(result.stdout+result.stderr, '')
+
     def test_workflows_restrict_launch_credentials_and_cleanup(self):
         for name, workflow in workflows():
             diagnostic = name == 'snyk-policy-qualification.yml'
