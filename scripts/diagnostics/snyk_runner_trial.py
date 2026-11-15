@@ -131,7 +131,10 @@ def capture(command, cwd, prefix, timeout=300, env=None):
 
 
 def python_resolver_command(raw, python, public_root):
-    # Only public plugin code is exposed; reports/tools remain in the private root.
+    # Python SNYK_TMP_PATH shares this root with the separate-UID resolver.
+    # The selected canonical, owner-matched, symlink-free extraction subtree is
+    # made recursively readable/traversable; its file contents are not allowlisted.
+    # Explicit report and scanner/tool paths remain under the private root.
     public_workspace_scope(public_root)
     assets = public_root / "resolver-assets"
     assets.mkdir(mode=0o711, exist_ok=True)
@@ -199,31 +202,59 @@ def python_resolver_command(raw, python, public_root):
     return python_command
 
 
-def scan_projects(source, scanner, raw, python, public_root, timeout=300):
+def report_digest(path):
+    """Only newly produced canonical regular report bytes can bind an attempt."""
+    try:
+        info = path.lstat()
+        if (path.resolve() != path or not stat.S_ISREG(info.st_mode) or info.st_nlink != 1):
+            return None
+        return hashlib.sha256(path.read_bytes()).hexdigest()
+    except OSError:
+        return None
+
+
+def scan_projects(source, scanner, raw, python, public_root, timeout=300, *,
+                  projects=None, assessor=None, ignore_policy=False, verify_source=None,
+                  attempt_binding=None):
+    projects = PROJECTS if projects is None else projects
+    assessor = assess if assessor is None else assessor
+    if attempt_binding is not None and (type(attempt_binding) is not str
+                                       or not re.fullmatch('[0-9a-f]{64}', attempt_binding)):
+        raise ValueError("Invalid application attempt binding")
     python_command = python_resolver_command(raw, python, public_root)
     private_tmp = raw / "snyk-tmp"
     private_tmp.mkdir(mode=0o700, exist_ok=True)
     rows = []
-    for index, project in enumerate(PROJECTS):
+    for index, project in enumerate(projects):
         attempts = []
         result = incomplete()
         for attempt in (1, 2):
             prefix = raw / f"project-{index}-attempt-{attempt}"
             output = prefix.with_suffix(".json")
+            output.unlink(missing_ok=True)
+            if verify_source is not None:
+                verify_source()
             command = [scanner, "test", f"--org={ORG}", f"--file={Path(project).name}",
                        "--json", f"--json-file-output={output}"]
             environment = {"SNYK_TMP_PATH": str(private_tmp)}
-            if project == "web/package.json":
+            if ignore_policy:
+                command.append("--ignore-policy")
+            if project.endswith("package.json"):
                 command.append("--dev")
             if project.endswith("requirements.txt"):
                 # Recheck immediately before each Python invocation, after the other six projects.
                 verify_python_mirror_files(public_root, source)
                 command.extend(["--package-manager=pip", f"--command={python_command}"])
+                # Python extraction is the temp-root exception: the wrapper
+                # exposes the selected subtree via a+rX, without content classification.
                 environment["SNYK_TMP_PATH"] = str(public_root / "resolver-assets")
             cwd = (public_root / "mirror" / project).parent if project.endswith("requirements.txt") else (source / project).parent
             code = capture(command, cwd, prefix, timeout, env=environment)
-            result = assess(load_report(output), code, project)
-            attempts.append({"exit_code": code, "status": result["status"]})
+            digest = report_digest(output)
+            result = assessor(load_report(output) if digest is not None else None, code, project)
+            attempts.append({"exit_code": code, "status": result["status"], "attempt": attempt,
+                             "project": project, "run_identity_sha256": attempt_binding,
+                             "report_sha256": digest})
             # A completed scan with findings is final; only processing failures retry.
             if result["status"] in COMPLETE:
                 break
@@ -262,9 +293,9 @@ def public_summary(state):
             "processing_status": "trial_complete" if complete else "trial_incomplete"}
 
 
-def manifest_hashes(source):
-    paths = (*PROJECTS, *(p.replace("go.mod", "go.sum") for p in PROJECTS if p.endswith("go.mod")),
-             "web/package-lock.json")
+def manifest_hashes(source, projects=PROJECTS):
+    paths = (*projects, *(p.replace("go.mod", "go.sum") for p in projects if p.endswith("go.mod")),
+             *(str(Path(p).with_name("package-lock.json")) for p in projects if p.endswith("package.json")))
     return {name: hashlib.sha256((source / name).read_bytes()).hexdigest() for name in paths}
 
 
@@ -304,14 +335,14 @@ def public_workspace_scope(public_root, *, empty=False, inspect_tree=False):
     return public_root
 
 
-def create_python_mirror(public_root, source, sha):
+def create_python_mirror(public_root, source, sha, *, sources=SOURCES):
     public_workspace_scope(public_root, inspect_tree=True)
     original = source / PROJECTS[-1]
     if original.resolve() != original or not original.is_file():
         raise ValueError("Unapproved Python mirror source")
     content = original.read_bytes()
     digest = hashlib.sha256(content).hexdigest()
-    if sha not in SOURCES or digest != PYTHON_REQUIREMENTS_SHA256:
+    if sha not in sources or digest != PYTHON_REQUIREMENTS_SHA256:
         raise ValueError("Python mirror source hash mismatch")
     mirror = public_root / "mirror" / PROJECTS[-1]
     directory = public_root / "mirror"
@@ -336,11 +367,11 @@ def verify_python_mirror_files(public_root, source):
         raise ValueError("Python mirror source or content hash mismatch")
 
 
-def verify_python_mirror(public_root, source, sha, binding):
+def verify_python_mirror(public_root, source, sha, binding, *, sources=SOURCES):
     verify_python_mirror_files(public_root, source)
     expected = {"source_sha": sha, "source_path": PROJECTS[-1], "source_sha256": PYTHON_REQUIREMENTS_SHA256,
                 "mirror_sha256": PYTHON_REQUIREMENTS_SHA256, "public_root": str(public_root)}
-    if sha not in SOURCES or binding != expected:
+    if sha not in sources or binding != expected:
         raise ValueError("Python mirror provenance or hash mismatch")
     return expected
 
@@ -406,6 +437,31 @@ def verify_snyk_resolution(raw, scanner):
     return resolution["version"]
 
 
+def dependency_commands(args, *, projects=PROJECTS):
+    """Trusted runner commands shared by the fixed trial and policy candidate."""
+    lock = args.control / "scripts/diagnostics/snyk_runner_trial_requirements.lock"
+    commands = [
+        (["npm", "ci", "--ignore-scripts", "--include=dev", "--no-audit", "--no-fund"], args.source / "web"),
+        (["/usr/bin/python3.12", "-I", "-m", "venv", "--copies", str(args.public_root / "venv")], args.source),
+        ([args.public_root / "venv/bin/python", "-I", "-m", "pip", "--isolated", "install", "--require-hashes",
+          "--only-binary=:all:", "--disable-pip-version-check", "-r", lock,
+          "-r", args.source / projects[-1]], args.source),
+    ]
+    # Pre-resolve Go package graphs without executing repository code or editing manifests.
+    for project in projects:
+        if not project.endswith("go.mod"):
+            continue
+        for name in ("go.mod", "go.sum"):
+            (args.source / project).with_name(name).chmod(0o444)
+        commands.append((["go", "list", "-deps", "./..."], (args.source / project).parent))
+    # Preserve the original trial command order; add further npm targets explicitly.
+    for project in projects:
+        if project.endswith("package.json") and project != "web/package.json":
+            commands.append((["npm", "ci", "--ignore-scripts", "--include=dev", "--no-audit", "--no-fund"],
+                             (args.source / project).parent))
+    return commands
+
+
 def prepare(args, raw):
     # Validate the dedicated public scope before any dependency or permission mutation.
     public_workspace_scope(args.public_root, empty=True)
@@ -424,18 +480,7 @@ def prepare(args, raw):
     stub = args.source / "hub/web/dist/index.html"
     stub.parent.mkdir(parents=True, exist_ok=True)
     stub.touch()
-    commands = [
-        (["npm", "ci", "--ignore-scripts", "--include=dev", "--no-audit", "--no-fund"], args.source / "web"),
-        (["/usr/bin/python3.12", "-I", "-m", "venv", "--copies", str(args.public_root / "venv")], args.source),
-        ([args.public_root / "venv/bin/python", "-I", "-m", "pip", "--isolated", "install", "--require-hashes",
-          "--only-binary=:all:", "--disable-pip-version-check", "-r", lock,
-          "-r", args.source / PROJECTS[-1]], args.source),
-    ]
-    # Pre-resolve Go package graphs without executing repository code or editing manifests.
-    for project in PROJECTS[:5]:
-        for name in ("go.mod", "go.sum"):
-            (args.source / project).with_name(name).chmod(0o444)
-        commands.append((["go", "list", "-deps", "./..."], (args.source / project).parent))
+    commands = dependency_commands(args)
     codes = [capture(cmd, cwd, raw / f"prepare-{index}", timeout=600)
              for index, (cmd, cwd) in enumerate(commands)]
     resolver_permissions(args.root, args.source, args.public_root)

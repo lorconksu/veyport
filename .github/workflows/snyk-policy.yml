@@ -1,0 +1,213 @@
+# Local candidate only. Do not activate until documented qualification is complete.
+name: Snyk policy candidate
+
+on:
+  workflow_dispatch:
+    inputs:
+      source_sha:
+        description: Exact 40-character source commit in this repository
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  policy:
+    if: github.event_name == 'workflow_dispatch' && github.repository == 'lorconksu/veyport' && github.repository_owner_id == '13374789' && github.actor_id == '13374789' && github.actor == 'lorconksu' && github.triggering_actor == 'lorconksu' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 180
+    env:
+      CONTROL: ${{ github.workspace }}/controller
+      SOURCE: ${{ github.workspace }}/source
+      SOURCE_SHA: ${{ inputs.source_sha }}
+      CONTROL_SHA: ${{ github.sha }}
+      GOWORK: 'off'
+      GOFLAGS: -mod=readonly
+      GOTOOLCHAIN: local
+      GOENV: 'off'
+      GOPROXY: https://proxy.golang.org
+      GOSUMDB: sum.golang.org
+      CGO_ENABLED: '0'
+      NPM_CONFIG_USERCONFIG: /dev/null
+      NPM_CONFIG_GLOBALCONFIG: /dev/null
+      NPM_CONFIG_IGNORE_SCRIPTS: 'true'
+      SNYK_CFG_DISABLE_ANALYTICS: '1'
+      PYTHONDONTWRITEBYTECODE: '1'
+    steps:
+      - name: Validate source input and initialize private evidence
+        shell: bash
+        run: |
+          set -euo pipefail
+          umask 077
+          [[ "$SOURCE_SHA" =~ ^[0-9a-f]{40}$ ]]
+          [[ "$CONTROL_SHA" =~ ^[0-9a-f]{40}$ ]]
+          candidate_root="$RUNNER_TEMP/snyk-policy"
+          mkdir -p "$candidate_root/raw" "$candidate_root/tools" "$candidate_root/home" "$candidate_root/config" "$candidate_root/cache"
+          chmod 700 "$candidate_root"
+          public_python_root="$(mktemp -d /tmp/veyport-snyk-public.XXXXXXXX)"
+          {
+            printf 'TRIAL_ROOT=%s\n' "$candidate_root"
+            printf 'HOME=%s/home\n' "$candidate_root"
+            printf 'XDG_CONFIG_HOME=%s/config\n' "$candidate_root"
+            printf 'XDG_CACHE_HOME=%s/cache\n' "$candidate_root"
+            printf 'NPM_CONFIG_CACHE=%s/cache/npm\n' "$candidate_root"
+            printf 'GOCACHE=%s/cache/go-build\n' "$candidate_root"
+            printf 'GOMODCACHE=%s/cache/go-mod\n' "$candidate_root"
+            printf 'PUBLIC_PYTHON_ROOT=%s\n' "$public_python_root"
+          } >> "$GITHUB_ENV"
+
+      - name: Checkout trusted main controller
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          repository: lorconksu/veyport
+          ref: ${{ github.sha }}
+          path: controller
+          persist-credentials: false
+
+      - name: Checkout exact source separately
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          repository: lorconksu/veyport
+          ref: ${{ inputs.source_sha }}
+          path: source
+          persist-credentials: false
+
+      - name: Verify source and inventory before tool setup
+        shell: bash
+        run: |
+          set -euo pipefail
+          umask 077
+          test "$(git -C "$CONTROL" rev-parse HEAD)" = "$CONTROL_SHA"
+          # Only the controller Python is imported. Source scripts are never run.
+          /usr/bin/python3 -I -B -c 'import importlib.util, os; from pathlib import Path; s=importlib.util.spec_from_file_location("policy", Path(os.environ["CONTROL"])/"scripts/security/snyk_policy.py"); m=importlib.util.module_from_spec(s); s.loader.exec_module(m); m.validate_source(Path(os.environ["SOURCE"]), os.environ["SOURCE_SHA"])' >"$TRIAL_ROOT/raw/preflight.stdout" 2>"$TRIAL_ROOT/raw/preflight.stderr"
+
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
+        with:
+          go-version: 1.26.11
+          cache: false
+
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: 25
+          package-manager-cache: false
+
+      - name: Bootstrap authenticated packages and checksummed latest stable CLI
+        shell: bash
+        run: |
+          set -euo pipefail
+          umask 077
+          {
+            sudo apt-get update -qq
+            sudo apt-get install -y -qq age python3.12-venv
+            /usr/bin/python3.12 -I -B "$CONTROL/scripts/diagnostics/snyk_latest_cli.py" --root "$TRIAL_ROOT"
+          } >"$TRIAL_ROOT/raw/bootstrap.stdout" 2>"$TRIAL_ROOT/raw/bootstrap.stderr"
+
+      - name: Test trusted helper boundaries before credentials
+        shell: bash
+        run: |
+          set -euo pipefail
+          umask 077
+          {
+            test "$(id -u)" -ne 0
+            sudo -n /usr/bin/true
+            cd "$CONTROL"
+            # Existing cross-UID probes need searchable synthetic test directories.
+            (umask 022; /usr/bin/python3.12 -m unittest discover -s scripts/diagnostics -p 'test_*.py')
+            (umask 022; /usr/bin/python3.12 -m unittest discover -s scripts/security -p 'test_*.py')
+          } >"$TRIAL_ROOT/raw/tests.stdout" 2>"$TRIAL_ROOT/raw/tests.stderr"
+
+      - name: Prepare eight dependency targets without credentials
+        shell: bash
+        run: |
+          set -euo pipefail
+          umask 077
+          /usr/bin/python3.12 -I -B "$CONTROL/scripts/security/snyk_policy.py" prepare \
+            --source "$SOURCE" --control "$CONTROL" --sha "$SOURCE_SHA" --control-sha "$CONTROL_SHA" \
+            --root "$TRIAL_ROOT" --scanner "$TRIAL_ROOT/tools/snyk" --public-root "$PUBLIC_PYTHON_ROOT" \
+            >"$TRIAL_ROOT/raw/prepare.stdout" 2>"$TRIAL_ROOT/raw/prepare.stderr"
+
+      - name: Verify live license controls and scan exact source
+        id: scan
+        shell: bash
+        env:
+          SNYK_TOKEN: ${{ secrets.SNYK_TOKEN }}
+        run: |
+          set -euo pipefail
+          umask 077
+          /usr/bin/python3.12 -I -B "$CONTROL/scripts/security/snyk_policy.py" scan \
+            --source "$SOURCE" --control "$CONTROL" --sha "$SOURCE_SHA" --control-sha "$CONTROL_SHA" \
+            --root "$TRIAL_ROOT" --scanner "$TRIAL_ROOT/tools/snyk" --public-root "$PUBLIC_PYTHON_ROOT" \
+            >"$TRIAL_ROOT/raw/scan.stdout" 2>"$TRIAL_ROOT/raw/scan.stderr"
+
+      - name: Evaluate all findings and bound license controls
+        id: policy
+        if: always() && steps.scan.outcome != 'skipped'
+        shell: bash
+        run: |
+          set -euo pipefail
+          umask 077
+          /usr/bin/python3.12 -I -B "$CONTROL/scripts/security/snyk_policy.py" evaluate \
+            --source "$SOURCE" --control "$CONTROL" --sha "$SOURCE_SHA" --control-sha "$CONTROL_SHA" \
+            --root "$TRIAL_ROOT" --scanner "$TRIAL_ROOT/tools/snyk" --public-root "$PUBLIC_PYTHON_ROOT" \
+            >"$TRIAL_ROOT/raw/evaluate.stdout" 2>"$TRIAL_ROOT/raw/evaluate.stderr"
+
+      - name: Seal private evidence and generate allowlisted summary
+        id: encrypt
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          umask 077
+          /usr/bin/python3.12 -I -B "$CONTROL/scripts/security/snyk_policy.py" seal \
+            --source "$SOURCE" --control "$CONTROL" --sha "$SOURCE_SHA" --control-sha "$CONTROL_SHA" \
+            --root "$TRIAL_ROOT" --scanner "$TRIAL_ROOT/tools/snyk" --public-root "$PUBLIC_PYTHON_ROOT"
+
+      - name: Upload only encrypted evidence and allowlisted aggregates
+        id: upload
+        if: always() && steps.encrypt.outcome == 'success'
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: snyk-policy-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            ${{ runner.temp }}/snyk-policy/public/evidence.tar.gz.age
+            ${{ runner.temp }}/snyk-policy/public/summary.json
+          if-no-files-found: error
+          retention-days: 3
+
+      - name: Publish sanitized summary
+        if: always() && steps.encrypt.outcome == 'success'
+        shell: bash
+        run: |
+          set -euo pipefail
+          cat "$TRIAL_ROOT/public/summary.json" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Remove public resolver workspace and private plaintext
+        id: cleanup
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          /usr/bin/python3.12 -I -B "$CONTROL/scripts/security/snyk_policy.py" cleanup \
+            --source "$SOURCE" --control "$CONTROL" --sha "$SOURCE_SHA" --control-sha "$CONTROL_SHA" \
+            --root "${TRIAL_ROOT:-$RUNNER_TEMP/snyk-policy}" --scanner "${TRIAL_ROOT:-$RUNNER_TEMP/snyk-policy}/tools/snyk" \
+            --public-root "${PUBLIC_PYTHON_ROOT:-/tmp/uninitialized-public-python}"
+
+      - name: Final policy and evidence gate
+        if: always()
+        shell: bash
+        env:
+          SCAN_OUTCOME: ${{ steps.scan.outcome }}
+          POLICY_OUTCOME: ${{ steps.policy.outcome }}
+          ENCRYPT_OUTCOME: ${{ steps.encrypt.outcome }}
+          UPLOAD_OUTCOME: ${{ steps.upload.outcome }}
+          CLEANUP_OUTCOME: ${{ steps.cleanup.outcome }}
+          SEALED_POLICY_EXIT: ${{ steps.encrypt.outputs.sealed_policy_exit }}
+        run: |
+          set -euo pipefail
+          test "$SCAN_OUTCOME" = success
+          test "$POLICY_OUTCOME" = success
+          test "$ENCRYPT_OUTCOME" = success
+          test "$UPLOAD_OUTCOME" = success
+          test "$CLEANUP_OUTCOME" = success
+          test "$SEALED_POLICY_EXIT" = 0
