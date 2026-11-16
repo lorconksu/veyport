@@ -183,9 +183,15 @@ included, no exclusions, only update restriction with
 `update_allows_fetch_and_merge=false`, and exactly the same dedicated App as
 Integration/pull_request bypass. Set positive repository variable
 `PROTECTED_MERGE_QUALIFICATION_RULESET_ID` to this separate rule ID; it must
-differ from `PROTECTED_MERGE_RULESET_ID`. The App cannot create/edit rules,
-protections, fixtures, checks or refs. Owner/human direct-update and PR-merge
-refusal probes remain owner-operated; this harness always uses the App.
+differ from `PROTECTED_MERGE_RULESET_ID`. The App has no Administration write
+or Checks write grant, so it cannot create/edit rules, protections or checks.
+Its Contents write grant permits content/ref mutation subject to branch
+protections; the PR-only bypass is expected to deny direct updates to the
+protected fixture. The helper's App mutation client limits attempts to a ref
+PATCH on the literal existing fixture for the direct-push probe or an exact
+fixture PR merge. Fixture preparation and owner/human direct-update and
+PR-merge refusal probes remain owner-operated; this harness always uses the
+App.
 
 Enable only during the qualification window using exact repository variable
 `PROTECTED_MERGE_QUALIFICATION_ENABLED=true`. The same main-only

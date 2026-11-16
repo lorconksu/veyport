@@ -449,7 +449,9 @@ def merge_once(api, app_reads, merger, event, env, admission):
     # an additional binding. Never retry a write, even for a definite 409.
     expected_sha = result.get('sha') if type(result) is dict and exact_sha(result.get('sha')) else None
     try:
-        return merged_outcome(api, admission, expected_sha)
+        # Preflight may spend its entire read budget. Start confirmation only
+        # after the one write, with a fresh bounded reader and the same read token.
+        return merged_outcome(api.fresh_readonly(), admission, expected_sha)
     except (OSError, ValueError, KeyError, TypeError, urllib.error.URLError, http.client.HTTPException):
         return {'result': 'unconfirmed', 'merge_commit_sha': ''}
 

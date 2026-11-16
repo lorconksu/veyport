@@ -1,6 +1,9 @@
 """Offline behavior/security contracts for the automatic trusted PR publisher."""
 import copy
+from email.message import Message
 import hashlib
+from http import HTTPStatus
+import http.client
 import importlib.util
 import io
 import json
@@ -16,11 +19,102 @@ import zipfile
 import warnings
 import contextlib
 import urllib.parse
+import urllib.request
+import urllib.response
 
 PATH = Path(__file__).with_name('snyk_pr_policy.py')
 REPO = {'id': 1188082218, 'full_name': 'lorconksu/veyport',
         'owner': {'id': 13374789}, 'default_branch': 'main'}
 HEAD, CONTROL, BASE = 'a' * 40, 'b' * 40, 'c' * 40
+
+
+class MetadataTransportTests(unittest.TestCase):
+    """Keep real urllib handlers, replacing HTTPS I/O and denying sockets."""
+
+    def setUp(self):
+        spec = importlib.util.spec_from_file_location('snyk_ci_transport_under_test',
+                                                     PATH.with_name('snyk_ci_common.py'))
+        self.common = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(self.common)
+        self.root = 'https://api.github.com/repos/lorconksu/veyport'
+        self.routes = {self.root: (200, b'{"full_name":"lorconksu/veyport"}'),
+                       self.root + '/': (404, b'{}')}
+        self.requests = []
+        case = self
+
+        class HTTPS(urllib.request.HTTPSHandler):
+            def https_open(self, request):
+                case.requests.append(request)
+                status, body = case.routes[request.full_url]
+                response = urllib.response.addinfourl(io.BytesIO(body), Message(), request.full_url, status)
+                response.msg = HTTPStatus(status).phrase
+                return response
+
+        class RejectHTTP(urllib.request.HTTPHandler):
+            def http_open(self, request):
+                raise AssertionError('HTTP transport disabled in tests')
+
+        original = urllib.request.build_opener
+        opener = mock.patch.object(urllib.request, 'build_opener',
+                                   side_effect=lambda *handlers: original(*handlers, HTTPS(), RejectHTTP()))
+        opener.start()
+        self.addCleanup(opener.stop)
+        sockets = mock.patch('socket.create_connection', side_effect=AssertionError('socket connection attempted'))
+        sockets.start()
+        self.addCleanup(sockets.stop)
+        self.api = self.common.MetadataClient('synthetic-transport-token')
+
+    def test_empty_repository_route_uses_canonical_url_without_trailing_slash(self):
+        # An unconditional separator sends the request to the distinct 404 route.
+        self.assertEqual(self.api.get(''), {'full_name': 'lorconksu/veyport'})
+        request, = self.requests
+        self.assertEqual(request.full_url, 'https://api.github.com/repos/lorconksu/veyport')
+        self.assertEqual(request.get_method(), 'GET')
+        self.assertEqual(request.get_header('Authorization'), 'Bearer synthetic-transport-token')
+        self.assertEqual(request.get_header('Accept'), 'application/vnd.github+json')
+        self.assertEqual(request.get_header('User-agent'), 'veyport-snyk-pr-policy')
+        self.assertEqual(request.get_header('X-github-api-version'), '2022-11-28')
+
+    def test_nonempty_routes_preserve_exact_path_and_query(self):
+        for path in ('actions/runs/200', 'actions/runs/200/artifacts?per_page=100&page=2',
+                     'commits/' + HEAD + '/check-runs?filter=all&per_page=100&page=1'):
+            with self.subTest(path=path):
+                url = self.root + '/' + path
+                self.routes[url] = (200, b'{"ok":true}')
+                self.assertEqual(self.api.get(path), {'ok': True})
+                self.assertEqual(self.requests[-1].full_url, url)
+                self.assertEqual(self.requests[-1].get_header('Authorization'), 'Bearer synthetic-transport-token')
+
+    def test_http_is_rejected_before_any_socket_connection(self):
+        with self.assertRaisesRegex(AssertionError, '^HTTP transport disabled in tests$'):
+            self.api.transport.opener.open('http://api.github.com/repos/lorconksu/veyport')
+        self.assertEqual(self.requests, [])
+
+    def test_fresh_readonly_has_independent_bounded_transport_and_same_credentials(self):
+        clock = [0.0]
+        with mock.patch.object(self.common.time, 'monotonic', side_effect=lambda: clock[0]):
+            original = self.common.MetadataClient('synthetic-transport-token')
+            for _ in range(160): original.get('')
+            clock[0] = 120.0
+            fresh = original.fresh_readonly()
+            with self.assertRaises(ValueError): original.get('')
+            before = len(self.requests)
+            for method, path in (('POST', 'check-runs'), ('PATCH', 'check-runs/888'),
+                                 ('PUT', 'pulls/7/merge'), ('GET', 'https://evil.test/'),
+                                 ('GET', 'installation/repositories')):
+                with self.subTest(method=method, path=path), self.assertRaises(ValueError):
+                    fresh.transport.request(method, path)
+            self.assertEqual(len(self.requests), before)
+            for _ in range(160):
+                self.assertEqual(fresh.get(''), {'full_name': 'lorconksu/veyport'})
+            with self.assertRaises(ValueError): fresh.get('')
+            self.assertEqual(len(self.requests), before+160)
+            self.assertTrue(all(request.get_header('Authorization') == 'Bearer synthetic-transport-token'
+                                and request.get_method() == 'GET' for request in self.requests))
+            clock[0] = 240.0
+            fresh.transport.requests = 0  # Isolate expiry from the independent count limit.
+            with self.assertRaises(ValueError): fresh.get('')
+            self.assertEqual(len(self.requests), before+160)
 
 
 def fixtures():
@@ -45,9 +139,19 @@ def fixtures():
     return env, event, upstream, driver, pr
 
 
+# A fixed sibling import also works under isolated Python without sys.path changes.
+_CONTEXT_SUPPORT_SPEC = importlib.util.spec_from_file_location(
+    'security_context_test_support', Path(__file__).with_name('context_test_support.py'))
+_CONTEXT_SUPPORT = importlib.util.module_from_spec(_CONTEXT_SUPPORT_SPEC)
+_CONTEXT_SUPPORT_SPEC.loader.exec_module(_CONTEXT_SUPPORT)
+change_context_fields = _CONTEXT_SUPPORT.change_context_fields
+
+
 class Metadata:
     def __init__(self):
         self.env, self.event, self.upstream, self.driver, self.pr = fixtures()
+        self.repository = copy.deepcopy(REPO)
+        self.workflow = {'id': 300, 'path': '.github/workflows/snyk-pr-policy.yml', 'state': 'active'}
         self.runs = [self.upstream]
         self.drivers = [self.driver]
         self.prs = [self.pr]
@@ -59,12 +163,14 @@ class Metadata:
         self.other_runs = {}
         self.calls = []
 
+    def fresh_readonly(self): return self
+
     def get(self, path, **kwargs):
         self.calls.append(path)
         base = path.split('?')[0]
-        if base == '': return copy.deepcopy(REPO)
+        if base == '': return copy.deepcopy(self.repository)
         if base == 'actions/workflows/snyk-pr-policy.yml':
-            return {'id': 300, 'path': '.github/workflows/snyk-pr-policy.yml', 'state': 'active'}
+            return copy.deepcopy(self.workflow)
         if base == 'actions/runs/100': return copy.deepcopy(self.upstream)
         if base == 'actions/runs/200': return copy.deepcopy(self.driver)
         if base.startswith('actions/runs/') and base[13:].isdigit(): return copy.deepcopy(self.other_runs[int(base[13:])])
@@ -90,6 +196,8 @@ class Checks:
         self.record = None
         self.writes = []
         self.counter = 887
+
+    def fresh_publication(self): return self
 
     def create(self, body):
         self.writes.append(('POST', copy.deepcopy(body)))
@@ -208,6 +316,41 @@ class PRPolicyTests(unittest.TestCase):
                 self.setUp(); mutate(self.api)
                 with self.assertRaises(ValueError): self.p.admit(self.api, self.checks, self.api.event, self.api.env)
                 self.assertFalse(any(body.get('conclusion') == 'success' for _, body in self.checks.writes))
+
+    def test_authenticated_controller_context_refuses_before_check_writes(self):
+        # Directly related automatic-controller bindings only. Fork support and
+        # untrusted dispatch actors retain their existing successful controls.
+        cases = [
+            ('repository', ('repository', 'id'), 666),
+            ('repository-name', ('repository', 'full_name'), 'other/veyport'),
+            ('repository-owner', ('repository', 'owner', 'id'), 666),
+            ('default-branch', ('repository', 'default_branch'), 'release'),
+            ('event-repository', ('event', 'repository', 'id'), 666),
+            ('event-action', ('event', 'action'), 'completed'),
+            ('workflow-path', ('workflow', 'path'), '.github/workflows/other.yml'),
+            ('workflow-state', ('workflow', 'state'), 'disabled_manually'),
+            ('driver-id', ('driver', 'id'), 201),
+            ('driver-workflow', ('driver', 'workflow_id'), 301),
+            ('driver-event', ('driver', 'event'), 'workflow_dispatch'),
+            ('driver-branch', ('driver', 'head_branch'), 'release'),
+            ('driver-repository', ('driver', 'repository', 'id'), 666),
+            ('driver-head-repository', ('driver', 'head_repository', 'id'), 666),
+            ('environment-event', ('env', 'GITHUB_EVENT_NAME'), 'workflow_dispatch'),
+            ('environment-ref', ('env', 'GITHUB_REF'), 'refs/heads/release'),
+            ('environment-repository', ('env', 'GITHUB_REPOSITORY'), 'other/veyport'),
+        ]
+        for binding, path, value in cases:
+            with self.subTest(binding=binding):
+                self.setUp()
+                state = {key: getattr(self.api, key) for key in
+                         ('repository', 'workflow', 'env', 'event', 'driver', 'upstream', 'pr')}
+                change_context_fields(self, state, [(path, value)])
+                for key, item in state.items(): setattr(self.api, key, item)
+                with self.assertRaises(ValueError):
+                    self.p.context(self.api, self.api.event, self.api.env)
+                with self.assertRaises(ValueError):
+                    self.p.admit(self.api, self.checks, self.api.event, self.api.env)
+                self.assertEqual(self.checks.writes, [])
 
     def test_ambiguous_trigger_mapping_rejects_without_check_write_or_scan_output(self):
         second = {**copy.deepcopy(self.api.pr), 'id': 778, 'number': 8}
@@ -424,13 +567,15 @@ class PRPolicyTests(unittest.TestCase):
 
     def test_partial_rerun_missing_failed_skipped_neutral_cleanup_never_green(self):
         admission = self.admission(); files, jobs = self.evidence(admission)
+        self.assertEqual(self.p.final_verdict(admission, files, jobs, 'success'), 'success')
         for outcome in ['skipped', 'neutral', 'cancelled', 'failure', None]:
             for name in self.p.REQUIRED_STEPS:
                 bad = copy.deepcopy(jobs)
                 next(j for j in bad if j['name'] == name)['steps'][-1]['conclusion'] = outcome
                 self.assertEqual(self.p.final_verdict(admission, files, bad, 'success'), 'failure')
         for mutate in [lambda x: x.pop(), lambda x: x[1].update(run_attempt=2),
-                       lambda x: x[1]['steps'].pop(), lambda x: x.append(copy.deepcopy(x[1]))]:
+                       lambda x: x[1]['steps'].pop(), lambda x: x.append(copy.deepcopy(x[1])),
+                       lambda x: x[1]['steps'].append({**copy.deepcopy(x[1]['steps'][0]), 'number': 99})]:
             bad = copy.deepcopy(jobs); mutate(bad)
             self.assertEqual(self.p.final_verdict(admission, files, bad, 'success'), 'failure')
         self.assertEqual(self.p.final_verdict(admission, files, jobs, 'failure'), 'failure')
@@ -540,15 +685,154 @@ print(summary['source_sha'])
     def test_bad_artifact_metadata_digests_and_missing_jobs_publish_failure(self):
         mutations=[lambda a:a.artifacts[0].update(digest='sha256:'+'0'*64),
                    lambda a:a.artifacts[0].update(expired=True),
-                   lambda a:a.artifacts[0]['workflow_run'].update(id=199),
                    lambda a:a.artifacts[0].update(name='snyk-pr-policy-200-2'),
-                   lambda a:a.artifacts.append(copy.deepcopy(a.artifacts[0])),
+                   # Distinct IDs pass pagination so only exact-name uniqueness fails.
+                   lambda a:a.artifacts.append({**copy.deepcopy(a.artifacts[0]), 'id':445}),
                    lambda a:a.jobs.clear(), lambda a:a.jobs[1]['steps'].pop()]
         for mutate in mutations:
             with self.subTest(mutate=mutate):
                 self.setUp(); admission=self.prepare_publisher(); mutate(self.api)
                 self.assertEqual(self.p.publish(self.api,self.checks,admission,self.api.event,self.api.env),'failure')
                 self.assertEqual(self.checks.writes[-1][1]['conclusion'],'failure')
+
+    def test_each_artifact_provenance_binding_completes_failure_without_success(self):
+        for field, value in [('id', 199), ('repository_id', 666), ('head_repository_id', 666),
+                             ('head_branch', 'release'), ('head_sha', HEAD)]:
+            with self.subTest(field=field):
+                self.setUp()
+                admission = self.prepare_publisher()
+                # Change one valid field; retain the current name, digest, size and envelope.
+                self.api.artifacts[0]['workflow_run'][field] = value
+                self.assertEqual(self.p.publish(self.api, self.checks, admission, self.api.event, self.api.env), 'failure')
+                self.assertEqual(self.checks.record['id'], admission['check_id'])
+                self.assertEqual(self.checks.record['status'], 'completed')
+                self.assertEqual(self.checks.record['conclusion'], 'failure')
+                self.assertEqual([method for method, _ in self.checks.writes], ['POST', 'PATCH'])
+                self.assert_no_success()
+
+    def test_broken_artifact_response_completes_failure_and_preserves_previous_green(self):
+        for error in (http.client.IncompleteRead(b'PRIVATE', 1), http.client.BadStatusLine('PRIVATE')):
+            with self.subTest(error=type(error).__name__):
+                self.setUp(); admission = self.prepare_publisher()
+                previous = {**copy.deepcopy(self.checks.record), 'id': 800, 'status': 'completed', 'conclusion': 'success'}
+                self.api.markers = [copy.deepcopy(previous)]
+                api = self.p.MetadataClient('read-token')
+                traffic = []
+                case = self
+
+                class Response:
+                    status = 200
+                    def __init__(self, path): self.path = path
+                    def __enter__(self): return self
+                    def __exit__(self, *args): pass
+                    def read(self, limit):
+                        if self.path == 'actions/artifacts/444/zip': raise error
+                        return json.dumps(case.api.get(self.path)).encode()[:limit]
+
+                def send(request, timeout):
+                    self.assertEqual(request.get_method(), 'GET')
+                    path = request.full_url.removeprefix('https://api.github.com/repos/lorconksu/veyport').lstrip('/')
+                    traffic.append(path)
+                    return Response(path)
+
+                with mock.patch.object(api.transport.opener, 'open', side_effect=send), \
+                     mock.patch.object(self.p.urllib.request, 'build_opener', return_value=api.transport.opener), \
+                     mock.patch('socket.create_connection', side_effect=AssertionError('socket connection attempted')):
+                    conclusion = self.p.publish(api, self.checks, admission, self.api.event, self.api.env)
+                self.assertEqual(conclusion, 'failure')
+                self.assertIn('actions/artifacts/444/zip', traffic)
+                self.assertEqual(self.checks.record['id'], admission['check_id'])
+                self.assertEqual(self.checks.record['status'], 'completed')
+                self.assertEqual(self.checks.record['conclusion'], 'failure')
+                self.assertEqual(self.api.markers, [previous])
+                self.assertEqual([method for method, _ in self.checks.writes], ['POST', 'PATCH'])
+                self.assert_no_success()
+
+    def test_evidence_transport_exhaustion_has_fresh_final_publication_and_guards(self):
+        for budget in ('time', 'requests'):
+            for guard in ('current', 'stale-head', 'completed-check'):
+                with self.subTest(budget=budget, guard=guard):
+                    self.setUp(); admission = self.prepare_publisher()
+                    clock, traffic, created = [0.0], [], []
+                    case = self
+                    clients = {}
+
+                    class Response:
+                        status = 200
+                        def __init__(self, path, data): self.path, self.data = path, data
+                        def __enter__(self): return self
+                        def __exit__(self, *args): pass
+                        def read(self, limit):
+                            if self.path.startswith('actions/runs/200/artifacts?'):
+                                if budget == 'time': clock[0] = clients['api'].transport.deadline
+                                else:
+                                    while clients['api'].transport.requests < 160: clients['api'].get('')
+                                if guard == 'stale-head': case.api.pr['head']['sha'] = 'e'*40
+                                if guard == 'completed-check': case.checks.record.update(status='completed', conclusion='success')
+                            return self.data[:limit]
+
+                    class Opener:
+                        def open(self, request, timeout):
+                            path = request.full_url.removeprefix('https://api.github.com/repos/lorconksu/veyport').lstrip('/')
+                            method = request.get_method()
+                            traffic.append((method, path, request.get_header('Authorization')))
+                            case.assertTrue(0 < timeout <= 30)
+                            if path.startswith('check-runs/'):
+                                case.assertEqual(path, 'check-runs/'+str(admission['check_id']))
+                                if method == 'PATCH':
+                                    body = json.loads(request.data)
+                                    case.assertEqual(body['conclusion'], 'failure')
+                                    value = case.checks.update(admission['check_id'], body)
+                                else:
+                                    case.assertEqual(method, 'GET')
+                                    value = case.checks.get(admission['check_id'])
+                            else:
+                                case.assertEqual(method, 'GET')
+                                value = case.api.get(path)
+                            return Response(path, json.dumps(value).encode())
+
+                    def opener(*handlers):
+                        created.append((len(traffic), clock[0]))
+                        return Opener()
+
+                    with mock.patch.object(self.p.common.time, 'monotonic', side_effect=lambda: clock[0]), \
+                         mock.patch.object(self.p.urllib.request, 'build_opener', side_effect=opener), \
+                         mock.patch('socket.create_connection', side_effect=AssertionError('socket connection attempted')):
+                        clients['api'] = self.p.MetadataClient('read-token')
+                        checks = self.p.ChecksClient('read-token')
+                        if guard == 'current':
+                            conclusion = self.p.publish(clients['api'], checks, admission, self.api.event, self.api.env)
+                        else:
+                            with self.assertRaises(ValueError):
+                                self.p.publish(clients['api'], checks, admission, self.api.event, self.api.env)
+                        with self.assertRaises(ValueError): clients['api'].get('')
+                    patches = [row for row in traffic if row[0] == 'PATCH']
+                    self.assertEqual(len(patches), 1 if guard == 'current' else 0)
+                    if guard == 'current':
+                        self.assertEqual(conclusion, 'failure')
+                        self.assertEqual(self.checks.record['status'], 'completed')
+                        self.assertEqual(self.checks.record['conclusion'], 'failure')
+                    if guard == 'completed-check':
+                        self.assertEqual(self.checks.record['status'], 'completed')
+                        self.assertEqual(self.checks.record['conclusion'], 'success')
+                    self.assertEqual(len(created), 4)
+                    self.assertGreater(created[2][0], created[1][0])
+                    self.assertTrue(all(row[2] == 'Bearer read-token' for row in traffic))
+                    self.assert_no_success()
+
+    def test_final_publication_reader_failure_leaves_pending_without_patch(self):
+        for failure in ('metadata-factory', 'checks-factory', 'final-check-read'):
+            with self.subTest(failure=failure):
+                self.setUp(); admission = self.prepare_publisher()
+                target = self.api if failure == 'metadata-factory' else self.checks
+                method = {'metadata-factory': 'fresh_readonly', 'checks-factory': 'fresh_publication', 'final-check-read': 'get'}[failure]
+                error = http.client.IncompleteRead(b'PRIVATE', 1) if failure == 'final-check-read' else OSError('PRIVATE')
+                effect = [copy.deepcopy(self.checks.record), error] if failure == 'final-check-read' else error
+                with mock.patch.object(target, method, side_effect=effect), self.assertRaises(type(error)):
+                    self.p.publish(self.api, self.checks, admission, self.api.event, self.api.env)
+                self.assertEqual(self.checks.record['status'], 'in_progress')
+                self.assertEqual([method for method, _ in self.checks.writes], ['POST'])
+                self.assert_no_success()
 
     def test_head_race_during_download_never_writes_success(self):
         admission=self.prepare_publisher(); original=self.api.get
@@ -692,7 +976,14 @@ print(summary['source_sha'])
             def __init__(self,data,status=200):super().__init__(data);self.status=status
         class Router:
             def open(self,request,timeout):
-                path=request.full_url.split('/repos/lorconksu/veyport/',1)[1]
+                root='https://api.github.com/repos/lorconksu/veyport'
+                if request.full_url == root:
+                    path=''
+                elif request.full_url == root+'/':
+                    raise urllib.error.HTTPError(request.full_url,404,'Not Found',{},None)
+                else:
+                    case.assertTrue(request.full_url.startswith(root+'/'))
+                    path=request.full_url[len(root)+1:]
                 if path=='check-runs' or path.startswith('check-runs/'):
                     case.assertEqual(request.get_header('Authorization'),'Bearer read-token')
                     if request.method=='POST':value=case.checks.create(json.loads(request.data));status=201
@@ -921,9 +1212,12 @@ class PRWorkflowTests(unittest.TestCase):
         publish_guard = scalar(self.jobs['publish'], 'if', 4)
         good = {'needs.admission.result': 'success', 'needs.admission.outputs.decision': 'scan',
                 'needs.admission.outputs.admission_json': '{"trusted":"identity"}'}
-        self.assertTrue(expression(scan_guard, good))
+        scan_context = {**good, 'github.repository': 'lorconksu/veyport',
+                        'github.event.workflow_run.head_repository.full_name': 'lorconksu/veyport',
+                        'github.event.workflow_run.head_repository.id': 1188082218}
+        self.assertTrue(expression(scan_guard, scan_context))
         for decision in ['rejected', 'ignore', '']:
-            self.assertFalse(expression(scan_guard, {**good, 'needs.admission.outputs.decision': decision}))
+            self.assertFalse(expression(scan_guard, {**scan_context, 'needs.admission.outputs.decision': decision}))
         for scan in ['success', 'failure', 'cancelled', 'skipped']:
             self.assertTrue(expression(publish_guard, {**good, 'needs.scan.result': scan, 'success()': False}))
         for key in good:
@@ -934,6 +1228,37 @@ class PRWorkflowTests(unittest.TestCase):
         admission = self.jobs['admission']
         for key in ['decision', 'source_sha', 'admission_json']:
             self.assertEqual(scalar(admission, key, 6), '${{ steps.admit.outputs.' + key + ' }}')
+
+    def test_scan_rejects_untrusted_event_repository_even_with_successful_admission(self):
+        # Removing either provenance comparison must permit a bad event and fail this test.
+        _, event, _, _, _ = fixtures()
+        repository = event['workflow_run']['head_repository']
+        good = {'needs.admission.result': 'success', 'needs.admission.outputs.decision': 'scan',
+                'github.repository': event['repository']['full_name'],
+                'github.event.workflow_run.head_repository.full_name': repository['full_name'],
+                'github.event.workflow_run.head_repository.id': repository['id']}
+        guard = scalar(self.jobs['scan'], 'if', 4)
+        self.assertTrue(expression(guard, good))
+        for key, bad_values in {
+            'github.event.workflow_run.head_repository.full_name': ['', 'fork/veyport', 'lorconksu/other'],
+            'github.event.workflow_run.head_repository.id': ['', 0, 666],
+            'github.repository': ['', 'fork/veyport'],
+            'needs.admission.result': ['', 'failure', 'cancelled', 'skipped'],
+            'needs.admission.outputs.decision': ['', 'rejected', 'ignore'],
+        }.items():
+            for bad in bad_values:
+                with self.subTest(key=key, bad=bad):
+                    self.assertFalse(expression(guard, {**good, key: bad}))
+            with self.subTest(missing=key):
+                missing = {name: value for name, value in good.items() if name != key}
+                self.assertFalse(expression(guard, missing))
+        for head_repository in ({}, {'full_name': 'fork/veyport', 'id': 666}):
+            with self.subTest(head_repository=head_repository):
+                context = {name: value for name, value in good.items()
+                           if not name.startswith('github.event.workflow_run.head_repository.')}
+                context.update({'github.event.workflow_run.head_repository.' + name: value
+                                for name, value in head_repository.items()})
+                self.assertFalse(expression(guard, context))
 
     def test_exact_checkouts_and_all_required_steps_are_explicit(self):
         spec = importlib.util.spec_from_file_location('workflow_contract', PATH)

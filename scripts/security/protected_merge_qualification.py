@@ -307,7 +307,7 @@ def probe(api, reads, event, env):
     admitted = context(api, event, env)
     settings(reads, env, admitted['case'])
     if admitted['case'] == 'main-settings':
-        result = classify(admitted, 200, {}, True)
+        result = classify(admitted, None, {}, True)
         return {**result, 'outcome': 'main-baseline-visible', 'mutation_attempted': False, 'evidence_scope': 'main-classic-and-app-identity-only'}
     fixture_preflight(api, admitted)
     require(context(api, event, env) == admitted)  # last request/head/base/owner reads
@@ -320,7 +320,7 @@ def probe(api, reads, event, env):
     except ERRORS:
         pass  # Only read-only reconciliation follows uncertain write; never retry.
     try:
-        return reconcile(api, admitted, status, response)
+        return reconcile(api.fresh_readonly(), admitted, status, response)
     except ERRORS:
         result = classify(admitted, status, response, True)
         return {**result, 'outcome': 'unconfirmed'}

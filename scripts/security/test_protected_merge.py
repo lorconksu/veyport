@@ -68,21 +68,33 @@ def fixtures(operation='merge'):
     return env, event, run, pr
 
 
+# A fixed sibling import also works under isolated Python without sys.path changes.
+_CONTEXT_SUPPORT_SPEC = importlib.util.spec_from_file_location(
+    'security_context_test_support', Path(__file__).with_name('context_test_support.py'))
+_CONTEXT_SUPPORT = importlib.util.module_from_spec(_CONTEXT_SUPPORT_SPEC)
+_CONTEXT_SUPPORT_SPEC.loader.exec_module(_CONTEXT_SUPPORT)
+change_context_fields = _CONTEXT_SUPPORT.change_context_fields
+
+
 class Metadata:
     def __init__(self, operation='merge'):
         self.env, self.event, self.run, self.pr = fixtures(operation)
+        self.repository = copy.deepcopy(REPO)
+        self.workflow = {'id': 300, 'path': '.github/workflows/protected-merge.yml', 'state': 'active'}
         self.main = CONTROL
         self.jobs, self.artifacts, self.raw, self.calls = [], [], b'', []
         self.before_get = None
         self.commit = {'sha': MERGED, 'parents': [{'sha': CONTROL}, {'sha': HEAD}]}
 
+    def fresh_readonly(self): return self
+
     def get(self, path, raw=False):
         self.calls.append(path)
         if self.before_get: self.before_get(self, path)
         base = path.split('?')[0]
-        if base == '': return copy.deepcopy(REPO)
+        if base == '': return copy.deepcopy(self.repository)
         if base == 'actions/workflows/protected-merge.yml':
-            return {'id': 300, 'path': '.github/workflows/protected-merge.yml', 'state': 'active'}
+            return copy.deepcopy(self.workflow)
         if base == 'actions/runs/200': return copy.deepcopy(self.run)
         if base == 'git/ref/heads/main': return {'ref': 'refs/heads/main', 'object': {'type': 'commit', 'sha': self.main}}
         if base == 'pulls/7': return copy.deepcopy(self.pr)
@@ -248,6 +260,48 @@ class ProtectedMergeTests(unittest.TestCase):
                 self.api = Metadata(); mutate(self.api)
                 with self.assertRaises(ValueError): self.admission()
 
+    def test_authenticated_context_bindings_refuse_before_app_reads_or_merge(self):
+        # Each role is independently mutable; valid foreign values exercise authority,
+        # rather than failing a type/shape check before the binding under audit.
+        cases = [
+            ('repository', ('repository', 'id'), 666),
+            ('repository-name', ('repository', 'full_name'), 'other/veyport'),
+            ('repository-owner', ('repository', 'owner', 'id'), 666),
+            ('repository-owner-login', ('repository', 'owner', 'login'), 'someone'),
+            ('default-branch', ('repository', 'default_branch'), 'release'),
+            ('event-repository', ('event', 'repository', 'id'), 666),
+            ('workflow-path', ('workflow', 'path'), '.github/workflows/other.yml'),
+            ('workflow-state', ('workflow', 'state'), 'disabled_manually'),
+            ('run-id', ('run', 'id'), 201),
+            ('run-workflow', ('run', 'workflow_id'), 301),
+            ('run-event', ('run', 'event'), 'workflow_run'),
+            ('run-branch', ('run', 'head_branch'), 'release'),
+            ('run-repository', ('run', 'repository', 'id'), 666),
+            ('run-head-repository', ('run', 'head_repository', 'id'), 666),
+            ('original-owner-login', ('run', 'actor', 'login'), 'someone'),
+            ('triggering-owner-login', ('run', 'triggering_actor', 'login'), 'someone'),
+            ('sender-login', ('event', 'sender', 'login'), 'someone'),
+            ('pr-number', ('pr', 'number'), 8),
+            ('pr-base-repository', ('pr', 'base', 'repo', 'id'), 666),
+            ('environment-ref', ('env', 'GITHUB_REF'), 'refs/heads/release'),
+            ('environment-repository', ('env', 'GITHUB_REPOSITORY'), 'other/veyport'),
+            ('environment-owner-login', ('env', 'GITHUB_ACTOR'), 'someone'),
+        ]
+        for binding, path, value in cases:
+            for consumer in ('admit', 'merge'):
+                with self.subTest(binding=binding, consumer=consumer):
+                    self.setUp()
+                    admission = self.prepared() if consumer == 'merge' else None
+                    state = {key: getattr(self.api, key) for key in
+                             ('repository', 'workflow', 'env', 'event', 'run', 'pr')}
+                    change_context_fields(self, state, [(path, value)])
+                    for key, item in state.items(): setattr(self.api, key, item)
+                    with self.assertRaises(ValueError):
+                        if consumer == 'admit': self.admission()
+                        else: self.merge(admission)
+                    self.assertEqual(self.app.calls, [])
+                    self.assertEqual(self.writer.writes, [])
+
     def test_strict_admission_rejects_extra_boolean_and_automatic_identity(self):
         admission = self.admission()
         for key, value in [('purpose', 'automatic-pr'), ('run_attempt', 2), ('owner_id', True),
@@ -295,8 +349,26 @@ class ProtectedMergeTests(unittest.TestCase):
                 with self.assertRaises(ValueError): self.merge({**admission, key: value})
                 self.assertEqual(self.writer.writes, [])
 
+    def test_embedded_evidence_identity_must_match_current_admission(self):
+        for key, value in [('pr_number', 8), ('pr_id', 556), ('pr_node_id', 'PR_other'),
+                           ('run_id', 199), ('run_number', 19),
+                           ('source_ref_sha256', self.p.common.digest(b'feature/other'))]:
+            with self.subTest(key=key):
+                self.setUp()
+                admission = self.prepared()
+                foreign = {**admission, key: value}
+                # Rebuild the envelope for the foreign identity, while retaining
+                # current-run API provenance and valid archive/digest bindings.
+                files = self.evidence(foreign)
+                self.p.validate_evidence(foreign, files)
+                self.assertEqual(self.p.context(self.api, self.api.event, self.api.env), admission)
+                with self.assertRaises(ValueError): self.merge(admission)
+                self.assertEqual(self.app.calls, [])
+                self.assertEqual(self.writer.writes, [])
+
     def test_successful_merge_uses_exact_number_head_and_reports_sanitized_commit(self):
         admission = self.prepared()
+        self.assertEqual(self.p.protection_config(self.api.env), (999, 777, 'veyport-merger', 'Iv1.example'))
         result = self.merge(admission)
         self.assertEqual(result, {'result': 'merged', 'merge_commit_sha': MERGED})
         self.assertEqual(self.writer.writes, [(7, HEAD)])
@@ -304,61 +376,115 @@ class ProtectedMergeTests(unittest.TestCase):
         self.assertNotIn('PRIVATE', json.dumps(result))
 
     def test_policy_and_envelope_faults_block_before_any_privileged_reads(self):
-        admission = self.prepared()
-        files = self.evidence(admission)
         for mutation in ['high', 'license', 'control', 'incomplete', 'tamper', 'automatic', 'cipher', 'scanner']:
             with self.subTest(mutation=mutation):
+                self.setUp()
+                admission = self.prepared()
+                files = self.evidence(admission)
                 changed = copy.deepcopy(files)
                 summary = json.loads(changed['summary.json'])
                 envelope = json.loads(changed['publication.json'])
                 if mutation in ('high', 'license'):
                     field = 'blocking_vulnerability_records' if mutation == 'high' else 'blocking_license_records'
                     summary['projects'][0][field] = 1
+                    summary['projects'][0]['vulnerability_path_records' if mutation == 'high' else 'license_path_records'] = 1
+                    summary['projects'][0]['status'] = 'scan_complete_with_findings'
                 elif mutation == 'control': summary['license_controls'] = self.p.common.policy.control_status(False)
                 elif mutation == 'incomplete': summary['processing_status'] = 'incomplete'
                 elif mutation == 'tamper': envelope['summary']['sha256'] = '0'*64
                 elif mutation == 'automatic': envelope['purpose'] = 'automatic-pr'
-                elif mutation == 'cipher': changed['evidence.tar.gz.age'] = b'plaintext'
+                elif mutation == 'cipher':
+                    changed['evidence.tar.gz.age'] = b'plaintext'
+                    envelope['ciphertext'] = {'sha256': self.p.common.digest(b'plaintext'), 'size': 9}
                 elif mutation == 'scanner': envelope['scanner']['size'] = True
+                if mutation in ('high', 'license', 'control', 'incomplete'):
+                    summary['policy'] = self.p.common.policy.policy_result(summary['projects'],
+                        controls_verified=summary['license_controls']['status'] == 'verified')
+                    self.assertEqual(summary['policy']['exit_code'],
+                                     {'high': 1, 'license': 1, 'control': 2, 'incomplete': 0}[mutation])
                 changed['summary.json'] = json.dumps(summary).encode()
+                if mutation in ('high', 'license', 'control', 'incomplete'):
+                    # These are schema-valid policy refusals, not hash tampering.
+                    # make_evidence validates row totals/policy and rebinds bytes.
+                    envelope = self.p.make_evidence(admission, changed['summary.json'],
+                                                    changed['evidence.tar.gz.age'], b'scanner')
                 changed['publication.json'] = json.dumps(envelope).encode()
                 self.install_files(changed)
                 with self.assertRaises(ValueError): self.merge(admission)
                 self.assertEqual(self.app.calls, []); self.assertEqual(self.writer.writes, [])
 
+    def test_native_check_app_ids_are_refused_before_privileged_reads(self):
+        for app_id in (15368, 57789):
+            for boundary in ('configuration', 'merge'):
+                with self.subTest(app_id=app_id, boundary=boundary):
+                    self.setUp()
+                    admission = self.prepared()
+                    self.api.env['PROTECTED_MERGE_APP_ID'] = str(app_id)
+                    # Keep all downstream identity/rule checks otherwise valid,
+                    # so an App metadata mismatch cannot mask the refusal.
+                    self.app.app['id'] = app_id
+                    self.app.rule['bypass_actors'][0]['actor_id'] = app_id
+                    self.app.rulesets = [copy.deepcopy(self.app.rule)]
+                    with self.assertRaises(ValueError):
+                        if boundary == 'configuration': self.p.protection_config(self.api.env)
+                        else: self.merge(admission)
+                    self.assertEqual(self.app.calls, [])
+                    self.assertEqual(self.writer.writes, [])
+
     def test_missing_failed_cancelled_skipped_duplicate_or_wrong_attempt_lifecycle_blocks(self):
-        admission = self.prepared()
-        pristine = copy.deepcopy(self.api.jobs)
         for kind in ['missing', 'duplicate', 'job_failed', 'cancelled', 'step_skipped', 'step_failed',
                      'extra_failed', 'duplicate_step', 'attempt', 'head', 'run', 'verify']:
             with self.subTest(kind=kind):
-                self.api.jobs = copy.deepcopy(pristine)
+                self.setUp()
+                admission = self.prepared()
                 scan = self.api.jobs[1]
                 if kind == 'missing': scan['steps'].pop()
-                elif kind == 'duplicate': self.api.jobs.append(copy.deepcopy(scan))
+                # Distinct IDs/numbers let the exact-name guards decide.
+                elif kind == 'duplicate': self.api.jobs.append({**copy.deepcopy(scan), 'id': 5})
                 elif kind == 'job_failed': scan['conclusion'] = 'failure'
                 elif kind == 'cancelled': scan['conclusion'] = 'cancelled'
                 elif kind == 'step_skipped': scan['steps'][0]['conclusion'] = 'skipped'
                 elif kind == 'step_failed': scan['steps'][0]['conclusion'] = 'failure'
                 elif kind == 'extra_failed': scan['steps'].append({'name': 'extra', 'number': 99, 'status': 'completed', 'conclusion': 'failure'})
-                elif kind == 'duplicate_step': scan['steps'].append(copy.deepcopy(scan['steps'][0]))
+                elif kind == 'duplicate_step': scan['steps'].append({**copy.deepcopy(scan['steps'][0]), 'number': 99})
                 elif kind == 'attempt': scan['run_attempt'] = 2
                 elif kind == 'head': scan['head_sha'] = HEAD
                 elif kind == 'run': scan['run_id'] = 199
                 elif kind == 'verify': self.api.jobs[2]['conclusion'] = 'skipped'
                 with self.assertRaises(ValueError): self.merge(admission)
+                self.assertEqual(self.app.calls, [])
                 self.assertEqual(self.writer.writes, [])
 
     def test_artifact_missing_duplicate_provenance_digest_and_expiry_fail_closed(self):
-        admission = self.prepared()
-        pristine = copy.deepcopy(self.api.artifacts)
         for key, value in [('name', 'protected-merge-199-1'), ('expired', True), ('digest', None),
-                           ('digest', 'sha256:'+'0'*64), ('workflow_run', {'id': 199}), ('size_in_bytes', 1)]:
-            self.api.artifacts = copy.deepcopy(pristine); self.api.artifacts[0][key] = value
-            with self.subTest(key=key), self.assertRaises(ValueError): self.merge(admission)
-        self.api.artifacts = pristine * 2
+                           # Incomplete provenance is separate from each foreign-field binding below.
+                           ('digest', 'sha256:'+'0'*64), ('workflow_run', {'id': 200}), ('size_in_bytes', 1)]:
+            with self.subTest(key=key, value=value):
+                self.setUp()
+                admission = self.prepared()
+                self.api.artifacts[0][key] = value
+                with self.assertRaises(ValueError): self.merge(admission)
+                self.assertEqual(self.app.calls, [])
+                self.assertEqual(self.writer.writes, [])
+        self.setUp()
+        admission = self.prepared()
+        # Distinct IDs pass pagination so the exact-name uniqueness guard decides.
+        self.api.artifacts.append({**copy.deepcopy(self.api.artifacts[0]), 'id': 445})
         with self.assertRaises(ValueError): self.merge(admission)
+        self.assertEqual(self.app.calls, [])
         self.assertEqual(self.writer.writes, [])
+
+    def test_each_artifact_provenance_binding_blocks_before_app_reads_and_merge(self):
+        for field, value in [('id', 199), ('repository_id', 666), ('head_repository_id', 666),
+                             ('head_branch', 'release'), ('head_sha', HEAD)]:
+            with self.subTest(field=field):
+                self.setUp()
+                admission = self.prepared()
+                # Change one valid field; retain the current name, digest, size and envelope.
+                self.api.artifacts[0]['workflow_run'][field] = value
+                with self.assertRaises(ValueError): self.merge(admission)
+                self.assertEqual(self.app.calls, [])
+                self.assertEqual(self.writer.writes, [])
 
     def test_captured_classic_api_response_accepts_without_fabricated_fields(self):
         self.assertNotIn('restrictions', self.app.protection)
@@ -521,6 +647,74 @@ class ProtectedMergeTests(unittest.TestCase):
         self.assertEqual(result, {'result': 'merged', 'merge_commit_sha': MERGED})
         self.assertEqual(self.writer.writes, [(7, HEAD)])
 
+    def test_exhausted_prewrite_transport_budget_has_fresh_readonly_reconciliation(self):
+        # Reusing the preflight Transport loses confirmation after a real PUT
+        # when either its elapsed-time or request budget is exhausted.
+        for budget in ('time', 'requests'):
+            for response in ('normal', 'malformed', 'uncertain'):
+                with self.subTest(budget=budget, response=response):
+                    self.setUp(); admission = self.prepared()
+                    clock, traffic, created = [0.0], [], []
+                    case = self
+
+                    class Response:
+                        status = 200
+                        def __init__(self, data): self.data = data
+                        def __enter__(self): return self
+                        def __exit__(self, *args): pass
+                        def read(self, limit): return self.data[:limit]
+
+                    class Opener:
+                        def open(self, request, timeout):
+                            path = request.full_url.removeprefix('https://api.github.com/repos/lorconksu/veyport').lstrip('/')
+                            method = request.get_method()
+                            traffic.append((method, path, request.get_header('Authorization'), timeout))
+                            if method == 'PUT':
+                                case.assertEqual(path, 'pulls/7/merge')
+                                case.assertEqual(json.loads(request.data), {'sha': HEAD, 'merge_method': 'merge'})
+                                case.api.pr.update(state='closed', merged=True, merge_commit_sha=MERGED)
+                                if response == 'uncertain': raise http.client.IncompleteRead(b'PRIVATE', 1)
+                                return Response(b'{}' if response == 'malformed' else json.dumps({'sha': MERGED}).encode())
+                            case.assertEqual(method, 'GET')
+                            value = case.api.get(path, raw=path.endswith('/zip'))
+                            return Response(value if type(value) is bytes else json.dumps(value).encode())
+
+                    def opener(*handlers):
+                        created.append((len(traffic), clock[0]))
+                        return Opener()
+
+                    original_context, contexts = self.p.context, [0]
+                    def exhaust_last_context(api, event, env):
+                        result = original_context(api, event, env)
+                        contexts[0] += 1
+                        if contexts[0] == 3:
+                            if budget == 'requests':
+                                while api.transport.requests < 160: api.get('')
+                            else:
+                                clock[0] = api.transport.deadline
+                        return result
+
+                    with mock.patch.object(self.p.common.time, 'monotonic', side_effect=lambda: clock[0]), \
+                         mock.patch.object(self.p.urllib.request, 'build_opener', side_effect=opener), \
+                         mock.patch.object(self.p, 'context', side_effect=exhaust_last_context), \
+                         mock.patch('socket.create_connection', side_effect=AssertionError('socket connection attempted')):
+                        api = self.p.MetadataClient('read-token')
+                        merger = self.p.MergeClient('app-token')
+                        result = self.p.merge_once(api, self.app, merger, self.api.event, self.api.env, admission)
+                        with self.assertRaises(ValueError): api.get('')
+                    self.assertEqual(contexts[0], 3)
+                    writes = [row for row in traffic if row[0] == 'PUT']
+                    self.assertEqual(len(writes), 1)
+                    self.assertEqual(result, {'result': 'merged', 'merge_commit_sha': MERGED})
+                    write_index = next(i for i, row in enumerate(traffic) if row[0] == 'PUT')
+                    self.assertEqual([(row[0], row[1], row[2]) for row in traffic[write_index+1:]],
+                                     [('GET', 'pulls/7', 'Bearer read-token'),
+                                      ('GET', 'commits/'+MERGED, 'Bearer read-token')])
+                    self.assertEqual(writes[0][2], 'Bearer app-token')
+                    self.assertEqual(len(created), 3)
+                    self.assertEqual(created[-1][0], write_index+1)
+                    self.assertTrue(all(0 < row[3] <= 30 for row in traffic))
+
     def test_head_409_and_unresolved_uncertainty_do_not_retry_or_claim_success(self):
         for error in [urllib.error.HTTPError('private', 409, 'private', {}, None), urllib.error.URLError('private')]:
             self.api = Metadata(); self.writer = Writer(self.api); admission = self.prepared()
@@ -639,7 +833,7 @@ class ProtectedMergeTests(unittest.TestCase):
         admission = self.prepared()
         pristine = copy.deepcopy(self.api.jobs)
         for kind in ['missing_job', 'completed', 'prior_failed', 'prior_missing', 'active_missing',
-                     'active_queued', 'active_completed', 'extra_skipped', 'duplicate_number']:
+                     'active_queued', 'active_completed', 'extra_skipped', 'duplicate_number', 'duplicate_active']:
             with self.subTest(kind=kind):
                 self.api.jobs = copy.deepcopy(pristine)
                 job = self.api.jobs[-1]
@@ -652,6 +846,7 @@ class ProtectedMergeTests(unittest.TestCase):
                 if kind == 'active_completed': job['steps'][-1].update(status='completed', conclusion='success')
                 if kind == 'extra_skipped': job['steps'].append({'name': 'extra', 'number': 8, 'conclusion': 'skipped'})
                 if kind == 'duplicate_number': job['steps'][2]['number'] = 1
+                if kind == 'duplicate_active': job['steps'].append({**copy.deepcopy(job['steps'][-1]), 'number': 99})
                 with self.assertRaises(ValueError): self.merge(admission)
                 self.assertEqual(self.app.calls, []); self.assertEqual(self.writer.writes, [])
 
@@ -735,7 +930,16 @@ class ProtectedMergeTests(unittest.TestCase):
             requests.append(request)
             parts = urllib.parse.urlsplit(request.full_url)
             self.assertEqual(parts.scheme, 'https'); self.assertEqual(parts.netloc, 'api.github.com')
-            path = parts.path.removeprefix('/repos/lorconksu/veyport/').lstrip('/')
+            root = '/repos/lorconksu/veyport'
+            if parts.path == root:
+                path = ''
+            elif parts.path == root+'/':
+                raise urllib.error.HTTPError(request.full_url, 404, 'Not Found', {}, None)
+            elif parts.path.startswith(root+'/'):
+                path = parts.path[len(root)+1:]
+            else:
+                self.assertTrue(parts.path.startswith('/apps/') or parts.path == '/installation/repositories')
+                path = parts.path[1:]
             if parts.query: path += '?'+parts.query
             if request.get_method() == 'PUT':
                 self.assertEqual(request.get_header('Authorization'), 'Bearer app-token')
