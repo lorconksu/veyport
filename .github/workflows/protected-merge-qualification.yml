@@ -1,0 +1,129 @@
+# Retain reviewed source; leave enable variable false after isolated qualification.
+name: Protected merge isolated qualification
+
+on:
+  workflow_dispatch:
+    inputs:
+      case:
+        description: Fixed isolated fixture probe (no production merge)
+        type: choice
+        options: [main-settings, wrong-head, direct-push, native-merge, missing-canary, pending-canary, failed-canary, workflow-file-merge]
+        default: main-settings
+        required: true
+      pr_number:
+        description: Exact open same-repository fixture PR number
+        type: string
+        required: true
+      head_sha:
+        description: Exact lowercase 40-hex fixture PR head
+        type: string
+        required: true
+
+permissions: {}
+
+env:
+  CONTROL: ${{ github.workspace }}/controller
+  PROTECTED_MERGE_QUALIFICATION_ENABLED: ${{ vars.PROTECTED_MERGE_QUALIFICATION_ENABLED }}
+
+jobs:
+  admission:
+    name: admission
+    if: github.event_name == 'workflow_dispatch' && github.repository == 'lorconksu/veyport' && github.repository_id == '1188082218' && github.repository_owner_id == '13374789' && github.ref == 'refs/heads/main' && github.actor == 'lorconksu' && github.actor_id == '13374789' && github.triggering_actor == 'lorconksu' && github.run_attempt == '1' && vars.PROTECTED_MERGE_QUALIFICATION_ENABLED == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      actions: read
+      pull-requests: read
+      checks: write
+    outputs:
+      admitted: ${{ steps.admit.outputs.admitted }}
+    steps:
+      - name: Checkout trusted main controller
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          repository: lorconksu/veyport
+          ref: ${{ github.sha }}
+          path: controller
+          persist-credentials: false
+
+      - name: Admit fixed fixture request
+        id: admit
+        shell: bash
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          umask 077
+          /usr/bin/python3.12 -I -B "$CONTROL/scripts/security/protected_merge_qualification.py" admit
+
+      - name: Produce fixed native canary when requested
+        if: steps.admit.outputs.case == 'pending-canary' || steps.admit.outputs.case == 'failed-canary'
+        shell: bash
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          umask 077
+          /usr/bin/python3.12 -I -B "$CONTROL/scripts/security/protected_merge_qualification.py" produce-canary
+
+  probe:
+    name: probe
+    needs: admission
+    if: needs.admission.result == 'success' && needs.admission.outputs.admitted == 'true'
+    environment: ssdf-protected-merge
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      actions: read
+      pull-requests: read
+      checks: read
+    steps:
+      - name: Checkout trusted main controller
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          repository: lorconksu/veyport
+          ref: ${{ github.sha }}
+          path: controller
+          persist-credentials: false
+
+      - name: Revalidate fixed fixture before token
+        id: preflight
+        shell: bash
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          umask 077
+          /usr/bin/python3.12 -I -B "$CONTROL/scripts/security/protected_merge_qualification.py" admit
+
+      - name: Mint same least-privilege App token
+        id: app
+        if: steps.preflight.outputs.admitted == 'true'
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+        with:
+          client-id: ${{ vars.PROTECTED_MERGE_APP_CLIENT_ID }}
+          private-key: ${{ secrets.PROTECTED_MERGE_APP_PRIVATE_KEY }}
+          owner: lorconksu
+          repositories: veyport
+          permission-contents: write
+          permission-administration: read
+
+      - name: Probe fixed fixture once
+        if: steps.preflight.outputs.admitted == 'true'
+        shell: bash
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          PROTECTED_MERGE_TOKEN: ${{ steps.app.outputs.token }}
+          PROTECTED_MERGE_MINTED_INSTALLATION_ID: ${{ steps.app.outputs.installation-id }}
+          PROTECTED_MERGE_APP_SLUG: ${{ steps.app.outputs.app-slug }}
+          PROTECTED_MERGE_APP_ID: ${{ vars.PROTECTED_MERGE_APP_ID }}
+          PROTECTED_MERGE_INSTALLATION_ID: ${{ vars.PROTECTED_MERGE_INSTALLATION_ID }}
+          PROTECTED_MERGE_APP_CLIENT_ID: ${{ vars.PROTECTED_MERGE_APP_CLIENT_ID }}
+          PROTECTED_MERGE_RULESET_ID: ${{ vars.PROTECTED_MERGE_RULESET_ID }}
+          PROTECTED_MERGE_QUALIFICATION_RULESET_ID: ${{ vars.PROTECTED_MERGE_QUALIFICATION_RULESET_ID }}
+        run: |
+          set -euo pipefail
+          umask 077
+          /usr/bin/python3.12 -I -B "$CONTROL/scripts/security/protected_merge_qualification.py" probe

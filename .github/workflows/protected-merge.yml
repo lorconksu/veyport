@@ -1,0 +1,396 @@
+# Owner-only fresh-run authority. Default verify never enters the App environment.
+name: Protected merge
+
+on:
+  workflow_dispatch:
+    inputs:
+      operation:
+        description: Fresh preview or one exact merge request
+        type: choice
+        options: [verify, merge]
+        default: verify
+        required: true
+      pr_number:
+        description: Exact positive PR number
+        type: string
+        required: true
+      head_sha:
+        description: Expected lowercase 40-hex PR head SHA
+        type: string
+        required: true
+
+permissions: {}
+
+env:
+  CONTROL: ${{ github.workspace }}/controller
+  CONTROL_SHA: ${{ github.sha }}
+  PROTECTED_MERGE_ENABLED: ${{ vars.PROTECTED_MERGE_ENABLED }}
+
+jobs:
+  admission:
+    name: admission
+    if: github.event_name == 'workflow_dispatch' && github.repository == 'lorconksu/veyport' && github.repository_id == '1188082218' && github.repository_owner_id == '13374789' && github.ref == 'refs/heads/main' && github.actor == 'lorconksu' && github.actor_id == '13374789' && github.triggering_actor == 'lorconksu' && github.run_attempt == '1' && vars.PROTECTED_MERGE_ENABLED == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      actions: read
+      pull-requests: read
+    outputs:
+      admission_json: ${{ steps.admit.outputs.admission_json }}
+      source_sha: ${{ steps.admit.outputs.source_sha }}
+    steps:
+      - name: Checkout trusted main controller
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          repository: lorconksu/veyport
+          ref: ${{ github.sha }}
+          path: controller
+          persist-credentials: false
+
+      - name: Admit exact owner request
+        id: admit
+        shell: bash
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          umask 077
+          # The helper parses event inputs strictly, including exact lowercase operation.
+          /usr/bin/python3.12 -I -B "$CONTROL/scripts/security/protected_merge.py" admit
+
+  scan:
+    name: scan
+    needs: admission
+    if: needs.admission.result == 'success' && needs.admission.outputs.admission_json != ''
+    permissions:
+      contents: read
+      actions: read
+      pull-requests: read
+    runs-on: ubuntu-24.04
+    timeout-minutes: 180
+    env:
+      CONTROL: ${{ github.workspace }}/controller
+      SOURCE: ${{ github.workspace }}/source
+      SOURCE_SHA: ${{ needs.admission.outputs.source_sha }}
+      ADMISSION_JSON: ${{ needs.admission.outputs.admission_json }}
+      CONTROL_SHA: ${{ github.sha }}
+      GOWORK: 'off'
+      GOFLAGS: -mod=readonly
+      GOTOOLCHAIN: local
+      GOENV: 'off'
+      GOPROXY: https://proxy.golang.org
+      GOSUMDB: sum.golang.org
+      CGO_ENABLED: '0'
+      NPM_CONFIG_IGNORE_SCRIPTS: 'true'
+      SNYK_CFG_DISABLE_ANALYTICS: '1'
+      PYTHONDONTWRITEBYTECODE: '1'
+    steps:
+      - name: Initialize private evidence
+        id: initialize
+        shell: bash
+        run: |
+          set -euo pipefail
+          umask 077
+          [[ "$SOURCE_SHA" =~ ^[0-9a-f]{40}$ ]]
+          [[ "$CONTROL_SHA" =~ ^[0-9a-f]{40}$ ]]
+          candidate_root="$RUNNER_TEMP/protected-merge"
+          mkdir -p "$candidate_root/raw" "$candidate_root/tools" "$candidate_root/home" "$candidate_root/config" "$candidate_root/cache"
+          chmod 700 "$candidate_root"
+          : > "$candidate_root/config/npm-user.npmrc"
+          : > "$candidate_root/config/npm-global.npmrc"
+          public_python_root="$(mktemp -d /tmp/veyport-snyk-public.XXXXXXXX)"
+          {
+            printf 'TRIAL_ROOT=%s\n' "$candidate_root"
+            printf 'HOME=%s/home\n' "$candidate_root"
+            printf 'XDG_CONFIG_HOME=%s/config\n' "$candidate_root"
+            printf 'XDG_CACHE_HOME=%s/cache\n' "$candidate_root"
+            printf 'NPM_CONFIG_USERCONFIG=%s/config/npm-user.npmrc\n' "$candidate_root"
+            printf 'NPM_CONFIG_GLOBALCONFIG=%s/config/npm-global.npmrc\n' "$candidate_root"
+            printf 'NPM_CONFIG_CACHE=%s/cache/npm\n' "$candidate_root"
+            printf 'GOCACHE=%s/cache/go-build\n' "$candidate_root"
+            printf 'GOMODCACHE=%s/cache/go-mod\n' "$candidate_root"
+            printf 'PUBLIC_PYTHON_ROOT=%s\n' "$public_python_root"
+          } >> "$GITHUB_ENV"
+
+      - name: Checkout trusted main controller
+        id: controller
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          repository: lorconksu/veyport
+          ref: ${{ github.sha }}
+          path: controller
+          persist-credentials: false
+
+      - name: Checkout exact admitted source
+        id: source
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          repository: lorconksu/veyport
+          ref: ${{ needs.admission.outputs.source_sha }}
+          path: source
+          persist-credentials: false
+
+      - name: Verify source and inventory before tool setup
+        id: preflight
+        shell: bash
+        run: |
+          set -euo pipefail
+          umask 077
+          test "$(git -C "$CONTROL" rev-parse HEAD)" = "$CONTROL_SHA"
+          # Only the controller Python is imported. Source scripts are never run.
+          /usr/bin/python3 -I -B -c 'import importlib.util, os; from pathlib import Path; s=importlib.util.spec_from_file_location("policy", Path(os.environ["CONTROL"])/"scripts/security/snyk_policy.py"); m=importlib.util.module_from_spec(s); s.loader.exec_module(m); m.validate_source(Path(os.environ["SOURCE"]), os.environ["SOURCE_SHA"])' >"$TRIAL_ROOT/raw/preflight.stdout" 2>"$TRIAL_ROOT/raw/preflight.stderr"
+
+      - name: Setup Go
+        id: go
+        uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
+        with:
+          go-version: 1.26.11
+          cache: false
+
+      - name: Setup Node
+        id: node
+        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: 25
+          package-manager-cache: false
+
+      - name: Bootstrap authenticated packages and checksummed latest stable CLI
+        id: bootstrap
+        shell: bash
+        run: |
+          set -euo pipefail
+          umask 077
+          {
+            sudo apt-get update -qq
+            sudo apt-get install -y -qq age python3.12-venv
+            /usr/bin/python3.12 -I -B "$CONTROL/scripts/diagnostics/snyk_latest_cli.py" --root "$TRIAL_ROOT"
+          } >"$TRIAL_ROOT/raw/bootstrap.stdout" 2>"$TRIAL_ROOT/raw/bootstrap.stderr"
+
+      - name: Test trusted helper boundaries before credentials
+        id: tests
+        shell: bash
+        run: |
+          set -euo pipefail
+          umask 077
+          {
+            test "$(id -u)" -ne 0
+            sudo -n /usr/bin/true
+            cd "$CONTROL"
+            # Existing cross-UID probes need searchable synthetic test directories.
+            (umask 022; /usr/bin/python3.12 -m unittest discover -s scripts/diagnostics -p 'test_*.py')
+            (umask 022; /usr/bin/python3.12 -m unittest discover -s scripts/security -p 'test_*.py')
+          } >"$TRIAL_ROOT/raw/tests.stdout" 2>"$TRIAL_ROOT/raw/tests.stderr"
+
+      - name: Prepare eight dependency targets without credentials
+        id: prepare
+        shell: bash
+        run: |
+          set -euo pipefail
+          umask 077
+          /usr/bin/python3.12 -I -B "$CONTROL/scripts/security/snyk_policy.py" prepare \
+            --source "$SOURCE" --control "$CONTROL" --sha "$SOURCE_SHA" --control-sha "$CONTROL_SHA" \
+            --root "$TRIAL_ROOT" --scanner "$TRIAL_ROOT/tools/snyk" --public-root "$PUBLIC_PYTHON_ROOT" \
+            >"$TRIAL_ROOT/raw/prepare.stdout" 2>"$TRIAL_ROOT/raw/prepare.stderr"
+
+      - name: Scan current source and bound license controls
+        id: scan
+        shell: bash
+        env:
+          SNYK_TOKEN: ${{ secrets.SNYK_TOKEN }}
+        run: |
+          set -euo pipefail
+          umask 077
+          /usr/bin/python3.12 -I -B "$CONTROL/scripts/security/snyk_policy.py" scan \
+            --source "$SOURCE" --control "$CONTROL" --sha "$SOURCE_SHA" --control-sha "$CONTROL_SHA" \
+            --root "$TRIAL_ROOT" --scanner "$TRIAL_ROOT/tools/snyk" --public-root "$PUBLIC_PYTHON_ROOT" \
+            >"$TRIAL_ROOT/raw/scan.stdout" 2>"$TRIAL_ROOT/raw/scan.stderr"
+
+      - name: Evaluate all findings and bound license controls
+        id: policy
+        if: always() && steps.scan.outcome != 'skipped'
+        shell: bash
+        run: |
+          set -euo pipefail
+          umask 077
+          /usr/bin/python3.12 -I -B "$CONTROL/scripts/security/snyk_policy.py" evaluate \
+            --source "$SOURCE" --control "$CONTROL" --sha "$SOURCE_SHA" --control-sha "$CONTROL_SHA" \
+            --root "$TRIAL_ROOT" --scanner "$TRIAL_ROOT/tools/snyk" --public-root "$PUBLIC_PYTHON_ROOT" \
+            >"$TRIAL_ROOT/raw/evaluate.stdout" 2>"$TRIAL_ROOT/raw/evaluate.stderr"
+
+      - name: Seal private evidence and generate allowlisted summary
+        id: encrypt
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          umask 077
+          /usr/bin/python3.12 -I -B "$CONTROL/scripts/security/snyk_policy.py" seal \
+            --source "$SOURCE" --control "$CONTROL" --sha "$SOURCE_SHA" --control-sha "$CONTROL_SHA" \
+            --root "$TRIAL_ROOT" --scanner "$TRIAL_ROOT/tools/snyk" --public-root "$PUBLIC_PYTHON_ROOT"
+
+      - name: Bind protected merge evidence
+        id: envelope
+        if: always() && steps.encrypt.outcome == 'success'
+        shell: bash
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          umask 077
+          unset SNYK_TOKEN
+          /usr/bin/python3.12 -I -B "$CONTROL/scripts/security/protected_merge.py" make-evidence
+
+      - name: Upload only encrypted evidence and allowlisted aggregates
+        id: upload
+        if: always() && steps.encrypt.outcome == 'success' && steps.envelope.outcome == 'success'
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: protected-merge-${{ github.run_id }}-1
+          path: |
+            ${{ runner.temp }}/protected-merge/public/summary.json
+            ${{ runner.temp }}/protected-merge/public/evidence.tar.gz.age
+            ${{ runner.temp }}/protected-merge/public/publication.json
+          if-no-files-found: error
+          retention-days: 3
+
+      - name: Remove public resolver workspace and private plaintext
+        id: cleanup
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          /usr/bin/python3.12 -I -B "$CONTROL/scripts/security/snyk_policy.py" cleanup \
+            --source "$SOURCE" --control "$CONTROL" --sha "$SOURCE_SHA" --control-sha "$CONTROL_SHA" \
+            --root "${TRIAL_ROOT:-$RUNNER_TEMP/protected-merge}" --scanner "${TRIAL_ROOT:-$RUNNER_TEMP/protected-merge}/tools/snyk" \
+            --public-root "${PUBLIC_PYTHON_ROOT:-/tmp/uninitialized-public-python}"
+
+      - name: Final policy and evidence gate
+        if: always()
+        shell: bash
+        env:
+          INITIALIZE_OUTCOME: ${{ steps.initialize.outcome }}
+          CONTROLLER_OUTCOME: ${{ steps.controller.outcome }}
+          SOURCE_OUTCOME: ${{ steps.source.outcome }}
+          PREFLIGHT_OUTCOME: ${{ steps.preflight.outcome }}
+          GO_OUTCOME: ${{ steps.go.outcome }}
+          NODE_OUTCOME: ${{ steps.node.outcome }}
+          BOOTSTRAP_OUTCOME: ${{ steps.bootstrap.outcome }}
+          TESTS_OUTCOME: ${{ steps.tests.outcome }}
+          PREPARE_OUTCOME: ${{ steps.prepare.outcome }}
+          ENVELOPE_OUTCOME: ${{ steps.envelope.outcome }}
+          SCAN_OUTCOME: ${{ steps.scan.outcome }}
+          POLICY_OUTCOME: ${{ steps.policy.outcome }}
+          ENCRYPT_OUTCOME: ${{ steps.encrypt.outcome }}
+          UPLOAD_OUTCOME: ${{ steps.upload.outcome }}
+          CLEANUP_OUTCOME: ${{ steps.cleanup.outcome }}
+          SEALED_POLICY_EXIT: ${{ steps.encrypt.outputs.sealed_policy_exit }}
+        run: |
+          set -euo pipefail
+          for outcome in "$INITIALIZE_OUTCOME" "$CONTROLLER_OUTCOME" "$SOURCE_OUTCOME" "$PREFLIGHT_OUTCOME" \
+            "$GO_OUTCOME" "$NODE_OUTCOME" "$BOOTSTRAP_OUTCOME" "$TESTS_OUTCOME" "$PREPARE_OUTCOME" "$ENVELOPE_OUTCOME"; do
+            test "$outcome" = success
+          done
+          test "$SCAN_OUTCOME" = success
+          test "$POLICY_OUTCOME" = success
+          test "$ENCRYPT_OUTCOME" = success
+          test "$UPLOAD_OUTCOME" = success
+          test "$CLEANUP_OUTCOME" = success
+          test "$SEALED_POLICY_EXIT" = 0
+
+  verify:
+    name: verify
+    needs: [admission, scan]
+    if: needs.admission.result == 'success' && needs.scan.result == 'success'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      actions: read
+      pull-requests: read
+    outputs:
+      verified: ${{ steps.verify.outputs.verified }}
+      purpose: ${{ steps.verify.outputs.purpose }}
+    env:
+      ADMISSION_JSON: ${{ needs.admission.outputs.admission_json }}
+    steps:
+      - name: Checkout trusted main controller
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          repository: lorconksu/veyport
+          ref: ${{ github.sha }}
+          path: controller
+          persist-credentials: false
+
+      - name: Verify fresh protected merge evidence
+        id: verify
+        shell: bash
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          umask 077
+          /usr/bin/python3.12 -I -B "$CONTROL/scripts/security/protected_merge.py" verify
+
+  merge:
+    name: merge
+    needs: [admission, scan, verify]
+    # Actions string equality folds case. purpose is emitted only after strict helper
+    # verification of the exact request; preview/invalid operations cannot emit it.
+    if: needs.admission.result == 'success' && needs.scan.result == 'success' && needs.verify.result == 'success' && needs.verify.outputs.verified == 'true' && needs.verify.outputs.purpose == 'protected-merge' && inputs.operation == 'merge'
+    environment: ssdf-protected-merge
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      actions: read
+      pull-requests: read
+    env:
+      ADMISSION_JSON: ${{ needs.admission.outputs.admission_json }}
+    steps:
+      - name: Checkout trusted main controller
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          repository: lorconksu/veyport
+          ref: ${{ github.sha }}
+          path: controller
+          persist-credentials: false
+
+      - name: Preflight fresh protected merge evidence
+        id: preflight
+        shell: bash
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          umask 077
+          /usr/bin/python3.12 -I -B "$CONTROL/scripts/security/protected_merge.py" verify
+
+      - name: Mint protected merge token
+        id: app
+        if: steps.preflight.outputs.verified == 'true' && steps.preflight.outputs.purpose == 'protected-merge'
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+        with:
+          client-id: ${{ vars.PROTECTED_MERGE_APP_CLIENT_ID }}
+          private-key: ${{ secrets.PROTECTED_MERGE_APP_PRIVATE_KEY }}
+          owner: lorconksu
+          repositories: veyport
+          permission-contents: write
+          permission-administration: read
+
+      - name: Merge exact owner request once
+        if: steps.preflight.outputs.verified == 'true' && steps.preflight.outputs.purpose == 'protected-merge'
+        shell: bash
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          PROTECTED_MERGE_TOKEN: ${{ steps.app.outputs.token }}
+          PROTECTED_MERGE_MINTED_INSTALLATION_ID: ${{ steps.app.outputs.installation-id }}
+          PROTECTED_MERGE_APP_SLUG: ${{ steps.app.outputs.app-slug }}
+          PROTECTED_MERGE_APP_ID: ${{ vars.PROTECTED_MERGE_APP_ID }}
+          PROTECTED_MERGE_INSTALLATION_ID: ${{ vars.PROTECTED_MERGE_INSTALLATION_ID }}
+          PROTECTED_MERGE_RULESET_ID: ${{ vars.PROTECTED_MERGE_RULESET_ID }}
+          PROTECTED_MERGE_APP_CLIENT_ID: ${{ vars.PROTECTED_MERGE_APP_CLIENT_ID }}
+        run: |
+          set -euo pipefail
+          umask 077
+          /usr/bin/python3.12 -I -B "$CONTROL/scripts/security/protected_merge.py" merge-once

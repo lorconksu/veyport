@@ -1,12 +1,12 @@
-# Snyk Actions candidate
+# Snyk Actions policy controllers
 
-This is a local, manually dispatched candidate. It is not deployed, required by branch protection, or qualified for automatic PR or release use. The existing diagnostic trial retains its original seven targets and source pins.
+The manual scanner, automatic informational PR feedback and owner-requested protected merger are implemented locally. App setup, hosted qualification and production restriction activation remain pending. The automatic-release hold remains in force; none of these controllers activates release/deployment policy. The existing diagnostic trial retains its original seven targets and source pins.
 
 The agreed policy blocks every High or Critical vulnerability, including issues already in main and issues with no fix. High licenses and Unknown licenses block. Medium licenses are reported without blocking. The configured High license set is AGPL-1.0, AGPL-3.0, CPOL-1.02, GPL-2.0, GPL-3.0, and SimPL-2.0. No baseline subtraction or fix-availability exemption applies. Approved exceptions require a separately qualified private consumer; this candidate accepts no exceptions and rejects source `.snyk` policies.
 
 ## Controller and source boundaries
 
-The workflow accepts only `workflow_dispatch` on `refs/heads/main` in `lorconksu/veyport`, under owner ID 13374789, with both the original and triggering actors restricted to `lorconksu`. It checks out the controller at the event's exact main SHA and source separately from the same repository at a validated lowercase 40-character commit SHA. Source input travels through environment variables or action inputs, never executable shell interpolation. There is no automatic PR trigger, approval ceremony, branch protection change, or release activation.
+The manual scanner accepts only `workflow_dispatch` on `refs/heads/main` in `lorconksu/veyport`, under owner ID 13374789, with both the original and triggering actors restricted to `lorconksu`. It checks out the controller at the event's exact main SHA and source separately from the same repository at a validated lowercase 40-character commit SHA. Source input travels through environment variables or action inputs, never executable shell interpolation. There is no automatic PR trigger, approval ceremony, branch protection change, or release activation.
 
 Source preflight runs controller-owned Python before tool setup or credentials. It verifies the source commit and all tracked regular file bytes against Git objects, rejects symlinks, hardlinks and submodules, and checks supported manifests and resolver inputs. It runs again after preparation, before scanning and each scan attempt, and after scanning. Source scripts and source workflow files are never executed. npm lifecycle scripts are disabled; Go only resolves package graphs with the local toolchain, readonly module files, workspace mode off and CGO disabled. Source package manager configuration, runtime selectors, npm engine/platform selectors, unsupported local npm dependencies/workspaces/registries and Go tool/toolchain directives are rejected. Local Go replacements must use bare tokens and resolve to one of the supported modules. Quoted replacement syntax, including escaped paths and replacements within blocks, is rejected conservatively before dependency preparation; the preflight does not attempt to decode Go strings. Other source changes may need a reviewed expansion of these bounds.
 
@@ -93,3 +93,184 @@ git diff --check
 Tests include synthetic Git repositories and fake scanners/encryption commands; these do not establish live provider authentication, real encryption success or hosted resource capacity. Saved historical report and combined-control replay are evidence of parser/adapter interpretation only, not a fresh hosted candidate scan. Private state records preparation and scan elapsed seconds; it does not measure peak whole-run memory, disk or runner capacity.
 
 Before a trusted-main run, complete the required immutable security and Claude reviews and owner-authorized integration. Then qualify actual hosted preparation, credentials, live controls with all eight targets, encrypted artifact upload and cleanup. The isolated real combined-control evidence supports this adapter; it does not establish full hosted candidate qualification. The local environment need not contain the hosted pinned runtimes, age or credentials, so offline test success is not full workflow qualification. An automatic PR wrapper requires additional check/source provenance qualification. Keep the eventual PR and release policy identical; activation and any risk acceptance remain separate owner decisions.
+
+## Automatic same-repository PR feedback
+
+`.github/workflows/snyk-pr-policy.yml` listens only for trusted `CI` entering `in_progress` through `workflow_run`. It authenticates repository ID `1188082218`, owner ID `13374789`, upstream workflow ID `251054731` at `.github/workflows/ci.yml`, and the current open PR targeting `main`. Authenticated commit-associated PR metadata resolves empty event PR arrays; ambiguous mappings fail closed. Source and controller are separate exact-SHA checkouts. Forks and colliding current PR heads are rejected without source checkout. The qualified eight-target scanner lifecycle above remains intact.
+
+The exact lowercase repository variable `SNYK_PR_POLICY_ENABLED=true` enables feedback. Admission/publication have only Contents, Actions and Pull requests read plus Checks write on their job-scoped `GITHUB_TOKEN`; separate bounded transport clients constrain metadata reads and check writes. They use no private App, key or environment. Scan has Contents read, and only its scan step receives `SNYK_TOKEN`. The displayed native GitHub Actions check (App ID `15368`) is **`Snyk PR scan`**, with an explicitly informational summary. Its strict envelope purpose is `automatic-pr`; exact current attempt jobs, lifecycle outcomes and the three encrypted/allowlisted artifact files are still validated before publication. Historical same-SHA chronology and collision checks improve feedback freshness.
+
+Commit checks are shared across PRs and can be spoofed by another workflow with check permission. A reused SHA can display an earlier green before admission. This check is not required security authority and must never be used alone to authorize merging. No protected merge consumes its result, check ID, artifact or previous scan. The protected merger independently scans the exact requested PR in its own fresh run, including when another PR has the same head SHA.
+
+## Exact owner-requested protected merge
+
+Use `.github/workflows/protected-merge.yml` from trusted `main`, as owner `lorconksu` (ID `13374789`). It accepts exactly three input keys: `operation` (exact lowercase `verify` or `merge`, default `verify`), canonical positive `pr_number`, and the expected lowercase 40-hex `head_sha`. Inputs are event/environment data, never shell source. Invalid casing, extra inputs, non-owner original/triggering actors, forks, drafts, closed or retargeted PRs, head/base/controller drift and run attempts other than `1` fail closed. Retry by dispatching a new exact request; **Re-run jobs** cannot replay a merge authorization.
+
+Four fresh jobs isolate authority:
+
+1. `admission` checks out only the trusted controller and authenticates the exact live owner request, PR node/number/head/base, current main/controller and workflow run. It produces a purpose-specific admission; outputs are transport hints and each later verifier rederives the identity.
+2. `scan` checks out the exact admitted source separately and follows the qualified lifecycle: complete inventory/source checks, checksummed latest stable CLI, credential-free helper tests and preparation, isolated resolvers, all eight targets and live bound license controls, evaluation, encryption, evidence binding, upload, unconditional cleanup and final gate. Only **Scan current source and bound license controls** receives `SNYK_TOKEN`. It receives no App authority.
+3. `verify` independently downloads this run's unique `protected-merge-RUN_ID-1` artifact, validates mandatory API digest/provenance, exact `summary.json`, `evidence.tar.gz.age`, `publication.json` contents and strict request/policy/scanner bindings, then checks actual successful admission/scan jobs and every lifecycle step. It emits only strict verified purpose and source hints.
+4. `merge` can enter `ssdf-protected-merge` only after successful current-run verification emits purpose `protected-merge` for exact operation `merge`. GitHub expression string equality ignores case; the helper strictly parses the event before emitting that purpose. Inside this fresh job a second read-only preflight also requires the completed successful verify job. Only then does the pinned action mint the narrow App token. The final helper repeats evidence/currentness and live settings checks, checks actual in-progress merge-step metadata, then sends one PR-number-specific merge request with expected head and `merge_method=merge`. It has no PR checkout, scanner token, push path, check override, branch deletion or auto-merge operation.
+
+`verify` uses purpose `protected-merge-preview`, performs fresh admission/scan/evidence verification, and never enters the App environment, mints a token or constructs a mutation client. Preview evidence cannot be reused for merge. `merge` always scans again. Enable the reviewed workflow for owner-only preview using exact `PROTECTED_MERGE_ENABLED=true` before activating the restriction if needed; the flag alone cannot authorize mutation. Merge additionally requires the live active restriction and full classic baseline.
+
+The short-lived token and authenticated installation ID/slug come **directly** from `actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510` (v3.3.0). The action uses its internal App JWT for the repository-installation lookup. No second JWT/private-key helper exists. The final helper validates those action outputs against configured identities, reads strict App metadata and the token's exact sole-repository scope, and retains normal post-job token revocation. Public App metadata alone does not authenticate token identity: pinned action wiring is part of the trust boundary.
+
+## One App setup and protection preservation
+
+Complete setup after immutable reviews, using the owner session. Key material belongs only in the main-only environment secret, never chat, repository files, artifacts or command output. No separate Checks App registration is needed.
+
+1. Register one dedicated GitHub App for `lorconksu`, homepage `https://github.com/lorconksu/veyport`, without callbacks, webhooks or event subscriptions. Grant only repository **Contents: Read and write**, **Administration: Read-only**, and mandatory **Metadata: Read-only**. Leave Actions, Checks, Workflows and every other permission ungranted. Administration read is necessary for classic-protection inspection; never grant Administration write to work around visibility failures.
+2. Install the App with **Only select repositories → veyport**. Record its positive numeric App and installation IDs, client ID and actual slug privately. The installation itself must select only `veyport`; the helper separately proves the minted token's narrowed repository scope. Do not substitute a personal token, GitHub Actions ID `15368` or CodeQL ID `57789`.
+3. Create environment **`ssdf-protected-merge`**. Under Selected branches and tags allow branch **`main` only**, no tags. Disable administrator bypass of environment protections. Configure no reviewer/wait timer: the exact owner dispatch authorizes the attempt. Verify these controls are enforced for this repository/plan. Enter the PEM as environment secret **`PROTECTED_MERGE_APP_PRIVATE_KEY`**, without a repository-level copy. Preserve repository scan secret `SNYK_TOKEN` separately.
+4. Add repository variables **`PROTECTED_MERGE_APP_ID`**, **`PROTECTED_MERGE_INSTALLATION_ID`**, **`PROTECTED_MERGE_APP_CLIENT_ID`** and **`PROTECTED_MERGE_RULESET_ID`** for the reviewed production rule. Leave **`PROTECTED_MERGE_ENABLED`** unset/`false` until reviewed integration and preview qualification. Automatic feedback uses only **`SNYK_PR_POLICY_ENABLED`** and needs none of the obsolete `SNYK_POLICY_APP_*` variables/secrets or publisher environment.
+5. Preserve the complete recorded classic `main` protection: all twelve exact context/App-ID pairs (eleven GitHub Actions `15368`; CodeQL `57789`), strict up-to-date checks, administrator enforcement, reviews, conversation resolution, explicitly disabled required signatures (`required_signatures.enabled=false`) and every existing control. The captured personal-repository API omits `restrictions`; absent or explicit `null` both mean no push restrictions. Every other recorded control must be present with its exact value; non-null restrictions, missing required metadata and unknown controls block merging. The offline baseline fixture is the public-safe raw GitHub API response captured on 2026-11-16 using API version `2022-11-28` (`scripts/security/fixtures/github-main-protection-2022-11-28.json`). Add a **separate** repository branch ruleset targeting only `refs/heads/main`, no exclusions, with only **Restrict updates**, `update_allows_fetch_and_merge=false`, and exactly this App Integration as a **pull_request-only** bypass actor. No human/administrator/general bypass and no checks/reviews in this restriction rule. Keep it disabled until platform qualification passes; the App bypass of this one update restriction must not bypass the independent classic protection.
+
+The merger conservatively rejects any additional active repository/inherited ruleset. The temporary qualification restriction must be **disabled before complete production settings validation or merging**. Main baseline auditing during isolated qualification is a separate read-only check; it is not proof that full production settings validation passed.
+
+## API and hosted qualification limits
+
+The PR merge API atomically checks expected **head SHA**; it offers no atomic expected-base/controller/target predicate. Final live rereads reject observed drift, but a trusted repository writer/main administrator can move/retarget after the final read. Ordered two-parent and actual PR/commit postchecks can detect an irreversible race after mutation; they cannot undo it. Those writers/administrators remain trusted. No atomic base guarantee is claimed.
+
+A timeout, protocol error or malformed response never causes a second PUT. The helper performs at most one read-only outcome reconciliation and reports `unconfirmed` with failure if unresolved. Inspect actual PR/commit state read-only before any new dispatch. After a confirmed merge, follow all downstream checks/jobs to terminal status; retain the automatic-release hold.
+
+Hosted proof is required for App metadata visibility (including a private App), exact token repository scope, Administration-read classic protection reads, complete visible ruleset bypass roster, environment enforcement and live Jobs API step visibility/consistency. Omitted/hidden/stale lifecycle or settings data blocks merging, with no success fallback or broadening of permissions. The current in-progress final step must be visible once and all prior required steps successful. The action's post-job revocation follows mutation; monitor its terminal result too.
+
+Contents write without Workflows write may be insufficient to merge a PR that changes workflow files. Qualify this with the actual least-privilege App and record the outcome; do not silently grant Workflows write or claim workflow-changing PRs are supported before proof. Local offline transports cannot prove GitHub restriction enforcement, App bypass behavior, native required-check selection or these visibility/permission properties.
+
+## Qualification, activation and rollback
+
+1. Complete local security/diagnostic validation, actionlint/shellcheck, root scoped review and ordered immutable Daybreak then independent Claude reviews. Resolve every actionable finding before staging/publication. Integrate the reviewed controller into main only under concrete owner authorization, initially disabled. Capture all current production protections privately and preserve the release hold.
+2. Complete the one-App/environment setup. Enable owner-only `verify` preview and automatic informational feedback in a controlled window without changing production update protection. Follow every started job to terminal status and inspect exact request/run/controller identities, all lifecycle outcomes, ciphertext/public summary/envelope and artifact provenance/digest. A green preview alone is not merge or platform enforcement proof.
+3. Use a separately reviewed, owner-only qualification harness fixed to **`qualification/protected-merge-20261116`** and a separate restriction. Production helper remains fixed to `main`, with no arbitrary-target switch. Prove humans cannot update the restricted fixture branch, pull_request-only App bypass cannot direct-push, required checks still block the App, a properly checked expected-head PR can merge, and wrong head returns 409. Never drop production contexts or forge a production scan/check. Any isolated synthetic canary proves only its stated primitive; external native providers may not supply all twelve production checks on a fixture branch. Leave the reviewed harness disabled afterward; do not remove it through unreviewed cleanup.
+4. Qualify High/Critical vulnerability and High/Unknown license blocks, informational Medium licenses, missing/extra inventory, control/processing/encryption/upload/cleanup failures, cancelled/skipped steps, owner/fork/draft/retarget rejection, head/base/controller changes, rerun refusal, old successful SHA reused by another PR, prior-run/wrong-purpose/malformed evidence, token identity/scope errors and uncertain outcomes. Preview must create zero App authority; a merge request must scan freshly. Demonstrate the least-permission behavior for workflow-changing PRs and actual final-step Jobs API visibility.
+5. Disable the temporary qualification restriction. Audit the exact full production baseline and intended rule, activate only the reviewed main update restriction under owner authorization, and demonstrate an exact owner-requested production merge through this workflow while all twelve classic contexts remain enforced. Missing/hidden bypass actors or any unproven platform prerequisite blocks activation. Do not promote `Snyk PR scan` into sole required security authority.
+6. Only after replacement is proven, retire the legacy Snyk PR security/license integration checks using the provider's narrowly verified PR-check setting. Preserve Snyk projects/account monitoring, CI/Sonar checks, classic protections and release/deployment controls. Unverified narrow retirement remains pending.
+
+For rollback, disable `PROTECTED_MERGE_ENABLED` and optionally `SNYK_PR_POLICY_ENABLED`, cancel and follow active attempts to terminal, and inspect any uncertain merge outcome read-only. Disabling the workflow while the restriction is active intentionally blocks updates; it does not restore the prior merge route. Restoring that route requires the owner-recorded prior restriction configuration or a proven reviewed replacement, while retaining all twelve classic contexts, strictness and administrator enforcement. Never turn a check green manually or broaden the App bypass to recover. Revoke/rotate credentials in the owner session when necessary and repeat identity/hosted qualification before re-enabling.
+
+Local verification adds these workflows to actionlint and the full security suite:
+
+```sh
+PYTHONDONTWRITEBYTECODE=1 python3.12 -B -m unittest discover -s scripts/security -p 'test_*.py'
+actionlint -shellcheck=/usr/bin/shellcheck .github/workflows/snyk-pr-policy.yml .github/workflows/protected-merge.yml .github/workflows/protected-merge-qualification.yml
+git diff --check
+```
+
+Tests use only the standard library and offline transports, execute actual workflow shell guards and constrained GitHub expressions, assert direct credential/output wiring, and reject deliberate damaged-workflow mutants. They establish local contracts, not hosted rollout.
+
+## Fixed isolated qualification harness
+
+The disabled-by-default `.github/workflows/protected-merge-qualification.yml`
+uses only `qualification/protected-merge-20261116`. It accepts exactly `case`,
+`pr_number` (canonical positive decimal) and `head_sha` (lowercase 40-hex).
+There is no target/repository override. Owner `lorconksu`, both original and
+triggering identity, trusted current `main`, the exact workflow path and
+attempt `1` are independently authenticated by the helper. Non-owner, rerun,
+fork, draft, head/base/controller drift and any other base, including `main`,
+refuse before mutation. A final independent mutation-layer target guard also
+rejects `main` and every other branch. The PR must be open, non-draft, actually
+mergeable, have a distinct head/base, and target the literal fixture even for
+`main-settings`; missing/stale mergeability is a blocker, not a retry fallback.
+
+After source review/integration, the owner prepares the fixture branch and
+same-repository PRs using owner access and records original settings/ref/rule
+IDs privately. Copy **all** classic baseline settings and twelve producer-bound
+checks to the fixture, including strict checks and administrator enforcement.
+Create a separate active repository restriction with only this literal branch
+included, no exclusions, only update restriction with
+`update_allows_fetch_and_merge=false`, and exactly the same dedicated App as
+Integration/pull_request bypass. Set positive repository variable
+`PROTECTED_MERGE_QUALIFICATION_RULESET_ID` to this separate rule ID; it must
+differ from `PROTECTED_MERGE_RULESET_ID`. The App cannot create/edit rules,
+protections, fixtures, checks or refs. Owner/human direct-update and PR-merge
+refusal probes remain owner-operated; this harness always uses the App.
+
+Enable only during the qualification window using exact repository variable
+`PROTECTED_MERGE_QUALIFICATION_ENABLED=true`. The same main-only
+`ssdf-protected-merge` environment holds the same key. Read-only admission and
+fresh preflight precede the pinned token action; direct action outputs bind
+token, installation ID and App slug. The App grants remain Contents write,
+Administration read and mandatory Metadata read. Normal token revocation stays
+enabled. No Snyk token or PR source checkout enters the harness. Dispatch a new
+run for each exact fixture PR/head; never rerun an attempt to retry a write.
+
+| Fixed case | Fixture prerequisite and allowed proof |
+| --- | --- |
+| `main-settings` | Read-only App identity/scope and exact complete main classic baseline audit; no mutation client. Does not run full production rules validation or prove main bypass visibility. |
+| `wrong-head` | Sends fixture base SHA as deliberately wrong expected head to exact fixture PR; requires HTTP 409 plus unchanged open PR and unchanged fixture branch. |
+| `direct-push` | Head is a real single-parent commit directly above fixture base, making a non-no-op fast-forward PATCH possible. Proof requires unchanged PR/ref and an actual GH013 response identifying “Cannot update this protected ref”. Permission errors, non-fast-forward errors, no-op success, generic denial and uncertainty remain unproven. |
+| `native-merge` | Exact head carries all twelve successful native check runs with original names and App IDs. Actual fixture merge/ref and ordered parents must match. |
+| `missing-canary`, `pending-canary`, `failed-canary` | Retain all twelve successful native checks and add only required `Protected merge qualification canary`, bound to GitHub Actions `15368`. The trusted native admission producer creates pending/failed canaries; missing-canary creates nothing. Requires HTTP 405 explicitly identifying required-check denial and unchanged PR/ref. Scope is only general check blocking. |
+| `workflow-file-merge` | Same twelve actual native successes, plus authenticated PR diff changing `.github/workflows/`; bounded complete diff requires fewer than 100 changed files. Confirms actual merge or records least-permission failure as a blocker. Never grants Workflows write. |
+
+Positive proof may use a genuine already-checked commit as PR head against a
+reviewed ancestor fixture base. Check runs must actually name that exact head,
+complete successfully, and carry the twelve expected native producer bindings;
+ambiguous duplicate names refuse. A custom successful context cannot replace
+CodeQL or any other native producer. A fixture must also satisfy the platform's
+strict up-to-date/mergeability rules. If providers cannot furnish their genuine
+checks on a suitable fixture, record the exact unavailable case and keep it a
+qualification limit/blocker. Do not drop a required context or manufacture a
+production scanner result to get a positive proof. Synthetic check canaries
+establish only their stated general blocking primitive; they do not prove each
+native provider's failure enforcement. Per-context native missing/pending/failed
+proof remains a separate owner matrix item where real providers support it.
+
+`python3.12 -I -B scripts/security/protected_merge_qualification.py admit|produce-canary|probe`
+is the complete CLI; all request data comes from the authenticated event and
+GitHub environment. Successful admission emits only `admitted=true` and the
+strict case through `GITHUB_OUTPUT`. Probe JSON exposes only schema version,
+case/target/run/PR/head/base identity, HTTP status (null when unknown), outcome,
+merge SHA, mutation-attempt flag and evidence scope. It never prints raw API
+messages, credentials or exception details. Expected verified denials are
+successful qualification outcomes; generic denials, unexpected writes and
+uncertainty fail the job. One PATCH/PUT is the maximum. A write with uncertain
+response is never retried; read-only PR/ref/commit reconciliation may confirm a
+native merge, while unresolved outcomes are `unproven`/`unconfirmed`. A
+`refused` result has `mutation_attempted=false`; it does not cover an attempted
+write whose reconciliation failed. Retain actual provider responses privately
+using owner evidence tooling when a denial needs further attribution; do not
+turn a generic permission error into restriction proof.
+
+Keep the private qualification matrix recording all twelve producer pairs,
+App/environment setup, main baseline visibility, owner-human denials,
+non-no-op App denial, wrong-head 409, actual native positive merge,
+workflow-file permission behavior and canary limitations. Audit actual run and
+merge identities/parents and follow every triggered/downstream job to terminal
+status. This harness has no fresh Snyk scan authority and cannot prove the
+production final-step Jobs API contract; those require the production workflow's
+fresh preview and separately owner-requested merge qualification.
+
+After isolated proof, set `PROTECTED_MERGE_QUALIFICATION_ENABLED=false`, follow
+active runs to terminal, and disable the temporary restriction using owner
+access. Keep reviewed source and private evidence. The unchanged production
+validator rejects **every extra active ruleset**, so main baseline audit during
+isolated testing is not full production validation. Only after the temporary
+rule is disabled may the complete production validator pass. Cleanup applies
+only to recorded qualification resources; preserve main protections, twelve
+contexts, release hold and other repository controls.
+
+
+The qualification admission job alone has native `GITHUB_TOKEN` Checks write;
+the probe job explicitly has Checks read. The dedicated App still has no Checks
+grant. After exact authenticated owner/current-run/literal-fixture admission,
+only `pending-canary` and `failed-canary` invoke the bounded `produce-canary`
+command. It rereads/authenticates the request, verifies all twelve genuine native
+successful checks on the exact fixture head and refuses **any existing canary**
+with that fixed name. It then sends at most one native check POST: the fixed
+canary name, exact admitted head, and `in_progress` with null conclusion or
+`completed` with `failure` respectively. The response must identify Actions App
+`15368`, the same head/name and requested state. No arbitrary name/head/state,
+check update/delete, existing native check modification, App key or App token
+enters this producer. The missing-canary case creates nothing.
+
+Prepare a **separate fresh fully checked fixture head** for each pending/failed
+case, without an existing canary; retain all twelve native producer successes.
+A head cannot be reused for these create-only cases after a canary exists.
+A POST timeout/malformed response fails as `canary-unconfirmed` with
+`mutation_attempted=true`; inspect actual check state read-only and use a fresh
+fixture rather than rerunning or rewriting the check. Failed admission prevents
+the App probe job. The check is synthetic general-enforcement evidence only;
+it cannot substitute for native provider checks or production scanner authority.
