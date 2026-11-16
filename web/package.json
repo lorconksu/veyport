@@ -52,6 +52,21 @@
     "vitest": "^4.1.12"
   },
   "overrides": {
+    "eslint": {
+      "minimatch": "11.0.8"
+    },
+    "@eslint/config-array": {
+      "minimatch": "11.0.8"
+    },
+    "@typescript-eslint/typescript-estree": {
+      "minimatch": "11.0.8"
+    },
+    "ajv": {
+      "uri-js": "npm:fast-uri@4.2.3"
+    },
+    "jsdom": {
+      "undici": "7.30.2"
+    },
     "lodash-es": ">=4.18.1",
     "uuid": "^14.0.0",
     "mermaid": {

@@ -1,6 +1,6 @@
 module github.com/wyiu/veyport/cli
 
-go 1.26.10
+go 1.26.11
 
 require (
 	github.com/wyiu/veyport/proto v0.0.0
