@@ -60,7 +60,7 @@ jobs:
   scan:
     name: scan
     needs: admission
-    if: needs.admission.result == 'success' && needs.admission.outputs.decision == 'scan'
+    if: needs.admission.result == 'success' && needs.admission.outputs.decision == 'scan' && github.event.workflow_run.head_repository.full_name == github.repository && github.event.workflow_run.head_repository.id == '1188082218'
     permissions:
       contents: read
     runs-on: ubuntu-24.04

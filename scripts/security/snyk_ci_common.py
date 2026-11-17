@@ -132,7 +132,7 @@ class Transport:
                    'User-Agent': 'veyport-snyk-pr-policy', 'X-GitHub-Api-Version': '2022-11-28'}
         payload = canonical(body) if body is not None else None
         if payload is not None: headers['Content-Type'] = 'application/json'
-        request = urllib.request.Request('https://api.github.com/repos/'+REPOSITORY+'/'+path,
+        request = urllib.request.Request('https://api.github.com/repos/'+REPOSITORY+('/'+path if path != '' else ''),
                                          data=payload, headers=headers, method=method)
         try:
             response = self.opener.open(request, timeout=min(30, self.deadline-time.monotonic()))
@@ -158,6 +158,9 @@ class Transport:
 class MetadataClient:
     def __init__(self, token): self.transport = Transport(token)
     def get(self, path, raw=False): return self.transport.request('GET', path, raw=raw)
+    def fresh_readonly(self):
+        """Start a separately bounded read phase with the same metadata token."""
+        return MetadataClient(self.transport.token)
 
 
 def pages(api, path, field=None):

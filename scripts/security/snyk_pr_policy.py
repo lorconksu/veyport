@@ -6,6 +6,7 @@ Native checks are informational only. Separate clients constrain metadata reads
 and check writes while using the job-scoped GITHUB_TOKEN.
 """
 import argparse
+import http.client
 import importlib.util
 import os
 from pathlib import Path
@@ -79,6 +80,9 @@ class ChecksClient:
     def update(self, identity, body):
         require(positive(identity))
         return self.transport.request('PATCH', 'check-runs/'+str(identity), body)
+    def fresh_publication(self):
+        """Bound final check publication separately from evidence collection."""
+        return ChecksClient(self.transport.token)
 
 
 def trusted_repo(repo):
@@ -422,8 +426,11 @@ def publish(api, checks, admission, event, env):
         jobs = pages(api, 'actions/runs/'+str(admission['driver_run_id'])+'/attempts/'+str(admission['driver_attempt'])+'/jobs', 'jobs')
         files = download_evidence(api, admission)
         conclusion = final_verdict(admission, files, jobs, env.get('SCAN_RESULT'))
-    except (ValueError, OSError, KeyError, TypeError, urllib.error.URLError):
+    except (ValueError, OSError, KeyError, TypeError, urllib.error.URLError, http.client.HTTPException):
         pass
+    # Evidence may consume its whole budget. Final authority checks and the
+    # single update get a fresh bounded phase with each client's existing token.
+    api, checks = api.fresh_readonly(), checks.fresh_publication()
     # A previous green is never re-used or rewritten. Re-read the exact check,
     # then currentness is the last API read before the check update.
     validate_check(checks.get(admission['check_id']), admission, pending=True)

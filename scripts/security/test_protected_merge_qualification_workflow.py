@@ -12,12 +12,45 @@ from test_snyk_pr_policy import scalar, workflow_steps, shell_body, expression
 from test_protected_merge_workflow import jobs
 
 WORKFLOW = Path(__file__).parents[2]/'.github/workflows/protected-merge-qualification.yml'
+# Independent safety budget: each CLI starts its own bounded readers. Within
+# probe, metadata and App preflight readers share the same elapsed-time window.
+READ_PHASE_SECONDS = 120
+WRITE_PHASE_SECONDS = 30
+SETUP_AND_EVIDENCE_RESERVE_SECONDS = 120
+CLI_PHASE_SECONDS = {
+    'admit': READ_PHASE_SECONDS,
+    'produce-canary': READ_PHASE_SECONDS + WRITE_PHASE_SECONDS,
+    'probe': READ_PHASE_SECONDS + WRITE_PHASE_SECONDS + READ_PHASE_SECONDS,
+}
 
 
 class QualificationWorkflowTests(unittest.TestCase):
     def source(self):
         text = WORKFLOW.read_text(); parsed = jobs(text)
         return text, parsed, {key: workflow_steps(block) for key, block in parsed.items()}
+
+    def test_job_timeouts_allow_bounded_phases_and_setup(self):
+        _, parsed, steps = self.source()
+        for key, block in parsed.items():
+            modes = [mode for step in steps[key].values() for mode in re.findall(
+                r'"\$CONTROL/scripts/security/protected_merge_qualification\.py" ([a-z-]+)', step)]
+            required_seconds = sum(CLI_PHASE_SECONDS[mode] for mode in modes) + SETUP_AND_EVIDENCE_RESERVE_SECONDS
+            self.assertGreaterEqual(int(scalar(block, 'timeout-minutes', 4))*60, required_seconds,
+                f'{key}: timeout must allow bounded helper phases and setup/evidence reserve ({required_seconds}s)')
+
+    def test_each_five_minute_job_mutant_fails_its_budget_assertion(self):
+        text, parsed, _ = self.source()
+        with self.workflow_source(text):
+            self.test_job_timeouts_allow_bounded_phases_and_setup()
+        for key, block in parsed.items():
+            original = '    timeout-minutes: '+scalar(block, 'timeout-minutes', 4)
+            self.assertEqual(block.count(original), 1)
+            mutant = text.replace(block, block.replace(original, '    timeout-minutes: 5'), 1)
+            self.assertNotEqual(mutant, text)
+            with self.subTest(job=key), self.workflow_source(mutant):
+                with self.assertRaisesRegex(AssertionError,
+                        key+': timeout must allow bounded helper phases and setup/evidence reserve'):
+                    self.test_job_timeouts_allow_bounded_phases_and_setup()
 
     def test_fixed_inputs_owner_guard_and_environment_gate(self):
         text, parsed, steps = self.source()

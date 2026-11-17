@@ -30,7 +30,7 @@ jobs:
     name: admission
     if: github.event_name == 'workflow_dispatch' && github.repository == 'lorconksu/veyport' && github.repository_id == '1188082218' && github.repository_owner_id == '13374789' && github.ref == 'refs/heads/main' && github.actor == 'lorconksu' && github.actor_id == '13374789' && github.triggering_actor == 'lorconksu' && github.run_attempt == '1' && vars.PROTECTED_MERGE_QUALIFICATION_ENABLED == 'true'
     runs-on: ubuntu-24.04
-    timeout-minutes: 5
+    timeout-minutes: 10
     permissions:
       contents: read
       actions: read
@@ -73,7 +73,7 @@ jobs:
     if: needs.admission.result == 'success' && needs.admission.outputs.admitted == 'true'
     environment: ssdf-protected-merge
     runs-on: ubuntu-24.04
-    timeout-minutes: 5
+    timeout-minutes: 10
     permissions:
       contents: read
       actions: read

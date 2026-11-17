@@ -22,9 +22,17 @@ def repository():
     return {'id': 1188082218, 'full_name': 'lorconksu/veyport', 'owner': {'id': 13374789, 'login': 'lorconksu'}, 'default_branch': 'main'}
 
 
+# A fixed sibling import also works under isolated Python without sys.path changes.
+_CONTEXT_SUPPORT_SPEC = importlib.util.spec_from_file_location(
+    'security_context_test_support', Path(__file__).with_name('context_test_support.py'))
+_CONTEXT_SUPPORT = importlib.util.module_from_spec(_CONTEXT_SUPPORT_SPEC)
+_CONTEXT_SUPPORT_SPEC.loader.exec_module(_CONTEXT_SUPPORT)
+change_context_fields = _CONTEXT_SUPPORT.change_context_fields
+
+
 def fixture():
     repo = repository(); owner = repo['owner']
-    event = {'ref': 'refs/heads/main', 'repository': repo, 'sender': owner,
+    event = {'ref': 'refs/heads/main', 'repository': copy.deepcopy(repo), 'sender': copy.deepcopy(owner),
              'inputs': {'case': 'wrong-head', 'pr_number': '42', 'head_sha': B}}
     env = {'PROTECTED_MERGE_QUALIFICATION_ENABLED': 'true', 'GITHUB_EVENT_NAME': 'workflow_dispatch',
            'GITHUB_REF': 'refs/heads/main', 'GITHUB_REPOSITORY': 'lorconksu/veyport',
@@ -34,18 +42,46 @@ def fixture():
            'GITHUB_SHA': A, 'GITHUB_WORKFLOW_SHA': A,
            'GITHUB_WORKFLOW_REF': 'lorconksu/veyport/.github/workflows/protected-merge-qualification.yml@refs/heads/main'}
     pr = {'id': 9, 'node_id': 'PR_node', 'number': 42, 'state': 'open', 'draft': False, 'merged': False,
-          'mergeable': True, 'head': {'ref': 'fixture-source', 'sha': B, 'repo': repo},
-          'base': {'ref': 'qualification/protected-merge-20261116', 'sha': C, 'repo': repo}}
+          'mergeable': True, 'head': {'ref': 'fixture-source', 'sha': B, 'repo': copy.deepcopy(repo)},
+          'base': {'ref': 'qualification/protected-merge-20261116', 'sha': C, 'repo': copy.deepcopy(repo)}}
     run = {'id': 80, 'run_number': 7, 'run_attempt': 1, 'workflow_id': 90,
            'path': '.github/workflows/protected-merge-qualification.yml', 'event': 'workflow_dispatch',
            'head_sha': A, 'head_branch': 'main', 'status': 'in_progress', 'conclusion': None,
-           'repository': repo, 'head_repository': repo, 'actor': owner, 'triggering_actor': owner}
-    values = {'': repo, 'actions/workflows/protected-merge-qualification.yml': {'id': 90, 'path': run['path'], 'state': 'active'},
+           'repository': copy.deepcopy(repo), 'head_repository': copy.deepcopy(repo),
+           'actor': copy.deepcopy(owner), 'triggering_actor': copy.deepcopy(owner)}
+    values = {'': copy.deepcopy(repo), 'actions/workflows/protected-merge-qualification.yml': {'id': 90, 'path': run['path'], 'state': 'active'},
               'actions/runs/80': run, 'pulls/42': pr,
               'git/ref/heads/main': {'ref': 'refs/heads/main', 'object': {'type': 'commit', 'sha': A}},
               'git/ref/heads/qualification/protected-merge-20261116': {'ref': 'refs/heads/qualification/protected-merge-20261116', 'object': {'type': 'commit', 'sha': C}}}
     api = mock.Mock(); api.get.side_effect = lambda path: copy.deepcopy(values[path])
+    api.fresh_readonly.return_value = api
     return api, event, env, values
+
+
+def settings_fixture():
+    # Use the actual public-safe API response, including signatures and absent restrictions.
+    classic = json.loads((Path(__file__).parent/'fixtures/github-main-protection-2022-11-28.json').read_bytes())
+    env = {'PROTECTED_MERGE_APP_ID': '333', 'PROTECTED_MERGE_INSTALLATION_ID': '444', 'PROTECTED_MERGE_RULESET_ID': '555',
+        'PROTECTED_MERGE_MINTED_INSTALLATION_ID': '444', 'PROTECTED_MERGE_APP_SLUG': 'merge-app',
+        'PROTECTED_MERGE_APP_CLIENT_ID': 'client', 'PROTECTED_MERGE_QUALIFICATION_RULESET_ID': '666'}
+    rule = {'id': 666, 'source_type': 'Repository', 'source': 'lorconksu/veyport', 'target': 'branch', 'enforcement': 'active',
+        'conditions': {'ref_name': {'include': ['refs/heads/'+q.TARGET], 'exclude': []}},
+        'rules': [{'type': 'update', 'parameters': {'update_allows_fetch_and_merge': False}}],
+        'bypass_actors': [{'actor_id': 333, 'actor_type': 'Integration', 'bypass_mode': 'pull_request'}]}
+    values = {'apps/merge-app': {'id': 333, 'client_id': 'client', 'slug': 'merge-app', 'owner': repository()['owner'], 'permissions': q.merge.APP_PERMISSIONS},
+        'installation/repositories?per_page=100&page=1': {'total_count': 1, 'repositories': [repository()]},
+        'branches/main/protection': classic, 'branches/'+q.BRANCH_PATH+'/protection': classic,
+        'rulesets/666': rule, 'rules/branches/'+q.BRANCH_PATH+'?per_page=100&page=1': [
+            {'type': 'update', 'parameters': {'update_allows_fetch_and_merge': False}, 'ruleset_id': 666,
+             'ruleset_source_type': 'Repository', 'ruleset_source': 'lorconksu/veyport'}]}
+    reads = mock.Mock(); reads.get.side_effect = lambda path: copy.deepcopy(values[path])
+    return reads, env, values, rule, classic
+
+
+def native_rows(sha):
+    return [{'id': i+1, 'name': name, 'head_sha': sha, 'status': 'completed', 'conclusion': 'success',
+             'app': {'id': 57789 if name == 'CodeQL' else 15368}}
+            for i, name in enumerate(q.merge.CHECK_CONTEXTS)]
 
 
 class QualificationTests(unittest.TestCase):
@@ -75,6 +111,100 @@ class QualificationTests(unittest.TestCase):
         for path, key, value in mutations:
             api, event, env, values = fixture(); values[path][key] = value
             with self.subTest(path=path, key=key), self.assertRaises(ValueError): q.context(api, event, env)
+
+    def test_authenticated_context_bindings_refuse_both_mutation_consumers(self):
+        workflow, run, pr = 'actions/workflows/protected-merge-qualification.yml', 'actions/runs/80', 'pulls/42'
+        fixture_ref = 'git/ref/heads/'+q.TARGET
+        cases = [
+            ('repository', ('values', '', 'id'), 666),
+            ('event-repository', ('event', 'repository', 'id'), 666),
+            ('sender', ('event', 'sender', 'id'), 666),
+            ('workflow-path', ('values', workflow, 'path'), '.github/workflows/other.yml'),
+            ('workflow-state', ('values', workflow, 'state'), 'disabled_manually'),
+            ('run-id', ('values', run, 'id'), 81),
+            ('run-workflow', ('values', run, 'workflow_id'), 91),
+            ('run-path', ('values', run, 'path'), '.github/workflows/other.yml'),
+            ('run-event', ('values', run, 'event'), 'push'),
+            ('run-control', ('values', run, 'head_sha'), C),
+            ('run-branch', ('values', run, 'head_branch'), 'release'),
+            ('run-status', ('values', run, 'status'), 'completed'),
+            ('run-conclusion', ('values', run, 'conclusion'), 'cancelled'),
+            ('run-repository', ('values', run, 'repository', 'id'), 666),
+            ('run-head-repository', ('values', run, 'head_repository', 'id'), 666),
+            ('original-owner', ('values', run, 'actor', 'id'), 666),
+            ('triggering-owner', ('values', run, 'triggering_actor', 'id'), 666),
+            ('main-ref', ('values', 'git/ref/heads/main', 'object', 'sha'), C),
+            ('pr-number', ('values', pr, 'number'), 43),
+            ('pr-state', ('values', pr, 'state'), 'closed'),
+            ('pr-merged', ('values', pr, 'merged'), True),
+            ('pr-head-repository', ('values', pr, 'head', 'repo', 'id'), 666),
+            ('pr-base-repository', ('values', pr, 'base', 'repo', 'id'), 666),
+            ('pr-head-input', ('values', pr, 'head', 'sha'), A),
+            ('fixture-ref', ('values', fixture_ref, 'object', 'sha'), A),
+        ]
+        scenarios = [(binding, [(path, value)]) for binding, path, value in cases]
+        # Keep PR/input equality and the current fixture ref valid. Only the
+        # distinct-head/base invariant is violated by this coherent two-field setup.
+        scenarios.append(('distinct-head-base', [
+            (('values', pr, 'head', 'sha'), C), (('event', 'inputs', 'head_sha'), C)]))
+        for binding, changes in scenarios:
+            for consumer in ('probe', 'canary'):
+                with self.subTest(binding=binding, consumer=consumer):
+                    api, event, env, values = fixture()
+                    reads, settings_env, _, _, _ = settings_fixture()
+                    env.update(settings_env)
+                    if consumer == 'probe':
+                        env.update(GITHUB_TOKEN='read-token', PROTECTED_MERGE_TOKEN='app-token')
+                    if consumer == 'canary':
+                        env.update(GITHUB_JOB='admission', GITHUB_TOKEN='native-token')
+                        event['inputs']['case'] = 'pending-canary'
+                    head = C if binding == 'distinct-head-base' else A if binding == 'pr-head-input' else B
+                    values['commits/'+head+'/check-runs?filter=all&per_page=100&page=1'] = {
+                        'total_count': 12, 'check_runs': native_rows(head)}
+                    state = {'event': event, 'env': env, 'values': values}
+                    change_context_fields(self, state, changes)
+                    # The real reader sees the selected copy, not the old closure.
+                    api.get.side_effect = lambda path: copy.deepcopy(state['values'][path])
+                    with mock.patch.object(q, 'FixtureMutationClient') as writer, \
+                         mock.patch.object(q, 'NativeCanaryClient') as native:
+                        with self.assertRaises(ValueError):
+                            if consumer == 'probe': q.probe(api, reads, state['event'], state['env'])
+                            else: q.produce_canary(api, state['event'], state['env'])
+                        writer.assert_not_called(); native.assert_not_called()
+                        reads.get.assert_not_called()
+
+    def test_authenticated_context_consumers_accept_valid_controls(self):
+        api, event, env, _ = fixture()
+        reads, settings_env, _, _, _ = settings_fixture()
+        env.update(settings_env, GITHUB_TOKEN='read-token', PROTECTED_MERGE_TOKEN='app-token')
+        with mock.patch.object(q, 'FixtureMutationClient') as writer:
+            writer.return_value.probe.return_value = (409, {})
+            result = q.probe(api, reads, event, env)
+            self.assertEqual(result['outcome'], 'head-mismatch-denied')
+            self.assertTrue(result['mutation_attempted'])
+            writer.assert_called_once_with('app-token')
+        self.assertIn(mock.call('branches/main/protection'), reads.get.call_args_list)
+        api, event, env, values = fixture()
+        env.update(GITHUB_JOB='admission', GITHUB_TOKEN='native-token')
+        event['inputs']['case'] = 'pending-canary'
+        values['commits/'+B+'/check-runs?filter=all&per_page=100&page=1'] = {
+            'total_count': 12, 'check_runs': native_rows(B)}
+        with mock.patch.object(q, 'NativeCanaryClient') as native:
+            native.return_value.create.return_value = 144
+            result = q.produce_canary(api, event, env)
+            self.assertEqual(result['outcome'], 'canary-created')
+            self.assertEqual(result['check_run_id'], 144)
+            native.assert_called_once_with('native-token')
+
+    def test_fixture_authority_roles_are_independent(self):
+        api, event, env, values = fixture()
+        run, pr = values['actions/runs/80'], values['pulls/42']
+        repos = [values[''], event['repository'], run['repository'], run['head_repository'],
+                 pr['head']['repo'], pr['base']['repo']]
+        owners = [repo['owner'] for repo in repos]+[event['sender'], run['actor'], run['triggering_actor']]
+        for rows in (repos, owners):
+            self.assertEqual(len({id(row) for row in rows}), len(rows))
+        self.assertEqual(q.context(api, event, env)['head_sha'], B)
 
     def test_request_paths_bodies_consumed_once_and_independent_target_gate(self):
         for case, method, path, body in [
@@ -117,7 +247,8 @@ class QualificationTests(unittest.TestCase):
                    'app': {'id': 57789 if name == 'CodeQL' else 15368}} for i, name in enumerate(q.merge.CHECK_CONTEXTS)]
         q.native_checks(checks, B)
         for mutate in [lambda rows: rows.pop(), lambda rows: rows[0].update(conclusion='neutral'),
-                       lambda rows: rows[0]['app'].update(id=123), lambda rows: rows[0].update(head_sha=C)]:
+                       lambda rows: rows[0]['app'].update(id=123), lambda rows: rows[0].update(head_sha=C),
+                       lambda rows: rows.append({**copy.deepcopy(rows[0]), 'id': 99})]:
             damaged = copy.deepcopy(checks); mutate(damaged)
             with self.assertRaises(ValueError): q.native_checks(damaged, B)
 
@@ -185,6 +316,80 @@ class QualificationTests(unittest.TestCase):
             with self.assertRaises(ValueError): q.probe(api, mock.Mock(), event, env)
             constructor.assert_not_called()
 
+    def test_exhausted_probe_transport_budget_has_fresh_readonly_reconciliation(self):
+        for budget in ('time', 'requests'):
+            for scenario in ('native-merge', 'uncertain', 'wrong-head'):
+                with self.subTest(budget=budget, scenario=scenario):
+                    _, event, env, values = fixture()
+                    event['inputs']['case'] = 'wrong-head' if scenario == 'wrong-head' else 'native-merge'
+                    env.update(GITHUB_TOKEN='read-token', PROTECTED_MERGE_TOKEN='app-token')
+                    values['commits/'+B+'/check-runs?filter=all&per_page=100&page=1'] = {'total_count': 12,
+                        'check_runs': [{'id': i+1, 'name': name, 'head_sha': B, 'status': 'completed', 'conclusion': 'success',
+                                       'app': {'id': 57789 if name == 'CodeQL' else 15368}}
+                                      for i, name in enumerate(q.merge.CHECK_CONTEXTS)]}
+                    clock, traffic, created = [0.0], [], []
+                    case = self
+
+                    class Response:
+                        status = 200
+                        def __init__(self, data): self.data = data
+                        def __enter__(self): return self
+                        def __exit__(self, *args): pass
+                        def read(self, limit): return self.data[:limit]
+
+                    class Opener:
+                        def open(self, request, timeout):
+                            path = request.full_url.removeprefix('https://api.github.com/repos/lorconksu/veyport').lstrip('/')
+                            method = request.get_method()
+                            traffic.append((method, path, request.get_header('Authorization')))
+                            case.assertTrue(0 < timeout <= 30)
+                            if method == 'PUT':
+                                case.assertEqual(path, 'pulls/42/merge')
+                                case.assertEqual(json.loads(request.data), {'sha': C if scenario == 'wrong-head' else B, 'merge_method': 'merge'})
+                                if scenario == 'wrong-head':
+                                    raise urllib.error.HTTPError(request.full_url, 409, 'conflict', {}, io.BytesIO(b'{}'))
+                                values['pulls/42'].update(merged=True, state='closed', merge_commit_sha=A)
+                                values['git/ref/heads/'+q.TARGET]['object']['sha'] = A
+                                values['commits/'+A] = {'sha': A, 'parents': [{'sha': C}, {'sha': B}]}
+                                if scenario == 'uncertain': raise TimeoutError('PRIVATE')
+                                return Response(json.dumps({'sha': A, 'merged': True}).encode())
+                            case.assertEqual(method, 'GET')
+                            return Response(json.dumps(values[path]).encode())
+
+                    def opener(*handlers):
+                        created.append(len(traffic))
+                        return Opener()
+
+                    original_context, contexts = q.context, [0]
+                    def exhaust_last_context(api, event, env):
+                        admitted = original_context(api, event, env)
+                        contexts[0] += 1
+                        if contexts[0] == 2:
+                            if budget == 'requests':
+                                while api.transport.requests < 160: api.get('')
+                            else: clock[0] = api.transport.deadline
+                        return admitted
+
+                    with mock.patch.object(q.common.time, 'monotonic', side_effect=lambda: clock[0]), \
+                         mock.patch.object(q.urllib.request, 'build_opener', side_effect=opener), \
+                         mock.patch.object(q, 'context', side_effect=exhaust_last_context), mock.patch.object(q, 'settings'), \
+                         mock.patch('socket.create_connection', side_effect=AssertionError('socket connection attempted')):
+                        api = q.common.MetadataClient('read-token')
+                        result = q.probe(api, mock.Mock(), event, env)
+                        with self.assertRaises(ValueError): api.get('')
+                    self.assertEqual(contexts[0], 2)
+                    self.assertEqual(sum(row[0] == 'PUT' for row in traffic), 1)
+                    self.assertEqual(result['outcome'], 'head-mismatch-denied' if scenario == 'wrong-head' else 'native-merge-confirmed')
+                    self.assertEqual(result['http_status'], 409 if scenario == 'wrong-head' else None if scenario == 'uncertain' else 200)
+                    self.assertTrue(result['mutation_attempted'])
+                    write_index = next(i for i, row in enumerate(traffic) if row[0] == 'PUT')
+                    expected = ['pulls/42', 'git/ref/heads/'+q.TARGET]
+                    if scenario != 'wrong-head': expected.append('commits/'+A)
+                    self.assertEqual(traffic[write_index+1:], [('GET', path, 'Bearer read-token') for path in expected])
+                    self.assertEqual(traffic[write_index][2], 'Bearer app-token')
+                    self.assertEqual(len(created), 3)
+                    self.assertEqual(created[-1], write_index+1)
+
     def test_real_cli_entrypoint_success_refusal_and_sanitized_postwrite_output(self):
         api, event, env, _ = fixture(); env.update(GITHUB_TOKEN='read-token', PROTECTED_MERGE_TOKEN='app-token')
         with tempfile.TemporaryDirectory() as folder:
@@ -219,22 +424,7 @@ class QualificationTests(unittest.TestCase):
                 with mock.patch.object(q.common, 'pages', return_value=rows), self.assertRaises(ValueError): q.fixture_preflight(api, {**admitted, 'case': case})
 
     def test_fixture_settings_preserve_full_baseline_and_visible_exact_bypass(self):
-        # Use the actual public-safe API response, including signatures and absent restrictions.
-        classic = json.loads((Path(__file__).parent/'fixtures/github-main-protection-2022-11-28.json').read_bytes())
-        env = {'PROTECTED_MERGE_APP_ID': '333', 'PROTECTED_MERGE_INSTALLATION_ID': '444', 'PROTECTED_MERGE_RULESET_ID': '555',
-            'PROTECTED_MERGE_MINTED_INSTALLATION_ID': '444', 'PROTECTED_MERGE_APP_SLUG': 'merge-app',
-            'PROTECTED_MERGE_APP_CLIENT_ID': 'client', 'PROTECTED_MERGE_QUALIFICATION_RULESET_ID': '666'}
-        rule = {'id': 666, 'source_type': 'Repository', 'source': 'lorconksu/veyport', 'target': 'branch', 'enforcement': 'active',
-            'conditions': {'ref_name': {'include': ['refs/heads/'+q.TARGET], 'exclude': []}},
-            'rules': [{'type': 'update', 'parameters': {'update_allows_fetch_and_merge': False}}],
-            'bypass_actors': [{'actor_id': 333, 'actor_type': 'Integration', 'bypass_mode': 'pull_request'}]}
-        values = {'apps/merge-app': {'id': 333, 'client_id': 'client', 'slug': 'merge-app', 'owner': repository()['owner'], 'permissions': q.merge.APP_PERMISSIONS},
-            'installation/repositories?per_page=100&page=1': {'total_count': 1, 'repositories': [repository()]},
-            'branches/main/protection': classic, 'branches/'+q.BRANCH_PATH+'/protection': classic,
-            'rulesets/666': rule, 'rules/branches/'+q.BRANCH_PATH+'?per_page=100&page=1': [
-                {'type': 'update', 'parameters': {'update_allows_fetch_and_merge': False}, 'ruleset_id': 666,
-                 'ruleset_source_type': 'Repository', 'ruleset_source': 'lorconksu/veyport'}]}
-        reads = mock.Mock(); reads.get.side_effect = lambda path: copy.deepcopy(values[path])
+        reads, env, values, rule, classic = settings_fixture()
         q.settings(reads, env, 'native-merge'); q.settings(reads, env, 'main-settings')
         for patch in [{'bypass_actors': []}, {'conditions': {'ref_name': {'include': ['refs/heads/main'], 'exclude': []}}}, {'enforcement': 'disabled'}]:
             with mock.patch.dict(rule, patch), self.assertRaises(ValueError): q.settings(reads, env, 'native-merge')
@@ -281,6 +471,8 @@ class QualificationTests(unittest.TestCase):
         with mock.patch.object(q, 'settings') as settings, mock.patch.object(q, 'FixtureMutationClient') as writer:
             result = q.probe(api, mock.Mock(), event, env)
             self.assertEqual(result['outcome'], 'main-baseline-visible'); self.assertFalse(result['mutation_attempted'])
+            self.assertIsNone(result['http_status'])
+            api.fresh_readonly.assert_not_called()
             settings.assert_called_once(); writer.assert_not_called()
         with tempfile.TemporaryDirectory() as folder:
             eventfile = Path(folder)/'event'; eventfile.write_text(json.dumps(event)); output = Path(folder)/'output'
@@ -313,6 +505,9 @@ class QualificationTests(unittest.TestCase):
             self.assertEqual(client.opener.open.call_count, 1)
             native = [{'id': i+1, 'name': name, 'head_sha': B, 'status': 'completed', 'conclusion': 'success', 'app': {'id': 57789 if name == 'CodeQL' else 15368}} for i,name in enumerate(q.merge.CHECK_CONTEXTS)]
             with mock.patch.object(q.common, 'pages', return_value=[*native,returned]): q.fixture_preflight(api, admitted)
+            duplicate = {**copy.deepcopy(returned), 'id': 102}
+            with mock.patch.object(q.common, 'pages', return_value=[*native, returned, duplicate]), self.assertRaises(ValueError):
+                q.fixture_preflight(api, admitted)
             returned['app']['id'] = 999
             with mock.patch.object(q.common, 'pages', return_value=[*native,returned]), self.assertRaises(ValueError): q.fixture_preflight(api, admitted)
 
