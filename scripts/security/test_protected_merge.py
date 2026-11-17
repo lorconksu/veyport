@@ -589,6 +589,77 @@ class ProtectedMergeTests(unittest.TestCase):
                 with self.assertRaises(ValueError): self.merge(admission)
                 self.assertEqual(self.writer.writes, [])
 
+    def test_update_rule_response_forms_reach_exact_head_merge(self):
+        for detail_omitted, effective_omitted in [(False, False), (True, False), (False, True), (True, True)]:
+            with self.subTest(detail_omitted=detail_omitted, effective_omitted=effective_omitted):
+                self.setUp()
+                admission = self.prepared()
+                if detail_omitted: self.app.rule['rules'][0].pop('parameters')
+                if effective_omitted: self.app.active[0].pop('parameters')
+                try:
+                    result = self.merge(admission)
+                except ValueError:
+                    self.assertEqual(self.writer.writes, [])
+                    self.fail('Valid update-rule response refused before merge write')
+                self.assertEqual(result['result'], 'merged')
+                self.assertEqual(self.writer.writes, [(7, HEAD)])
+
+    def test_malformed_update_responses_refuse_before_merge_write(self):
+        malformed = [
+            {}, {'parameters': {'update_allows_fetch_and_merge': False}}, {'type': 'other'},
+            {'type': 'update', 'unknown': False},
+            *[{'type': 'update', 'parameters': value} for value in [
+                None, {}, False, [], {'unknown': False},
+                {'update_allows_fetch_and_merge': False, 'unknown': False},
+                *[{'update_allows_fetch_and_merge': value} for value in [True, 0, 1, 'false', 'true', None]]]],
+        ]
+        for site in ('detail', 'effective'):
+            for response in malformed + [None, [], 'update']:
+                with self.subTest(site=site, response=response):
+                    self.setUp()
+                    admission = self.prepared()
+                    self.app.rule['rules'][0].pop('parameters')
+                    self.app.active[0].pop('parameters')
+                    if site == 'detail': self.app.rule['rules'] = [copy.deepcopy(response)]
+                    else:
+                        metadata = {k: v for k, v in self.app.active[0].items() if k != 'type'}
+                        self.app.active = [{**metadata, **response}] if type(response) is dict else [response]
+                    with self.assertRaises(ValueError): self.merge(admission)
+                    self.assertEqual(self.writer.writes, [])
+
+    def test_omitted_update_parameters_preserve_full_rule_authority(self):
+        mutations = [
+            lambda a: a.rule.update(rules=[]),
+            lambda a: a.rule['rules'].append({'type': 'update'}),
+            lambda a: a.rule.update(rules={'type': 'update'}),
+            lambda a: a.rule.update(rules=None),
+            lambda a: a.active.clear(),
+            lambda a: a.active.append(copy.deepcopy(a.active[0])),
+            lambda a: a.active[0].pop('ruleset_id'),
+            lambda a: a.active[0].update(ruleset_id=778),
+            lambda a: a.active[0].update(ruleset_id=777.0),
+            lambda a: a.active[0].pop('ruleset_source_type'),
+            lambda a: a.active[0].pop('ruleset_source'),
+            lambda a: a.active[0].update(ruleset_source_type='Organization'),
+            lambda a: a.active[0].update(ruleset_source='other/repo'),
+            lambda a: a.active[0].update(unknown=False),
+            lambda a: a.rule.update(source_type='Organization'),
+            lambda a: a.rule.update(source='other/repo'),
+            lambda a: a.rule.update(target='tag'),
+            lambda a: a.rule['conditions']['ref_name']['exclude'].append('refs/heads/main'),
+            lambda a: a.rule['bypass_actors'][0].update(bypass_mode='always'),
+            lambda a: a.rule['bypass_actors'].append({'actor_type': 'User', 'actor_id': 13374789, 'bypass_mode': 'always'}),
+        ]
+        for index, mutate in enumerate(mutations):
+            with self.subTest(mutation=index):
+                self.setUp()
+                admission = self.prepared()
+                self.app.rule['rules'][0].pop('parameters')
+                self.app.active[0].pop('parameters')
+                mutate(self.app)
+                with self.assertRaises(ValueError): self.merge(admission)
+                self.assertEqual(self.writer.writes, [])
+
     def test_minted_relationship_configuration_is_not_supplied_by_artifacts(self):
         admission = self.prepared()
         for key, value in [('PROTECTED_MERGE_MINTED_INSTALLATION_ID', '887'),

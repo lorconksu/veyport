@@ -346,6 +346,25 @@ def validate_classic(value):
     require(pairs == {(name, 57789 if name == 'CodeQL' else 15368) for name in CHECK_CONTEXTS})
 
 
+def exact_update_rules(rules, metadata=None):
+    """One restrictive update rule, with only the two observed parameter forms."""
+    metadata = {} if metadata is None else metadata
+    if type(rules) is not list or len(rules) != 1 or type(rules[0]) is not dict:
+        return False
+    rule = rules[0]
+    # Validate complete keys and effective-rule provenance independently of the
+    # optional parameters. Never discard fields or normalize a malformed value.
+    if set(rule)-{'parameters'} != {'type'} | set(metadata) or rule.get('type') != 'update':
+        return False
+    if canonical({key: rule[key] for key in metadata}) != canonical(metadata):
+        return False
+    if 'parameters' not in rule:
+        return True
+    parameters = rule['parameters']
+    return (type(parameters) is dict and set(parameters) == {'update_allows_fetch_and_merge'}
+            and parameters['update_allows_fetch_and_merge'] is False)
+
+
 def validate_protections(api, env):
     app_id, ruleset_id, slug, client = protection_config(env)
     app = api.get('apps/'+slug)
@@ -370,7 +389,7 @@ def validate_protections(api, env):
             and rule.get('target') == 'branch' and rule.get('enforcement') == 'active'
             and selected[0].get('enforcement') == 'active'
             and rule.get('conditions') == {'ref_name': {'include': ['refs/heads/main'], 'exclude': []}}
-            and canonical(rule.get('rules')) == canonical([{'type': 'update', 'parameters': {'update_allows_fetch_and_merge': False}}])
+            and exact_update_rules(rule.get('rules'))
             and canonical(rule.get('bypass_actors')) == canonical([{'actor_id': app_id, 'actor_type': 'Integration', 'bypass_mode': 'pull_request'}]))
     # Branch rule records lack IDs. Bound pagination independently and compare
     # the complete list, including inherited rules and all their parameters.
@@ -381,8 +400,8 @@ def validate_protections(api, env):
         active.extend(batch)
         if len(batch) < 100: break
     else: require(False)
-    require(canonical(active) == canonical([{'type': 'update', 'parameters': {'update_allows_fetch_and_merge': False},
-                        'ruleset_id': ruleset_id, 'ruleset_source_type': 'Repository', 'ruleset_source': REPOSITORY}]))
+    require(exact_update_rules(active, {'ruleset_id': ruleset_id,
+            'ruleset_source_type': 'Repository', 'ruleset_source': REPOSITORY}))
 
 
 class MergeClient:
