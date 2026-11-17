@@ -194,11 +194,11 @@ def settings(reads, env, case):
             and rule.get('source_type') == 'Repository' and rule.get('source') == merge.REPOSITORY
             and rule.get('target') == 'branch' and rule.get('enforcement') == 'active'
             and rule.get('conditions') == {'ref_name': {'include': ['refs/heads/'+TARGET], 'exclude': []}}
-            and canonical(rule.get('rules')) == canonical([{'type': 'update', 'parameters': {'update_allows_fetch_and_merge': False}}])
+            and merge.exact_update_rules(rule.get('rules'))
             and canonical(rule.get('bypass_actors')) == canonical([{'actor_id': app_id, 'actor_type': 'Integration', 'bypass_mode': 'pull_request'}]))
     active = reads.get('rules/branches/'+BRANCH_PATH+'?per_page=100&page=1')
-    require(canonical(active) == canonical([{'type': 'update', 'parameters': {'update_allows_fetch_and_merge': False},
-            'ruleset_id': rule_id, 'ruleset_source_type': 'Repository', 'ruleset_source': merge.REPOSITORY}]))
+    require(merge.exact_update_rules(active, {'ruleset_id': rule_id,
+            'ruleset_source_type': 'Repository', 'ruleset_source': merge.REPOSITORY}))
     classic = reads.get('branches/'+BRANCH_PATH+'/protection')
     if case in ('missing-canary', 'pending-canary', 'failed-canary'):
         # A single extra Actions canary; all original baseline fields retained.

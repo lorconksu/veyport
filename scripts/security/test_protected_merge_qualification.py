@@ -196,6 +196,94 @@ class QualificationTests(unittest.TestCase):
             self.assertEqual(result['check_run_id'], 144)
             native.assert_called_once_with('native-token')
 
+    def test_update_rule_response_forms_reach_wrong_head_probe(self):
+        for detail_omitted, effective_omitted in [(False, False), (True, False), (False, True), (True, True)]:
+            with self.subTest(detail_omitted=detail_omitted, effective_omitted=effective_omitted):
+                api, event, env, _ = fixture()
+                reads, settings_env, values, rule, _ = settings_fixture()
+                env.update(settings_env, GITHUB_TOKEN='read-token', PROTECTED_MERGE_TOKEN='app-token')
+                if detail_omitted: rule['rules'][0].pop('parameters')
+                active = values['rules/branches/'+q.BRANCH_PATH+'?per_page=100&page=1']
+                if effective_omitted: active[0].pop('parameters')
+                # Exercise the real one-shot HTTP writer at its offline transport boundary.
+                with mock.patch.object(q.urllib.request, 'build_opener') as opener:
+                    opener.return_value.open.side_effect = urllib.error.HTTPError(
+                        'https://api.github.com', 409, 'head mismatch', {}, io.BytesIO(b'{}'))
+                    try:
+                        result = q.probe(api, reads, event, env)
+                    except ValueError:
+                        opener.return_value.open.assert_not_called()
+                        self.fail('Valid update-rule response refused before fixture probe write')
+                    self.assertEqual(result['outcome'], 'head-mismatch-denied')
+                    self.assertTrue(result['mutation_attempted'])
+                    self.assertEqual(opener.return_value.open.call_count, 1)
+                    request = opener.return_value.open.call_args.args[0]
+                    self.assertEqual(request.method, 'PUT')
+                    self.assertEqual(json.loads(request.data), {'sha': C, 'merge_method': 'merge'})
+
+    def test_malformed_update_responses_refuse_before_probe_write(self):
+        malformed = [
+            {}, {'parameters': {'update_allows_fetch_and_merge': False}}, {'type': 'other'},
+            {'type': 'update', 'unknown': False},
+            *[{'type': 'update', 'parameters': value} for value in [
+                None, {}, False, [], {'unknown': False},
+                {'update_allows_fetch_and_merge': False, 'unknown': False},
+                *[{'update_allows_fetch_and_merge': value} for value in [True, 0, 1, 'false', 'true', None]]]],
+        ]
+        for site in ('detail', 'effective'):
+            for response in malformed + [None, [], 'update']:
+                with self.subTest(site=site, response=response):
+                    api, event, env, _ = fixture()
+                    reads, settings_env, values, rule, _ = settings_fixture()
+                    env.update(settings_env, GITHUB_TOKEN='read-token', PROTECTED_MERGE_TOKEN='app-token')
+                    rule['rules'][0].pop('parameters')
+                    path = 'rules/branches/'+q.BRANCH_PATH+'?per_page=100&page=1'
+                    values[path][0].pop('parameters')
+                    if site == 'detail': rule['rules'] = [copy.deepcopy(response)]
+                    else:
+                        metadata = {k: v for k, v in values[path][0].items() if k != 'type'}
+                        values[path] = [{**metadata, **response}] if type(response) is dict else [response]
+                    with mock.patch.object(q.urllib.request, 'build_opener') as opener:
+                        with self.assertRaises(ValueError): q.probe(api, reads, event, env)
+                        opener.assert_not_called()
+
+    def test_omitted_update_parameters_preserve_fixture_rule_authority(self):
+        mutations = [
+            lambda r, a: r.update(rules=[]),
+            lambda r, a: r['rules'].append({'type': 'update'}),
+            lambda r, a: r.update(rules={'type': 'update'}),
+            lambda r, a: r.update(rules=None),
+            lambda r, a: a.clear(),
+            lambda r, a: a.append(copy.deepcopy(a[0])),
+            lambda r, a: a[0].pop('ruleset_id'),
+            lambda r, a: a[0].update(ruleset_id=555),
+            lambda r, a: a[0].update(ruleset_id=666.0),
+            lambda r, a: a[0].pop('ruleset_source_type'),
+            lambda r, a: a[0].pop('ruleset_source'),
+            lambda r, a: a[0].update(ruleset_source_type='Organization'),
+            lambda r, a: a[0].update(ruleset_source='other/repo'),
+            lambda r, a: a[0].update(unknown=False),
+            lambda r, a: r.update(id=555),
+            lambda r, a: r.update(source_type='Organization'),
+            lambda r, a: r.update(source='other/repo'),
+            lambda r, a: r.update(target='tag'),
+            lambda r, a: r['conditions']['ref_name']['exclude'].append('refs/heads/main'),
+            lambda r, a: r['bypass_actors'][0].update(bypass_mode='always'),
+            lambda r, a: r['bypass_actors'].append({'actor_type': 'User', 'actor_id': 13374789, 'bypass_mode': 'always'}),
+        ]
+        for index, mutate in enumerate(mutations):
+            with self.subTest(mutation=index):
+                api, event, env, _ = fixture()
+                reads, settings_env, values, rule, _ = settings_fixture()
+                env.update(settings_env, GITHUB_TOKEN='read-token', PROTECTED_MERGE_TOKEN='app-token')
+                rule['rules'][0].pop('parameters')
+                active = values['rules/branches/'+q.BRANCH_PATH+'?per_page=100&page=1']
+                active[0].pop('parameters')
+                mutate(rule, active)
+                with mock.patch.object(q.urllib.request, 'build_opener') as opener:
+                    with self.assertRaises(ValueError): q.probe(api, reads, event, env)
+                    opener.assert_not_called()
+
     def test_fixture_authority_roles_are_independent(self):
         api, event, env, values = fixture()
         run, pr = values['actions/runs/80'], values['pulls/42']
