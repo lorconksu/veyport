@@ -57,7 +57,7 @@ class QualificationWorkflowTests(unittest.TestCase):
         trigger = text.split('on:\n', 1)[1].split('\npermissions:')[0]
         self.assertEqual(re.findall(r'^  ([a-z_]+):', trigger, re.M), ['workflow_dispatch'])
         self.assertEqual(re.findall(r'^      ([a-z_]+):', trigger, re.M), ['case', 'pr_number', 'head_sha'])
-        self.assertIn('options: [main-settings, wrong-head, direct-push, native-merge, missing-canary, pending-canary, failed-canary, workflow-file-merge]', trigger)
+        self.assertIn('options: [main-settings, settings-diagnostic, wrong-head, direct-push, native-merge, missing-canary, pending-canary, failed-canary, workflow-file-merge]', trigger)
         self.assertEqual(set(parsed), {'admission', 'probe'})
         good = {'github.event_name': 'workflow_dispatch', 'github.repository': 'lorconksu/veyport',
             'github.repository_id': '1188082218', 'github.repository_owner_id': '13374789',
@@ -125,7 +125,7 @@ class QualificationWorkflowTests(unittest.TestCase):
         guard = scalar(producer, 'if', 8)
         for case in ['pending-canary', 'failed-canary']:
             self.assertTrue(expression(guard, {'steps.admit.outputs.case': case}))
-        for case in ['missing-canary', 'native-merge', 'main-settings', 'wrong-head', '']:
+        for case in ['missing-canary', 'native-merge', 'main-settings', 'settings-diagnostic', 'wrong-head', '']:
             self.assertFalse(expression(guard, {'steps.admit.outputs.case': case}))
         for forbidden in ['PROTECTED_MERGE_TOKEN', 'secrets.', 'create-github-app-token', 'environment:']:
             self.assertNotIn(forbidden, parsed['admission'])

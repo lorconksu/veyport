@@ -5,11 +5,13 @@ This is not production merge authority or scanner proof. No rule editing, ref
 creation, arbitrary targets, write retries, or private-key handling exists here.
 """
 import argparse
+from contextlib import contextmanager
 import http.client
 import importlib.util
 import os
 from pathlib import Path
 import re
+import signal
 import sys
 import time
 import urllib.error
@@ -18,15 +20,25 @@ import urllib.request
 _SPEC = importlib.util.spec_from_file_location('qualification_merge_trusted', Path(__file__).with_name('protected_merge.py'))
 merge = importlib.util.module_from_spec(_SPEC)
 _SPEC.loader.exec_module(merge)
+_DIAGNOSTIC_SPEC = importlib.util.spec_from_file_location(
+    'qualification_diagnostic_trusted', Path(__file__).with_name('protected_merge_diagnostic.py'))
+diagnostic = importlib.util.module_from_spec(_DIAGNOSTIC_SPEC)
+_DIAGNOSTIC_SPEC.loader.exec_module(diagnostic)
 common = merge.common
 require, canonical, strict_json = common.require, common.canonical, common.strict_json
 TARGET = 'qualification/protected-merge-20261116'
 WORKFLOW = '.github/workflows/protected-merge-qualification.yml'
 BRANCH_PATH = 'qualification%2Fprotected-merge-20261116'
-CASES = ('main-settings', 'wrong-head', 'direct-push', 'native-merge',
-         'missing-canary', 'pending-canary', 'failed-canary', 'workflow-file-merge')
+SETTINGS_DIAGNOSTIC = 'settings-diagnostic'
+WRITE_CASES = ('wrong-head', 'direct-push', 'native-merge', 'missing-canary',
+               'pending-canary', 'failed-canary', 'workflow-file-merge')
+CASES = ('main-settings', SETTINGS_DIAGNOSTIC, *WRITE_CASES)
 CANARY = 'Protected merge qualification canary'
 ERRORS = (OSError, ValueError, KeyError, TypeError, urllib.error.URLError, http.client.HTTPException)
+EFFECTIVE_RULES_PATH = 'rules/branches/'+BRANCH_PATH+'?per_page=100&page=1'
+FIXTURE_CLASSIC_PATH = 'branches/'+BRANCH_PATH+'/protection'
+INSTALLATION_SCOPE_PATH = 'installation/repositories?per_page=100&page=1'
+DIAGNOSTIC_REQUEST_SECONDS = 30
 
 
 def fixed_target(target):
@@ -141,6 +153,7 @@ class NativeCanaryClient:
 def produce_canary(api, event, env):
     require(env.get('GITHUB_JOB') == 'admission' and not env.get('PROTECTED_MERGE_TOKEN'))
     admitted = context(api, event, env)
+    require(admitted['case'] != SETTINGS_DIAGNOSTIC)
     result = {'schema_version': 1, 'case': admitted['case'], 'target': TARGET,
               'head_sha': admitted['head_sha'], 'mutation_attempted': False, 'outcome': 'canary-not-requested'}
     if admitted['case'] not in ('pending-canary', 'failed-canary'): return result
@@ -175,31 +188,137 @@ class FixtureReadClient(merge.AppReadClient):
         return strict_json(raw)
 
 
-def settings(reads, env, case):
-    # Reuse exact identity validation without relaxing production protections.
-    app_id, _, slug, client = merge.protection_config(env)
-    app = reads.get('apps/'+slug)
+def _diagnostic_timeout(_signal, _frame):
+    raise TimeoutError
+
+
+@contextmanager
+def diagnostic_read_deadline(seconds):
+    """Bound the POSIX CLI's network I/O even if bytes keep arriving slowly."""
+    previous = signal.signal(signal.SIGALRM, _diagnostic_timeout)
+    try:
+        signal.setitimer(signal.ITIMER_REAL, seconds)
+        yield
+    finally:
+        try:
+            signal.setitimer(signal.ITIMER_REAL, 0)
+        finally:
+            signal.signal(signal.SIGALRM, previous)
+
+
+class DiagnosticReadClient:
+    """Only the fixed settings GETs and one read-only GraphQL operation."""
+    def __init__(self, token):
+        merge.token_valid(token)
+        self.token = token
+        self.opener = urllib.request.build_opener(DiagnosticNoRedirect())
+        self.deadline = time.monotonic() + 120
+        self.requests = 0
+
+    def get(self, path):
+        return self._read(path=path)
+
+    def graphql_fixture_ruleset(self, rule_id):
+        return self._read(graphql_rule_id=rule_id)
+
+    def _read(self, *, path=None, graphql_rule_id=None):
+        if path is None:
+            require(type(graphql_rule_id) is int and 0 < graphql_rule_id <= diagnostic.GRAPHQL_INT_MAX)
+            route = 'graphql'
+            body = canonical({'query': diagnostic.GRAPHQL_QUERY, 'variables': {'id': graphql_rule_id}})
+        else:
+            require(type(path) is str and graphql_rule_id is None)
+            route, body = self._rest_route(path), None
+        remaining = self.deadline - time.monotonic()
+        if self.requests >= 7 or remaining <= 0:
+            return {'result': 'budget-exhausted'}, None
+        self.requests += 1
+        request = urllib.request.Request('https://api.github.com/'+route, data=body,
+            method='POST' if body is not None else 'GET', headers={'Authorization': 'Bearer '+self.token,
+            'Accept': 'application/vnd.github+json', 'Content-Type': 'application/json',
+            'User-Agent': 'veyport-protected-merge-qualification', 'X-GitHub-Api-Version': '2022-11-28'})
+        stage = {}
+        timeout = min(DIAGNOSTIC_REQUEST_SECONDS, remaining)
+        try:
+            with diagnostic_read_deadline(timeout):
+                try:
+                    response = self.opener.open(request, timeout=timeout)
+                except urllib.error.HTTPError as error:
+                    response = error
+                with response:
+                    status = response.code if isinstance(response, urllib.error.HTTPError) else response.status
+                    if type(status) is int and 100 <= status <= 599:
+                        stage['http_status'] = status
+                    if type(status) is not int or status != 200:
+                        return {**stage, 'result': 'http-error'}, None
+                    # A bounded HTTPResponse.read can silently return fewer bytes than declared.
+                    declared_length = getattr(response, 'length', None)
+                    if declared_length is not None and declared_length > common.MAX_JSON:
+                        return {**stage, 'result': 'validation-failed'}, None
+                    raw = response.read(common.MAX_JSON+1)
+                    if declared_length is not None and len(raw) != declared_length:
+                        return {**stage, 'result': 'transport-error'}, None
+            if time.monotonic() >= self.deadline:
+                return {**stage, 'result': 'budget-exhausted'}, None
+        except ERRORS:
+            return {**stage, 'result': 'transport-error'}, None
+        try:
+            return {**stage, 'result': 'observed'}, strict_json(raw)
+        except ValueError:
+            return {**stage, 'result': 'validation-failed'}, None
+
+    @staticmethod
+    def _rest_route(path):
+        if path == INSTALLATION_SCOPE_PATH or re.fullmatch(r'apps/[a-z0-9](?:[a-z0-9-]{0,98}[a-z0-9])?', path):
+            return path
+        rule = re.fullmatch(r'rulesets/([1-9][0-9]{0,9})', path)
+        require(path in ('branches/main/protection', FIXTURE_CLASSIC_PATH, EFFECTIVE_RULES_PATH)
+                or (rule and int(rule[1]) <= diagnostic.GRAPHQL_INT_MAX))
+        return 'repos/'+merge.REPOSITORY+'/'+path
+
+
+class DiagnosticNoRedirect(common.NoRedirect):
+    def http_error_302(self, request, response, status, message, headers):
+        # Let urllib's default handler report the original status without parsing Location.
+        return None
+
+    http_error_301 = http_error_303 = http_error_307 = http_error_308 = http_error_302
+
+
+def validate_app_identity(app, app_id, slug, client):
     require(type(app) is dict and type(app.get('id')) is int and app['id'] == app_id
             and app.get('slug') == slug and app.get('client_id') == client
             and app.get('permissions') == merge.APP_PERMISSIONS)
     merge.trusted_owner(app.get('owner'))
+
+
+def fixture_rule_identity(rule, rule_id):
+    return (type(rule) is dict and type(rule.get('id')) is int and rule['id'] == rule_id
+            and rule.get('source_type') == 'Repository' and rule.get('source') == merge.REPOSITORY)
+
+
+def fixture_rule_conditions(rule):
+    return rule.get('conditions') == {'ref_name': {'include': ['refs/heads/'+TARGET], 'exclude': []}}
+
+
+def settings(reads, env, case):
+    # Reuse exact identity validation without relaxing production protections.
+    app_id, production_rule_id, slug, client = merge.protection_config(env)
+    validate_app_identity(reads.get('apps/'+slug), app_id, slug, client)
     repos = common.pages(reads, 'installation/repositories', 'repositories')
     require(len(repos) == 1); merge.trusted_repo(repos[0])
     merge.validate_classic(reads.get('branches/main/protection'))
     if case == 'main-settings': return
     rule_id = merge.integer_env(env, 'PROTECTED_MERGE_QUALIFICATION_RULESET_ID')
-    require(rule_id != merge.integer_env(env, 'PROTECTED_MERGE_RULESET_ID'))
+    require(rule_id != production_rule_id)
     rule = reads.get('rulesets/'+str(rule_id))
-    require(type(rule) is dict and type(rule.get('id')) is int and rule['id'] == rule_id
-            and rule.get('source_type') == 'Repository' and rule.get('source') == merge.REPOSITORY
+    require(fixture_rule_identity(rule, rule_id)
             and rule.get('target') == 'branch' and rule.get('enforcement') == 'active'
-            and rule.get('conditions') == {'ref_name': {'include': ['refs/heads/'+TARGET], 'exclude': []}}
+            and fixture_rule_conditions(rule)
             and merge.exact_update_rules(rule.get('rules'))
             and canonical(rule.get('bypass_actors')) == canonical([{'actor_id': app_id, 'actor_type': 'Integration', 'bypass_mode': 'pull_request'}]))
-    active = reads.get('rules/branches/'+BRANCH_PATH+'?per_page=100&page=1')
-    require(merge.exact_update_rules(active, {'ruleset_id': rule_id,
-            'ruleset_source_type': 'Repository', 'ruleset_source': merge.REPOSITORY}))
-    classic = reads.get('branches/'+BRANCH_PATH+'/protection')
+    require(effective_update_matches(reads.get(EFFECTIVE_RULES_PATH), rule_id))
+    classic = reads.get(FIXTURE_CLASSIC_PATH)
     if case in ('missing-canary', 'pending-canary', 'failed-canary'):
         # A single extra Actions canary; all original baseline fields retained.
         require(type(classic) is dict and type(classic.get('required_status_checks')) is dict)
@@ -210,6 +329,83 @@ def settings(reads, env, case):
         status['contexts'] = [name for name in status['contexts'] if name != CANARY]
         status['checks'] = [row for row in status['checks'] if row != {'context': CANARY, 'app_id': 15368}]
     merge.validate_classic(classic)
+
+
+def effective_update_matches(value, rule_id):
+    return merge.exact_update_rules(value, {'ruleset_id': rule_id,
+            'ruleset_source_type': 'Repository', 'ruleset_source': merge.REPOSITORY})
+
+
+def observe(response, inspect):
+    stage, value = response
+    if stage['result'] != 'observed':
+        return stage
+    try:
+        predicates = inspect(value)
+    except (KeyError, TypeError, ValueError):
+        return {**stage, 'result': 'validation-failed'}
+    if predicates is None:  # Successful exact validator.
+        return {**stage, 'result': 'verified'}
+    return {**stage, **predicates}
+
+
+def validate_diagnostic_scope(value):
+    # Exactly one installed repository must fit in the first page.
+    require(type(value) is dict and type(value.get('total_count')) is int and value['total_count'] == 1
+            and type(value.get('repositories')) is list and len(value['repositories']) == 1)
+    merge.trusted_repo(value['repositories'][0])
+
+
+def describe_fixture_rule(rule, rule_id, app_id):
+    if not fixture_rule_identity(rule, rule_id):
+        return {'result': 'validation-failed', 'identity_matches': False}
+    enforcement = rule.get('enforcement')
+    return {'identity_matches': True, 'branch_target_matches': rule.get('target') == 'branch',
+            'conditions_match': fixture_rule_conditions(rule), 'restrictive_update_matches': merge.exact_update_rules(rule.get('rules')),
+            'enforcement': enforcement if enforcement in ('active', 'disabled', 'evaluate') else 'unrecognized',
+            **diagnostic.rest_bypass(rule, app_id)}
+
+
+def describe_effective_rules(value, rule_id):
+    require(type(value) is list and len(value) <= 100)
+    return {'restrictive_update_matches': effective_update_matches(value, rule_id), 'empty': not value}
+
+
+def settings_diagnostic(reads, env, admitted):
+    """Collect settings observations after admission and exact App checks."""
+    stages = {'admission': {'result': 'verified'}}
+    result = {'schema_version': 1, 'outcome': 'diagnostic-refused', 'mutation_attempted': False,
+              'evidence_scope': 'settings-visibility-only', 'stages': stages,
+              **{key: admitted[key] for key in ('case', 'target', 'run_id', 'pr_number', 'head_sha', 'base_sha')}}
+    try:
+        app_id, production_rule_id, slug, client = merge.protection_config(env)
+    except ValueError:
+        stages['app_configuration'] = {'result': 'validation-failed'}
+        return result
+    stages['app_configuration'] = {'result': 'verified'}
+    stages['app_identity'] = observe(reads.get('apps/'+slug),
+        lambda value: validate_app_identity(value, app_id, slug, client))
+    if stages['app_identity']['result'] != 'verified':
+        return result
+    stages['installation_scope'] = observe(reads.get(INSTALLATION_SCOPE_PATH), validate_diagnostic_scope)
+    if stages['installation_scope']['result'] != 'verified':
+        return result
+    try:
+        rule_id = merge.integer_env(env, 'PROTECTED_MERGE_QUALIFICATION_RULESET_ID')
+        require(rule_id != production_rule_id and rule_id <= diagnostic.GRAPHQL_INT_MAX)
+    except ValueError:
+        stages['fixture_configuration'] = {'result': 'validation-failed'}
+        return result
+    stages['fixture_configuration'] = {'result': 'verified'}
+    stages['main_classic'] = observe(reads.get('branches/main/protection'), merge.validate_classic)
+    stages['fixture_ruleset'] = observe(reads.get('rulesets/'+str(rule_id)),
+        lambda value: describe_fixture_rule(value, rule_id, app_id))
+    stages['fixture_effective'] = observe(reads.get(EFFECTIVE_RULES_PATH),
+        lambda value: describe_effective_rules(value, rule_id))
+    stages['fixture_classic'] = observe(reads.get(FIXTURE_CLASSIC_PATH), merge.validate_classic)
+    stages['graphql_bypass'] = {'sole_app_pr_only': False, **observe(reads.graphql_fixture_ruleset(rule_id),
+        lambda value: diagnostic.graphql_bypass(value, merge.REPOSITORY, merge.REPOSITORY_ID, rule_id, app_id))}
+    return {**result, 'outcome': 'diagnostic-collected'}
 
 
 def native_checks(rows, sha):
@@ -262,7 +458,7 @@ class FixtureMutationClient:
     def probe(self, admitted):
         fixed_target(admitted.get('target'))
         case = admitted.get('case')
-        require(not self.used and case in CASES and case != 'main-settings'
+        require(not self.used and case in WRITE_CASES
                 and common.positive(admitted.get('pr_number'))
                 and common.exact_sha(admitted.get('head_sha')) and common.exact_sha(admitted.get('base_sha'))
                 and admitted['head_sha'] != admitted['base_sha'])
@@ -305,6 +501,8 @@ def classify(admitted, status, response, unchanged):
 
 def probe(api, reads, event, env):
     admitted = context(api, event, env)
+    if admitted['case'] == SETTINGS_DIAGNOSTIC:
+        return settings_diagnostic(reads, env, admitted)
     settings(reads, env, admitted['case'])
     if admitted['case'] == 'main-settings':
         result = classify(admitted, None, {}, True)
@@ -360,7 +558,7 @@ def main(argv=None):
     try:
         env = os.environ
         event = strict_json(common.regular(Path(env.get('GITHUB_EVENT_PATH', '')), common.MAX_JSON))
-        local_guard(event, env)  # refuses before constructing token clients or networking
+        inputs = local_guard(event, env)  # refuses before constructing token clients or networking
         api = common.MetadataClient(env.get('GITHUB_TOKEN', ''))
         if args.mode == 'admit':
             require(not env.get('PROTECTED_MERGE_TOKEN'))
@@ -374,8 +572,11 @@ def main(argv=None):
         require(env.get('GITHUB_JOB') == 'probe')
         token = env.get('PROTECTED_MERGE_TOKEN'); merge.token_valid(token)
         require(token != env.get('GITHUB_TOKEN'))
-        result = probe(api, FixtureReadClient(token), event, env)
+        reader = DiagnosticReadClient if inputs['case'] == SETTINGS_DIAGNOSTIC else FixtureReadClient
+        result = probe(api, reader(token), event, env)
         print(canonical(result).decode())
+        if inputs['case'] == SETTINGS_DIAGNOSTIC:
+            return 0 if result['outcome'] == 'diagnostic-collected' else 1
         return 0 if result['outcome'] in ('main-baseline-visible', 'head-mismatch-denied', 'restriction-denied', 'canary-check-denied', 'native-merge-confirmed') else 1
     except ERRORS:
         print(canonical({'schema_version': 1, 'outcome': 'refused', 'target': TARGET, 'mutation_attempted': False}).decode())
