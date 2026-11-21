@@ -207,6 +207,7 @@ run for each exact fixture PR/head; never rerun an attempt to retry a write.
 | Fixed case | Fixture prerequisite and allowed proof |
 | --- | --- |
 | `main-settings` | Read-only App identity/scope and exact complete main classic baseline audit; no mutation client. Does not run full production rules validation or prove main bypass visibility. |
+| `settings-diagnostic` | Read-only App settings and bypass visibility on the fixed fixture. The fixture ruleset can remain disabled. |
 | `wrong-head` | Sends fixture base SHA as deliberately wrong expected head to exact fixture PR; requires HTTP 409 plus unchanged open PR and unchanged fixture branch. |
 | `direct-push` | Head is a real single-parent commit directly above fixture base, making a non-no-op fast-forward PATCH possible. Proof requires unchanged PR/ref and an actual GH013 response identifying “Cannot update this protected ref”. Permission errors, non-fast-forward errors, no-op success, generic denial and uncertainty remain unproven. |
 | `native-merge` | Exact head carries all twelve successful native check runs with original names and App IDs. Actual fixture merge/ref and ordered parents must match. |
@@ -229,7 +230,7 @@ proof remains a separate owner matrix item where real providers support it.
 `python3.12 -I -B scripts/security/protected_merge_qualification.py admit|produce-canary|probe`
 is the complete CLI; all request data comes from the authenticated event and
 GitHub environment. Successful admission emits only `admitted=true` and the
-strict case through `GITHUB_OUTPUT`. Probe JSON exposes only schema version,
+strict case through `GITHUB_OUTPUT`. The platform probe JSON exposes schema version,
 case/target/run/PR/head/base identity, HTTP status (null when unknown), outcome,
 merge SHA, mutation-attempt flag and evidence scope. It never prints raw API
 messages, credentials or exception details. Expected verified denials are
@@ -241,6 +242,44 @@ native merge, while unresolved outcomes are `unproven`/`unconfirmed`. A
 write whose reconciliation failed. Retain actual provider responses privately
 using owner evidence tooling when a denial needs further attribution; do not
 turn a generic permission error into restriction proof.
+
+### Read-only settings diagnostic
+
+For an authorized diagnostic run, select `settings-diagnostic` in the **Protected
+merge isolated qualification** workflow on `main`. Supply the exact open fixture
+PR number and current head SHA. Use the same qualification flag, environment,
+App token action and fixture ruleset ID as above. The fixture ruleset ID must
+fit GraphQL's positive 32-bit integer range. The diagnostic uses the existing
+App permissions, skips the canary step and creates no App mutation client.
+
+The diagnostic JSON sets `mutation_attempted` to `false` and uses the
+`settings-visibility-only` evidence scope. `diagnostic-collected` exits zero
+for a report collected after admission, App identity, installation scope and
+configuration checks. Individual settings reads can fail in a collected
+report. Admission failure exits one with `refused`. An App identity, scope or
+configuration refusal exits one with `diagnostic-refused` and stops subsequent
+reads. Both the main and fixture classic settings stages use the full classic
+baseline validator. The REST ruleset stage records identity, branch target,
+conditions, restrictive update rule, enforcement and bypass visibility. The
+effective rules stage checks the update rule and its provenance separately.
+An empty effective rule list gives `empty: true` even when the fixture rule
+is configured but disabled.
+
+The final stage issues one fixed GraphQL query for the configured fixture
+ruleset using the same App token. It requires the expected repository and
+ruleset identities and a consistent, complete page of at most 100 actor nodes.
+For either API, `roster: visible` means the response contained a complete,
+recognized roster within the limit. `sole_app_pr_only: true` also requires
+exactly the configured App with pull-request-only bypass and no other actor or
+role. A missing, null or incomplete roster leaves the match unproven. GraphQL
+errors invalidate any partial data. Stage results distinguish HTTP failures
+from transport failures and invalid responses, and preserve numeric HTTP
+status when observed. The collector makes at most seven App API requests, caps
+each network operation at 30 seconds within a shared 120-second budget, and
+accepts at most 1 MiB of JSON per response. Redirects and retries are disabled.
+Reports contain fixed observations and request binding fields. Treat collection
+results as visibility evidence only. Production rollout and merge qualification
+require their separate enforcement and merge proofs.
 
 Keep the private qualification matrix recording all twelve producer pairs,
 App/environment setup, main baseline visibility, owner-human denials,

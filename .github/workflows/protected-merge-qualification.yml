@@ -7,7 +7,7 @@ on:
       case:
         description: Fixed isolated fixture probe (no production merge)
         type: choice
-        options: [main-settings, wrong-head, direct-push, native-merge, missing-canary, pending-canary, failed-canary, workflow-file-merge]
+        options: [main-settings, settings-diagnostic, wrong-head, direct-push, native-merge, missing-canary, pending-canary, failed-canary, workflow-file-merge]
         default: main-settings
         required: true
       pr_number:
