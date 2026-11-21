@@ -18,7 +18,7 @@
     "dompurify": "^3.4.16",
     "highlight.js": "^11.11.1",
     "lucide-react": "^0.577.0",
-    "mermaid": "^11.16.1",
+    "mermaid": "^11.17.2",
     "qrcode": "^1.5.4",
     "react": "^19.2.4",
     "react-dom": "^19.2.4",
