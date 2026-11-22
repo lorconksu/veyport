@@ -461,7 +461,9 @@ func (h *Handler) routeAgentMessage(serverID string, stream pb.AgentService_Conn
 		if current := h.connMgr.GetConn(serverID); current == nil || current.Stream != stream {
 			return nil
 		}
-		h.deliverPending(serverID, p.FileReadResponse.RequestId, p.FileReadResponse)
+		if h.pending != nil {
+			h.pending.DeliverFileRead(serverID, stream, p.FileReadResponse)
+		}
 	case *pb.AgentMessage_LogStreamChunk:
 		if current := h.connMgr.GetConn(serverID); current == nil || current.Stream != stream {
 			return nil

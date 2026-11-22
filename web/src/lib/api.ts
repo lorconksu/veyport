@@ -28,7 +28,7 @@ function shouldSetJsonContentType(body: BodyInit | null | undefined): boolean {
 
 function buildHeaders(options: RequestInit): Headers {
   const headers = new Headers(options.headers)
-  headers.set('Accept', 'application/json')
+  if (!headers.has('Accept')) headers.set('Accept', 'application/json')
 
   if (shouldSetJsonContentType(options.body)) {
     headers.set('Content-Type', 'application/json')
@@ -66,11 +66,11 @@ async function refreshToken(): Promise<boolean> {
   return refreshPromise
 }
 
-export async function apiFetch<T>(
+export async function apiFetchResponse(
   path: string,
   options: RequestInit = {},
   refreshOnUnauthorized = true,
-): Promise<T> {
+): Promise<Response> {
   const headers = buildHeaders(options)
 
   let res = await fetch(`${BASE_URL}${path}`, {
@@ -107,6 +107,15 @@ export async function apiFetch<T>(
     throw await responseError(res)
   }
 
+  return res
+}
+
+export async function apiFetch<T>(
+  path: string,
+  options: RequestInit = {},
+  refreshOnUnauthorized = true,
+): Promise<T> {
+  const res = await apiFetchResponse(path, options, refreshOnUnauthorized)
   if (options.method?.toUpperCase() === 'HEAD' || res.status === 204 || res.headers.get('content-length') === '0') {
     return undefined as T
   }

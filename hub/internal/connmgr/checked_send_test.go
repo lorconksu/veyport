@@ -5,6 +5,7 @@ import (
 	"errors"
 	"sync/atomic"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	pb "github.com/wyiu/veyport/proto/veyport/v1"
@@ -256,4 +257,192 @@ func TestInboundDeliveryAndConnectionReplacementHaveOneOrder(t *testing.T) {
 	default:
 		t.Fatal("replaced generation remained live")
 	}
+}
+
+type blockedFileStopStream struct {
+	*mockStream
+	generationDone             <-chan struct{}
+	entered, release, finished chan struct{}
+}
+
+func (s *blockedFileStopStream) Send(msg *pb.HubMessage) error {
+	if msg.GetFileReadCancel() == nil {
+		return s.mockStream.Send(msg)
+	}
+	close(s.entered)
+	defer close(s.finished)
+	select {
+	case <-s.release:
+		return nil
+	case <-s.generationDone:
+		return context.Canceled
+	}
+}
+
+func startBlockedFileStop(t *testing.T) (*ConnManager, *AgentConn, *blockedFileStopStream, *Activity) {
+	t.Helper()
+	cm := New()
+	stream := &blockedFileStopStream{
+		mockStream: &mockStream{},
+		entered:    make(chan struct{}),
+		release:    make(chan struct{}),
+		finished:   make(chan struct{}),
+	}
+	conn := cm.Register("node", stream)
+	stream.generationDone = conn.Done()
+
+	msg := &pb.HubMessage{Payload: &pb.HubMessage_FileReadRequest{
+		FileReadRequest: &pb.FileReadRequest{RequestId: "read"},
+	}}
+	activity, err := cm.BeginRequest(conn, msg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := activity.Send(t.Context(), msg); err != nil {
+		t.Fatal(err)
+	}
+
+	stopCtx, cancelStop := context.WithTimeout(t.Context(), 2*time.Second)
+	defer cancelStop()
+	stopReturned := make(chan struct{})
+	go func() {
+		activity.TryCancelFileRead(stopCtx)
+		close(stopReturned)
+	}()
+	<-stream.entered
+	<-stopReturned
+	return cm, conn, stream, activity
+}
+
+func TestInFlightFileStopDeadlinePreservesConnection(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		cm, conn, stream, activity := startBlockedFileStop(t)
+		defer conn.Close()
+		if cm.GetConn("node") != conn {
+			t.Fatal("in-flight best-effort stop disconnected the control stream")
+		}
+
+		// A duplicate stop must skip this writer, and another preview
+		// waiting for its turn may expire without retiring the generation.
+		activity.TryCancelFileRead(t.Context())
+		queuedCtx, cancelQueued := context.WithTimeout(t.Context(), time.Second)
+		defer cancelQueued()
+		msg := &pb.HubMessage{Payload: &pb.HubMessage_FileReadRequest{FileReadRequest: &pb.FileReadRequest{
+			RequestId: "read", Mode: pb.FileReadMode_FILE_READ_MODE_IMAGE,
+		}}}
+		if err := activity.SendImageRead(queuedCtx, msg, 10*time.Second); !errors.Is(err, context.DeadlineExceeded) {
+			t.Fatalf("queued preview send: %v", err)
+		}
+		if cm.GetConn("node") != conn || len(stream.sent) != 1 {
+			t.Fatal("queued send affected the generation or crossed the active stop")
+		}
+
+		close(stream.release)
+		<-stream.finished
+		if err := cm.SendToConnectionChecked(t.Context(), conn, &pb.HubMessage{}, nil); err != nil {
+			t.Fatalf("control writer did not recover: %v", err)
+		}
+		time.Sleep(30 * time.Second)
+		if cm.GetConn("node") != conn {
+			t.Fatal("resolved stop left a watchdog that disconnected the control stream")
+		}
+	})
+}
+
+func TestInFlightFileStopHealthDeadlineRetiresOnlyStalledGeneration(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		cm, conn, stream, _ := startBlockedFileStop(t)
+		defer conn.Close()
+		cleaned := make(chan struct{})
+		go func() {
+			<-conn.Done()
+			cm.UnregisterIfCurrent("node", stream)
+			close(cleaned)
+		}()
+		queued := make(chan error, 1)
+		go func() {
+			queued <- cm.SendToConnectionChecked(t.Context(), conn, &pb.HubMessage{}, nil)
+		}()
+		maintenance := make(chan error, 1)
+		go func() {
+			maintenance <- cm.ReserveMaintenance(conn, "old", func() error {
+				return nil
+			})
+		}()
+
+		// The caller waited two seconds. Let the write reach the end of
+		// its independent 30-second health window.
+		time.Sleep(28*time.Second - time.Nanosecond)
+		if cm.GetConn("node") != conn {
+			t.Fatal("caller deadline or queued work closed the generation early")
+		}
+		time.Sleep(time.Nanosecond)
+		synctest.Wait()
+		select {
+		case <-conn.Done():
+		default:
+			t.Fatal("persistently stalled control writer survived its health deadline")
+		}
+		<-cleaned
+		<-stream.finished
+		if err := <-queued; err == nil {
+			t.Fatal("queued control send crossed generation closure")
+		}
+		if err := <-maintenance; err == nil {
+			t.Fatal("queued maintenance reserved a closed generation")
+		}
+
+		newStream := &mockStream{}
+		replacement := cm.Register("node", newStream)
+		time.Sleep(30 * time.Second)
+		if cm.GetConn("node") != replacement || replacement == conn || len(newStream.sent) != 0 {
+			t.Fatal("watchdog or queued old work affected the replacement generation")
+		}
+		if err := cm.ObserveActivityCapabilities("node", newStream, 1, 0); err != nil {
+			t.Fatal(err)
+		}
+		if err := cm.ReserveMaintenance(replacement, "new", func() error { return nil }); err != nil {
+			t.Fatalf("maintenance could not proceed on the replacement: %v", err)
+		}
+	})
+}
+
+func TestImageDispatchAndRequiredCleanupUseSeparateCancellationPolicies(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		cm := New()
+		stream := &mockStream{}
+		conn := cm.Register("node", stream)
+		msg := &pb.HubMessage{Payload: &pb.HubMessage_FileReadRequest{FileReadRequest: &pb.FileReadRequest{
+			RequestId: "image", Mode: pb.FileReadMode_FILE_READ_MODE_IMAGE,
+		}}}
+		activity, err := cm.BeginRequest(conn, msg)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		conn.SendMu.Lock()
+		defer conn.SendMu.Unlock()
+		ctx, cancel := context.WithCancel(t.Context())
+		defer cancel()
+		imageResult := make(chan error, 1)
+		go func() { imageResult <- activity.SendImageRead(ctx, msg, 10*time.Second) }()
+		synctest.Wait()
+		cancel()
+		if err := <-imageResult; !errors.Is(err, context.Canceled) {
+			t.Fatalf("queued preview send: %v", err)
+		}
+		activity.Abandon()
+		if cm.GetConn("node") != conn || len(stream.sent) != 0 || activity.Dispatched() {
+			t.Fatal("abandoned preview dispatched or closed a healthy generation")
+		}
+
+		cleanup, cancelCleanup := context.WithTimeout(t.Context(), 2*time.Second)
+		defer cancelCleanup()
+		if err := cm.SendToConnectionChecked(cleanup, conn, &pb.HubMessage{}, nil); !errors.Is(err, context.DeadlineExceeded) {
+			t.Fatalf("queued cleanup send: %v", err)
+		}
+		if cm.GetConn("node") != nil {
+			t.Fatal("required cleanup failure did not close its exact generation")
+		}
+	})
 }

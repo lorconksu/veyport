@@ -42,6 +42,9 @@ type ReEnrollReleaser interface {
 }
 
 type Server struct {
+	imagePreviewSlots           chan struct{} // Bounds complete binary buffers and concurrent response writes.
+	imageDecodeSlot             chan struct{} // Serializes full raster validation.
+	fileTailSlots               chan struct{} // Bounds assembled text tails and their JSON responses.
 	applicationAuditMu          sync.Mutex
 	applicationDomain           string
 	applicationPortalOrigin     string
@@ -167,6 +170,9 @@ func New(cfg Config) *Server {
 	}
 
 	s := &Server{
+		imagePreviewSlots:           make(chan struct{}, 8),
+		imageDecodeSlot:             make(chan struct{}, 1),
+		fileTailSlots:               make(chan struct{}, 64),
 		applicationDomain:           cfg.ApplicationDomain,
 		applicationPortalOrigin:     cfg.ApplicationPortalOrigin,
 		applicationDialer:           cfg.ApplicationDialer,

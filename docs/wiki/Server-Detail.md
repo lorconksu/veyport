@@ -60,6 +60,42 @@ Both the file tree and the content viewer scroll independently, so long director
 
 When you select a file in the File Explorer, it opens in the File Viewer in the main panel.
 
+### Image previews
+
+Select a still PNG, a single-image JPEG, or a WebP file to open it in the viewer.
+Multi-picture JPEGs (including MPO) and Ultra HDR/gain-map JPEGs with appended
+image data are not supported. Animated PNG is not supported; animated WebP is
+supported. The online agent must support image preview and be able to read the
+file under your existing path permissions. The viewer supports complete files
+up to 10 MiB, with a maximum of 16,777,216 pixels and 16,384 pixels on either
+side. Animated WebP supports up to 256 frames and 67,108,864 total frame pixels.
+The Hub validates the complete image before sending the original bytes to the
+browser. Image decoding can use substantial memory, so preview requests are
+limited to eight concurrent transfers per Hub and eight active image readers
+per agent. A transfer may have up to fifteen seconds without data progress and
+a two-minute total receive bound.
+The Hub runs one image validation at a time; a request can wait up to ten
+seconds for that slot. Once validation starts, decoding is synchronous and can
+take longer than ten seconds. Each PNG or WebP container, including nested WebP
+frame containers, is limited to 4,096 chunks; JPEG is limited to 32 scans and
+268,435,456 aggregate scan-pixels. Image capacity refusal returns 503; an agent
+in maintenance returns 409.
+
+Decoding can use hundreds of MiB for a maximum-size image. The Go PNG decoder's
+16-bit RGBA output buffer alone is about 128 MiB at the canvas limit (8 bytes
+per pixel); Adam7 interlacing adds pass images and row scratch. The Go JPEG
+decoder retains progressive coefficient arrays alongside its output image,
+which can bring one max-size decode into the hundreds of MiB. This is an
+estimate rather than a guaranteed allocation ceiling. Only one image is
+decoded at a time, but the Hub can also hold up to 80 MiB of compressed image
+buffers and 64 MiB of text-tail data before JSON/base64 response overhead.
+
+**Fit to window** scales the image down to the available space. **Actual size**
+shows it at its original display size, with scrollbars when needed. **Download**
+saves the original bytes. Click **Close** or press **Escape** to return to the
+file selection prompt. Successful image reads appear in the audit log as
+`file.read`.
+
 ### Syntax Highlighting
 
 Source code and configuration files are automatically syntax-highlighted based on their file extension. Supported types include Python, JavaScript/TypeScript, Go, Rust, shell scripts, YAML, TOML, JSON, Dockerfiles, Makefiles, and more. The viewer uses a dark theme optimised for readability.

@@ -1,4 +1,4 @@
-import { render, screen, fireEvent, waitFor } from '@testing-library/react'
+import { render, screen, fireEvent, waitFor, act } from '@testing-library/react'
 import { vi } from 'vitest'
 import { BrowserRouter } from 'react-router-dom'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
@@ -70,6 +70,7 @@ vi.mock('highlight.js/lib/languages/yaml', () => ({ default: {} }))
 
 vi.mock('@/lib/api', () => ({
   apiFetch: vi.fn(),
+  apiFetchResponse: vi.fn(),
   listPendingReEnroll: vi.fn().mockResolvedValue([]),
   approveReEnroll: vi.fn(),
   denyReEnroll: vi.fn(),
@@ -96,8 +97,9 @@ vi.mock('react-router-dom', async (importOriginal) => {
   }
 })
 
-import { apiFetch } from '@/lib/api'
+import { apiFetch, apiFetchResponse } from '@/lib/api'
 const mockApiFetch = apiFetch as ReturnType<typeof vi.fn>
+const mockApiFetchResponse = vi.mocked(apiFetchResponse)
 
 import { useAuth } from '@/hooks/use-auth'
 const mockUseAuth = useAuth as ReturnType<typeof vi.fn>
@@ -363,6 +365,96 @@ describe('ServerDetailPage', () => {
 
     await waitFor(() => {
       expect(mockApiFetch).toHaveBeenCalledWith(expect.stringContaining('/files/read'))
+    })
+  })
+
+
+  describe('image preview', () => {
+    const images = ['first.PNG', 'second.webp'].map(name => ({
+      name, path: `/etc/${name}`, is_dir: false, size: 1, readable: true,
+    }))
+    const createObjectURL = vi.fn<(blob: Blob) => string>()
+    const revokeObjectURL = vi.fn<(url: string) => void>()
+
+    beforeEach(() => {
+      mockApiFetchResponse.mockReset()
+      createObjectURL.mockReset().mockImplementation((blob) => `blob:${blob.type}`)
+      revokeObjectURL.mockReset()
+      const NativeURL = globalThis.URL
+      vi.stubGlobal('URL', class extends NativeURL {
+        static createObjectURL = createObjectURL
+        static revokeObjectURL = revokeObjectURL
+      })
+    })
+
+    async function openFiles() {
+      mockApiFetch.mockImplementation(async (path: string) => {
+        if (path.endsWith('/my-paths')) return { paths: ['/etc'] }
+        if (path.includes('/files?')) return { files: [...images, mockFileNodes[1]] }
+        if (path.includes('/files/read')) return { data: btoa('ordinary text'), total_size: 13, mime_type: 'text/plain' }
+        return mockServer
+      })
+      renderPage()
+      fireEvent.click(await screen.findByRole('button', { name: '/etc' }))
+      await screen.findByRole('button', { name: 'first.PNG' })
+    }
+
+    function imageResponse(mime: string, size = 1) {
+      return new Response(Uint8Array.of(1), {
+        headers: { 'Content-Type': mime, 'Content-Length': String(size) },
+      })
+    }
+
+    it('cancels a replaced selection, exposes image controls, and revokes on close', async () => {
+      let finishFirst!: (response: Response) => void
+      mockApiFetchResponse.mockReturnValueOnce(new Promise(resolve => { finishFirst = resolve }))
+      mockApiFetchResponse.mockResolvedValueOnce(imageResponse('image/webp'))
+      await openFiles()
+      fireEvent.click(screen.getByRole('button', { name: 'first.PNG' }))
+      expect(await screen.findByText('Loading image...')).toBeInTheDocument()
+      await waitFor(() => expect(mockApiFetchResponse).toHaveBeenCalledTimes(1))
+      const firstSignal = mockApiFetchResponse.mock.calls[0][1]?.signal
+      fireEvent.click(screen.getByRole('button', { name: 'second.webp' }))
+
+      await waitFor(() => expect(document.querySelector('img[src="blob:image/webp"]')).toBeInTheDocument())
+      const image = document.querySelector('img[src="blob:image/webp"]')!
+      fireEvent.load(image)
+      expect(screen.getByRole('img', { name: 'second.webp' })).toBe(image)
+      expect(screen.getByRole('button', { name: 'Fit to window' })).toHaveAttribute('aria-pressed', 'true')
+      fireEvent.click(screen.getByRole('button', { name: 'Actual size' }))
+      expect(screen.getByRole('button', { name: 'Actual size' })).toHaveAttribute('aria-pressed', 'true')
+      expect(screen.getByRole('link', { name: 'Download' })).toHaveAttribute('download', 'second.webp')
+      expect(screen.getByRole('link', { name: 'Download' })).toHaveAttribute('href', 'blob:image/webp')
+      expect(firstSignal?.aborted).toBe(true)
+
+      await act(async () => { finishFirst(imageResponse('image/png')) })
+      expect(createObjectURL).toHaveBeenCalledTimes(1)
+      fireEvent.click(screen.getByRole('button', { name: 'Close' }))
+      expect(screen.getByText('Select a file to view its contents')).toBeInTheDocument()
+      expect(revokeObjectURL).toHaveBeenCalledWith('blob:image/webp')
+      fireEvent.click(screen.getByRole('button', { name: 'nginx.conf' }))
+      expect(await screen.findByText('ordinary text')).toBeInTheDocument()
+    })
+
+    it('shows permission, partial response, and decoder failures without a download', async () => {
+      mockApiFetchResponse.mockRejectedValueOnce(new Error('access denied'))
+      mockApiFetchResponse.mockResolvedValueOnce(imageResponse('image/png', 2))
+      mockApiFetchResponse.mockResolvedValueOnce(imageResponse('image/png'))
+      await openFiles()
+      fireEvent.click(screen.getByRole('button', { name: 'first.PNG' }))
+      expect(await screen.findByText('access denied')).toBeInTheDocument()
+      expect(screen.queryByRole('link', { name: 'Download' })).toBeNull()
+
+      fireEvent.click(screen.getByRole('button', { name: 'Retry' }))
+      expect(await screen.findByText('Incomplete image response')).toBeInTheDocument()
+      expect(createObjectURL).not.toHaveBeenCalled()
+
+      fireEvent.click(screen.getByRole('button', { name: 'Retry' }))
+      await waitFor(() => expect(document.querySelector('img[src="blob:image/png"]')).toBeInTheDocument())
+      fireEvent.error(document.querySelector('img[src="blob:image/png"]')!)
+      expect(screen.getByText('The image could not be decoded')).toBeInTheDocument()
+      expect(screen.queryByRole('link', { name: 'Download' })).toBeNull()
+      expect(revokeObjectURL).toHaveBeenCalledWith('blob:image/png')
     })
   })
 

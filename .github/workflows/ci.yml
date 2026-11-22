@@ -355,7 +355,8 @@ jobs:
           password: ${{ secrets.DOCKERHUB_TOKEN }}
 
       - name: Build Docker image
-        run: docker build --build-arg NODE_IMAGE=node:25-slim --build-arg GO_IMAGE=golang:1.26.11-bookworm -t veyport-e2e:test .
+        # The enrolled agent must report a valid version on the control stream.
+        run: docker build --build-arg NODE_IMAGE=node:25-slim --build-arg GO_IMAGE=golang:1.26.11-bookworm --build-arg VERSION=0.0.0-e2e -t veyport-e2e:test .
 
       - name: Run E2E tests
         run: cd tests/e2e && E2E_IMAGE=veyport-e2e:test npx playwright test

@@ -18,6 +18,7 @@ require (
 	github.com/creack/pty v1.1.24
 	github.com/go-ldap/ldap/v3 v3.4.13
 	github.com/wyiu/veyport/agent v0.0.0-00010101000000-000000000000
+	golang.org/x/image v0.47.0
 )
 
 require (

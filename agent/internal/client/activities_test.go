@@ -232,6 +232,17 @@ func TestActivityRefusalsAndUploadAbortDuringMaintenance(t *testing.T) {
 					t.Fatal(response)
 				}
 			}
+			s.dispatch(&pb.HubMessage{Payload: &pb.HubMessage_FileReadRequest{FileReadRequest: &pb.FileReadRequest{
+				RequestId: "chunked-read", Path: "/nonexistent", Mode: pb.FileReadMode_FILE_READ_MODE_CHUNKED_TAIL,
+			}}})
+			want := pb.FileReadFailure_FILE_READ_FAILURE_CAPACITY
+			if reason == "maintenance" {
+				want = pb.FileReadFailure_FILE_READ_FAILURE_MAINTENANCE
+			}
+			result := activityMessage(t, send).GetFileReadResponse()
+			if !result.GetDone() || result.GetFailure() != want || result.GetError() == "" || len(result.GetData()) != 0 {
+				t.Fatalf("chunked read admission refusal: %v", result)
+			}
 			s.dispatch(&pb.HubMessage{Payload: &pb.HubMessage_FileUploadAbort{FileUploadAbort: &pb.FileUploadAbort{RequestId: "unknown"}}})
 			if response := activityMessage(t, send).GetFileUploadAck(); response.Success || response.Error != "upload aborted" {
 				t.Fatal(response)
@@ -411,4 +422,41 @@ func TestLogStartupFailuresAndCapacityReportTerminalCompletion(t *testing.T) {
 			waitActivityCount(t, c, 0)
 		})
 	}
+}
+
+func TestImageReadCancellationKeepsActivityUntilTerminalRecord(t *testing.T) {
+	c := activityClient(t)
+	send := make(chan *pb.AgentMessage)
+	s := newActivitySession(context.Background(), c, send)
+	defer s.close()
+	path := filepath.Join(t.TempDir(), "image.png")
+	if err := os.WriteFile(path, make([]byte, 1<<20), 0600); err != nil {
+		t.Fatal(err)
+	}
+	req := &pb.FileReadRequest{RequestId: "image-read", Path: path, Mode: pb.FileReadMode_FILE_READ_MODE_IMAGE}
+	if !s.dispatch(&pb.HubMessage{Payload: &pb.HubMessage_FileReadRequest{FileReadRequest: req}}) {
+		t.Fatal("image read was not dispatched")
+	}
+	var first *pb.FileReadResponse
+	select {
+	case record := <-s.fileData:
+		first = record.message.GetFileReadResponse()
+		record.sent <- nil
+	case <-time.After(3 * time.Second):
+		t.Fatal("image data did not reach the bulk sender")
+	}
+	if first.GetDone() || len(first.GetData()) == 0 {
+		t.Fatal("image worker did not start", first)
+	}
+	if !s.dispatch(&pb.HubMessage{Payload: &pb.HubMessage_FileReadCancel{FileReadCancel: &pb.FileReadCancel{RequestId: req.RequestId}}}) {
+		t.Fatal("image cancellation was not handled")
+	}
+	if c.budget.TryMaintenance() {
+		t.Fatal("cancellation claimed completion before the terminal message")
+	}
+	terminal := activityMessage(t, send).GetFileReadResponse()
+	if !terminal.GetDone() || terminal.GetError() != "image read canceled" || len(terminal.GetData()) != 0 {
+		t.Fatal("cancellation did not end the transfer", terminal.GetDone(), terminal.GetError(), len(terminal.GetData()))
+	}
+	waitActivityCount(t, c, 0)
 }

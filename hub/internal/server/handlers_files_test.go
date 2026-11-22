@@ -80,7 +80,7 @@ func TestIsPathAllowed(t *testing.T) {
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			allowed, err := s.isPathAllowed(viewerID, serverID, tc.path)
+			allowed, err := s.isPathAllowed(t.Context(), viewerID, serverID, tc.path)
 			if err != nil {
 				t.Fatalf("unexpected error: %v", err)
 			}

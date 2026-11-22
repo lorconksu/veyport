@@ -10,6 +10,7 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/wyiu/veyport/proto/fileview"
 	pb "github.com/wyiu/veyport/proto/veyport/v1"
 	"golang.org/x/sys/unix"
 )
@@ -26,7 +27,7 @@ var readBufPool = sync.Pool{
 	},
 }
 
-const MaxReadSize = 1048576 // 1MB
+const MaxReadSize = fileview.MaxTailSize
 
 const errCannotReadFile = "cannot read file"
 const errPathRestricted = "access to this path is restricted"

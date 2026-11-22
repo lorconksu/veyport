@@ -64,6 +64,7 @@ message HubMessage {
     ReEnrollApproved reenroll_approved = 22;
     ReEnrollDenied reenroll_denied = 23;
     FileUploadAbort file_upload_abort = 24;
+    FileReadCancel file_read_cancel = 25;
     ExecutionPrepare execution_prepare = 30;
     ExecutionAttachRequest execution_attach = 31;
     ExecutionCancel execution_cancel = 32;
@@ -203,11 +204,31 @@ message FileNode {
   bool readable = 5;
 }
 
+enum FileReadMode {
+  FILE_READ_MODE_LEGACY = 0;
+  FILE_READ_MODE_CHUNKED_TAIL = 1;
+  FILE_READ_MODE_IMAGE = 2;
+}
+
+enum FileReadFailure {
+  FILE_READ_FAILURE_UNSPECIFIED = 0;
+  FILE_READ_FAILURE_ACCESS_DENIED = 1;
+  FILE_READ_FAILURE_TOO_LARGE = 2;
+  FILE_READ_FAILURE_CAPACITY = 3;
+  FILE_READ_FAILURE_MAINTENANCE = 4;
+  FILE_READ_FAILURE_TIMEOUT = 5;
+}
+
 message FileReadRequest {
   string request_id = 1;
   string path = 2;
   int64 offset = 3;
   int64 limit = 4;
+  FileReadMode mode = 5;
+}
+
+message FileReadCancel {
+  string request_id = 1;
 }
 
 message FileReadResponse {
@@ -216,6 +237,12 @@ message FileReadResponse {
   int64 total_size = 3;
   string mime_type = 4;
   string error = 5;
+  // Presence distinguishes stream records from a legacy one-shot response.
+  // Data records are contiguous, relative to the start of the requested view.
+  // A data-free done record follows file closure and carries the final status.
+  optional int64 chunk_offset = 6;
+  bool done = 7;
+  FileReadFailure failure = 8;
 }
 
 // Log tailing (sub-project 5)
