@@ -1,6 +1,7 @@
 package grpcserver
 
 import (
+	"bytes"
 	"testing"
 
 	"github.com/wyiu/veyport/proto/fileview"
@@ -77,5 +78,65 @@ func TestPendingTailReadPreservesConcurrentChangesInLength(t *testing.T) {
 		default:
 			t.Fatal("missing complete tail")
 		}
+	}
+}
+
+func TestPendingTailReadRetainsBytesWhenLogGrows(t *testing.T) {
+	const node, id = "node", "growing-log"
+	const initialSize = fileview.MaxChunkSize
+	p := NewPendingRequests()
+	stream := &mockStream{}
+	reply, _ := p.RegisterFileRead(node, stream, &pb.FileReadRequest{
+		RequestId: id, Mode: pb.FileReadMode_FILE_READ_MODE_CHUNKED_TAIL,
+	})
+	first := bytes.Repeat([]byte{'x'}, initialSize)
+	extra := []byte("line appended during read\n")
+	deliver := func(offset int64, data []byte, done bool) {
+		p.DeliverFileRead(node, stream, &pb.FileReadResponse{
+			RequestId: id, ChunkOffset: proto.Int64(offset), TotalSize: initialSize,
+			Data: data, Done: done, MimeType: "text/plain",
+		})
+	}
+	deliver(0, first, false)
+	deliver(initialSize, extra, false)
+	deliver(initialSize+int64(len(extra)), nil, true)
+	select {
+	case result := <-reply:
+		read, ok := result.(*pb.FileReadResponse)
+		if !ok || !read.GetDone() || read.GetTotalSize() != initialSize ||
+			read.GetMimeType() != "text/plain" || !bytes.Equal(read.GetData(), append(first, extra...)) {
+			t.Fatal("completed tail lost bytes or initial metadata")
+		}
+	default:
+		t.Fatal("growing log never completed")
+	}
+	deliver(initialSize+int64(len(extra)), nil, true)
+	select {
+	case <-reply:
+		t.Fatal("duplicate terminal record completed the read twice")
+	default:
+	}
+}
+
+func TestPendingImageReadRejectsEmptyProgressRecord(t *testing.T) {
+	const node, id = "node", "empty-progress"
+	p := NewPendingRequests()
+	stream := &mockStream{}
+	reply, progress := p.RegisterFileRead(node, stream, &pb.FileReadRequest{
+		RequestId: id, Mode: pb.FileReadMode_FILE_READ_MODE_IMAGE,
+	})
+	p.DeliverFileRead(node, stream, &pb.FileReadResponse{RequestId: id, ChunkOffset: proto.Int64(0), TotalSize: 3})
+	select {
+	case result := <-reply:
+		if result != nil {
+			t.Fatal("empty progress record produced a usable image response")
+		}
+	default:
+		t.Fatal("empty record did not fail the pending read")
+	}
+	select {
+	case <-progress:
+		t.Fatal("empty record extended the HTTP idle timeout")
+	default:
 	}
 }
