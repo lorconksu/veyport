@@ -10,13 +10,15 @@ import (
 // Keys are scoped per server (serverID:requestID) to prevent a
 // compromised agent from delivering responses for another agent.
 type PendingRequests struct {
-	mu       sync.Mutex
-	channels map[string]chan proto.Message
+	mu        sync.Mutex
+	channels  map[string]chan proto.Message
+	fileReads map[string]*pendingFileRead
 }
 
 func NewPendingRequests() *PendingRequests {
 	return &PendingRequests{
-		channels: make(map[string]chan proto.Message),
+		channels:  make(map[string]chan proto.Message),
+		fileReads: make(map[string]*pendingFileRead),
 	}
 }
 
@@ -50,6 +52,15 @@ func (p *PendingRequests) Deliver(serverID, requestID string, msg proto.Message)
 
 func (p *PendingRequests) Remove(serverID, requestID string) {
 	p.mu.Lock()
-	delete(p.channels, makeKey(serverID, requestID))
+	key := makeKey(serverID, requestID)
+	delete(p.channels, key)
+	read := p.fileReads[key]
+	delete(p.fileReads, key)
 	p.mu.Unlock()
+	if read != nil {
+		read.mu.Lock()
+		read.finished = true
+		read.data = nil
+		read.mu.Unlock()
+	}
 }

@@ -32,6 +32,8 @@ const LazyMarkdownViewer = lazy(() => import('@/components/markdown-viewer'))
 import { apiFetch } from '@/lib/api'
 import { getCSRFToken } from '@/lib/auth'
 import { useFileContentViewer } from '@/hooks/use-file-content-viewer'
+import { ImagePreview } from '@/components/image-preview'
+import { imagePreviewType } from '@/lib/image-preview'
 import { relativeTime } from '@/lib/time'
 import { formatFileSize, isMarkdownFile, sortFileNodes } from '@/lib/file-viewer'
 import { createLogLineAssembler } from '@/lib/log-stream'
@@ -1407,6 +1409,7 @@ interface ServerWorkspacePanelProps {
   onRefreshTree: () => void
   onToggleDir: (path: string) => void
   onSelectFile: (node: FileNode) => void
+  onCloseFile: () => void
   onDragStart: (event: ReactMouseEvent) => void
   onResetWidth: () => void
   onRefetchFile: () => void
@@ -1488,6 +1491,17 @@ function FileWorkspaceContent(props: Readonly<ServerWorkspacePanelProps>) {
     )
   }
 
+  if (imagePreviewType(props.selectedFile.path)) {
+    return (
+      <ImagePreview
+        key={props.selectedFile.path}
+        serverId={props.serverId}
+        file={props.selectedFile}
+        onClose={props.onCloseFile}
+      />
+    )
+  }
+
   return (
     <div className="flex-1 flex flex-col min-w-0">
       <FileViewerToolbar
@@ -1553,7 +1567,8 @@ export function ServerDetailPage() {
   const [treeState, setTreeState] = useState<Record<string, TreeNodeState>>({})
   const treeStateRef = useRef(treeState)
   treeStateRef.current = treeState
-  const [selectedFile, setSelectedFile] = useState<FileNode | null>(null)
+  const [selection, setSelection] = useState<{ serverId: string | undefined; node: FileNode } | null>(null)
+  const selectedFile = selection && selection.serverId === serverId ? selection.node : null
   const [markdownView, setMarkdownView] = useState<'raw' | 'rendered'>('rendered')
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false)
   const [sidebarWidth, setSidebarWidth] = useState(() => {
@@ -1628,7 +1643,7 @@ export function ServerDetailPage() {
       apiFetch<FileReadResponse>(
         `/servers/${serverId}/files/read?path=${encodeURIComponent(selectedFile!.path)}`,
       ),
-    enabled: !!serverId && !!selectedFile && !selectedFile.is_dir,
+    enabled: !!serverId && !!selectedFile && !selectedFile.is_dir && !imagePreviewType(selectedFile.path),
   })
 
   const {
@@ -1688,13 +1703,15 @@ export function ServerDetailPage() {
   )
 
   const handleSelectFile = useCallback((node: FileNode) => {
-    setSelectedFile(node)
+    setSelection({ serverId, node })
     setMarkdownView('rendered')
     setLiveTailing(false)
     setSearchOpen(false)
     setSearchInput('')
     setCurrentMatch(0)
-  }, [])
+  }, [serverId])
+
+  const handleCloseFile = useCallback(() => setSelection(null), [])
 
   // Refresh all expanded directories in the file tree
   const handleRefreshTree = useCallback(async () => {
@@ -1764,7 +1781,7 @@ export function ServerDetailPage() {
   // Reset tree state when server changes
   useEffect(() => {
     setTreeState({})
-    setSelectedFile(null)
+    setSelection(null)
   }, [serverId])
 
   // Breadcrumb segments
@@ -1780,14 +1797,14 @@ export function ServerDetailPage() {
   // Ctrl+F handler — open search bar
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
-      if ((e.ctrlKey || e.metaKey) && e.key === 'f') {
+      if ((e.ctrlKey || e.metaKey) && e.key === 'f' && !imagePreviewType(selectedFile?.path ?? '')) {
         e.preventDefault()
         setSearchOpen(true)
       }
     }
     globalThis.addEventListener('keydown', handler)
     return () => globalThis.removeEventListener('keydown', handler)
-  }, [])
+  }, [selectedFile?.path])
 
   // Scroll current match into view when it changes
   /* c8 ignore next 6 */
@@ -1909,6 +1926,7 @@ export function ServerDetailPage() {
         onRefreshTree={handleRefreshTree}
         onToggleDir={handleToggleDir}
         onSelectFile={handleSelectFile}
+        onCloseFile={handleCloseFile}
         onDragStart={handleDragStart}
         onResetWidth={handleResetWidth}
         onRefetchFile={handleRefetchFile}

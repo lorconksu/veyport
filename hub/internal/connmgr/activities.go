@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"strings"
+	"time"
 
 	pb "github.com/wyiu/veyport/proto/veyport/v1"
 	"google.golang.org/protobuf/proto"
@@ -11,6 +12,11 @@ import (
 
 const MaxNodeActivities = 128
 const MaxActivities = 4096
+
+const (
+	fileReadStopWait               = 2 * time.Second
+	fileReadStopWriteHealthTimeout = 30 * time.Second
+)
 
 var ErrActivityBusy = errors.New("agent has active or unconfirmed file/upload/log work")
 var ErrActivityCapacity = errors.New("agent activity capacity reached; wait for actual completion")
@@ -41,8 +47,12 @@ type Activity struct {
 }
 
 func (cm *ConnManager) BeginRequest(conn *AgentConn, msg *pb.HubMessage) (*Activity, error) {
+	return cm.BeginRequestContext(context.Background(), conn, msg)
+}
+
+func (cm *ConnManager) BeginRequestContext(ctx context.Context, conn *AgentConn, msg *pb.HubMessage) (*Activity, error) {
 	kind, id := messageActivity(msg)
-	return cm.BeginActivity(conn, id, kind)
+	return cm.beginActivity(ctx, conn, id, kind)
 }
 func (cm *ConnManager) CompleteResponse(node string, stream pb.AgentService_ConnectServer, msg proto.Message) bool {
 	var kind ActivityKind
@@ -51,6 +61,9 @@ func (cm *ConnManager) CompleteResponse(node string, stream pb.AgentService_Conn
 	case *pb.FileListResponse:
 		kind, id = ActivityList, p.GetRequestId()
 	case *pb.FileReadResponse:
+		if p.ChunkOffset != nil && (!p.GetDone() || len(p.GetData()) != 0) {
+			return false
+		}
 		kind, id = ActivityRead, p.GetRequestId()
 	case *pb.FileDeleteResponse:
 		kind, id = ActivityDelete, p.GetRequestId()
@@ -83,16 +96,110 @@ func (a *Activity) Send(ctx context.Context, msg *pb.HubMessage) error {
 		return errors.New("activity message binding differs")
 	}
 	return a.manager.SendToConnectionChecked(ctx, a.key.connection, msg, func() error {
-		a.manager.mu.Lock()
-		defer a.manager.mu.Unlock()
-		r := a.manager.activities[a.key]
-		if r == nil || r.abandoned {
-			return errors.New("activity is no longer admitted")
-		}
-		// Claim dispatch before cancellation can discard a supposedly unsent entry.
-		r.dispatched = true
-		return nil
+		return a.claimDispatch(ctx)
 	})
+}
+
+// claimDispatch is the cancellation and generation boundary immediately before
+// putting an admitted request on the wire. Abandon keeps committed work live.
+func (a *Activity) claimDispatch(ctx context.Context) error {
+	a.manager.mu.Lock()
+	defer a.manager.mu.Unlock()
+	r := a.manager.activities[a.key]
+	if r == nil || r.abandoned || !a.manager.liveLocked(a.key.connection) {
+		return errors.New("activity is no longer admitted")
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	r.dispatched = true
+	return nil
+}
+
+// SendImageRead lets a preview leave while awaiting admission or transport.
+// After commit only the write health limit can close its shared connection.
+func (a *Activity) SendImageRead(ctx context.Context, msg *pb.HubMessage, writeTimeout time.Duration) error {
+	req := msg.GetFileReadRequest()
+	if a.key.kind != ActivityRead || req.GetMode() != pb.FileReadMode_FILE_READ_MODE_IMAGE || req.GetRequestId() != a.key.id {
+		return errors.New("image read message binding differs")
+	}
+	conn := a.key.connection
+	if err := conn.SendMu.lockContext(ctx, conn); err != nil {
+		return err
+	}
+	result := make(chan error)
+	go func() {
+		err := a.writeImageRead(ctx, conn, msg, writeTimeout)
+		// A rendezvous transfers cancellation cleanup to the caller. If
+		// the caller has already left, this writer owns cleanup.
+		select {
+		case result <- err:
+		case <-ctx.Done():
+			if err == nil {
+				a.CancelImageRead()
+			}
+		case <-conn.Done():
+		}
+	}()
+	select {
+	case err := <-result:
+		return err
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-conn.Done():
+		return errors.New("agent disconnected")
+	}
+}
+
+func (a *Activity) writeImageRead(ctx context.Context, conn *AgentConn, msg *pb.HubMessage, writeTimeout time.Duration) error {
+	defer conn.SendMu.Unlock()
+	conn.GenerationMu.Lock()
+	defer conn.GenerationMu.Unlock()
+	if err := a.claimDispatch(ctx); err != nil {
+		return err
+	}
+	return conn.withWriteHealthDeadline(writeTimeout, func() error { return a.manager.sendPrepared(conn, msg) })
+}
+
+func (a *Activity) CancelImageRead() {
+	ctx, cancel := context.WithTimeout(context.Background(), fileReadStopWait)
+	defer cancel()
+	a.TryCancelFileRead(ctx)
+}
+
+// TryCancelFileRead skips a congested control writer. The caller can stop
+// waiting independently of the write. An admitted write keeps both locks
+// until gRPC returns and has its own connection-health deadline. The agent's
+// read deadline is the fallback, and the stop never releases the activity.
+func (a *Activity) TryCancelFileRead(ctx context.Context) {
+	if a.key.kind != ActivityRead || !a.Dispatched() {
+		return
+	}
+	conn := a.key.connection
+	if !conn.SendMu.TryLock() {
+		return
+	}
+	if !conn.GenerationMu.TryLock() {
+		conn.SendMu.Unlock()
+		return
+	}
+	msg := &pb.HubMessage{Payload: &pb.HubMessage_FileReadCancel{
+		FileReadCancel: &pb.FileReadCancel{RequestId: a.key.id},
+	}}
+	sent := make(chan struct{})
+	go func() {
+		defer close(sent)
+		defer conn.SendMu.Unlock()
+		defer conn.GenerationMu.Unlock()
+		_ = a.manager.sendLocked(ctx, conn, msg, func(send func() error) error {
+			return conn.withWriteHealthDeadline(fileReadStopWriteHealthTimeout, send)
+		})
+	}()
+	select {
+	case <-sent:
+	case <-ctx.Done():
+	case <-conn.Done():
+	}
 }
 
 func validActivity(id string, kind ActivityKind) bool {
@@ -106,13 +213,22 @@ func validActivity(id string, kind ActivityKind) bool {
 	return false
 }
 func (cm *ConnManager) BeginActivity(conn *AgentConn, id string, kind ActivityKind) (*Activity, error) {
+	return cm.beginActivity(context.Background(), conn, id, kind)
+}
+
+func (cm *ConnManager) beginActivity(ctx context.Context, conn *AgentConn, id string, kind ActivityKind) (*Activity, error) {
 	if conn == nil || !validActivity(id, kind) {
 		return nil, errors.New("invalid activity binding")
 	}
-	conn.SendMu.Lock()
+	if err := conn.SendMu.lockContext(ctx, conn); err != nil {
+		return nil, err
+	}
 	defer conn.SendMu.Unlock()
 	cm.mu.Lock()
 	defer cm.mu.Unlock()
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	if !cm.liveLocked(conn) {
 		return nil, errors.New("agent connection changed or closed")
 	}

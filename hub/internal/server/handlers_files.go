@@ -1,6 +1,7 @@
 package server
 
 import (
+	"context"
 	"encoding/base64"
 	"fmt"
 	"net/http"
@@ -10,12 +11,13 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/wyiu/veyport/hub/internal/model"
+	"github.com/wyiu/veyport/proto/fileview"
 	pb "github.com/wyiu/veyport/proto/veyport/v1"
 )
 
 const (
-	maxFileReadSize      = 1048576  // 1MB
-	maxFileViewSize      = 10485760 // 10MB hard cap
+	maxFileReadSize      = fileview.MaxTailSize
+	maxFileViewSize      = fileview.MaxFileSize
 	agentTimeoutDuration = 10 * time.Second
 )
 
@@ -64,66 +66,27 @@ func (s *Server) handleListFiles(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleReadFile(w http.ResponseWriter, r *http.Request) {
 	path := r.URL.Query().Get("path")
-	if path == "" {
-		respondError(w, http.StatusBadRequest, "path is required")
-		return
-	}
-
 	serverID := r.PathValue("id")
-	if !s.checkFileAccess(w, r, serverID, path) {
+	if !s.checkFileRead(w, r, serverID, path, r.Context()) {
 		return
 	}
-
-	// Check agent is connected
-	if _, ok := s.requireAgent(w, r); !ok {
+	select {
+	case s.fileTailSlots <- struct{}{}:
+		defer func() { <-s.fileTailSlots }()
+	default:
+		respondError(w, http.StatusServiceUnavailable, "file reading is busy; try again")
 		return
 	}
-
-	// Send request — use offset -1 to tell the agent to return the tail (last 1MB).
-	// The agent interprets negative offsets as "from end of file".
-	raw := s.sendAgentRequestContext(r.Context(), w, serverID, uuid.NewString(), func(requestID string) *pb.HubMessage {
-		return &pb.HubMessage{
-			Payload: &pb.HubMessage_FileReadRequest{
-				FileReadRequest: &pb.FileReadRequest{
-					RequestId: requestID,
-					Path:      path,
-					Offset:    -1,
-					Limit:     maxFileReadSize,
-				},
-			},
-		}
-	}, agentTimeoutDuration)
-	if raw == nil {
+	resp := s.readFile(w, r, serverID, path, pb.FileReadMode_FILE_READ_MODE_CHUNKED_TAIL, nil)
+	if resp == nil {
 		return
 	}
-
-	resp, ok := raw.(*pb.FileReadResponse)
-	if !ok {
-		respondError(w, http.StatusInternalServerError, errUnexpectedResponse)
-		return
-	}
-	if resp.Error != "" {
-		respondError(w, http.StatusNotFound, resp.Error)
-		return
-	}
-	if resp.TotalSize > maxFileViewSize {
+	if resp.GetTotalSize() > maxFileViewSize {
 		respondError(w, http.StatusRequestEntityTooLarge, "file too large for viewing")
 		return
 	}
 
-	// Audit log
-	userID := UserIDFromContext(r.Context())
-	ip := clientIP(r)
-	detail := path
-	s.auditLogRequest(r, model.AuditEntry{
-		ID:        uuid.NewString(),
-		UserID:    &userID,
-		Action:    model.AuditFileRead,
-		Target:    &serverID,
-		Detail:    &detail,
-		IPAddress: &ip,
-	})
-
+	s.auditFileRead(r, serverID, path)
 	respondJSON(w, http.StatusOK, model.FileReadResult{
 		Data:      base64.StdEncoding.EncodeToString(resp.Data),
 		TotalSize: resp.TotalSize,
@@ -131,9 +94,95 @@ func (s *Server) handleReadFile(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+func (s *Server) checkFileRead(w http.ResponseWriter, r *http.Request, serverID, path string, setup context.Context) bool {
+	if imageSetupEnded(r.Context(), setup, w) {
+		return false
+	}
+	if path == "" {
+		respondError(w, http.StatusBadRequest, "path is required")
+		return false
+	}
+	if !s.checkFileAccessContext(w, r, serverID, path, setup) {
+		return false
+	}
+	if imageSetupEnded(r.Context(), setup, w) {
+		return false
+	}
+	_, ok := s.requireAgent(w, r)
+	return ok
+}
+
+func (s *Server) readFile(w http.ResponseWriter, r *http.Request, serverID, path string, mode pb.FileReadMode, setup context.Context) *pb.FileReadResponse {
+	offset, limit := int64(-1), int64(maxFileReadSize)
+	if mode == pb.FileReadMode_FILE_READ_MODE_IMAGE {
+		// An older agent ignores Mode. Keep its one-shot answer below the
+		// control stream receive limit before returning an upgrade error.
+		offset, limit = 0, 1
+	}
+	requestID := uuid.NewString()
+	msg := &pb.HubMessage{
+		Payload: &pb.HubMessage_FileReadRequest{
+			FileReadRequest: &pb.FileReadRequest{
+				RequestId: requestID,
+				Path:      path,
+				Offset:    offset,
+				Limit:     limit,
+				Mode:      mode,
+			},
+		},
+	}
+	raw := s.sendAgentRequest(r.Context(), setup, w, serverID, requestID, msg, agentTimeoutDuration)
+	if raw == nil {
+		return nil
+	}
+
+	resp, ok := raw.(*pb.FileReadResponse)
+	if !ok {
+		respondError(w, http.StatusInternalServerError, errUnexpectedResponse)
+		return nil
+	}
+	if resp.GetError() != "" {
+		status := http.StatusNotFound
+		switch resp.GetFailure() {
+		case pb.FileReadFailure_FILE_READ_FAILURE_ACCESS_DENIED:
+			if mode == pb.FileReadMode_FILE_READ_MODE_IMAGE {
+				status = http.StatusForbidden
+			}
+		case pb.FileReadFailure_FILE_READ_FAILURE_TOO_LARGE:
+			status = http.StatusRequestEntityTooLarge
+		case pb.FileReadFailure_FILE_READ_FAILURE_CAPACITY:
+			status = http.StatusServiceUnavailable
+		case pb.FileReadFailure_FILE_READ_FAILURE_MAINTENANCE:
+			status = http.StatusConflict
+		case pb.FileReadFailure_FILE_READ_FAILURE_TIMEOUT:
+			status = http.StatusGatewayTimeout
+		}
+		respondError(w, status, resp.GetError())
+		return nil
+	}
+	return resp
+}
+
+func (s *Server) auditFileRead(r *http.Request, serverID, path string) {
+	userID := UserIDFromContext(r.Context())
+	ip := clientIP(r)
+	s.auditLogRequest(r, model.AuditEntry{
+		ID:        uuid.NewString(),
+		UserID:    &userID,
+		Action:    model.AuditFileRead,
+		Target:    &serverID,
+		Detail:    &path,
+		IPAddress: &ip,
+	})
+}
+
 // checkFileAccess validates the path and checks that the user is allowed to access it.
 // Returns false (and writes the error response) if access should be denied.
 func (s *Server) checkFileAccess(w http.ResponseWriter, r *http.Request, serverID, path string) bool {
+	return s.checkFileAccessContext(w, r, serverID, path, r.Context())
+}
+
+func (s *Server) checkFileAccessContext(w http.ResponseWriter, r *http.Request, serverID, path string, ctx context.Context) bool {
 	if err := validateRequestPath(path); err != nil {
 		respondError(w, http.StatusBadRequest, err.Error())
 		return false
@@ -142,7 +191,10 @@ func (s *Server) checkFileAccess(w http.ResponseWriter, r *http.Request, serverI
 	role := UserRoleFromContext(r.Context())
 	if role != "admin" {
 		userID := UserIDFromContext(r.Context())
-		allowed, err := s.isPathAllowed(userID, serverID, path)
+		allowed, err := s.isPathAllowed(ctx, userID, serverID, path)
+		if imageSetupEnded(r.Context(), ctx, w) {
+			return false
+		}
 		if err != nil || !allowed {
 			respondError(w, http.StatusForbidden, "access denied")
 			return false
@@ -152,8 +204,8 @@ func (s *Server) checkFileAccess(w http.ResponseWriter, r *http.Request, serverI
 }
 
 // isPathAllowed checks if the requested path is under one of the user's allowed roots.
-func (s *Server) isPathAllowed(userID, serverID, requestedPath string) (bool, error) {
-	paths, err := s.store.GetUserPathsForServer(userID, serverID)
+func (s *Server) isPathAllowed(ctx context.Context, userID, serverID, requestedPath string) (bool, error) {
+	paths, err := s.store.GetUserPathsForServerContext(ctx, userID, serverID)
 	if err != nil {
 		return false, err
 	}

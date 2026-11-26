@@ -1,6 +1,9 @@
 package sessionlimit
 
-import "sync"
+import (
+	"errors"
+	"sync"
+)
 
 // Budget atomically bounds terminal sessions and prepared/running executions.
 type Budget struct {
@@ -14,15 +17,30 @@ type Budget struct {
 
 const MaxActivities = 128
 
+var (
+	ErrActivityMaintenance = errors.New("agent maintenance is active")
+	ErrActivityCapacity    = errors.New("agent activity capacity reached")
+)
+
 type activityObserver struct{ emit func(uint32) }
 
 // AcquireActivity reserves a whole file operation or log tail, independently
 // of terminal capacity. The returned release is safe to call more than once.
 func (b *Budget) AcquireActivity() (func(), bool) {
+	release, err := b.AcquireActivityWithError()
+	return release, err == nil
+}
+
+// AcquireActivityWithError reports the refusal reason from the same locked
+// admission decision as the reservation.
+func (b *Budget) AcquireActivityWithError() (func(), error) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	if b.maintenance || b.activities >= MaxActivities {
-		return nil, false
+	if b.maintenance {
+		return nil, ErrActivityMaintenance
+	}
+	if b.activities >= MaxActivities {
+		return nil, ErrActivityCapacity
 	}
 	b.activities++
 	b.notifyActivity()
@@ -34,7 +52,7 @@ func (b *Budget) AcquireActivity() (func(), bool) {
 			b.activities--
 			b.notifyActivity()
 		})
-	}, true
+	}, nil
 }
 
 func (b *Budget) ActivityCount() uint32 {

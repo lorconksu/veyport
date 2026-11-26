@@ -1,6 +1,7 @@
 package store
 
 import (
+	"context"
 	"fmt"
 
 	"github.com/google/uuid"
@@ -53,7 +54,11 @@ func (s *Store) ListPermissionsForServer(serverID string) ([]model.Permission, e
 }
 
 func (s *Store) GetUserPathsForServer(userID, serverID string) ([]string, error) {
-	rows, err := s.db.Query(
+	return s.GetUserPathsForServerContext(context.Background(), userID, serverID)
+}
+
+func (s *Store) GetUserPathsForServerContext(ctx context.Context, userID, serverID string) ([]string, error) {
+	rows, err := s.db.QueryContext(ctx,
 		"SELECT path FROM permissions WHERE user_id = ? AND server_id = ?", userID, serverID,
 	)
 	if err != nil {

@@ -1755,8 +1755,9 @@ Read the contents of a file from a remote server. Returns base64-encoded data.
 | `path` | string | Absolute file path to read (**required**) |
 
 **Limits:**
-- Reads up to 1MB of file content
-- Files larger than 10MB cannot be viewed (returns 413)
+- Returns the last 1 MiB of file content
+- Returns 413 only when the file exceeds 10 MiB (10,485,760 bytes); exactly 10 MiB is accepted
+- Hub admits at most 64 concurrent file-tail reads; excess requests return 503
 
 **Response (200):**
 
@@ -1772,8 +1773,10 @@ Read the contents of a file from a remote server. Returns base64-encoded data.
 - `400` - Path is required, path must be absolute, path traversal not allowed
 - `403` - Access denied
 - `404` - File not found on agent
-- `413` - File too large for viewing (> 10MB)
-- `502` - Agent communication failure
+- `409` - Agent maintenance is active
+- `413` - File exceeds 10 MiB (10,485,760 bytes); exactly 10 MiB is accepted
+- `502` - Agent communication failure, or incomplete/invalid agent response
+- `503` - Hub or agent file-read capacity is busy; retry later
 
 **cURL:**
 
@@ -1784,7 +1787,62 @@ curl 'https://hub.example.com/api/servers/SERVER_UUID/files/read?path=/var/log/s
 
 ---
 
-### 29. GET /api/servers/{id}/logs/tail
+### 29. GET /api/servers/{id}/files/image
+
+Read a complete still PNG, single-image JPEG, or WebP from a connected agent.
+Multi-picture JPEGs (including MPO) and Ultra HDR/gain-map JPEGs with appended
+image data are rejected because their additional image data is not validated.
+Animated PNG is rejected; animated WebP is supported subject to the limits below.
+This endpoint uses
+the same access token, node and path permissions, rate limit, and `file.read`
+audit action as the file-content endpoint. The `id` is the server UUID and the
+required `path` query parameter is the absolute path on that agent.
+
+On success, the response has the original bytes, an image `Content-Type`,
+`Content-Length`, an attachment filename, and no-cache headers. The compressed
+file limit is 10 MiB. The canvas limit is 16,777,216 pixels with at most
+16,384 pixels on either side. Animated WebP allows up to 256 frames and
+67,108,864 total frame pixels. The Hub fully decodes and validates the image
+before serving the original bytes. Preview requests are limited to eight
+concurrent transfers per Hub and eight active image readers per agent. The Hub
+runs one image validation at a time; requests can wait up to ten seconds for
+the validation slot. Once admitted, decoding is synchronous and may take
+longer than ten seconds. Each PNG or WebP container, including nested WebP
+frame containers, is limited to 4,096 chunks; JPEG is limited to 32 scans and
+268,435,456 aggregate scan-pixels. These limits bound transfer buffers and
+decoder work, though decoding a maximum-size canvas still requires substantial
+temporary memory. The Go PNG decoder's 16-bit RGBA output buffer alone is about
+128 MiB at the canvas limit (8 bytes per pixel); Adam7 interlacing adds pass
+images and row scratch. The Go JPEG decoder retains progressive coefficient
+arrays alongside its output image, which can bring one maximum-size decode into
+the hundreds of MiB. This is an estimate, not a guaranteed allocator ceiling.
+The Hub runs only one decoder at a time, while
+up to 80 MiB of compressed image buffers and 64 MiB of text-tail data may also
+be resident before JSON/base64 response overhead.
+
+The Hub allows ten seconds for preview setup, including the path-permission
+lookup and waiting for the agent control writer. Canceling during setup
+releases the Hub's preview slot. The agent checks cancellation between
+filesystem calls. A filesystem call already in progress can retain one of the
+eight agent reader slots until it returns.
+
+Errors use the standard JSON error format.
+
+| Status | Meaning |
+|---|---|
+| 400 | Invalid or missing path |
+| 401 / 403 | Authentication or file permission failure |
+| 404 | The agent could not read the file |
+| 409 | Image preview requires a newer agent, or the agent is in maintenance |
+| 413 | File size exceeds 10 MiB |
+| 415 | Unsupported format, invalid image (including unsupported JPEG/PNG variants), or excessive dimensions or animation size |
+| 502 | Incomplete/invalid agent response or agent communication failure |
+| 503 | Preview capacity reached (Hub or agent), or no validation slot became available within ten seconds |
+| 504 | Preview setup timed out, or the agent transfer exceeded 15 seconds without data progress or two minutes after dispatch |
+
+---
+
+### 30. GET /api/servers/{id}/logs/tail
 
 Tail a log file in real-time via Server-Sent Events (SSE). Each event contains base64-encoded log data.
 
@@ -1826,7 +1884,7 @@ curl - N 'https://hub.example.com/api/servers/SERVER_UUID/logs/tail?path=/var/lo
 
 ---
 
-### 30. POST /api/servers/{id}/upload
+### 31. POST /api/servers/{id}/upload
 
 Upload a file to a server's dropzone (`/tmp/veyport-dropzone/` on the agent).
 
@@ -1866,7 +1924,7 @@ curl - X POST https://hub.example.com/api/servers/SERVER_UUID/upload \
 
 ---
 
-### 31. GET /api/servers/{id}/dropzone
+### 32. GET /api/servers/{id}/dropzone
 
 List files in a server's dropzone directory (`/tmp/veyport-dropzone/`).
 
@@ -1905,7 +1963,7 @@ curl https://hub.example.com/api/servers/SERVER_UUID/dropzone \
 
 ---
 
-### 32. DELETE /api/servers/{id}/dropzone
+### 33. DELETE /api/servers/{id}/dropzone
 
 Delete a file from a server's dropzone.
 
@@ -1941,7 +1999,7 @@ curl - X DELETE 'https://hub.example.com/api/servers/SERVER_UUID/dropzone?filena
 
 These endpoints are public (no authentication required) and are used by the install script.
 
-### 33. GET /install.sh
+### 34. GET /install.sh
 
 Download the agent installation shell script.
 
@@ -1958,7 +2016,7 @@ curl - sSL https://hub.example.com/install.sh
 
 ---
 
-### 34. GET /install/{os}/{arch}
+### 35. GET /install/{os}/{arch}
 
 Download the agent binary for a specific platform.
 
@@ -2062,7 +2120,7 @@ curl https://hub.example.com/install/cli/linux/amd64/sha256
 
 ## Server Removal Endpoints
 
-### 35. DELETE /api/servers/{id}/unregister
+### 36. DELETE /api/servers/{id}/unregister
 
 Unregister a server: sends an unregister command to the agent (if connected), then deletes the server from the database.
 
@@ -2095,7 +2153,7 @@ curl - X DELETE https://hub.example.com/api/servers/SERVER_UUID/unregister \
 
 ---
 
-### 36. DELETE /api/servers/{id}/self-unregister
+### 37. DELETE /api/servers/{id}/self-unregister
 
 Public endpoint called by the agent during reinstallation. The server UUID in the path acts as proof of installation. Disconnects the agent (if connected) and deletes the server from the database.
 
@@ -2123,7 +2181,7 @@ curl - X DELETE https://hub.example.com/api/servers/SERVER_UUID/self-unregister
 
 ## Hub Settings Endpoints
 
-### 37. GET /api/settings/hub
+### 38. GET /api/settings/hub
 
 Get the Hub configuration (currently the gRPC external address and the account lockout/dormancy policy).
 
@@ -2168,7 +2226,7 @@ curl https://hub.example.com/api/settings/hub \
 
 ---
 
-### 38. PUT /api/settings/hub
+### 39. PUT /api/settings/hub
 
 Update the Hub configuration.
 
@@ -2226,7 +2284,7 @@ curl - X PUT https://hub.example.com/api/settings/hub \
 
 ## LDAP Directory Endpoints
 
-### 39. GET /api/settings/ldap
+### 40. GET /api/settings/ldap
 
 Get the current LDAP configuration. The bind password is write-only and is never returned; use `bind_password_set` to tell whether a password is already stored.
 
@@ -2264,7 +2322,7 @@ Get the current LDAP configuration. The bind password is write-only and is never
 
 ---
 
-### 40. PUT /api/settings/ldap
+### 41. PUT /api/settings/ldap
 
 Update LDAP login, search, TLS, and group mapping settings. The bind password is encrypted before storage. Omit `bind_password` or send an empty string to keep the existing password; send `clear_bind_password: true` to clear it.
 
@@ -2315,7 +2373,7 @@ Update LDAP login, search, TLS, and group mapping settings. The bind password is
 
 ---
 
-### 41. POST /api/settings/ldap/test
+### 42. POST /api/settings/ldap/test
 
 Test the submitted LDAP URL, TLS settings, and service bind credentials without requiring an end-user password.
 
@@ -2341,7 +2399,7 @@ Test the submitted LDAP URL, TLS settings, and service bind credentials without 
 
 ## SMTP and Notification Endpoints
 
-### 42. GET /api/settings/smtp
+### 43. GET /api/settings/smtp
 
 Get the current SMTP configuration. The password field is omitted from the response for security.
 
@@ -2371,7 +2429,7 @@ curl https://hub.example.com/api/settings/smtp \
 
 ---
 
-### 43. PUT /api/settings/smtp
+### 44. PUT /api/settings/smtp
 
 Update the SMTP configuration. Invalidates the cached SMTP config immediately.
 
@@ -2412,7 +2470,7 @@ curl - X PUT https://hub.example.com/api/settings/smtp \
 
 ---
 
-### 44. POST /api/settings/smtp/test
+### 45. POST /api/settings/smtp/test
 
 Send a test email to verify SMTP configuration. Requires SMTP settings to be saved first.
 
@@ -2451,7 +2509,7 @@ curl - X POST https://hub.example.com/api/settings/smtp/test \
 
 ---
 
-### 45. GET /api/notifications/preferences
+### 46. GET /api/notifications/preferences
 
 Get the current user's notification preferences. Returns all 8 event types with their enabled/disabled state.
 
@@ -2489,7 +2547,7 @@ curl https://hub.example.com/api/notifications/preferences \
 
 ---
 
-### 46. PUT /api/notifications/preferences
+### 47. PUT /api/notifications/preferences
 
 Update the current user's notification preferences.
 
@@ -2533,7 +2591,7 @@ curl - X PUT https://hub.example.com/api/notifications/preferences \
 
 ---
 
-### 47. GET /api/notifications/log
+### 48. GET /api/notifications/log
 
 List notification delivery log entries. Supports pagination.
 
@@ -2711,7 +2769,7 @@ curl -X POST https://hub.example.com/api/servers/SERVER_UUID/reenroll/deny \
 
 Terminal endpoints require an interactive browser access token. CLI-created API tokens are rejected. Access is limited to admins and LDAP users who have terminal access from LDAP group mapping plus a root (`/`) assignment on the target server.
 
-### 48. POST /api/servers/{id}/terminal/sessions
+### 49. POST /api/servers/{id}/terminal/sessions
 
 Create a terminal session on an online server.
 
@@ -2751,7 +2809,7 @@ Create a terminal session on an online server.
 
 ---
 
-### 49. GET /api/servers/{id}/terminal/sessions/{sessionId}/stream
+### 50. GET /api/servers/{id}/terminal/sessions/{sessionId}/stream
 
 Attach to a terminal session event stream. Only one stream can attach to a session.
 
@@ -2781,7 +2839,7 @@ The Hub closes the terminal session when the stream disconnects.
 
 ---
 
-### 50. POST /api/servers/{id}/terminal/sessions/{sessionId}/input
+### 51. POST /api/servers/{id}/terminal/sessions/{sessionId}/input
 
 Send terminal input to an active session.
 
@@ -2809,7 +2867,7 @@ Send terminal input to an active session.
 
 ---
 
-### 51. POST /api/servers/{id}/terminal/sessions/{sessionId}/resize
+### 52. POST /api/servers/{id}/terminal/sessions/{sessionId}/resize
 
 Resize an active terminal session.
 
@@ -2836,7 +2894,7 @@ Resize an active terminal session.
 
 ---
 
-### 52. DELETE /api/servers/{id}/terminal/sessions/{sessionId}
+### 53. DELETE /api/servers/{id}/terminal/sessions/{sessionId}
 
 Close an active terminal session.
 
@@ -2855,7 +2913,7 @@ Close an active terminal session.
 
 These two endpoints support the native SSH gateway (see [[SSH Gateway]]): issuing a short-lived user certificate and publishing the gateway's host identity for pinning. The gateway itself is a raw SSH listener on a separate port (default `:2222`), not an HTTP endpoint — these are the only two HTTP touchpoints for it.
 
-### 53. POST /api/ssh/certificates
+### 54. POST /api/ssh/certificates
 
 Issue a short-lived SSH user certificate for the caller's own identity, for use against the SSH gateway.
 
@@ -2907,7 +2965,7 @@ curl -X POST https://hub.example.com/api/ssh/certificates \
 
 ---
 
-### 54. GET /api/ssh/host-key
+### 55. GET /api/ssh/host-key
 
 Get the SSH gateway's host identity, for pinning instead of trust-on-first-use.
 

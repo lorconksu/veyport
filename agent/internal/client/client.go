@@ -98,6 +98,7 @@ type Client struct {
 	budget             *sessionlimit.Budget
 	updates            *update.Runtime
 	updateWorkers      chan struct{}
+	imagePreviewSlots  chan struct{}
 }
 
 func New(cfg Config) *Client {
@@ -149,6 +150,7 @@ func New(cfg Config) *Client {
 		transportPrivBytes: transportPrivBytes,
 		budget:             sessionlimit.New(8),
 		updateWorkers:      make(chan struct{}, 1),
+		imagePreviewSlots:  make(chan struct{}, 8),
 	}
 	c.dropzone = dropzone.NewWithBudget(dropzoneDir, c.budget)
 	c.updates = update.New(cfg.AgentVersion, cfg.AgentRevision, cfg.ConfigPath, certDir, cfg.Insecure, c.budget)
@@ -481,18 +483,18 @@ func (c *Client) handleFileListRequest(p *pb.HubMessage_FileListRequest, sendCh 
 }
 
 func (c *Client) handleFileReadRequest(p *pb.HubMessage_FileReadRequest, sendCh chan<- *pb.AgentMessage, contexts ...context.Context) {
-	resolvedPath := c.resolveAgentPath(p.FileReadRequest.Path)
+	ctx := responseContext(contexts)
+	req := p.FileReadRequest
+	resolvedPath := c.resolveAgentPath(req.GetPath())
 	if !isPathAllowed(resolvedPath, c.allowedPaths) {
-		sendResponse(responseContext(contexts), sendCh, &pb.AgentMessage{
-			Payload: &pb.AgentMessage_FileReadResponse{
-				FileReadResponse: &pb.FileReadResponse{
-					RequestId: p.FileReadRequest.RequestId,
-					Error:     "path not in allowed list",
-				},
-			},
-		})
+		sendFileReadFailure(ctx, sendCh, req, "path not in allowed list", pb.FileReadFailure_FILE_READ_FAILURE_ACCESS_DENIED)
 		return
 	}
+	if req.GetMode() != pb.FileReadMode_FILE_READ_MODE_LEGACY {
+		sendFileReadFailure(ctx, sendCh, req, "unsupported file read mode", pb.FileReadFailure_FILE_READ_FAILURE_UNSPECIFIED)
+		return
+	}
+
 	resp, _ := filebrowser.ReadFile(
 		resolvedPath,
 		p.FileReadRequest.Offset,
@@ -1304,21 +1306,7 @@ func (c *Client) connectAndStream(ctx context.Context) error {
 
 	recvErr := c.startRecvLoopForSession(stream, sendCh, terminalMgr, executions, activities)
 
-	for {
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		case err := <-recvErr:
-			return fmt.Errorf("receive error: %w", err)
-		case msg := <-sendCh:
-			if err := stream.Send(msg); err != nil {
-				return fmt.Errorf("send: %w", err)
-			}
-		case <-c.reconnectCh:
-			log.Printf("adopting renewed certificate via reconnect")
-			return errReconnectWithMTLS
-		}
-	}
+	return runControlWriter(ctx, cancelSession, stream.Send, sendCh, activities.fileData, recvErr, c.reconnectCh)
 }
 
 func (c *Client) nextBackoff() time.Duration {

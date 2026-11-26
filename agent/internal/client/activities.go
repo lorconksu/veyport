@@ -26,8 +26,10 @@ type activitySession struct {
 	budget            *sessionlimit.Budget
 	dropzone          *dropzone.Dropzone
 	send              chan<- *pb.AgentMessage
+	fileData          chan fileDataRecord
 	closed            bool
 	tails             map[string]context.CancelFunc
+	imageReads        map[string]context.CancelFunc
 	detach            func()
 	capabilityTimeout time.Duration
 	applications      *applicationTransport
@@ -35,7 +37,7 @@ type activitySession struct {
 
 func newActivitySession(ctx context.Context, c *Client, send chan<- *pb.AgentMessage, controlCancels ...context.CancelFunc) *activitySession {
 	ctx, cancel := context.WithCancel(ctx)
-	s := &activitySession{ctx: ctx, cancel: cancel, client: c, budget: c.budget, dropzone: dropzone.NewWithBudget(c.dropzone.Dir(), c.budget), send: send, tails: make(map[string]context.CancelFunc), capabilityTimeout: 5 * time.Second}
+	s := &activitySession{ctx: ctx, cancel: cancel, client: c, budget: c.budget, dropzone: dropzone.NewWithBudget(c.dropzone.Dir(), c.budget), send: send, fileData: make(chan fileDataRecord), tails: make(map[string]context.CancelFunc), imageReads: make(map[string]context.CancelFunc), capabilityTimeout: 5 * time.Second}
 	if len(controlCancels) != 0 {
 		s.controlCancel = controlCancels[0]
 	}
@@ -105,7 +107,7 @@ func (s *activitySession) close() {
 func (s *activitySession) dispatch(message *pb.HubMessage) bool {
 	switch message.Payload.(type) {
 	case *pb.HubMessage_FileListRequest, *pb.HubMessage_FileReadRequest, *pb.HubMessage_FileDeleteRequest,
-		*pb.HubMessage_FileUploadRequest, *pb.HubMessage_FileUploadAbort,
+		*pb.HubMessage_FileUploadRequest, *pb.HubMessage_FileUploadAbort, *pb.HubMessage_FileReadCancel,
 		*pb.HubMessage_LogStreamRequest, *pb.HubMessage_LogStreamStop:
 	default:
 		return false
@@ -116,6 +118,16 @@ func (s *activitySession) dispatch(message *pb.HubMessage) bool {
 		return true
 	}
 	switch p := message.Payload.(type) {
+	case *pb.HubMessage_FileReadRequest:
+		if p.FileReadRequest.GetMode() == pb.FileReadMode_FILE_READ_MODE_IMAGE {
+			s.startImageRead(p.FileReadRequest)
+			return true
+		}
+	case *pb.HubMessage_FileReadCancel:
+		if cancel := s.imageReads[p.FileReadCancel.GetRequestId()]; cancel != nil {
+			cancel()
+		}
+		return true
 	case *pb.HubMessage_FileUploadRequest:
 		req := p.FileUploadRequest
 		if ack := s.dropzone.HandleChunk(req.RequestId, req.Filename, req.Chunk, req.Done); ack != nil {
@@ -135,10 +147,16 @@ func (s *activitySession) dispatch(message *pb.HubMessage) bool {
 		s.startTail(p.LogStreamRequest)
 		return true
 	}
-	release, admitted := s.budget.AcquireActivity()
-	if !admitted {
-		s.reject(message)
-		return true
+	s.startFileActivity(message)
+	return true
+}
+
+// startFileActivity is called while dispatch holds the session admission lock.
+func (s *activitySession) startFileActivity(message *pb.HubMessage) {
+	release, err := s.budget.AcquireActivityWithError()
+	if err != nil {
+		s.reject(message, err)
+		return
 	}
 	go func() {
 		defer release()
@@ -146,12 +164,15 @@ func (s *activitySession) dispatch(message *pb.HubMessage) bool {
 		case *pb.HubMessage_FileListRequest:
 			s.client.handleFileListRequest(p, s.send, s.ctx)
 		case *pb.HubMessage_FileReadRequest:
-			s.client.handleFileReadRequest(p, s.send, s.ctx)
+			if p.FileReadRequest.GetMode() == pb.FileReadMode_FILE_READ_MODE_CHUNKED_TAIL {
+				s.readTailInChunks(p.FileReadRequest)
+			} else {
+				s.client.handleFileReadRequest(p, s.send, s.ctx)
+			}
 		case *pb.HubMessage_FileDeleteRequest:
 			s.client.handleFileDeleteRequest(p, s.send, s.ctx)
 		}
 	}()
-	return true
 }
 
 func (s *activitySession) startTail(req *pb.LogStreamRequest) {
@@ -214,13 +235,14 @@ func (s *activitySession) tailDone(id, reason string) {
 	sendResponse(s.ctx, s.send, &pb.AgentMessage{Payload: &pb.AgentMessage_LogStreamChunk{LogStreamChunk: chunk}})
 }
 
-func (s *activitySession) reject(message *pb.HubMessage) {
+func (s *activitySession) reject(message *pb.HubMessage, err error) {
 	response := &pb.AgentMessage{}
 	switch p := message.Payload.(type) {
 	case *pb.HubMessage_FileListRequest:
 		response.Payload = &pb.AgentMessage_FileListResponse{FileListResponse: &pb.FileListResponse{RequestId: p.FileListRequest.RequestId, Error: errActivityAdmission}}
 	case *pb.HubMessage_FileReadRequest:
-		response.Payload = &pb.AgentMessage_FileReadResponse{FileReadResponse: &pb.FileReadResponse{RequestId: p.FileReadRequest.RequestId, Error: errActivityAdmission}}
+		sendFileReadFailure(s.ctx, s.send, p.FileReadRequest, errActivityAdmission, fileReadAdmissionFailure(err))
+		return
 	case *pb.HubMessage_FileDeleteRequest:
 		response.Payload = &pb.AgentMessage_FileDeleteResponse{FileDeleteResponse: &pb.FileDeleteResponse{RequestId: p.FileDeleteRequest.RequestId, Error: errActivityAdmission}}
 	}

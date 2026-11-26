@@ -15,7 +15,7 @@ export default async function globalSetup() {
   // Build if no pre-built image provided
   if (!process.env.E2E_IMAGE) {
     console.log('Building Docker image...')
-    run('docker', ['build', '-t', 'veyport-e2e:test', '.'], { cwd: repoRoot })
+    run('docker', ['build', '--build-arg', 'VERSION=0.0.0-e2e', '-t', imageName, '.'], { cwd: repoRoot })
   }
 
   // Remove old container

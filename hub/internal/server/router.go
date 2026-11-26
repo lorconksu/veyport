@@ -147,6 +147,8 @@ func (s *Server) routes() http.Handler {
 	mux.Handle("GET /api/servers/{id}/files", loggingMiddleware(fileOpsLimiter.middleware(s.authMiddleware(auth.TokenTypeAccess, http.HandlerFunc(s.handleListFiles)))))
 	mux.Handle("GET /api/servers/{id}/files/read", loggingMiddleware(fileOpsLimiter.middleware(s.authMiddleware(auth.TokenTypeAccess, http.HandlerFunc(s.handleReadFile)))))
 
+	mux.Handle("GET /api/servers/{id}/files/image", loggingMiddleware(fileOpsLimiter.middleware(s.authMiddleware(auth.TokenTypeAccess, http.HandlerFunc(s.handleImagePreview)))))
+
 	// Log tailing SSE endpoint (any authenticated user, permission-checked in handler)
 	mux.Handle("GET /api/servers/{id}/logs/tail", loggingMiddleware(fileOpsLimiter.middleware(s.authMiddleware(auth.TokenTypeAccess, http.HandlerFunc(s.handleTailLog)))))
 

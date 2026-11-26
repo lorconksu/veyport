@@ -15,7 +15,7 @@ type AgentConn struct {
 	ServerID     string
 	Stream       pb.AgentService_ConnectServer
 	LastSeen     time.Time
-	SendMu       sync.Mutex
+	SendMu       controlSendLock
 	DeliveryMu   sync.Mutex
 	GenerationMu sync.Mutex
 	GenerationID string
@@ -25,6 +25,37 @@ type AgentConn struct {
 
 func (c *AgentConn) Done() <-chan struct{} { return c.done }
 func (c *AgentConn) Close()                { c.closeOnce.Do(func() { close(c.done) }) }
+
+// controlSendLock serializes writes without requiring a goroutine to wait for
+// a stalled writer after the caller's deadline or generation closure.
+type controlSendLock chan struct{}
+
+func (l controlSendLock) Lock()   { l <- struct{}{} }
+func (l controlSendLock) Unlock() { <-l }
+
+func (l controlSendLock) TryLock() bool {
+	select {
+	case l <- struct{}{}:
+		return true
+	default:
+		return false
+	}
+}
+
+func (l controlSendLock) lockContext(ctx context.Context, conn *AgentConn) error {
+	select {
+	case l <- struct{}{}:
+		if err := ctx.Err(); err != nil {
+			l.Unlock()
+			return err
+		}
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-conn.Done():
+		return fmt.Errorf("agent disconnected: %s", conn.ServerID)
+	}
+}
 
 type ConnManager struct {
 	mu             sync.RWMutex
@@ -55,6 +86,7 @@ func (cm *ConnManager) Register(serverID string, stream pb.AgentService_ConnectS
 	connection := &AgentConn{
 		ServerID:     serverID,
 		Stream:       stream,
+		SendMu:       make(controlSendLock, 1),
 		LastSeen:     time.Now(),
 		GenerationID: uuid.NewString(),
 		done:         make(chan struct{}),
@@ -254,9 +286,9 @@ func (cm *ConnManager) SendToAgent(serverID string, msg *pb.HubMessage) error {
 	})
 }
 
-// SendToAgentContext bounds a control send. Timeout closes the registered
-// Connect handler, which cancels the underlying gRPC stream and its blocked
-// sender. Callers reserve execution capacity before using this method.
+// SendToAgentContext bounds a control send. A caller timeout closes the
+// registered Connect handler, including when the writer is busy. Callers
+// reserve execution capacity before using this method.
 func (cm *ConnManager) SendToAgentContext(ctx context.Context, serverID string, msg *pb.HubMessage) error {
 	return cm.SendToConnectionChecked(ctx, cm.GetConn(serverID), msg, nil)
 }
@@ -282,39 +314,67 @@ func (cm *ConnManager) SendToConnectionGuarded(ctx context.Context, conn *AgentC
 	if conn == nil {
 		return fmt.Errorf("agent not connected")
 	}
-	result := make(chan error, 1)
-	go func() {
-		conn.SendMu.Lock()
+	if err := conn.SendMu.lockContext(ctx, conn); err != nil {
+		if ctx.Err() != nil {
+			// Revocation and cleanup callers rely on fail-closed delivery.
+			conn.Close()
+		}
+		return err
+	}
+	return waitForControlSend(ctx, conn, func() error {
 		defer conn.SendMu.Unlock()
 		conn.GenerationMu.Lock()
 		defer conn.GenerationMu.Unlock()
-		select {
-		case <-conn.Done():
-			result <- fmt.Errorf("agent disconnected: %s", conn.ServerID)
-			return
-		case <-ctx.Done():
-			result <- ctx.Err()
-			return
-		default:
-		}
-		send := func() error {
-			if err := cm.prepareActivitySend(conn, msg); err != nil {
-				return err
-			}
-			err := conn.Stream.Send(msg)
-			if err != nil {
-				cm.abandonMessage(conn, msg)
-			}
+		return cm.sendLocked(ctx, conn, msg, guard)
+	})
+}
+
+func (cm *ConnManager) sendLocked(ctx context.Context, conn *AgentConn, msg *pb.HubMessage, guard func(send func() error) error) error {
+	select {
+	case <-conn.Done():
+		return fmt.Errorf("agent disconnected: %s", conn.ServerID)
+	case <-ctx.Done():
+		return ctx.Err()
+	default:
+	}
+	send := func() error {
+		if err := cm.prepareActivitySend(conn, msg); err != nil {
 			return err
 		}
-		var err error
-		if guard != nil {
-			err = guard(send)
-		} else {
-			err = send()
-		}
-		result <- err
-	}()
+		return cm.sendPrepared(conn, msg)
+	}
+	if guard != nil {
+		return guard(send)
+	}
+	return send()
+}
+
+func (cm *ConnManager) sendPrepared(conn *AgentConn, msg *pb.HubMessage) error {
+	err := conn.Stream.Send(msg)
+	if err != nil {
+		cm.abandonMessage(conn, msg)
+	}
+	return err
+}
+
+// withWriteHealthDeadline closes only the active generation on a prolonged
+// write failure. Join an already-started close before handing over the writer.
+func (c *AgentConn) withWriteHealthDeadline(timeout time.Duration, send func() error) error {
+	expired := make(chan struct{})
+	health := time.AfterFunc(timeout, func() {
+		c.Close()
+		close(expired)
+	})
+	err := send()
+	if !health.Stop() {
+		<-expired
+	}
+	return err
+}
+
+func waitForControlSend(ctx context.Context, conn *AgentConn, send func() error) error {
+	result := make(chan error, 1)
+	go func() { result <- send() }()
 	select {
 	case err := <-result:
 		return err
